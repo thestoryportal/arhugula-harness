@@ -66,7 +66,7 @@ def _recovery_audit_data() -> dict[str, Any]:
     }
 
 
-def test_recovery_audit_round_trip_and_legacy_bytes(tmp_path: Path) -> None:
+def test_recovery_audit_round_trip_and_legacy_bytes() -> None:
     legacy = StateLedgerEntry(
         action_id=Identifier("legacy-1"),
         idempotency_key=Identifier("legacy-key"),
@@ -78,33 +78,29 @@ def test_recovery_audit_round_trip_and_legacy_bytes(tmp_path: Path) -> None:
     legacy = legacy.model_copy(update={"response_hash": compute_response_hash(legacy)})
     assert canonicalize(legacy).decode() == (
         '{"action_id":"legacy-1","actor":{"actor_class":"operator","actor_id":"uid:1000"},'
-        '"idempotency_key":"legacy-key","prior_event_hash":"' + '0' * 64 +
-        '","timestamp":"2026-09-24T00:00:00+00:00"}'
+        '"idempotency_key":"legacy-key","prior_event_hash":"'
+        + "0" * 64
+        + '","timestamp":"2026-09-24T00:00:00+00:00"}'
     )
-    assert legacy.response_hash.hex() == "693cd70e9333bd9b111cebc4780b7dfdd8116f063984983bbd613346f7a95f3c"
+    assert (
+        legacy.response_hash.hex()
+        == "693cd70e9333bd9b111cebc4780b7dfdd8116f063984983bbd613346f7a95f3c"
+    )
     assert _serialize_entry(legacy) == (
         '{"action_id":"legacy-1","idempotency_key":"legacy-key",'
         '"actor":{"actor_class":"operator","actor_id":"uid:1000"},'
         '"response_hash":"693cd70e9333bd9b111cebc4780b7dfdd8116f063984983bbd613346f7a95f3c",'
-        '"timestamp":"2026-09-24T00:00:00+00:00","prior_event_hash":"' + '0' * 64 + '"}'
+        '"timestamp":"2026-09-24T00:00:00+00:00","prior_event_hash":"' + "0" * 64 + '"}'
     )
 
-    payload = EntryPayload.model_validate({
-        "action_id": "recovery-entry",
-        "idempotency_key": "recovery-key",
-        "actor": {"actor_class": "operator", "actor_id": "uid:1000"},
-        "timestamp": "2026-09-24T00:01:00+00:00",
-        "recovery_audit": _recovery_audit_data(),
-    })
-    handle = _handle(tmp_path)
-    assert append_ledger_entry(handle, payload, WriteKey(
-        thread_id=Identifier("thread"), step_id=Identifier("step"),
-        idempotency_key=Identifier("recovery-key"),
-    )) is WriteResult.APPENDED
-    line = handle.canonical_path.read_text().strip()
-    assert json.loads(line)["recovery_audit"] == payload.recovery_audit.model_dump(mode="json")
+    # [LAW:behavior-not-structure] Task 2 routes recovery writes through the durable API;
+    # the Task 1 codec witness still tests the nested JSONL representation directly.
+    entry = _recovery_entry(_recovery_audit_data())
+    entry = entry.model_copy(update={"response_hash": compute_response_hash(entry)})
+    line = _serialize_entry(entry)
+    assert json.loads(line)["recovery_audit"] == entry.recovery_audit.model_dump(mode="json")
     restored = _deserialize_entry(line)
-    assert restored.recovery_audit == payload.recovery_audit
+    assert restored.recovery_audit == entry.recovery_audit
     assert compute_response_hash(restored) == restored.response_hash
 
 
@@ -133,15 +129,18 @@ def test_recovery_audit_refuses_reserved_tenant_scope(reserved: str) -> None:
         _recovery_entry(audit)
 
 
-@pytest.mark.parametrize("field,value", [
-    ("subject_id", "raw-claim-token"),
-    ("action_id", "raw secret with spaces"),
-    ("action_id", "x" * 129),
-    ("observation.lease_generation", "raw-lease-generation"),
-    ("observation.lease_st_dev", "8"),
-    ("observation.lease_st_ino", -1),
-    ("observation.lease_identity", "free text"),
-])
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("subject_id", "raw-claim-token"),
+        ("action_id", "raw secret with spaces"),
+        ("action_id", "x" * 129),
+        ("observation.lease_generation", "raw-lease-generation"),
+        ("observation.lease_st_dev", "8"),
+        ("observation.lease_st_ino", -1),
+        ("observation.lease_identity", "free text"),
+    ],
+)
 def test_recovery_audit_refuses_unstructured_identity(field: str, value: object) -> None:
     audit = _recovery_audit_data()
     target = audit["observation"] if field.startswith("observation.") else audit
@@ -183,40 +182,56 @@ def _attestation() -> dict[str, Any]:
 
 def _record_audit() -> dict[str, Any]:
     audit = _recovery_audit_data()
-    audit.update({
-        "scope": "record", "phase": "complete", "action": "abandon",
-        "transition_kind": "record_tombstone",
-        "observation": {
-            "kind": "claim_no_token", "canonical_claim_path": "/state/claim-1",
-            "parent_st_dev": 8, "parent_st_ino": 20,
-            "claim_st_dev": 8, "claim_st_ino": 42, "raw_digest": "d" * 64,
-        },
-        "quiescence_attestation": _attestation(),
-    })
+    audit.update(
+        {
+            "scope": "record",
+            "phase": "complete",
+            "action": "abandon",
+            "transition_kind": "record_tombstone",
+            "observation": {
+                "kind": "claim_no_token",
+                "canonical_claim_path": "/state/claim-1",
+                "parent_st_dev": 8,
+                "parent_st_ino": 20,
+                "claim_st_dev": 8,
+                "claim_st_ino": 42,
+                "raw_digest": "d" * 64,
+            },
+            "quiescence_attestation": _attestation(),
+        }
+    )
     return audit
 
 
 def _recovery_entry(audit: dict[str, Any]) -> StateLedgerEntry:
-    return StateLedgerEntry.model_validate({
-        "action_id": "recovery-entry",
-        "idempotency_key": "recovery-key",
-        "actor": {"actor_class": "operator", "actor_id": "uid:1000"},
-        "response_hash": ALL_ZEROS_SENTINEL,
-        "timestamp": "2026-09-24T00:01:00+00:00",
-        "prior_event_hash": ALL_ZEROS_SENTINEL,
-        "recovery_audit": audit,
-    })
+    return StateLedgerEntry.model_validate(
+        {
+            "action_id": "recovery-entry",
+            "idempotency_key": "recovery-key",
+            "actor": {"actor_class": "operator", "actor_id": "uid:1000"},
+            "response_hash": ALL_ZEROS_SENTINEL,
+            "timestamp": "2026-09-24T00:01:00+00:00",
+            "prior_event_hash": ALL_ZEROS_SENTINEL,
+            "recovery_audit": audit,
+        }
+    )
 
 
-@pytest.mark.parametrize("scope,phase,observation", [
-    ("claim", "intent", None),
-    ("claim", "complete", None),
-    ("record", "intent", "claim_absent"),
-    ("record", "complete", "claim_no_token"),
-    ("record", "complete", "claim_unreadable"),
-])
+@pytest.mark.parametrize(
+    "scope,phase,observation",
+    [
+        ("claim", "intent", None),
+        ("claim", "complete", None),
+        ("record", "intent", "claim_absent"),
+        ("record", "complete", "claim_no_token"),
+        ("record", "complete", "claim_unreadable"),
+    ],
+)
 def test_recovery_audit_all_legal_variants_round_trip(
-    tmp_path: Path, scope: str, phase: str, observation: str | None,
+    tmp_path: Path,
+    scope: str,
+    phase: str,
+    observation: str | None,
 ) -> None:
     audit = _recovery_audit_data()
     audit["scope"] = scope
@@ -248,16 +263,19 @@ def test_recovery_audit_all_legal_variants_round_trip(
     assert compute_response_hash(restored) == compute_response_hash(entry)
 
 
-@pytest.mark.parametrize("mutation", [
-    ("action_id", "recover-2"),
-    ("subject_id", "2" * 64),
-    ("reason_digest", "1" * 64),
-    ("observation.claim_bytes_digest", "2" * 64),
-    ("observation.claim_st_ino", 43),
-    ("observation.lease_generation", "b" * 32),
-    ("observation.lease_st_ino", 44),
-    ("transition_digest", "3" * 64),
-])
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        ("action_id", "recover-2"),
+        ("subject_id", "2" * 64),
+        ("reason_digest", "1" * 64),
+        ("observation.claim_bytes_digest", "2" * 64),
+        ("observation.claim_st_ino", 43),
+        ("observation.lease_generation", "b" * 32),
+        ("observation.lease_st_ino", 44),
+        ("transition_digest", "3" * 64),
+    ],
+)
 def test_recovery_audit_fields_change_hash(mutation: tuple[str, object]) -> None:
     original = _recovery_audit_data()
     changed = deepcopy(original)
@@ -272,15 +290,19 @@ def test_recovery_audit_fields_change_hash(mutation: tuple[str, object]) -> None
     )
 
 
-@pytest.mark.parametrize("path,value", [
-    (("record_identity", "tenant_id"), None),
-    (("record_identity", "record_count"), 3),
-    (("record_identity", "snapshot_hash"), "2" * 64),
-    (("observation", "parent_st_ino"), 21),
-    (("quiescence_attestation", "attested_at"), "2026-09-24T00:00:01+00:00"),
-])
+@pytest.mark.parametrize(
+    "path,value",
+    [
+        (("record_identity", "tenant_id"), None),
+        (("record_identity", "record_count"), 3),
+        (("record_identity", "snapshot_hash"), "2" * 64),
+        (("observation", "parent_st_ino"), 21),
+        (("quiescence_attestation", "attested_at"), "2026-09-24T00:00:01+00:00"),
+    ],
+)
 def test_record_audit_identity_and_attestation_changes_hash(
-    path: tuple[str, str], value: object,
+    path: tuple[str, str],
+    value: object,
 ) -> None:
     original = _record_audit()
     changed = deepcopy(original)
@@ -290,11 +312,14 @@ def test_record_audit_identity_and_attestation_changes_hash(
     )
 
 
-@pytest.mark.parametrize("field,value", [
-    ("raw_reason", "secret"),
-    ("claim_token", "secret"),
-    ("hitl_answer", "secret"),
-])
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("raw_reason", "secret"),
+        ("claim_token", "secret"),
+        ("hitl_answer", "secret"),
+    ],
+)
 def test_recovery_audit_refuses_sensitive_raw_fields(field: str, value: str) -> None:
     audit = _recovery_audit_data()
     audit[field] = value
@@ -317,10 +342,13 @@ def test_recovery_audit_refuses_illegal_scope_phase_and_transition() -> None:
         _recovery_entry(audit)
 
 
-@pytest.mark.parametrize("mutation", [
-    {"transition_kind": "claim_tombstone"},
-    {"quiescence_attestation": _attestation()},
-])
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        {"transition_kind": "claim_tombstone"},
+        {"quiescence_attestation": _attestation()},
+    ],
+)
 def test_claim_release_refuses_abandon_only_fields(mutation: dict[str, Any]) -> None:
     audit = _recovery_audit_data()
     audit.update(mutation)
@@ -328,10 +356,13 @@ def test_claim_release_refuses_abandon_only_fields(mutation: dict[str, Any]) -> 
         _recovery_entry(audit)
 
 
-@pytest.mark.parametrize("mutation", [
-    {"action": "release"},
-    {"transition_kind": "none"},
-])
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        {"action": "release"},
+        {"transition_kind": "none"},
+    ],
+)
 def test_record_complete_refuses_claim_only_fields(mutation: dict[str, Any]) -> None:
     audit = _record_audit()
     audit.update(mutation)
@@ -342,8 +373,11 @@ def test_record_complete_refuses_claim_only_fields(mutation: dict[str, Any]) -> 
 def test_claim_absent_refuses_claim_inode_fields() -> None:
     audit = _record_audit()
     audit["observation"] = {
-        "kind": "claim_absent", "canonical_claim_path": "/state/claim-1",
-        "parent_st_dev": 8, "parent_st_ino": 20, "claim_st_ino": 42,
+        "kind": "claim_absent",
+        "canonical_claim_path": "/state/claim-1",
+        "parent_st_dev": 8,
+        "parent_st_ino": 20,
+        "claim_st_ino": 42,
     }
     with pytest.raises(ValidationError):
         _recovery_entry(audit)
@@ -362,9 +396,12 @@ def test_record_abandon_requires_true_quiescence_attestation() -> None:
     audit.pop("transition_kind")
     audit.pop("transition_digest")
     audit["observation"] = {
-        "kind": "claim_unreadable", "canonical_claim_path": "/state/claim-1",
-        "parent_st_dev": 8, "parent_st_ino": 20,
-        "claim_st_dev": 8, "claim_st_ino": 42,
+        "kind": "claim_unreadable",
+        "canonical_claim_path": "/state/claim-1",
+        "parent_st_dev": 8,
+        "parent_st_ino": 20,
+        "claim_st_dev": 8,
+        "claim_st_ino": 42,
     }
     with pytest.raises(ValidationError):
         _recovery_entry(audit)
@@ -383,16 +420,24 @@ def test_recovery_scope_observation_transition_and_attestation_are_hashed() -> N
     )
 
     record = deepcopy(claim)
-    record.update({
-        "scope": "record", "phase": "complete", "action": "abandon",
-        "transition_kind": "record_tombstone",
-        "observation": {
-            "kind": "claim_no_token", "canonical_claim_path": "/state/claim-1",
-            "parent_st_dev": 8, "parent_st_ino": 20,
-            "claim_st_dev": 8, "claim_st_ino": 42, "raw_digest": "d" * 64,
-        },
-        "quiescence_attestation": _attestation(),
-    })
+    record.update(
+        {
+            "scope": "record",
+            "phase": "complete",
+            "action": "abandon",
+            "transition_kind": "record_tombstone",
+            "observation": {
+                "kind": "claim_no_token",
+                "canonical_claim_path": "/state/claim-1",
+                "parent_st_dev": 8,
+                "parent_st_ino": 20,
+                "claim_st_dev": 8,
+                "claim_st_ino": 42,
+                "raw_digest": "d" * 64,
+            },
+            "quiescence_attestation": _attestation(),
+        }
+    )
     changed_observation = deepcopy(record)
     changed_observation["observation"]["kind"] = "claim_unreadable"
     changed_observation["observation"].pop("raw_digest")
@@ -407,6 +452,7 @@ def test_recovery_scope_observation_transition_and_attestation_are_hashed() -> N
     assert compute_response_hash(_recovery_entry(record)) != compute_response_hash(
         _recovery_entry(changed_attestation)
     )
+
 
 _ACTOR = Actor(actor_class=ActorClass.AGENT, actor_id="agent-1")
 _SNAPSHOT_REF = Identifier(

@@ -39,14 +39,18 @@ Authority: Implementation_Plan_Information_Substrate_v2_3.md §2.1 U-IS-11
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import threading
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
+from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict, TypeAdapter, field_validator
+from pydantic import BaseModel, ConfigDict, TypeAdapter, field_validator, model_validator
 
 from harness_is.chain_link_construction import construct_prior_event_hash
+from harness_is.chain_verification import VerificationStatus, verify_chain
 from harness_is.cross_process_ledger_lock import (
     cross_process_read_lock,
     cross_process_write_lock,
@@ -102,6 +106,9 @@ WRITER_OWNED_TIMESTAMP: Timestamp = datetime.fromtimestamp(0, tz=UTC)
 #: Serializes the read-prior-then-append critical section (acceptance #7).
 _WRITE_LOCK = threading.Lock()
 
+# [LAW:verifiable-goals] A recovery line has a fixed maximum before one os.write.
+_MAX_RECOVERY_LINE_BYTES = 1024 * 1024
+
 
 def ledger_write_lock() -> threading.Lock:
     """The module-level lock serializing ledger writes (acceptance #7).
@@ -153,6 +160,23 @@ class EntryPayload(BaseModel):
         return reject_noncanonical_rotation_correlation_id(value)
 
 
+class RecoveryAuditPayload(EntryPayload):
+    """A recovery entry with its required, hash-covered audit sidecar."""
+
+    recovery_audit: RecoveryAudit  # pyright: ignore[reportGeneralTypeIssues, reportIncompatibleVariableOverride]
+
+    @model_validator(mode="after")
+    def _reject_other_sidecars(self) -> RecoveryAuditPayload:
+        # [LAW:types-are-the-program] Recovery writes carry exactly one sidecar.
+        if any(
+            (self.procedural_tier_snapshot_ref, self.branch_metadata, self.rotation_correlation_id)
+        ):
+            raise ValueError("recovery audit cannot carry other sidecars")
+        if self.timestamp != WRITER_OWNED_TIMESTAMP:
+            raise ValueError("recovery audit requires writer-owned timestamp")
+        return self
+
+
 class WriteKey(BaseModel):
     """The idempotent-write keying tuple (C-IS-07 §7.1, Stripe-style)."""
 
@@ -176,6 +200,40 @@ class WriteKeyMismatchError(ValueError):
 
 class NonMonotonicTimestampError(ValueError):
     """Raised when an entry's timestamp precedes the prior entry's (C-IS-05 §5)."""
+
+
+class RecoveryAuditError(ValueError):
+    """Invalid recovery append request."""
+
+
+class RecoveryAuditConflictError(RecoveryAuditError):
+    """A persisted key names a different stable payload."""
+
+
+class RecoveryAuditIntegrityError(RecoveryAuditError):
+    """The prior ledger cannot be trusted for a recovery append."""
+
+
+class RecoveryAuditDurabilityError(OSError):
+    """The durable append or its required sync did not complete."""
+
+
+def recovery_audit_idempotency_key(audit: RecoveryAudit) -> Identifier:
+    """Derive the v1 recovery key from the action's stable identity."""
+    # [LAW:one-source-of-truth] The IS writer owns this collision-resistant key recipe.
+    parts = (
+        "harness-is/recovery-audit/v1",
+        audit.scope,
+        audit.phase,
+        audit.subject_id,
+        audit.action_id,
+    )
+    encoded = b"\x00".join(part.encode("utf-8") for part in parts)
+    return Identifier(hashlib.sha256(encoded).hexdigest())
+
+
+def _recovery_action_id(audit: RecoveryAudit) -> Identifier:
+    return Identifier(f"recovery:{audit.scope}:{audit.phase}:{audit.action_id}")
 
 
 def _serialize_entry(entry: StateLedgerEntry) -> str:
@@ -240,38 +298,41 @@ def _deserialize_entry(line: str) -> StateLedgerEntry:
     raw = json.loads(line)
     snapshot_ref_raw = raw.get("procedural_tier_snapshot_ref")
     branch_metadata_raw = raw.get("branch_metadata")
-    return StateLedgerEntry.model_validate({
-        "action_id": Identifier(raw["action_id"]),
-        "idempotency_key": Identifier(raw["idempotency_key"]),
-        "actor": Actor(
-            actor_class=ActorClass(raw["actor"]["actor_class"]),
-            actor_id=raw["actor"]["actor_id"],
-        ),
-        "response_hash": bytes.fromhex(raw["response_hash"]),
-        "timestamp": Timestamp.fromisoformat(raw["timestamp"]),
-        "prior_event_hash": bytes.fromhex(raw["prior_event_hash"]),
-        "procedural_tier_snapshot_ref": (
-            Identifier(snapshot_ref_raw) if snapshot_ref_raw is not None else None
-        ),
-        "branch_metadata": (
-            BranchMetadata(
-                parent_action_id=Identifier(branch_metadata_raw["parent_action_id"]),
-                branch_index=branch_metadata_raw["branch_index"],
-                terminal_status=branch_metadata_raw["terminal_status"],
-            )
-            if branch_metadata_raw is not None
-            else None
-        ),
-        "rotation_correlation_id": raw.get("rotation_correlation_id"),
-        # [LAW:parse-dont-validate] Persisted audit JSON crosses this reader boundary once.
-        "recovery_audit": (
-            TypeAdapter(RecoveryAudit).validate_json(
-                json.dumps(raw["recovery_audit"]), strict=True,
-            )
-            if raw.get("recovery_audit") is not None
-            else None
-        ),
-    })
+    return StateLedgerEntry.model_validate(
+        {
+            "action_id": Identifier(raw["action_id"]),
+            "idempotency_key": Identifier(raw["idempotency_key"]),
+            "actor": Actor(
+                actor_class=ActorClass(raw["actor"]["actor_class"]),
+                actor_id=raw["actor"]["actor_id"],
+            ),
+            "response_hash": bytes.fromhex(raw["response_hash"]),
+            "timestamp": Timestamp.fromisoformat(raw["timestamp"]),
+            "prior_event_hash": bytes.fromhex(raw["prior_event_hash"]),
+            "procedural_tier_snapshot_ref": (
+                Identifier(snapshot_ref_raw) if snapshot_ref_raw is not None else None
+            ),
+            "branch_metadata": (
+                BranchMetadata(
+                    parent_action_id=Identifier(branch_metadata_raw["parent_action_id"]),
+                    branch_index=branch_metadata_raw["branch_index"],
+                    terminal_status=branch_metadata_raw["terminal_status"],
+                )
+                if branch_metadata_raw is not None
+                else None
+            ),
+            "rotation_correlation_id": raw.get("rotation_correlation_id"),
+            # [LAW:parse-dont-validate] Persisted audit JSON crosses this reader boundary once.
+            "recovery_audit": (
+                TypeAdapter(RecoveryAudit).validate_json(
+                    json.dumps(raw["recovery_audit"]),
+                    strict=True,
+                )
+                if raw.get("recovery_audit") is not None
+                else None
+            ),
+        }
+    )
 
 
 def _read_ledger_unlocked(ledger_handle: JsonlLedgerHandle) -> list[StateLedgerEntry]:
@@ -301,6 +362,137 @@ def read_ledger(ledger_handle: JsonlLedgerHandle) -> list[StateLedgerEntry]:
         return _read_ledger_unlocked(ledger_handle)
 
 
+def _verified_recovery_ledger_unlocked(path: Path) -> list[StateLedgerEntry]:
+    # [LAW:single-enforcer] Only the durable writer requires stored-hash self-checks.
+    if not path.exists():
+        return []
+    raw = path.read_bytes()
+    if raw and not raw.endswith(b"\n"):
+        raise RecoveryAuditIntegrityError("ledger has an unterminated tail")
+    try:
+        ledger = [_deserialize_entry(line.decode("utf-8")) for line in raw.splitlines()]
+    except (UnicodeError, ValueError, KeyError, TypeError) as exc:
+        raise RecoveryAuditIntegrityError("ledger contains an invalid entry") from exc
+    for position, entry in enumerate(ledger, start=1):
+        if entry.response_hash != compute_response_hash(entry):
+            raise RecoveryAuditIntegrityError(f"stored response hash differs at entry {position}")
+    verification = verify_chain(ledger)
+    if verification.status is not VerificationStatus.VALID:
+        raise RecoveryAuditIntegrityError(
+            f"ledger chain fails at entry {verification.failure_position}"
+        )
+    return ledger
+
+
+def _write_recovery_line(fd: int, data: bytes) -> int:
+    """One whole-line append call; a fault-injection seam for partial writes."""
+    return os.write(fd, data)
+
+
+def _fsync_recovery_target(fd: int) -> None:
+    """Sync one file or directory; a fault-injection seam for ordering."""
+    os.fsync(fd)
+
+
+def _sync_recovery_entry(fd: int, path: Path) -> None:
+    # [LAW:effects-at-boundaries] Sync the file and both containing dirents in order.
+    _fsync_recovery_target(fd)
+    for directory in (path.parent, path.parent.parent):
+        directory_fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            _fsync_recovery_target(directory_fd)
+        finally:
+            os.close(directory_fd)
+
+
+def append_recovery_audit_entry(
+    ledger_handle: JsonlLedgerHandle,
+    payload: RecoveryAuditPayload,
+    key: WriteKey,
+) -> WriteResult:
+    """Append or reconcile one durable recovery audit under C-IS-07 §7.8."""
+    # [LAW:parse-dont-validate] Refuse untyped callers before entering the durable boundary.
+    if not isinstance(payload, RecoveryAuditPayload):  # pyright: ignore[reportUnnecessaryIsInstance]
+        raise RecoveryAuditError("recovery append requires RecoveryAuditPayload")
+    audit = payload.recovery_audit
+    if any(
+        (
+            payload.procedural_tier_snapshot_ref,
+            payload.branch_metadata,
+            payload.rotation_correlation_id,
+        )
+    ):
+        raise RecoveryAuditError("recovery append requires only a recovery audit sidecar")
+    if payload.timestamp != WRITER_OWNED_TIMESTAMP:
+        raise RecoveryAuditError("recovery append requires writer-owned timestamp")
+    derived_key = recovery_audit_idempotency_key(audit)
+    action_id = _recovery_action_id(audit)
+    if payload.idempotency_key != derived_key or key.idempotency_key != derived_key:
+        raise WriteKeyMismatchError("recovery idempotency key differs from derived key")
+    if payload.action_id != action_id:
+        raise RecoveryAuditError("recovery action_id differs from derived action_id")
+
+    path = ledger_handle.canonical_path
+    # [LAW:no-ambient-temporal-coupling] Preserve dir/file -> process-lock order.
+    with cross_process_write_lock(path), _WRITE_LOCK:
+        ledger = _verified_recovery_ledger_unlocked(path)
+        matches = [entry for entry in ledger if entry.idempotency_key == derived_key]
+        if len(matches) > 1:
+            raise RecoveryAuditIntegrityError("recovery key occurs more than once")
+        if matches:
+            prior = matches[0]
+            if prior.recovery_audit is None:
+                raise RecoveryAuditConflictError("recovery key belongs to a non-recovery entry")
+            stable = (action_id, derived_key, payload.actor, audit)
+            persisted = (prior.action_id, prior.idempotency_key, prior.actor, prior.recovery_audit)
+            if persisted != stable or any(
+                (
+                    prior.procedural_tier_snapshot_ref,
+                    prior.branch_metadata,
+                    prior.rotation_correlation_id,
+                )
+            ):
+                raise RecoveryAuditConflictError("recovery key has a different stable payload")
+            try:
+                fd = os.open(path, os.O_RDONLY)
+                try:
+                    _sync_recovery_entry(fd, path)
+                finally:
+                    os.close(fd)
+            except OSError as exc:
+                raise RecoveryAuditDurabilityError("recovery retry sync failed") from exc
+            return WriteResult.IDEMPOTENT_NOOP
+
+        prior_entry = ledger[-1] if ledger else None
+        timestamp = datetime.now(UTC)
+        if prior_entry is not None and timestamp < prior_entry.timestamp - _CLOCK_SKEW_TOLERANCE:
+            raise NonMonotonicTimestampError("recovery timestamp precedes prior entry")
+        draft = StateLedgerEntry(
+            action_id=action_id,
+            idempotency_key=derived_key,
+            actor=payload.actor,
+            response_hash=ALL_ZEROS_SENTINEL,
+            timestamp=timestamp,
+            prior_event_hash=construct_prior_event_hash(prior_entry),
+            recovery_audit=audit,
+        )
+        entry = draft.model_copy(update={"response_hash": compute_response_hash(draft)})
+        line = (_serialize_entry(entry) + "\n").encode("utf-8")
+        if len(line) > _MAX_RECOVERY_LINE_BYTES:
+            raise RecoveryAuditError("recovery audit line exceeds 1 MiB")
+        try:
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+            try:
+                if _write_recovery_line(fd, line) != len(line):
+                    raise RecoveryAuditDurabilityError("short recovery audit write")
+                _sync_recovery_entry(fd, path)
+            finally:
+                os.close(fd)
+        except OSError as exc:
+            raise RecoveryAuditDurabilityError("recovery append or sync failed") from exc
+    return WriteResult.APPENDED
+
+
 def append_ledger_entry(
     ledger_handle: JsonlLedgerHandle,
     entry_payload: EntryPayload,
@@ -328,6 +520,9 @@ def append_ledger_entry(
     (elect only where the entry timestamp means *when appended*), never by
     anything this function can observe.
     """
+    # [LAW:single-enforcer] Recovery entries cross only the durable writer boundary.
+    if entry_payload.recovery_audit is not None:
+        raise RecoveryAuditError("recovery audit requires append_recovery_audit_entry")
     if write_key.idempotency_key != entry_payload.idempotency_key:
         raise WriteKeyMismatchError(
             "write_key.idempotency_key must equal entry_payload.idempotency_key"
