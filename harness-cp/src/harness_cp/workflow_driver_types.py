@@ -213,6 +213,7 @@ class ChildResumeRefusal(StrEnum):
     SNAPSHOT_MISMATCH = "snapshot-mismatch"
     DEPTH_MISMATCH = "depth-mismatch"
     GATEWAY_NOT_INSTALLED = "gateway-not-installed"
+    WORKFLOW_MISMATCH = "workflow-mismatch"
 
 
 class ChildResumeRefusedError(Exception):
@@ -224,9 +225,15 @@ class ChildResumeRefusedError(Exception):
     no journal capture follow it, so the prior durable pause stays the only record.
     """
 
-    def __init__(self, reason: ChildResumeRefusal, detail: str = "") -> None:
+    def __init__(
+        self, reason: ChildResumeRefusal, detail: str = "", *, audit_signing_failed: bool = False
+    ) -> None:
         self.reason = reason
         self.detail = detail
+        #: True when composing this refusal's audit record also failed signing under
+        #: fail-closed. CP-owned (a plain bool) so CP never imports the OD signing family;
+        #: it only makes the terminal fail_class truthful about the audit failure.
+        self.audit_signing_failed = audit_signing_failed
         super().__init__(f"child resume refused ({reason.value}){': ' + detail if detail else ''}")
 
 

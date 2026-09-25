@@ -130,6 +130,7 @@ from harness_cp.topology_subagent_namespace import (
     TOPOLOGY_NAMESPACE_SCHEMA,
 )
 from harness_cp.workflow_driver_types import (
+    ChildResumeRefusedError,
     RunStatus,
     StepExecutionContext,
     StepKind,
@@ -153,6 +154,7 @@ from harness_runtime.lifecycle.audit_signing_errors import (
     AUDIT_SIGNING_HARD_FAILURES,
     PostEffectAuditSigningError,
     PostEffectClass,
+    RefusedChildAuditSigningError,
 )
 from harness_runtime.lifecycle.audit_writer import RuntimeAuditLedgerWriter
 from harness_runtime.lifecycle.child_workflow_runner import ChildWorkflowRunner
@@ -1140,6 +1142,31 @@ class RuntimeSubAgentDispatcher:
                         step_context.effect_fence_tree_wide_abort_present
                     ),
                 )
+            except ChildResumeRefusedError as refusal:
+                # B-104 Task 4c — a durable paused child was refused before it ran. The
+                # refusal must reach CP typed so the parent fails terminally; a signing
+                # failure while composing this best-effort audit must not replace it.
+                span.set_attribute("subagent.result_status", "failed")
+                span.set_attribute("subagent.request_blocked_by_budget", False)
+                span.set_attribute("subagent.tokens_in", 0)
+                span.set_attribute("subagent.tokens_out", 0)
+                span.set_attribute("subagent.cached_tokens_in", 0)
+                try:
+                    _ = self._compose_and_persist_audit(
+                        parent_action_id=parent_action_id,
+                        descent=descent,
+                        payload=payload,
+                        step_context=step_context,
+                        raise_on_failure=False,
+                    )
+                except AUDIT_SIGNING_HARD_FAILURES as sign_exc:
+                    # Reachable only under fail-closed (the helper already logged the
+                    # compliance event). Carry BOTH facts: still a refusal for CP, still
+                    # the typed signing family (U-RT-136), never a completed-effect carrier.
+                    raise RefusedChildAuditSigningError(
+                        refusal.reason, refusal.detail
+                    ) from sign_exc
+                raise
             except Exception:
                 # Typed errors from child execution: annotate span +
                 # propagate. Spec §14.7.2 step 10.

@@ -48,7 +48,12 @@ from harness_cp.pause_resume_protocol_types import PausedChildCapture, ResumeCon
 from harness_cp.sub_agent_gate_level_descent import SubAgentGateLevelDescent
 from harness_cp.workflow_driver import DriverContext as _CpDriverContext
 from harness_cp.workflow_driver import execute_workflow_at_depth
-from harness_cp.workflow_driver_types import RunResult, WorkflowStep
+from harness_cp.workflow_driver_types import (
+    ChildResumeRefusal,
+    ChildResumeRefusedError,
+    RunResult,
+    WorkflowStep,
+)
 from harness_cp.workflow_manifest_entry import WorkflowManifestEntry
 
 from harness_runtime.lifecycle.durable_child_admission import (
@@ -226,11 +231,15 @@ def compose_child_workflow_runner(
         # the old child's cursor/run_id to the new child would silently corrupt lineage.
         pause_snapshot_input = child_resume.child_snapshot if child_resume is not None else None
         if pause_snapshot_input is not None and pause_snapshot_input.workflow_id != workflow_id:
-            raise ValueError(
+            # A typed refusal, not a generic ValueError: a legacy carrier with no recorded
+            # child_workflow_id skips CP's identity guard, and a generic failure here would
+            # let the pause cascade drop the child's cursor and dispatch it fresh.
+            raise ChildResumeRefusedError(
+                ChildResumeRefusal.WORKFLOW_MISMATCH,
                 "child resume workflow-id mismatch: snapshot.workflow_id="
                 f"{pause_snapshot_input.workflow_id!r}, resume child workflow_id="
                 f"{workflow_id!r} (the paused child's snapshot cannot resume a different "
-                "child workflow)"
+                "child workflow)",
             )
         # B-104 Task 4c — under a DURABLE protocol a resumed paused child must be the exact
         # journal record its parent carried (verified by position and digest, full snapshot

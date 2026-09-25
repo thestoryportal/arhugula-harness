@@ -75,6 +75,7 @@ from harness_cp.topology_subagent_namespace import (
 )
 from harness_cp.workflow_driver import StepDispatcher
 from harness_cp.workflow_driver_types import (
+    ChildResumeRefusedError,
     RunResult,
     RunStatus,
     StepExecutionContext,
@@ -858,7 +859,8 @@ def test_child_runner_resume_workflow_id_mismatch_fails_closed() -> None:
         cast(Any, SimpleNamespace(step_dispatchers=None)),
         durable_admission=RefuseDurableChildAdmission(),
     )
-    with pytest.raises(ValueError, match="child resume workflow-id mismatch"):
+    # B-104 Task 4c correction: a typed, terminal refusal (was a generic ValueError).
+    with pytest.raises(ChildResumeRefusedError, match="child resume workflow-id mismatch"):
         runner(
             workflow_id="a-different-child-wf",
             manifest_entry=cast(Any, None),

@@ -31,6 +31,7 @@ import hashlib
 import logging
 from enum import StrEnum
 
+from harness_cp.workflow_driver_types import ChildResumeRefusal, ChildResumeRefusedError
 from harness_od.audit_signing_errors import (
     AUDIT_SIGNING_HARD_FAILURES,
     AuditSigningBreakerOpenError,
@@ -45,6 +46,7 @@ __all__ = [
     "AuditSigningFailedError",
     "PostEffectAuditSigningError",
     "PostEffectClass",
+    "RefusedChildAuditSigningError",
     "report_post_effect_audit_failure",
 ]
 
@@ -109,6 +111,20 @@ class PostEffectAuditSigningError(AuditSigningFailedError):
         #: The already-obtained effect result (opaque payload) — preserved
         #: for the audit-failure report at the outermost dispatch boundary.
         self.result = result
+
+
+class RefusedChildAuditSigningError(ChildResumeRefusedError, AuditSigningFailedError):
+    """A durable paused child was refused AND its audit record failed signing (fail-closed).
+
+    B-104 Task 4c. Belongs to BOTH families on purpose: CP's typed `ChildResumeRefusedError`
+    catches make the refusal terminal (no re-pause, no fresh child dispatch), and U-RT-136's
+    rule that fail-closed signing failures surface as the typed `AUDIT_SIGNING_HARD_FAILURES`
+    family still holds. Deliberately NOT a `PostEffectAuditSigningError`: no child effect
+    completed, so there is no result to preserve and nothing to report as done.
+    """
+
+    def __init__(self, reason: ChildResumeRefusal, detail: str = "") -> None:
+        super().__init__(reason, detail, audit_signing_failed=True)
 
 
 def report_post_effect_audit_failure(exc: PostEffectAuditSigningError) -> None:

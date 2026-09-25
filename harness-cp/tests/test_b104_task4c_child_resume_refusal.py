@@ -72,9 +72,10 @@ from .test_workflow_driver_parallelization_pause import (
 
 _BINDING = ModelBinding(provider="anthropic", model="claude-haiku-4-5")
 _FAMILIES = ("fan_out", "peer")
+# The stable prefix, then the refusal reason(s) the run ended on (Task 4c correction).
 _REFUSED_FAIL_CLASS = {
-    "fan_out": "orchestrator-workers-child-resume-refused",
-    "peer": "parallelization-child-resume-refused",
+    "fan_out": "orchestrator-workers-child-resume-refused (gateway-not-installed)",
+    "peer": "parallelization-child-resume-refused (gateway-not-installed)",
 }
 
 

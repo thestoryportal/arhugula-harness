@@ -425,7 +425,9 @@ def test_a_real_composed_resume_refuses_at_admission_and_the_parent_fails_termin
     )
 
     assert resumed.status is RunStatus.FAILED
-    assert resumed.fail_class == "orchestrator-workers-child-resume-refused"
+    assert resumed.fail_class == (
+        "orchestrator-workers-child-resume-refused (gateway-not-installed)"
+    )
     assert resumed.pause_snapshot is None and resumed.pause_record_ref is None
     assert bodies.invocations == 0 and spy.calls == []
     assert _journal_line_counts(root) == before
