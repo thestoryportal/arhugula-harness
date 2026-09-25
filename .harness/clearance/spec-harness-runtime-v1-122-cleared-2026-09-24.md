@@ -7,10 +7,11 @@ back_reference:
   - "Spec_Control_Plane_v1_2.md C-CP-12 §12.2–§12.3, C-CP-17 §17.1–§17.3, C-CP-19 §19.1/§19.4"
   - "arhugula-harness-trial-193 cmt-fac585a5-fd9b-49e5-bb70-dc06520520e6"
   - "evaluation/production-readiness-arch/evidence-gate-floor-contract-opus-1/SHA256SUMS f8b3203207fa7bca0db731d02c4cd0c47cec071c735603971a411540e8f2a8f8"
-merge_commit: pending (local implementation awaiting independent review and integration)
+merge_commit: pending (local implementation awaiting integration)
 reviewer_chain:
   - "Claude Opus 5.5/high independent contract adjudication, 2026-09-24"
-  - "Codex Sol/medium implementer behavioral RED/GREEN; independent source review pending"
+  - "Codex Sol/medium behavioral RED/GREEN; Claude Opus 5.5/high source NO-GO at d43f476: arhugula-harness-trial-193 cmt-50d28442-0506-4d33-a06b-053069ede068; evaluation/production-readiness-arch/evidence-gate-floor-enforcement-review-opus-1/SHA256SUMS 103007c58f03dfc0fed8019c8cabccbed31ecaa7d7668d9354518fb4b88a5498"
+  - "Codex Sol/medium audit-delta RED/GREEN; Claude Opus 5.5/high source GO at 3ebedc6: arhugula-harness-trial-193 cmt-8d7aebc0-f8fd-4693-ae6e-fb7620164052; evaluation/production-readiness-arch/evidence-gate-floor-audit-delta-review-opus-1/SHA256SUMS b5da623d1e972760109bed243a95db99410f104e474f3da96ff3e07158ac681a"
 supersedes: spec-harness-runtime-v1-121-cleared-2026-08-13.md
 ---
 
