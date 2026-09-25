@@ -193,15 +193,34 @@ def test_a_paused_run_snapshot_and_its_hash_are_identical_with_and_without_an_au
     assert authority.calls == []
 
 
-def test_the_root_entry_has_no_way_to_carry_an_authority() -> None:
-    """The root keyword belongs to the later `api.resume` wiring slice, not this one."""
-    with pytest.raises(TypeError, match="child_resume_authority"):
-        execute_workflow(
-            _manifest(TopologyPattern.SINGLE_THREADED_LINEAR),
-            [_step("s0")],
-            run_id="run-5b1",
-            ctx=cast(DriverContext, _Ctx(_RecordingProtocol())),
-            default_model_binding=_BINDING,
-            step_dispatchers=cast(StepDispatcherRegistry, _Registry(cast(Any, _Recorder()))),
-            **cast(Any, {"child_resume_authority": _FakeAuthority()}),
-        )
+def test_the_root_entry_forwards_the_same_authority_without_invoking_it() -> None:
+    authority = _FakeAuthority()
+    recorder = _Recorder()
+    result = execute_workflow(
+        _manifest(TopologyPattern.SINGLE_THREADED_LINEAR),
+        [_step("s0")],
+        run_id="run-5b1",
+        ctx=cast(DriverContext, _Ctx(_RecordingProtocol())),
+        default_model_binding=_BINDING,
+        step_dispatchers=cast(StepDispatcherRegistry, _Registry(cast(Any, recorder))),
+        child_resume_authority=authority,
+    )
+    assert result.status is RunStatus.SUCCESS
+    assert recorder.contexts and all(
+        c.child_resume_authority is authority for c in recorder.contexts
+    )
+    assert authority.calls == []  # CP carries the authority; it never invokes it
+
+    default_recorder = _Recorder()
+    default_result = execute_workflow(
+        _manifest(TopologyPattern.SINGLE_THREADED_LINEAR),
+        [_step("s0")],
+        run_id="run-5b1",
+        ctx=cast(DriverContext, _Ctx(_RecordingProtocol())),
+        default_model_binding=_BINDING,
+        step_dispatchers=cast(StepDispatcherRegistry, _Registry(cast(Any, default_recorder))),
+    )
+    assert default_result.status is RunStatus.SUCCESS
+    assert default_recorder.contexts and all(
+        c.child_resume_authority is None for c in default_recorder.contexts
+    )
