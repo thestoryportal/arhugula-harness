@@ -500,6 +500,16 @@ _SENTINEL_ROSTER: dict[str, int] = {
     "harness-runtime/src/harness_runtime/lifecycle/sub_agent_dispatch.py": 1,
 }
 
+#: C-IS-07 §7.8 REQUIRED sentinel sites (IS spec v1.15) — NOT §7.6.1 elections and
+#: not rows of the plan v2.9 §2.1 table above, whose historical meaning is unchanged.
+#: The durable recovery-audit append refuses any caller-supplied timestamp, so every
+#: producer of a `RecoveryAuditPayload` must stamp the sentinel: there is no choice to
+#: classify. Each entry must actually call `append_recovery_audit_entry`.
+_RECOVERY_APPEND_SITES: dict[str, int] = {
+    # B-104 Task 6a claim-scoped audited recovery (INTENT / COMPLETE payloads)
+    "harness-runtime/src/harness_runtime/admin/pause_claim_recovery.py": 1,
+}
+
 #: IS plan v2.9 §2.1 row 14 — RETAINS caller-supplied semantics (EVENT time).
 _RETAIN_SITE = "harness-runtime/src/harness_runtime/lifecycle/as_is_wiring.py"
 #: IS plan v2.9 §2.1 row 10 / §2.2 — DEFERRED, production-UNREACHABLE.
@@ -545,9 +555,25 @@ def test_sentinel_electing_sites_match_the_plan_v2_9_roster() -> None:
     which is the standing value of this check.
 
     PD-8: stamp the sentinel at any unclassified production site and this test
-    FAILS with that path in the diff.
+    FAILS with that path in the diff. The §7.8 required recovery-append sites are
+    the only other classified stampers; they are listed separately, never as §2.1
+    rows.
     """
-    assert _sentinel_stamps_by_module() == _SENTINEL_ROSTER
+    assert _sentinel_stamps_by_module() == _SENTINEL_ROSTER | _RECOVERY_APPEND_SITES
+
+
+def test_recovery_append_sites_are_a_separate_required_class() -> None:
+    """The §7.8 classification cannot become a back door for §7.6.1 elections.
+
+    A module listed as a required recovery-append site must really produce the
+    durable recovery append, and no module may sit in both classes.
+    """
+    assert not set(_SENTINEL_ROSTER) & set(_RECOVERY_APPEND_SITES)
+    for site in _RECOVERY_APPEND_SITES:
+        source = (_REPO_ROOT / site).read_text(encoding="utf-8")
+        assert "append_recovery_audit_entry(" in source, (
+            f"{site} is classified as a C-IS-07 §7.8 recovery-append site but never calls it"
+        )
 
 
 def test_no_production_module_touches_the_sentinel_outside_the_roster() -> None:
@@ -558,7 +584,8 @@ def test_no_production_module_touches_the_sentinel_outside_the_roster() -> None:
 
     A new module reaching for the sentinel trips this even if it never writes
     the canonical line — at which point it must be classified against IS plan
-    v2.9 §2.1 before it can land.
+    v2.9 §2.1 (or, only if it produces the durable recovery append, as a
+    C-IS-07 §7.8 required site) before it can land.
     """
     mentioning = {
         module.relative_to(_REPO_ROOT).as_posix()
@@ -566,12 +593,16 @@ def test_no_production_module_touches_the_sentinel_outside_the_roster() -> None:
         for module in src_dir.rglob("*.py")
         if "WRITER_OWNED_TIMESTAMP" in module.read_text(encoding="utf-8")
     }
-    expected = set(_SENTINEL_ROSTER) | {
-        # The sentinel's own definition + the §7.6 drain path that predates
-        # §7.6.1, plus one cross-reference in prose.
-        "harness-is/src/harness_is/state_ledger_write.py",
-        "harness-core/src/harness_core/cross_process_lock_deadline.py",
-    }
+    expected = (
+        set(_SENTINEL_ROSTER)
+        | set(_RECOVERY_APPEND_SITES)
+        | {
+            # The sentinel's own definition + the §7.6 drain path that predates
+            # §7.6.1, plus one cross-reference in prose.
+            "harness-is/src/harness_is/state_ledger_write.py",
+            "harness-core/src/harness_core/cross_process_lock_deadline.py",
+        }
+    )
     assert mentioning == expected
 
 
