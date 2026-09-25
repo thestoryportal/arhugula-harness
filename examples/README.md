@@ -20,6 +20,8 @@ ${EDITOR:-vi} harness.toml
 uv run --no-sync harness run examples/ollama-first.toml --config harness.toml
 ```
 
+> **Not durable.** This onboarding config keeps run state under the checkout's `.harness/` directory, so it is non-durable and not restore-safe. For state outside the checkout, use an `omarchy.*.toml.example` profile and follow [External state root](../docs/how-to-deploy.md#external-state-root-omarchy-production-profile). The Codex profile is HELD.
+
 A successful one-shot run prints a completed status, the workflow id, and an audit-ledger head hash (the hash varies):
 
 ```text

@@ -76,6 +76,54 @@ The full managed-cloud live e2e creates a hosted E2B sandbox, emits OTLP to the
 managed collector, and polls Cloud Trace. Treat that command as usage-billed and
 operator-approved only.
 
+## External state root (Omarchy production profile)
+
+Three additive, complete profiles declare a state placement for Omarchy (Arch Linux
+ARM) with local Ollama or a subscription CLI. Paid hosted providers are excluded.
+
+| Profile | Route | Status |
+| --- | --- | --- |
+| `examples/omarchy.ollama.toml.example` | local Ollama | source-checked only |
+| `examples/omarchy.claude-code.toml.example` | Claude Code subscription CLI | source-checked only |
+| `examples/omarchy.codex.toml.example` | Codex subscription CLI | **HELD**: the CLI's filesystem read exposure is a separate boundary that is not enforced or tested. A loadable config is not launch acceptance. |
+
+Each profile has two literal placeholders you must edit: `/absolute/path/to/your/workspace`
+(this checkout) and `/absolute/path/to/your/state-root` (used in `[runtime.state_placement]`
+and again as the parent of the `STATE_LEDGER` cell). No `~` or environment variable is
+expanded. An unedited placeholder is refused at bootstrap (`parent-missing`).
+
+Setup, in order:
+
+1. Stop every harness service and worker.
+2. Choose a durable root outside every checkout, every linked worktree and every
+   restore, snapshot or clean scope, on a real filesystem (`tmpfs` and `ramfs` are
+   refused). The root must be absent (bootstrap creates it 0700 and stamps a marker) or
+   an empty 0700 directory you own. Its parent must already exist, be owned by you or
+   root, and not be writable by group or others.
+3. List every restore, snapshot, backup or dotfile-restore target you know of in
+   `forbidden_roots`. The verifier discovers Git checkouts itself, but an empty list is
+   not evidence that no other restore scope exists.
+4. Inspect legacy checkout state. If a previous run left non-empty `.harness/effect-fence`,
+   `.harness/engine-recovery-*`, `.harness/protected-results`, `.harness/memories*`,
+   `.harness/memory` or `.harness/onboarding/state-ledger`, bootstrap refuses with
+   `legacy-state-present`. Archive or migrate it yourself first; the harness never copies
+   or deletes it. A custom older ledger binding is not detected; inventory it yourself.
+5. Edit both placeholders, then run. The first run creates and stamps the root. There is
+   no read-only placement-check command yet, and `inspect` does not report placement.
+
+`/home/robbo/.local/state/arhugula-harness` is a host path that is a candidate, not accepted.
+Its acceptance waits on the installed host inventory and restore-scope witness (S5). It is never a default and does not appear in any profile.
+
+Limits you must not read past:
+
+- These profiles do not enable durable pause/resume. That waits on the reviewed B-104
+  claim gateway, recovery path and CLI/MCP integration.
+- The tutorial and handoff examples are unchanged: they keep state in the checkout and
+  declare no placement (non-durable).
+- The Gemini and Antigravity overlays are not part of this first release.
+- Source tests check the loader and verifier only. Installed restore, filesystem, CLI
+  output and launch acceptance are separate, later gates.
+
 ## Deployment Boundary
 
 Static readiness checks are safe to run as provider-free CI/local gates. Live

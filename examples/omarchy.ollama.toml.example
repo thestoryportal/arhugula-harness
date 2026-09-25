@@ -1,0 +1,75 @@
+# Omarchy production profile: local Ollama.
+#
+# A COMPLETE runtime config (not an overlay). Copy it to harness.toml at the checkout
+# root, then edit BOTH placeholders below before the first run:
+#   /absolute/path/to/your/workspace   this checkout's absolute path (`pwd -P`)
+#   /absolute/path/to/your/state-root  a literal absolute path OUTSIDE every checkout,
+#                                      worktree and restore/snapshot scope (used twice)
+# No tilde or environment variable is expanded; the placement verifier refuses either.
+# Setup, migration and limits: docs/how-to-deploy.md, "External state root (Omarchy
+# production profile)". Existing tutorial examples keep state in the checkout and are
+# non-durable; this profile is the additive placement-declaring form.
+#
+# Status: source-checked only; no installed-host acceptance yet. Needs a local Ollama daemon.
+# Pause/resume persistence is NOT enabled here; it waits on the reviewed B-104 claim
+# and recovery integration. Paid hosted providers are excluded from this profile.
+
+[runtime]
+deployment_surface = "local-development"
+repository_root = "/absolute/path/to/your/workspace"
+default_topology = "single-threaded-linear"
+enabled_provider_names = ["ollama"]
+external_cli_providers = []
+mcp_clients = []
+ollama_host = "http://127.0.0.1:11434"
+ollama_optional = false
+
+# Keep the first run independent of the optional memory subsystem.
+[runtime.memory]
+enabled = false
+
+# The exporter uses a loopback endpoint. A collector is optional for this first run.
+[runtime.otel]
+otlp_endpoint = "http://127.0.0.1:4317"
+
+# Every STATE_LEDGER cell must sit inside state_root. An empty forbidden_roots is not
+# evidence that no restore scope exists: list each snapshot, backup or dotfile-restore
+# target that could reach state_root's location.
+[runtime.state_placement]
+state_root = "/absolute/path/to/your/state-root"
+forbidden_roots = []
+
+# SKILLS, PROMPTS and ROUTING_MANIFEST stay in the checkout. STATE_LEDGER is a
+# directory; the ledger file is created inside it as state.jsonl.
+[[runtime.path_bindings.raw_entries]]
+path_class = "SKILLS"
+workflow_class = "pipeline-automation"
+deployment_surface = "local-development"
+path = "/absolute/path/to/your/workspace/.agents/skills"
+
+[[runtime.path_bindings.raw_entries]]
+path_class = "PROMPTS"
+workflow_class = "pipeline-automation"
+deployment_surface = "local-development"
+path = "/absolute/path/to/your/workspace/.harness/onboarding/prompts"
+
+[[runtime.path_bindings.raw_entries]]
+path_class = "ROUTING_MANIFEST"
+workflow_class = "pipeline-automation"
+deployment_surface = "local-development"
+path = "/absolute/path/to/your/workspace/.harness/onboarding/routing-manifest"
+
+[[runtime.path_bindings.raw_entries]]
+path_class = "STATE_LEDGER"
+workflow_class = "pipeline-automation"
+deployment_surface = "local-development"
+path = "/absolute/path/to/your/state-root/state-ledger"
+
+[runtime.routing_manifest]
+manifest_version = 1
+per_role_bindings = {}
+per_workload_overrides = {}
+retry_policies = {}
+fallback_chains = [
+    { primary = { provider = "ollama", model = "llama3.2:3b", family = "local_open_weight" }, same_family = [], cross_family = [] },
+]

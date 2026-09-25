@@ -23,6 +23,8 @@ ${EDITOR:-vi} harness.toml
 
 Replace every `/absolute/path/to/your/workspace` with the absolute checkout path from `pwd -P`. The config enables only Ollama, points to its loopback host, and binds the four required path classes for `pipeline-automation`. Stage 1 creates the `.harness/onboarding/` directories when the workflow starts. `STATE_LEDGER` must remain a directory path: the runtime creates `state.jsonl` inside it.
 
+This tutorial config keeps state under the checkout's `.harness/onboarding/`, so it is non-durable and not restore-safe. For state outside the checkout, see [External state root](how-to-deploy.md#external-state-root-omarchy-production-profile).
+
 ## 3. Run the workflow
 
 ```sh
