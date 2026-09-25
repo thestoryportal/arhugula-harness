@@ -49,6 +49,7 @@ from harness_core.identity import (
     UnitId,
     WorkflowID,
 )
+from harness_core.journal_record_ref import JournalRecordRef
 from harness_core.persona_tier import PersonaTier
 from harness_core.sandbox_decision_policy import SandboxDecisionPolicy
 from harness_core.schema_attribute_enums import AttributeValueType, Cardinality
@@ -71,6 +72,7 @@ __all__ = [
     "CrossProcessLockTimeoutError",
     "DeploymentSurface",
     "EntryID",
+    "JournalRecordRef",
     "PersonaTier",
     "ReferenceToUnit",
     "SandboxDecisionPolicy",

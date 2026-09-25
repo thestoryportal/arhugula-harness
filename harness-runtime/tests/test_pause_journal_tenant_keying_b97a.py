@@ -98,7 +98,7 @@ snap = PauseSnapshot(
     snapshot_hash="0" * 64, created_at=0, state_ledger_anchor="0" * 64,
 )
 store = JournalWorkflowPauseStore(journal_dir=Path(journal_dir), tenant_id=tenant)
-store.capture(snap)
+store.capture(snap, depth=None)
 read_back = store.read_latest(workflow_id)
 assert read_back is not None, "own capture unreadable"
 assert read_back.run_id == run_id, (
@@ -138,8 +138,8 @@ def test_ac1b_two_sequential_stores_in_one_process_keep_their_own_streams(
     a = JournalWorkflowPauseStore(journal_dir=journal_dir, tenant_id=_TENANT_A)
     b = JournalWorkflowPauseStore(journal_dir=journal_dir, tenant_id=_TENANT_B)
 
-    a.capture(_snapshot(run_id="run-a"))
-    b.capture(_snapshot(run_id="run-b"))
+    a.capture(_snapshot(run_id="run-a"), depth=None)
+    b.capture(_snapshot(run_id="run-b"), depth=None)
 
     a_read = a.read_latest(_WORKFLOW_ID)
     b_read = b.read_latest(_WORKFLOW_ID)
@@ -158,7 +158,9 @@ def test_ac1_wrong_tenant_read_resolves_its_own_path_and_finds_nothing(
     nothing to refuse.
     """
     journal_dir = tmp_path / "pause-journal"
-    JournalWorkflowPauseStore(journal_dir=journal_dir, tenant_id=_TENANT_A).capture(_snapshot())
+    JournalWorkflowPauseStore(journal_dir=journal_dir, tenant_id=_TENANT_A).capture(
+        _snapshot(), depth=None
+    )
 
     result = JournalWorkflowPauseStore(
         journal_dir=journal_dir, tenant_id=_TENANT_B
@@ -412,7 +414,9 @@ def test_ac4a_wrong_tenant_and_legacy_only_both_report_the_ordinary_absent(
     removes.
     """
     journal_dir = tmp_path / "pause-journal"
-    JournalWorkflowPauseStore(journal_dir=journal_dir, tenant_id=_TENANT_A).capture(_snapshot())
+    JournalWorkflowPauseStore(journal_dir=journal_dir, tenant_id=_TENANT_A).capture(
+        _snapshot(), depth=None
+    )
     (journal_dir / legacy_pause_journal_filename("wf-legacy-only")).write_text(
         json.dumps(
             {
@@ -477,7 +481,7 @@ def test_ac4c_corrupt_latest_parse_branch_is_indeterminate(tmp_path: Path) -> No
     """
     journal_dir = tmp_path / "pause-journal"
     store = JournalWorkflowPauseStore(journal_dir=journal_dir, tenant_id=None)
-    store.capture(_snapshot())
+    store.capture(_snapshot(), depth=None)
     journal = journal_dir / pause_journal_filename(None, _WORKFLOW_ID)
     with journal.open("a", encoding="utf-8") as handle:
         handle.write('{"workflow_id": "wf-b97a", "pause_sn')  # torn tail
@@ -593,8 +597,8 @@ def test_ac6_mutation_probe_removing_the_tenant_component_fails_ac1(
     journal_dir = tmp_path / "pause-journal"
     a = JournalWorkflowPauseStore(journal_dir=journal_dir, tenant_id=_TENANT_A)
     b = JournalWorkflowPauseStore(journal_dir=journal_dir, tenant_id=_TENANT_B)
-    a.capture(_snapshot(run_id="run-a"))
-    b.capture(_snapshot(run_id="run-b"))
+    a.capture(_snapshot(run_id="run-a"), depth=None)
+    b.capture(_snapshot(run_id="run-b"), depth=None)
 
     a_read = a.read_latest(_WORKFLOW_ID)
     assert a_read is not None
@@ -655,7 +659,7 @@ def test_ac8_the_store_never_removes_a_journal_on_any_path(
     monkeypatch.setattr(Path, "rmdir", lambda self: removals.append(str(self)))
 
     store = JournalWorkflowPauseStore(journal_dir=journal_dir, tenant_id=None)
-    store.capture(_snapshot())
+    store.capture(_snapshot(), depth=None)
     store.read_latest(_WORKFLOW_ID)
     JournalWorkflowPauseStore(journal_dir=journal_dir, tenant_id=_TENANT_A).read_latest(
         _WORKFLOW_ID
@@ -689,8 +693,12 @@ def test_ac12_the_record_shape_is_byte_identical_and_carries_no_wrapper_tenant_k
     snapshot = _snapshot()
     untenanted_dir = tmp_path / "untenanted"
     tenanted_dir = tmp_path / "tenanted"
-    JournalWorkflowPauseStore(journal_dir=untenanted_dir, tenant_id=None).capture(snapshot)
-    JournalWorkflowPauseStore(journal_dir=tenanted_dir, tenant_id=_TENANT_A).capture(snapshot)
+    JournalWorkflowPauseStore(journal_dir=untenanted_dir, tenant_id=None).capture(
+        snapshot, depth=None
+    )
+    JournalWorkflowPauseStore(journal_dir=tenanted_dir, tenant_id=_TENANT_A).capture(
+        snapshot, depth=None
+    )
 
     untenanted_bytes = (untenanted_dir / pause_journal_filename(None, _WORKFLOW_ID)).read_bytes()
     tenanted_bytes = (tenanted_dir / pause_journal_filename(_TENANT_A, _WORKFLOW_ID)).read_bytes()
@@ -700,9 +708,10 @@ def test_ac12_the_record_shape_is_byte_identical_and_carries_no_wrapper_tenant_k
     )
 
     record = json.loads(untenanted_bytes.decode())
-    assert set(record) == {"workflow_id", "pause_snapshot"}, (
+    assert set(record) == {"workflow_id", "pause_snapshot", "depth"}, (
         f"a wrapper key was added: {sorted(record)}"
     )
+    assert record["depth"] is None
     assert record["pause_snapshot"]["snapshot_hash"] == snapshot.snapshot_hash
 
 

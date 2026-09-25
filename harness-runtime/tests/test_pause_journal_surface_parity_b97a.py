@@ -175,7 +175,7 @@ async def test_accessor_reads_the_tenant_scoped_record_and_not_a_co_tenants(
     """
     journal_dir = _journal_dir(tmp_path)
     JournalWorkflowPauseStore(journal_dir=journal_dir, tenant_id=_TENANT_A).capture(
-        _snapshot("run-a")
+        _snapshot("run-a"), depth=None
     )
 
     state = await read_paused_workflow_state(
@@ -196,7 +196,7 @@ async def test_the_untenanted_accessor_does_not_see_a_tenanted_record(tmp_path: 
     superset. `None` is its own segment-count form, so it collides with nothing."""
     journal_dir = _journal_dir(tmp_path)
     JournalWorkflowPauseStore(journal_dir=journal_dir, tenant_id=_TENANT_A).capture(
-        _snapshot("run-a")
+        _snapshot("run-a"), depth=None
     )
     with pytest.raises(PausedWorkflowStateUnavailableError):
         await read_paused_workflow_state(
@@ -226,7 +226,7 @@ async def test_both_surfaces_read_through_one_authority(
     journal_dir = _journal_dir(tmp_path)
     config = _config(tmp_path, tenant_id=_TENANT_A)
     JournalWorkflowPauseStore(journal_dir=journal_dir, tenant_id=_TENANT_A).capture(
-        _snapshot("run-a")
+        _snapshot("run-a"), depth=None
     )
 
     calls: list[tuple[str | None, str]] = []
