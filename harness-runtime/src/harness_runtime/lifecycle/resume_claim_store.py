@@ -2,6 +2,12 @@
 
 This slice owns the lease and sticky ``claimed`` frame. The invocation-side
 ``started`` barrier and audited recovery transitions are separate consumers.
+
+The store exists only over a journal directory placed under a verified external
+state root (``PlacedStateDir``), and re-proves that placement before its first
+lock, on every lease probe and at the final barrier before a claim is created. A
+placement fault surfaces as ``StateRootPlacementError``, never as a claim refusal
+or contention.
 """
 
 from __future__ import annotations
@@ -20,6 +26,7 @@ from typing import Any, cast
 from harness_core import JournalRecordRef
 from pydantic import ValidationError
 
+from harness_runtime.config.state_placement import PlacedStateDir
 from harness_runtime.lifecycle.journal_workflow_pause_store import (
     JournalWorkflowPauseStore,
     cross_process_journal_lock,
@@ -270,9 +277,10 @@ def _read_fd(fd: int) -> bytes:
 class ResumeClaimStore:
     """Lease publication and one-shot claim admission for an exact journal ref."""
 
-    def __init__(self, *, journal_dir: Path, tenant_id: str | None) -> None:
-        self._journal = JournalWorkflowPauseStore(journal_dir=journal_dir, tenant_id=tenant_id)
-        self._journal_dir = Path(journal_dir)
+    def __init__(self, *, placement: PlacedStateDir, tenant_id: str | None) -> None:
+        self._placement = placement
+        self._journal = JournalWorkflowPauseStore(journal_dir=placement.path, tenant_id=tenant_id)
+        self._journal_dir = placement.path
         self._tenant = normalize_tenant_scope(tenant_id)
 
     def paths_for(self, ref: JournalRecordRef) -> _Paths:
@@ -369,6 +377,8 @@ class ResumeClaimStore:
     ) -> HeldLease | LeaseBusy | LeaseMissing | LeaseInvalid:
         """Noncreating, nonblocking shared probe; a successful caller owns the fd."""
         paths = self.paths_for(ref)
+        # A replaced root is a placement fault, not a missing or invalid lease.
+        self._placement.revalidate()
         if (
             journal_exclusion_is_degraded()
             or not hasattr(os, "O_NOFOLLOW")
@@ -428,6 +438,8 @@ class ResumeClaimStore:
         ):
             raise ClaimRefusedError("journal exclusion or safe open flags are unavailable")
         paths = self.paths_for(ref)
+        # The journal lock creates its lock file, so placement is proved before it.
+        self._placement.revalidate()
         with cross_process_journal_lock(paths.journal, deadline_seconds=deadline_seconds):
             self._require_current_exact(ref)
             if self._tombstoned(paths) or os.path.lexists(paths.claim):
@@ -450,6 +462,9 @@ class ResumeClaimStore:
                     or self._valid_lease(probe.fd, ref) != probe.token
                 ):
                     raise ClaimRefusedError("record changed before admission")
+                # The last barrier before O_EXCL: a root swapped between the two lock
+                # sections must not receive the claim (the published lease stays).
+                self._placement.revalidate()
                 token = uuid.uuid4().hex
                 fd = os.open(paths.claim, _CREATE_FLAGS, 0o600)
                 try:

@@ -50,6 +50,7 @@ from harness_runtime.types import (
 
 __all__ = [
     "MARKER_NAME",
+    "PlacedStateDir",
     "StateKind",
     "StatePlacementRefusal",
     "StateRootPlacementError",
@@ -57,6 +58,7 @@ __all__ = [
     "bootstrap_state_root",
     "filesystem_type_from_mountinfo",
     "linux_filesystem_type",
+    "place_state_dir",
     "probe_state_root",
     "require_inside_state_root",
     "resolve_state_path",
@@ -95,6 +97,7 @@ class StatePlacementRefusal(StrEnum):
     MARKER_UNSAFE = "marker-unsafe"
     IDENTITY_CHANGED = "identity-changed"
     UNVERIFIED_PLACEMENT = "unverified-placement"
+    PLACEMENT_REQUIRED = "placement-required"
     PATH_OUTSIDE_ROOT = "path-outside-root"
     OPERATOR_DEFINED_UNVERIFIABLE = "operator-defined-unverifiable"
 
@@ -567,3 +570,73 @@ def revalidate_state_root(
             f"{str(current.realpath)!r}; device/inode/root_id compared)",
         )
     return current
+
+
+# --- placed directories: durable consumers that must stay external ------------------------
+
+
+@dataclass(frozen=True)
+class PlacedStateDir:
+    """A directory proven to sit under a verified external state root.
+
+    Produced only by `place_state_dir`. A consumer whose durable writes must never land in
+    a checkout (the resume claim store) takes this in its signature, so an unplaced
+    directory cannot reach it at all ([LAW:parse-dont-validate]).
+    """
+
+    path: Path
+    stamp: VerifiedStateRoot
+    config: RuntimeConfig
+    what: str
+    filesystem_type: Callable[[Path], str | None]
+
+    def revalidate(self) -> None:
+        """Prove the placement again before a side effect.
+
+        The root must still be exactly the stamped one (`IDENTITY_CHANGED`), and this
+        directory must still resolve inside it (`PATH_OUTSIDE_ROOT`) — which also refuses
+        a directory swapped for a symlink to somewhere else. Read-only; takes no lock.
+        """
+        placement = self.config.state_placement
+        assert placement is not None  # place_state_dir only stamps a declared placement
+        revalidate_state_root(
+            self.stamp,
+            placement,
+            repository_root=self.config.repository_root,
+            worktree_base=transient_worktree_base(self.config.repository_root),
+            path_bindings=self.config.path_bindings,
+            filesystem_type=self.filesystem_type,
+        )
+        require_inside_state_root(self.path, self.config, self.stamp, what=self.what)
+
+
+def place_state_dir(
+    path: Path,
+    config: RuntimeConfig,
+    verified: VerifiedStateRoot | None,
+    *,
+    what: str,
+    filesystem_type: Callable[[Path], str | None] = linux_filesystem_type,
+) -> PlacedStateDir:
+    """Place a durable directory under the verified root, or refuse.
+
+    Unlike `require_inside_state_root`, an undeclared placement does not pass through:
+    this consumer only exists with an external root (`PLACEMENT_REQUIRED`). A declared
+    placement without a stamp refuses `UNVERIFIED_PLACEMENT`; a path outside the root
+    refuses `PATH_OUTSIDE_ROOT`. Writes nothing.
+    """
+    if config.state_placement is None:
+        raise StateRootPlacementError(
+            StatePlacementRefusal.PLACEMENT_REQUIRED,
+            f"{what} needs a declared state_placement; refusing a checkout-local "
+            f"durable directory {str(path)!r}",
+        )
+    require_inside_state_root(path, config, verified, what=what)
+    assert verified is not None  # require_inside_state_root refuses a declared, unstamped root
+    return PlacedStateDir(
+        path=path,
+        stamp=verified,
+        config=config,
+        what=what,
+        filesystem_type=filesystem_type,
+    )
