@@ -96,12 +96,14 @@ class ExternalCLICommandError(ExternalCLIProviderError):
         stderr: str,
         *,
         stdout: str = "",
+        detail: str | None = None,
     ) -> None:
         self.command = command
         self.exit_code = exit_code
         self.stderr = stderr
         self.stdout = stdout
-        detail = stderr.strip() or stdout.strip() or "no stderr/stdout"
+        if detail is None:
+            detail = stderr.strip() or stdout.strip() or "no stderr/stdout"
         super().__init__(f"external CLI command {command!r} exited {exit_code}: {detail}")
 
 
@@ -635,10 +637,9 @@ class CodexCLIAdapter:
             timeout_seconds=self.timeout_seconds,
             on_wire=on_wire,
         )
-        _raise_for_nonzero(self.command, result)
+        _raise_for_codex_nonzero(self.command, result)
         events = _parse_json_lines(result.stdout, "Codex inference response")
-        _reject_codex_tool_items(events, "Codex inference response")
-        text = _extract_jsonl_text_result(events, "Codex inference response")
+        text = _codex_answer_text(events, "Codex inference response")
         return ExternalCLITextResult(
             text=text,
             exit_code=result.exit_code,
@@ -884,6 +885,18 @@ def _raise_for_nonzero(command: str, result: CLIProcessResult) -> None:
         )
 
 
+def _raise_for_codex_nonzero(command: str, result: CLIProcessResult) -> None:
+    """Nonzero exit still wins over parsing, but Codex stdout/stderr are untrusted output.
+
+    The error keeps the command and exit code and stores neither stream: a tool item's text
+    must not reach a message or a diagnostic field just because the CLI also exited nonzero.
+    """
+    if result.exit_code != 0:
+        raise ExternalCLICommandError(
+            command, result.exit_code, "", detail="CLI output withheld (untrusted Codex output)"
+        )
+
+
 def _parse_json_object(raw: str, label: str) -> Mapping[str, Any]:
     try:
         parsed = json.loads(raw)
@@ -943,6 +956,13 @@ def _extract_jsonl_text_result(events: Sequence[Mapping[str, Any]], label: str) 
     raise ExternalCLIOutputError(f"{label} did not contain an agent text result")
 
 
+_CODEX_LIFECYCLE_TYPES = frozenset({"thread.started", "turn.started", "turn.completed"})
+"""The only no-item Codex envelopes. Anything else, including `turn.failed` and `error`, is
+unverified output on a successful exit and refuses; this grammar is closed, not a denylist."""
+
+_CODEX_ITEM_PHASES = frozenset({"item.started", "item.updated", "item.completed"})
+"""The only outer types that may carry an `item`."""
+
 _CODEX_NON_TOOL_ITEM_TYPES = frozenset({"agent_message", "reasoning"})
 """The only Codex JSONL item types that are model output rather than tool activity."""
 
@@ -953,17 +973,20 @@ _CODEX_NAMED_TOOL_ITEM_TYPES = frozenset(
 untrusted output: any other type is reported only as unrecognised."""
 
 
-def _codex_item_refusal(event: Mapping[str, Any]) -> str | None:
-    """The fixed classification of an event that shows, or could hide, tool activity.
+def _codex_event_refusal(event: Mapping[str, Any]) -> str | None:
+    """The fixed label for an event outside the closed Codex grammar, else `None`.
 
-    `None` for a lifecycle event (`thread.*`, `turn.*`: no `item` key, not an `item.*` type)
-    and for a well-formed non-tool item. An `item.*` event, or any event carrying an `item`
-    key, whose item is missing, null, not an object or has no string type is malformed and
-    refused, so a tool item cannot pass by hiding its shape.
+    The outer `type` must be a string in exactly one of two sets: a lifecycle type, which
+    carries no `item` key, or an item phase, which carries a mapping item of a recognised
+    non-tool type. Every label is a constant or a name from `_CODEX_NAMED_TOOL_ITEM_TYPES`.
     """
     event_type = event.get("type")
-    if "item" not in event and not (isinstance(event_type, str) and event_type.startswith("item.")):
-        return None
+    if not isinstance(event_type, str):
+        return "malformed event envelope"
+    if event_type in _CODEX_LIFECYCLE_TYPES:
+        return "malformed event envelope" if "item" in event else None
+    if event_type not in _CODEX_ITEM_PHASES:
+        return "unrecognised event type"
     item = event.get("item")
     item_type = cast(Mapping[str, Any], item).get("type") if isinstance(item, Mapping) else None
     if not isinstance(item_type, str):
@@ -975,20 +998,28 @@ def _codex_item_refusal(event: Mapping[str, Any]) -> str | None:
     return "unrecognised item type"
 
 
-def _reject_codex_tool_items(events: Sequence[Mapping[str, Any]], label: str) -> None:
-    """Refuse Codex output that shows tool activity: detection after the fact, not prevention.
+def _codex_answer_text(events: Sequence[Mapping[str, Any]], label: str) -> str:
+    """Parse a Codex stream: refuse anything outside the grammar, then take the answer.
 
-    Any item that is not a recognisable non-tool type is treated as a tool item, so a new
-    Codex item kind fails closed instead of being skipped by the text extractor. The error
-    carries only a fixed classification (`_codex_item_refusal`), never output text.
+    Detection after the fact, not prevention. The answer is the last COMPLETED agent-message
+    item of a fully validated stream; no top-level text shape is ever an answer.
+    [LAW:parse-dont-validate]
     """
     for event in events:
-        refusal = _codex_item_refusal(event)
+        refusal = _codex_event_refusal(event)
         if refusal is not None:
             raise ExternalCLIOutputError(
-                f"{label} contained a tool item or unverifiable item event ({refusal}); "
+                f"{label} contained a tool item or unverifiable event ({refusal}); "
                 "tool use is not supported on this route"
             )
+    for event in reversed(events):
+        if event["type"] != "item.completed":
+            continue
+        item = cast(Mapping[str, Any], event["item"])
+        text = item.get("text")
+        if item["type"] == "agent_message" and isinstance(text, str):
+            return text
+    raise ExternalCLIOutputError(f"{label} did not contain an agent text result")
 
 
 def _render_argv_templates(

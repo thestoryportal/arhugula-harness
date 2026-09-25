@@ -274,3 +274,183 @@ async def test_a_failed_scratch_removal_is_reported_without_replacing_the_outcom
     assert result.text == "OK"
     assert "Codex scratch directory removal failed" in caplog.text
     assert "secret-stderr-sentinel" not in caplog.text
+
+
+# --- Codex delta HOLD: one closed envelope grammar over the whole stream ----------------------
+#
+# Grammar (from the canonical stream in this file and the recorded Codex `exec --json` shape;
+# no live CLI was run): no-item lifecycle events are exactly `thread.started`, `turn.started`
+# and `turn.completed`; item events are exactly `item.started|updated|completed` carrying a
+# mapping item of a recognised type. Anything else refuses with a fixed label.
+
+INNER_ANSWER = {"id": "i2", "type": "agent_message", "text": "LEAKED"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "event",
+    [
+        {"type": ["item.completed"], "item": INNER_ANSWER},
+        {"type": "command_execution", "item": INNER_ANSWER},
+        {"type": "thread.started", "item": INNER_ANSWER},
+    ],
+    ids=["outer-type-list", "tool-like-outer-type", "thread-event-carrying-item"],
+)
+async def test_a_malformed_outer_envelope_is_refused_even_around_an_agent_message(
+    event: dict[str, Any],
+) -> None:
+    with pytest.raises(ExternalCLIOutputError, match="tool item or unverifiable") as caught:
+        await _dispatch(_events(event))
+
+    assert "LEAKED" not in str(caught.value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "event",
+    [
+        {"type": "agent_message", "text": "LEAKED"},
+        {"type": "message", "text": "LEAKED"},
+        {"type": "response", "text": "LEAKED"},
+        {"text": "LEAKED"},
+        {"type": "turn.completed", "text": "LEAKED"},
+    ],
+    ids=["agent_message", "message", "response", "untyped", "lifecycle-with-text"],
+)
+async def test_top_level_text_is_never_an_answer(event: dict[str, Any]) -> None:
+    with pytest.raises(ExternalCLIOutputError):
+        await _dispatch(_events(THREAD, TURN_STARTED, event, TURN_DONE))
+
+
+@pytest.mark.asyncio
+async def test_top_level_text_after_a_real_answer_is_refused_not_preferred() -> None:
+    stdout = _events(THREAD, ANSWER, {"type": "message", "text": "LEAKED"}, TURN_DONE)
+
+    with pytest.raises(ExternalCLIOutputError) as caught:
+        await _dispatch(stdout)
+
+    assert "LEAKED" not in str(caught.value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", ["stdout", "stderr"])
+async def test_a_nonzero_codex_exit_carries_no_cli_output(stream: str) -> None:
+    secret = f"{SENTINEL} " + json.dumps(_tool_item("command_execution"))
+    result = CLIProcessResult(
+        exit_code=2,
+        stdout=secret if stream == "stdout" else "",
+        stderr=secret if stream == "stderr" else "",
+    )
+    adapter = await construct_codex_cli_adapter(_config(), runner=_FakeRunner([result]))
+
+    with pytest.raises(ExternalCLICommandError) as caught:
+        await adapter.dispatch_text(model="gpt-5", prompt="p")
+
+    error = caught.value
+    assert error.exit_code == 2 and "2" in str(error)
+    assert SENTINEL not in str(error) and SENTINEL not in error.stdout + error.stderr
+    assert not error.stdout and not error.stderr
+
+
+@pytest.mark.asyncio
+async def test_a_nonzero_exit_of_another_provider_keeps_its_diagnostic() -> None:
+    from harness_runtime.lifecycle.external_cli_provider import construct_claude_code_cli_adapter
+
+    config = ExternalCLIProviderConfig(
+        provider="claude-code",
+        kind="claude-code",
+        command="claude",
+        timeout_seconds=42.0,
+        auth_check=False,
+    )
+    result = CLIProcessResult(exit_code=2, stdout="", stderr="claude said no")
+    adapter = await construct_claude_code_cli_adapter(config, runner=_FakeRunner([result]))
+
+    with pytest.raises(ExternalCLICommandError, match="claude said no"):
+        await adapter.dispatch_text(model="m", prompt="p")
+
+
+# --- boundaries of the grammar ------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("inner", ["agent_message", "reasoning"])
+@pytest.mark.parametrize("phase", ["item.started", "item.updated", "item.completed"])
+async def test_every_item_phase_with_a_recognised_inner_type_is_accepted(
+    inner: str, phase: str
+) -> None:
+    event = {"type": phase, "item": {"id": "i", "type": inner, "text": "partial"}}
+
+    assert await _dispatch(_events(THREAD, event, ANSWER, TURN_DONE)) == "OK"
+
+
+@pytest.mark.asyncio
+async def test_only_a_completed_agent_message_is_the_answer() -> None:
+    updated = {"type": "item.updated", "item": {"id": "i2", "type": "agent_message", "text": "P"}}
+    started = {"type": "item.started", "item": {"id": "i2", "type": "agent_message", "text": "S"}}
+
+    assert await _dispatch(_events(THREAD, ANSWER, updated, started, TURN_DONE)) == "OK"
+    with pytest.raises(ExternalCLIOutputError, match="agent text result"):
+        await _dispatch(_events(THREAD, started, updated, REASONING, TURN_DONE))
+
+
+@pytest.mark.asyncio
+async def test_the_last_completed_agent_message_wins() -> None:
+    later = {"type": "item.completed", "item": {"id": "i3", "type": "agent_message", "text": "B"}}
+
+    assert await _dispatch(_events(THREAD, ANSWER, later, TURN_DONE)) == "B"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "event",
+    [
+        {"type": "item.deleted", "item": INNER_ANSWER},
+        {"type": "item", "item": INNER_ANSWER},
+        {"type": None, "item": INNER_ANSWER},
+        {"item": INNER_ANSWER},
+        {"type": 7, "item": INNER_ANSWER},
+        {"type": "turn.started", "item": None},
+        {"type": "turn.completed", "item": INNER_ANSWER},
+        {"type": "turn.failed"},
+        {"type": "error", "message": "x"},
+        {"type": "thread.resumed"},
+    ],
+    ids=[
+        "unknown-item-phase",
+        "bare-item",
+        "null-type",
+        "missing-type",
+        "int-type",
+        "lifecycle-item-null",
+        "turn-carrying-item",
+        "turn-failed",
+        "error-event",
+        "unknown-thread-event",
+    ],
+)
+async def test_unknown_or_malformed_envelopes_fail_closed(event: dict[str, Any]) -> None:
+    with pytest.raises(ExternalCLIOutputError, match="tool item or unverifiable") as caught:
+        await _dispatch(_events(THREAD, event, ANSWER, TURN_DONE))
+
+    assert "LEAKED" not in str(caught.value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "item",
+    [None, "str", 7, ["agent_message"], {"id": "i"}, {"type": None}, {"type": ["agent_message"]}],
+    ids=["null", "string", "int", "list", "no-type", "null-type", "list-type"],
+)
+async def test_malformed_item_lifecycle_values_fail_closed(item: object) -> None:
+    for phase in ("item.started", "item.updated", "item.completed"):
+        with pytest.raises(ExternalCLIOutputError, match="malformed item event"):
+            await _dispatch(_events(THREAD, {"type": phase, "item": item}, ANSWER))
+
+
+@pytest.mark.asyncio
+async def test_a_completed_agent_message_with_non_string_text_is_no_answer() -> None:
+    bad = {"type": "item.completed", "item": {"id": "i", "type": "agent_message", "text": 7}}
+
+    with pytest.raises(ExternalCLIOutputError, match="agent text result"):
+        await _dispatch(_events(THREAD, bad, TURN_DONE))
