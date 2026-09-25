@@ -18,7 +18,10 @@ import hashlib
 import json
 import os
 import stat
+import threading
 import uuid
+from collections.abc import Callable, Generator
+from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -205,36 +208,121 @@ _MINT = object()
 
 
 class LeaseCapability:
-    """The store-issued, still-live hold on one lease flock, from `claim` to the worker's close.
+    """The store-issued hold on one lease flock, from `claim` until its owner closes it.
 
-    [LAW:types-are-the-program] Ownership is provenance, not a lock taken on demand: an
-    instance can only be minted by `ResumeClaimStore.claim`, which hands it the fd that took
-    the flock, and only `close` releases that fd. A validator that flock()s a presented fd
-    would turn any unlocked descriptor into an owner the moment the real holder lets go, so
-    admission asks whether the capability is one the store issued and that is still open.
+    [LAW:types-are-the-program] The capability OWNS the descriptor: nothing outside this class
+    can read it, so no caller can offer the store an fd of its own making, and the store never
+    flocks a presented descriptor. Provenance is the class itself: it can be minted only here
+    (`__new__` checks a module-private token), cannot be subclassed, copied or pickled, and the
+    store admits only an exact instance that is open, in the minting process, and still on the
+    inode it was minted on.
 
-    Trust assumption: `_MINT` is module-private, so this stops any caller working through the
-    public API, including a `HeldClaim` rebuilt from the readable token and a fresh fd. It is
-    not a hostile same-process boundary; code that reaches into this module's privates or
-    closes the fd behind the capability's back is outside the model. Across processes the
-    only way to hold the flock is to inherit the fd, which is the worker handoff itself.
+    Operations that need the lease *borrow* it (`_borrow`) for their entire durable window, and
+    `close` serialises with that window: from another thread it waits for the borrow to end;
+    from the borrowing thread itself it raises, because closing inside the operation that is
+    using the lease could only tear that operation.
+
+    Lock order: this in-process borrow (E) is taken before any journal lock (J); the lease
+    flock (L) is only ever taken non-blocking; recovery never takes E and `close` takes only E.
+
+    Trust assumption: reaching this module's privates, `object.__new__` plus slot writes, or
+    `os.close` on an fd one does not own is outside the model, and flock is advisory on a
+    local POSIX filesystem. Across processes the only way to hold the flock is to inherit the
+    fd, which is the worker handoff itself; a forked copy is refused here.
     """
 
-    __slots__ = ("_fd",)
+    __slots__ = ("_borrower", "_closed", "_cond", "_dev_ino", "_fd", "_pid")
+    _borrower: int | None
+    _closed: bool
+    _cond: threading.Condition
+    _dev_ino: tuple[int, int]
+    _fd: int
+    _pid: int
 
-    def __init__(self, mint: object, fd: int) -> None:
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        raise TypeError("a lease capability cannot be subclassed")
+
+    def __new__(cls, mint: object, fd: int) -> LeaseCapability:
         if mint is not _MINT:
             raise TypeError("a lease capability is issued only by ResumeClaimStore.claim")
+        self = super().__new__(cls)
+        own = os.fstat(fd)
         self._fd = fd
+        self._dev_ino = (own.st_dev, own.st_ino)
+        self._pid = os.getpid()
+        self._cond = threading.Condition()
+        self._borrower = None
+        self._closed = False
+        return self
+
+    def __copy__(self) -> LeaseCapability:
+        raise TypeError("a lease capability cannot be copied")
+
+    def __deepcopy__(self, memo: object) -> LeaseCapability:
+        raise TypeError("a lease capability cannot be copied")
+
+    def __reduce_ex__(self, protocol: object) -> Any:
+        raise TypeError("a lease capability cannot be pickled")
 
     @property
-    def fd(self) -> int:
-        return self._fd
+    def closed(self) -> bool:
+        return self._closed
+
+    @contextmanager
+    def _borrow(self) -> Generator[int, None, None]:
+        """Yield the descriptor for one whole durable operation, or refuse with no effect."""
+        # [LAW:no-ambient-temporal-coupling] Checked before any wait: a forked copy shares a
+        # borrower flag whose thread does not exist in this process.
+        if os.getpid() != self._pid:
+            raise ClaimRefusedError("lease capability belongs to another process")
+        me = threading.get_ident()
+        with self._cond:
+            while self._borrower is not None:
+                if self._borrower == me:
+                    raise ClaimRefusedError("lease is already borrowed by this thread")
+                self._cond.wait()
+            if self._closed:
+                raise ClaimRefusedError("lease capability is closed")
+            try:
+                own = os.fstat(self._fd)
+            except OSError as exc:
+                raise ClaimRefusedError("lease descriptor is unusable") from exc
+            if (own.st_dev, own.st_ino) != self._dev_ino:
+                raise ClaimRefusedError("lease descriptor no longer names its lease")
+            self._borrower = me
+        try:
+            yield self._fd
+        finally:
+            with self._cond:
+                self._borrower = None
+                self._cond.notify_all()
 
     def close(self) -> None:
-        if self._fd >= 0:
-            os.close(self._fd)
-            self._fd = -1
+        if os.getpid() != self._pid:
+            # A forked copy only drops its own reference; the owner's flock is not touched.
+            if not self._closed:
+                self._closed = True
+                os.close(self._fd)
+            return
+        with self._cond:
+            if self._borrower == threading.get_ident():
+                raise RuntimeError("a lease cannot be closed from inside the operation using it")
+            while self._borrower is not None:
+                self._cond.wait()
+            if not self._closed:
+                self._closed = True
+                os.close(self._fd)
+
+
+def _borrowed(lease: object) -> AbstractContextManager[int]:
+    """Borrow a store-issued capability for a whole durable operation, or refuse.
+
+    [LAW:parse-dont-validate] The exact type is the proof of provenance; a subclass, stand-in
+    or rebuilt claim wrapper never reaches the descriptor.
+    """
+    if type(lease) is not LeaseCapability:
+        raise ClaimRefusedError("lease is not a store-issued capability")
+    return lease._borrow()  # pyright: ignore[reportPrivateUsage]
 
 
 @dataclass
@@ -246,8 +334,8 @@ class HeldClaim:
     lease: LeaseCapability
 
     @property
-    def lease_fd(self) -> int:
-        return self.lease.fd
+    def closed(self) -> bool:
+        return self.lease.closed
 
     def close(self) -> None:
         self.lease.close()
@@ -276,8 +364,8 @@ class StartedClaim:
     """A claim whose ``started`` frame is durable; the only value that may lead to a body.
 
     [LAW:types-are-the-program] Produced solely by `ResumeClaimStore.mark_started`. It wraps
-    (aliases) the SAME `HeldClaim`, so the lease fd stays with the caller: closing either
-    object closes the one descriptor, once.
+    (aliases) the SAME `HeldClaim`, so the lease capability stays with the caller: closing
+    either object closes the one descriptor, once.
     """
 
     claim: HeldClaim
@@ -291,8 +379,8 @@ class StartedClaim:
         return self.claim.record_ref
 
     @property
-    def lease_fd(self) -> int:
-        return self.claim.lease_fd
+    def closed(self) -> bool:
+        return self.claim.closed
 
     def close(self) -> None:
         self.claim.close()
@@ -454,21 +542,19 @@ class ResumeClaimStore:
         current = os.stat(path, follow_symlinks=False)
         return (own.st_dev, own.st_ino) == (current.st_dev, current.st_ino)
 
-    def _require_lease_live(self, lease: object, path: Path) -> None:
-        """Admit only a store-issued capability that is still open on the canonical lease.
+    def _require_lease_live(self, fd: int, path: Path, ref: JournalRecordRef) -> None:
+        """Prove a BORROWED capability descriptor is the canonical live lease for `ref`.
 
         The single flock attempt is on a FRESH open and can only refuse: if it acquires, the
-        capability's lock is gone (closed or released behind its back) and the transient lock
-        drops on close. Nothing here ever locks the presented fd, so no unlocked descriptor
-        can become a holder by winning a lock that was just freed.
+        capability's lock is gone (released behind its back) and the transient lock drops on
+        close. Nothing here ever locks the borrowed fd, so no unlocked descriptor can become a
+        holder by winning a lock that was just freed.
         """
         import fcntl  # POSIX-only; the degraded platform refuses before any caller gets here.
 
-        # [LAW:parse-dont-validate] A forged HeldClaim carries a stand-in, never a capability.
-        if not isinstance(lease, LeaseCapability) or lease.fd < 0:
-            raise ValueError("lease is not a live store-issued capability")
-        if not self._same_inode(lease.fd, path):
+        if not self._same_inode(fd, path):
             raise ValueError("lease is not the canonical live lease")
+        self._valid_lease(fd, ref)
         probe = os.open(path, _OPEN_FLAGS)
         try:
             try:
@@ -589,15 +675,16 @@ class ResumeClaimStore:
         if self._journal.read_exact(ref) is None:
             raise ClaimRefusedError("invalid exact journal record")
 
-    def _require_parent_carried(self, ref: JournalRecordRef, parent: StartedClaim) -> None:
+    def _require_parent_carried(
+        self, ref: JournalRecordRef, parent: StartedClaim, parent_fd: int
+    ) -> None:
         """Admit a positional child ref only through a live STARTED parent that carries it once."""
         # [LAW:single-enforcer] The one place child recency is decided; every fault refuses.
         if parent.record_ref.tenant != ref.tenant:
             raise ClaimRefusedError("parent claim is in another tenant scope")
         parent_paths = self.paths_for(parent.record_ref)
         try:
-            self._require_lease_live(parent.claim.lease, parent_paths.lease)
-            self._valid_lease(parent.lease_fd, parent.record_ref)
+            self._require_lease_live(parent_fd, parent_paths.lease, parent.record_ref)
             state = parse_claim(_read_regular_no_follow(parent_paths.claim), parent.record_ref)
         except (OSError, ValueError) as exc:
             raise ClaimRefusedError("parent claim evidence is not trustworthy") from exc
@@ -636,12 +723,22 @@ class ResumeClaimStore:
         if len(matching) != 1:
             raise ClaimRefusedError("parent does not carry this child exactly once")
 
-    def _require_admitted(self, ref: JournalRecordRef, admission: Admission) -> None:
+    @contextmanager
+    def _admitting(
+        self, ref: JournalRecordRef, admission: Admission
+    ) -> Generator[Callable[[], None], None, None]:
+        """Yield the recency check for `admission`, holding its lease borrow for the whole scope.
+
+        [LAW:no-ambient-temporal-coupling] A parent-carried child is admitted only while the
+        parent's capability is borrowed, so the parent cannot be closed between the recency
+        check and the child's durable claim.
+        """
         match admission:
             case RootLatestAdmission():
-                self._require_current_exact(ref)
+                yield lambda: self._require_current_exact(ref)
             case ParentCarriedAdmission(parent):
-                self._require_parent_carried(ref, parent)
+                with _borrowed(parent.claim.lease) as parent_fd:
+                    yield lambda: self._require_parent_carried(ref, parent, parent_fd)
             case _ as unreachable:
                 assert_never(unreachable)
 
@@ -666,52 +763,54 @@ class ResumeClaimStore:
         paths = self.paths_for(ref)
         # The journal lock creates its lock file, so placement is proved before it.
         self._placement.revalidate()
-        with cross_process_journal_lock(paths.journal, deadline_seconds=deadline_seconds):
-            self._require_admitted(ref, admission)
-            if self._tombstoned(paths) or os.path.lexists(paths.claim):
-                raise ClaimRefusedError("record is ineligible")
-            self._prepare_lease(paths, ref)
-        probe = self.probe_lease(ref)
-        if isinstance(probe, LeaseBusy):
-            raise ClaimBusyError("lease holder is active")
-        if not isinstance(probe, HeldLease):
-            raise ClaimRefusedError("lease is missing or invalid")
-        try:
+        with self._admitting(ref, admission) as require_admitted:
             with cross_process_journal_lock(paths.journal, deadline_seconds=deadline_seconds):
-                # [LAW:no-ambient-temporal-coupling] Recency is checked under the
-                # same journal lock as O_EXCL creation, after taking the lease lock.
-                self._require_admitted(ref, admission)
-                if (
-                    self._tombstoned(paths)
-                    or os.path.lexists(paths.claim)
-                    or not self._same_inode(probe.fd, paths.lease)
-                    or self._valid_lease(probe.fd, ref) != probe.token
-                ):
-                    raise ClaimRefusedError("record changed before admission")
-                # The last barrier before O_EXCL: a root swapped between the two lock
-                # sections must not receive the claim (the published lease stays).
-                self._placement.revalidate()
-                token = uuid.uuid4().hex
-                fd = os.open(paths.claim, _CREATE_FLAGS, 0o600)
-                try:
-                    _write_all(fd, _encode_frame("claimed", token, ref))
-                    os.fsync(fd)
-                finally:
-                    os.close(fd)
-                _fsync_dir(paths.journal.parent)
-                return HeldClaim(token, ref, LeaseCapability(_MINT, probe.fd))
-        except BaseException:
-            probe.close()
-            raise
+                require_admitted()
+                if self._tombstoned(paths) or os.path.lexists(paths.claim):
+                    raise ClaimRefusedError("record is ineligible")
+                self._prepare_lease(paths, ref)
+            probe = self.probe_lease(ref)
+            if isinstance(probe, LeaseBusy):
+                raise ClaimBusyError("lease holder is active")
+            if not isinstance(probe, HeldLease):
+                raise ClaimRefusedError("lease is missing or invalid")
+            try:
+                with cross_process_journal_lock(paths.journal, deadline_seconds=deadline_seconds):
+                    # [LAW:no-ambient-temporal-coupling] Recency is checked under the
+                    # same journal lock as O_EXCL creation, after taking the lease lock.
+                    require_admitted()
+                    if (
+                        self._tombstoned(paths)
+                        or os.path.lexists(paths.claim)
+                        or not self._same_inode(probe.fd, paths.lease)
+                        or self._valid_lease(probe.fd, ref) != probe.token
+                    ):
+                        raise ClaimRefusedError("record changed before admission")
+                    # The last barrier before O_EXCL: a root swapped between the two lock
+                    # sections must not receive the claim (the published lease stays).
+                    self._placement.revalidate()
+                    token = uuid.uuid4().hex
+                    fd = os.open(paths.claim, _CREATE_FLAGS, 0o600)
+                    try:
+                        _write_all(fd, _encode_frame("claimed", token, ref))
+                        os.fsync(fd)
+                    finally:
+                        os.close(fd)
+                    _fsync_dir(paths.journal.parent)
+                    return HeldClaim(token, ref, LeaseCapability(_MINT, probe.fd))
+            except BaseException:
+                probe.close()
+                raise
 
     def mark_started(
         self, held: HeldClaim, *, deadline_seconds: float | None = None
     ) -> StartedClaim:
         """Durably record ``started`` for a held claim; only the result may lead to a body.
 
-        Under lease then journal lock it revalidates the placed root, proves the live
-        lease fd still names the canonical lease inode, requires the claim file to be an
-        exact `UnstartedProof` for THIS token and ref, appends the v1 ``started`` frame
+        It borrows the lease capability for the whole durable window (so no `close` can land
+        between the checks and the fsync), then under the journal lock revalidates the placed
+        root, proves the borrowed lease is the canonical live lease, requires the claim file to
+        be an exact `UnstartedProof` for THIS token and ref, appends the v1 ``started`` frame
         (no symlink followed) and fsyncs before returning. Missing, closed, changed,
         already-started, tampered or ambiguous evidence refuses (`ClaimRefusedError`,
         never the retryable busy). The lease stays with the caller on every outcome.
@@ -727,36 +826,36 @@ class ResumeClaimStore:
             raise ClaimRefusedError("journal exclusion or safe open flags are unavailable")
         paths = self.paths_for(held.record_ref)
         self._placement.revalidate()
-        with cross_process_journal_lock(paths.journal, deadline_seconds=deadline_seconds):
-            # The last barrier before the append: a swapped root must not receive it.
-            self._placement.revalidate()
-            try:
-                # The lease frame carries the LEASE token (distinct from the claim token,
-                # which the claim file proves below): the fd must name the canonical inode
-                # and hold a canonical lease frame for this exact ref.
-                self._require_lease_live(held.lease, paths.lease)
-                self._valid_lease(held.lease_fd, held.record_ref)
-                fd = os.open(paths.claim, os.O_RDWR | os.O_APPEND | _OPEN_FLAGS_NO_ACCESS)
-            except (OSError, ValueError) as exc:
-                raise ClaimRefusedError(f"claim evidence unavailable: {exc}") from exc
-            try:
-                st = os.fstat(fd)
-                if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1:
-                    raise ClaimRefusedError("invalid claim inode")
-                state = parse_claim(_read_fd(fd), held.record_ref)
-                if not (
-                    isinstance(state, UnstartedProof)
-                    and state.token == held.token
-                    and state.record_ref == held.record_ref
-                ):
-                    raise ClaimRefusedError("claim is not an exact unstarted proof")
-                if self._tombstoned(paths):
-                    raise ClaimRefusedError("record is ineligible")
+        with _borrowed(held.lease) as lease_fd:
+            with cross_process_journal_lock(paths.journal, deadline_seconds=deadline_seconds):
+                # The last barrier before the append: a swapped root must not receive it.
+                self._placement.revalidate()
                 try:
-                    _write_all(fd, started_frame(held))
-                    os.fsync(fd)
-                except OSError as exc:
-                    raise ClaimRefusedError("started frame was not made durable") from exc
-            finally:
-                os.close(fd)
+                    # The lease frame carries the LEASE token (distinct from the claim token,
+                    # which the claim file proves below): the borrowed fd must name the
+                    # canonical inode and hold a canonical lease frame for this exact ref.
+                    self._require_lease_live(lease_fd, paths.lease, held.record_ref)
+                    fd = os.open(paths.claim, os.O_RDWR | os.O_APPEND | _OPEN_FLAGS_NO_ACCESS)
+                except (OSError, ValueError) as exc:
+                    raise ClaimRefusedError(f"claim evidence unavailable: {exc}") from exc
+                try:
+                    st = os.fstat(fd)
+                    if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1:
+                        raise ClaimRefusedError("invalid claim inode")
+                    state = parse_claim(_read_fd(fd), held.record_ref)
+                    if not (
+                        isinstance(state, UnstartedProof)
+                        and state.token == held.token
+                        and state.record_ref == held.record_ref
+                    ):
+                        raise ClaimRefusedError("claim is not an exact unstarted proof")
+                    if self._tombstoned(paths):
+                        raise ClaimRefusedError("record is ineligible")
+                    try:
+                        _write_all(fd, started_frame(held))
+                        os.fsync(fd)
+                    except OSError as exc:
+                        raise ClaimRefusedError("started frame was not made durable") from exc
+                finally:
+                    os.close(fd)
         return StartedClaim(held)

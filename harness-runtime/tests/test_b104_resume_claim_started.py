@@ -10,8 +10,6 @@ from __future__ import annotations
 import os
 import sys
 import uuid
-from collections.abc import Generator
-from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -99,10 +97,10 @@ def test_mark_started_appends_the_exact_started_frame_and_keeps_the_lease(placed
     state = parse_claim(_claim_bytes(store, ref), ref)
     assert isinstance(state, StartedOrUnknown) and state.phase == "started"
     assert state.token == held.token
-    assert started.lease_fd == held.lease_fd >= 0 and started.token == held.token
+    assert not started.closed and not held.closed and started.token == held.token
     assert _lease_is_held_elsewhere(store, ref)  # ownership stayed with the caller
     started.close()
-    assert held.lease_fd == -1  # one descriptor, closed once, seen through both views
+    assert held.closed  # one descriptor, closed once, seen through both views
     assert not _lease_is_held_elsewhere(store, ref)
 
 
@@ -156,7 +154,7 @@ def test_a_failed_fsync_never_returns_a_started_claim_and_never_reads_as_unstart
     monkeypatch.undo()
 
     assert not isinstance(parse_claim(_claim_bytes(store, ref), ref), UnstartedProof)
-    assert held.lease_fd >= 0 and _lease_is_held_elsewhere(store, ref)  # still the caller's
+    assert not held.closed and _lease_is_held_elsewhere(store, ref)  # still the caller's
     with pytest.raises(ClaimRefusedError):  # and it can never be started a second time
         store.mark_started(held)
 
@@ -174,7 +172,7 @@ def test_a_second_mark_started_refuses_and_changes_nothing(placed: Placed) -> No
 
     assert not isinstance(raised.value, ClaimBusyError)
     assert _claim_bytes(store, ref) == after_first
-    assert held.lease_fd >= 0
+    assert not held.closed
 
 
 def test_a_closed_lease_refuses_before_anything_is_written(placed: Placed) -> None:
@@ -201,7 +199,7 @@ def test_a_lease_fd_that_is_not_the_canonical_lease_refuses(placed: Placed) -> N
         forged.close()
 
     assert _claim_bytes(store, ref) == claimed
-    assert held.lease_fd >= 0
+    assert not held.closed
 
 
 def test_a_wrong_token_for_the_live_lease_refuses(placed: Placed) -> None:
@@ -213,7 +211,7 @@ def test_a_wrong_token_for_the_live_lease_refuses(placed: Placed) -> None:
         store.mark_started(forged)
 
     assert _claim_bytes(store, ref) == claimed
-    assert held.lease_fd >= 0  # the forged view shares the fd but did not close it
+    assert not held.closed  # the forged view shares the fd but did not close it
 
 
 def test_a_valid_looking_lease_on_a_replaced_inode_refuses(placed: Placed) -> None:
@@ -229,7 +227,7 @@ def test_a_valid_looking_lease_on_a_replaced_inode_refuses(placed: Placed) -> No
         store.mark_started(held)
 
     assert _claim_bytes(store, ref) == claimed
-    assert held.lease_fd >= 0
+    assert not held.closed
 
 
 @pytest.mark.parametrize(
@@ -269,7 +267,7 @@ def test_a_claim_that_is_not_an_exact_unstarted_proof_refuses_without_writing(
     assert decoy.read_bytes() == decoy_before  # a symlink target is never appended to
     if before is not None:
         assert claim_path.read_bytes() == before
-    assert held.lease_fd >= 0
+    assert not held.closed
 
 
 def test_a_tombstoned_record_refuses(placed: Placed) -> None:
@@ -298,7 +296,7 @@ def test_a_swapped_root_before_the_transition_is_a_placement_fault_and_writes_no
         store.mark_started(held)
 
     assert _claim_bytes(store, ref) == claimed
-    assert held.lease_fd >= 0
+    assert not held.closed
 
 
 def test_a_root_swapped_after_the_journal_lock_still_writes_nothing(placed: Placed) -> None:
@@ -430,7 +428,7 @@ def test_a_started_parent_admits_each_same_workflow_sibling_positionally(
         with store.claim(family.child_refs[0], admission) as first:  # N, though N+1 is latest
             with store.claim(family.child_refs[1], admission) as second:
                 assert first.record_ref != second.record_ref
-                assert first.lease_fd != second.lease_fd
+                assert first.lease is not second.lease
 
 
 def _parent_carried_refusal(
@@ -564,68 +562,7 @@ def test_the_real_holder_is_unaffected_by_the_lock_proof_repeated_probes(placed:
     started.close()
 
 
-# --- F2 release race: ownership is a store-issued capability, not a lock acquired on demand --
-
-
-@contextmanager
-def _release_holder_when_a_nonblocking_lock_is_first_refused(
-    monkeypatch: pytest.MonkeyPatch, holder: HeldClaim
-) -> Generator[None]:
-    """The genuine holder closes at the exact point a fresh lock attempt is refused.
-
-    This is the OS ordering behind the review finding: whatever the store does after its
-    first refused lock attempt runs against a lease nobody holds any more.
-    """
-    import fcntl
-
-    real_flock = fcntl.flock
-    released: list[bool] = []
-
-    def flock(fd: int, operation: int) -> None:
-        try:
-            real_flock(fd, operation)
-        except OSError:
-            if not released:
-                released.append(True)
-                holder.close()
-            raise
-
-    monkeypatch.setattr(fcntl, "flock", flock)
-    yield
-
-
-def test_a_forged_claim_is_refused_when_the_holder_releases_between_lock_attempts(
-    placed: Placed, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    store, ref, held = _held(placed)
-    claimed = _claim_bytes(store, ref)
-    forged = _forged_claim(held, _unlocked_fd_for(store, ref))
-    try:
-        with _release_holder_when_a_nonblocking_lock_is_first_refused(monkeypatch, held):
-            with pytest.raises(ClaimRefusedError):
-                store.mark_started(forged)
-    finally:
-        forged.close()
-
-    assert _claim_bytes(store, ref) == claimed  # no started frame was appended
-
-
-def test_a_forged_parent_admits_no_child_when_the_holder_releases_between_lock_attempts(
-    placed: Placed, family: Family, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    store = placed.store()
-    real_parent = _started_parent(store, family)
-    forged = StartedClaim(
-        _forged_claim(real_parent.claim, _unlocked_fd_for(store, family.parent_ref))
-    )
-    try:
-        with _release_holder_when_a_nonblocking_lock_is_first_refused(
-            monkeypatch, real_parent.claim
-        ):
-            _parent_carried_refusal(placed, family, forged)
-    finally:
-        forged.close()
-        real_parent.close()
+# --- F2: ownership is a store-issued capability (see test_b104_lease_capability.py) ---------
 
 
 def test_lease_capabilities_are_issued_only_by_the_store() -> None:
@@ -651,7 +588,7 @@ def test_closing_a_claim_invalidates_it_for_start_and_for_parent_admission(
     store = placed.store()
     parent = _started_parent(store, family)
     parent.close()
-    assert parent.lease_fd == -1 and not _lease_is_held_elsewhere(store, family.parent_ref)
+    assert parent.closed and not _lease_is_held_elsewhere(store, family.parent_ref)
     _parent_carried_refusal(placed, family, parent)
 
     _store, ref, held = _held(placed)
@@ -665,7 +602,8 @@ def test_a_capability_whose_flock_was_released_behind_its_back_refuses(placed: P
 
     store, ref, held = _held(placed)
     claimed = _claim_bytes(store, ref)
-    fcntl.flock(held.lease_fd, fcntl.LOCK_UN)  # the fd is open, the lock is gone
+    # Out-of-model tamper (the descriptor is private): the kernel view must still refuse.
+    fcntl.flock(held.lease._fd, fcntl.LOCK_UN)  # pyright: ignore[reportPrivateUsage]
 
     with pytest.raises(ClaimRefusedError):
         store.mark_started(held)
