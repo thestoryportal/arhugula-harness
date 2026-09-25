@@ -66,6 +66,7 @@ the under-gate impossible.
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from harness_cp.cp_shared_types import MCPTrustTier
@@ -75,9 +76,51 @@ if TYPE_CHECKING:  # pragma: no cover — type-only import (avoid runtime cycle)
     from harness_runtime.types import HarnessContext, ServerName
 
 __all__ = [
+    "ToolOwner",
     "make_step_mcp_trust_tier_resolver",
     "resolve_step_mcp_trust_tier",
+    "resolve_tool_owner",
 ]
+
+
+@dataclass(frozen=True, slots=True)
+class ToolOwner:
+    """The configured MCP host whose `tool_registry` owns a tool, and its declared trust.
+
+    `server_name` is the host's key in `ctx.mcp_client_hosts` — the same name the
+    dispatcher's tool→server `routing_index` routes the tool to.
+    """
+
+    server_name: str
+    trust_tier: MCPTrustTier | None
+    """`None` when the host declares no `MCPTrustTier`."""
+
+
+def resolve_tool_owner(tool_id: str, ctx: HarnessContext) -> ToolOwner | None:
+    """The owning host of `tool_id`, or `None` if no configured host registers it.
+
+    [LAW:one-source-of-truth] The one host scan behind both the trust tier and the owner
+    name, so a caller never scores one host and names another. The collision guarantee
+    (see the module docstring) makes the owner unique.
+    """
+    hosts: dict[ServerName, Any] = getattr(ctx, "mcp_client_hosts", None) or {}
+    for server_name, host in hosts.items():
+        registry = getattr(host, "tool_registry", None)
+        if registry is None:
+            continue
+        try:
+            contract = registry.get(tool_id)
+        except KeyError:
+            # Real ToolRegistry raises ToolNameNotRegisteredError (a KeyError) on
+            # a miss — try the next host (collision guarantee ⇒ at most one match).
+            continue
+        if contract is not None:
+            trust_tier = getattr(host, "trust_tier", None)
+            return ToolOwner(
+                server_name=str(server_name),
+                trust_tier=trust_tier if isinstance(trust_tier, MCPTrustTier) else None,
+            )
+    return None
 
 
 def resolve_step_mcp_trust_tier(step: WorkflowStep, ctx: HarnessContext) -> MCPTrustTier | None:
@@ -94,21 +137,8 @@ def resolve_step_mcp_trust_tier(step: WorkflowStep, ctx: HarnessContext) -> MCPT
     tool_id = step.step_payload.get("tool_id")
     if not isinstance(tool_id, str) or not tool_id:
         return None
-    hosts: dict[ServerName, Any] = getattr(ctx, "mcp_client_hosts", None) or {}
-    for host in hosts.values():
-        registry = getattr(host, "tool_registry", None)
-        if registry is None:
-            continue
-        try:
-            contract = registry.get(tool_id)
-        except KeyError:
-            # Real ToolRegistry raises ToolNameNotRegisteredError (a KeyError) on
-            # a miss — try the next host (collision guarantee ⇒ at most one match).
-            continue
-        if contract is not None:
-            trust_tier = getattr(host, "trust_tier", None)
-            return trust_tier if isinstance(trust_tier, MCPTrustTier) else None
-    return None
+    owner = resolve_tool_owner(tool_id, ctx)
+    return None if owner is None else owner.trust_tier
 
 
 def make_step_mcp_trust_tier_resolver(

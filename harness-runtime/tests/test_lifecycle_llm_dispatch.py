@@ -1115,6 +1115,139 @@ async def test_active_system_prompt_injects_through_anthropic_hitl_variant() -> 
     assert all(call["system"] == _SYS for call in client.messages.calls)
 
 
+@dataclass(frozen=True)
+class _RefusalAwareLoopResult:
+    tool_call_id: str
+    dispatch_result: Mapping[str, Any] | None
+    refusal: Any = None
+
+
+class _RefusingHITLToolLoop:
+    """Refuses `toolu_001` under policy (with the operator's RESPOND text), dispatches the rest."""
+
+    def __init__(self) -> None:
+        self.contexts: list[HITLToolLoopContext] = []
+
+    async def run_tool_calls(
+        self, calls: Sequence[ModelToolCall], context: HITLToolLoopContext
+    ) -> tuple[_RefusalAwareLoopResult, ...]:
+        from harness_runtime.lifecycle.hitl_tool_loop import (
+            HITLToolRefusal,
+            HITLToolRefusalReason,
+        )
+
+        self.contexts.append(context)
+        return tuple(
+            _RefusalAwareLoopResult(
+                tool_call_id=call.tool_call_id,
+                dispatch_result=None if call.tool_call_id == "toolu_001" else {"ok": True},
+                refusal=(
+                    HITLToolRefusal(HITLToolRefusalReason.POLICY_DENY, "try another tool")
+                    if call.tool_call_id == "toolu_001"
+                    else None
+                ),
+            )
+            for call in calls
+        )
+
+
+def _two_tool_use_turn_client() -> _AnthropicClient:
+    client = _AnthropicClient()
+    client.messages.responses = [
+        _AnthropicToolTurnResponse(
+            id="msg_tool",
+            content=[
+                {"type": "tool_use", "id": "toolu_001", "name": "blocked", "input": {}},
+                {"type": "tool_use", "id": "toolu_002", "name": "allowed", "input": {}},
+            ],
+            stop_reason="tool_use",
+            usage=_Usage(input_tokens=11, output_tokens=6),
+        ),
+        _AnthropicToolTurnResponse(
+            id="msg_final",
+            content=[{"type": "text", "text": "done"}],
+            stop_reason="end_turn",
+            usage=_Usage(input_tokens=12, output_tokens=4),
+        ),
+    ]
+    return client
+
+
+def _two_tool_step_payload() -> dict[str, Any]:
+    return {
+        "messages": [{"role": "user", "content": "go"}],
+        "tools": [
+            {"name": "blocked", "server": "srv", "input_schema": {"type": "object"}},
+            {"name": "allowed", "server": "srv", "input_schema": {"type": "object"}},
+        ],
+        "params": {"max_tokens": 100},
+    }
+
+
+@pytest.mark.asyncio
+async def test_a_policy_refused_tool_call_is_an_error_result_and_the_turn_continues() -> None:
+    client = _two_tool_use_turn_client()
+    tp, exporter = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"anthropic": _AnthropicFakeAdapter(client)},
+        tracer_provider=tp,
+        hitl_tool_loop=cast(Any, _RefusingHITLToolLoop()),
+    )
+
+    result = await dispatcher.dispatch(
+        _binding("anthropic", model="claude-test"),
+        _step(_two_tool_step_payload()),
+        step_context=_step_context(),
+    )
+
+    assert len(client.messages.calls) == 2  # the next model call is made with the results
+    refused, allowed = client.messages.calls[1]["messages"][-1]["content"]
+    assert refused["tool_use_id"] == "toolu_001"
+    assert refused["is_error"] is True
+    assert refused["content"] == "policy refused this tool call: try another tool"
+    assert allowed["tool_use_id"] == "toolu_002"
+    assert "is_error" not in allowed
+    assert result is not None
+    classes = [
+        span.attributes.get("sandbox.fail.class")
+        for span in exporter.get_finished_spans()
+        if span.attributes is not None
+    ]
+    assert classes.count("policy_override") == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("descended", "parent", "expected_floor"),
+    [
+        (False, GateLevel.DENY, GateLevel.AUTO),
+        (True, GateLevel.DENY, GateLevel.DENY),
+        (True, GateLevel.ASK, GateLevel.ASK),
+    ],
+)
+async def test_the_loop_context_carries_the_parent_gate_floor_only_when_descended(
+    descended: bool, parent: GateLevel, expected_floor: GateLevel
+) -> None:
+    client = _two_tool_use_turn_client()
+    tp, _ = _tracer_provider_with_exporter()
+    loop = _RefusingHITLToolLoop()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"anthropic": _AnthropicFakeAdapter(client)},
+        tracer_provider=tp,
+        hitl_tool_loop=cast(Any, loop),
+    )
+
+    await dispatcher.dispatch(
+        _binding("anthropic", model="claude-test"),
+        _step(_two_tool_step_payload()),
+        step_context=_step_context().model_copy(
+            update={"sub_agent_descent": descended, "parent_gate_level": parent}
+        ),
+    )
+
+    assert loop.contexts[0].inherited_gate_floor is expected_floor
+
+
 @pytest.mark.asyncio
 async def test_active_system_prompt_injects_through_anthropic_memory_variant(
     monkeypatch: pytest.MonkeyPatch,

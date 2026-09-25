@@ -1,4 +1,10 @@
-# Specification — Harness Runtime v1.127
+# Specification — Harness Runtime v1.128
+
+## Change-note (v1.127 → v1.128)
+
+**Model tool-call DENY (C-RT-38).** The model-emitted tool loop obtains one typed `HITLToolCallAssessment(level, owner)` for each call. The level comes from the registered tool owner's actual MCP trust tier and blast radius, with the inherited parent floor folded once. The owner comes from the same registry lookup and replaces a model-supplied server label in the rewrite record, operator prompt and dispatch. `DENY` offers only `REJECT` and `RESPOND`, and no reply dispatches. A refusal reaches the model as an `is_error` tool result and marks `sandbox.fail.class=policy_override`. §14.27 is the contract.
+
+**Scope and limits.** The shipped self-hosted `r420-echo` example declares an L1 host, which resolves to `ASK`; the local Ollama example declares no MCP hosts. An operator-added L0 host is refused by the L0 mapping. Those observations cover the example files, not private deployment configs. The C-CP-20 audit of the operator's response remains a separate first-release obligation. Installed behavior remains unverified; this version makes no CP or IS spec amendment.
 
 ## Change-note (v1.126 → v1.127)
 
@@ -7161,6 +7167,16 @@ The STATE_LEDGER directory is not derived: it is the operator-bound `STATE_LEDGE
 **Binding and failure.** Stage 5 binds the typed reader to the mutable bootstrap context and stage 7 carries the same callable onto the frozen `HarnessContext`. A child sub-agent uses the same binding. The CP driver's live evaluate, pending evaluate on resume and completed resume-prefix checks all consume this reader. A malformed live or pending verdict returns FAILED with `evaluator-optimizer-verdict-malformed` and drains prior buffered entries; a malformed completed prefix returns a resume mismatch. Neither path retries the completed evaluation or advances to a hosted fallback. [APPSPEC:errors-are-api]
 
 **Recorded bytes and release scope.** Parsing does not change the provider response mapping recorded in the cursor, engine output store or inter-step channel, and does not change the ledger entries. A valid reject may continue to the iteration cap and end SUCCESS with `accepted=False`; only `terminal_state["accepted"] is True` proves acceptance. The reader's recognized response shape is Ollama-only. The local evaluator witness uses an Ollama-only chain and no memory context. Installed `done_reason` values, `format` schema adherence, thinking-model content and `format` plus automatic memory tools remain unverified. [APPSPEC:observed-beats-inferred]
+
+## §14.27 C-RT-38 — Model tool-call gate enforcement
+
+**One typed assessment and owner.** For each model-emitted tool call, the evaluator returns `HITLToolCallAssessment(GateLevel, owner)` or the loop refuses the call before a rewrite, prompt, ledger write or dispatch. The evaluator builds one synthetic `TOOL_STEP` with `model_tool_call_step`, shared with the dispatcher adapter. `resolve_tool_owner` scans the configured MCP hosts once for both the trust tier and canonical owner, ignoring the model-supplied server label. The resulting owner replaces that label in the rewrite record, prompt and dispatch. A tool with no registered host or a host with no trust declaration computes `DENY`; the former records owner `<unregistered>`. The in-process `search_tools` call takes owner `<in-process>`, the host-less L3 no-floor default and a read-only blast radius. Other calls use `resolve_step_blast_radius` and `gate_level(per_tool=AUTO, persona, blast, mcp_trust)`. The parent's C-CP-12 floor folds in once with `max_gate_level`; a root step contributes none through `HITLToolLoopContext.inherited_gate_floor`. If evaluation raises, refusal reason is `evaluator-failed`. A malformed assessment, including `None`, a bare level, a foreign enum or an empty owner, is `malformed-gate-level`. Neither failure asks or dispatches.
+
+**Palette and prompt.** `AUTO` dispatches without a rewrite ledger entry. Other levels run the rewrite and compute `compute_effective_palette(level, cross_trust_state, None)`; the narrowed palette is recorded on the rewritten call before its ledger entry, then offered exactly to the operator. `DENY` offers only `{REJECT, RESPOND}` subject to cross-trust narrowing. The loop checks the adapter's runtime reply type and membership in the offered palette, even when its declared type claims otherwise.
+
+**No dispatch under DENY.** Every `DENY` outcome refuses without dispatch: REJECT, RESPOND (preserving operator text for the model), a response outside the offered palette (including APPROVE or EDIT), or a malformed reply. The typed refusal reasons are `policy-deny`, `response-outside-palette` and `malformed-gate-reply`, in addition to the assessment failures above. At `ASK`, an admitted APPROVE or EDIT dispatches, with EDIT's arguments; REJECT and RESPOND do not dispatch.
+
+**Model result and limits.** `llm_dispatch` returns each refused call as an `is_error` `tool_result` containing `policy refused this tool call`, appending `: <text>` for an operator RESPOND. Remaining calls in the same turn and the next model call proceed. The enclosing dispatch span carries `sandbox.fail.class=policy_override` once per refusal, using a dedicated refusal span when no recording span exists. The loop writes the pre-gate rewrite ledger entry only. C-CP-20 response audit is open. Installed behavior for a real L0 host, the shipped `r420-echo` host and the operator-visible refusal remains unverified. [APPSPEC:errors-are-api]
 
 ---
 

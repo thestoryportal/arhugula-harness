@@ -78,6 +78,7 @@ from harness_cp.cp_shared_types import (
     TraceContext,
 )
 from harness_cp.engine_class import EngineClass
+from harness_cp.gate_level_rule import GateLevel
 from harness_cp.layer_budget import DEFAULT_LAYER_BUDGETS, LayerBudget
 from harness_cp.layered_routing_strategy import LayerDecisionFn
 from harness_cp.memory_access_mode import MemoryAccessMode, MemoryAccessModeDenialReason
@@ -3713,12 +3714,45 @@ def _hitl_loop_context_from_step(
         cell_synchrony_class=SynchronyClass.SYNC_BLOCKING,
         cross_trust_boundary_state=CrossTrustBoundaryState.NONE,
         actor=ActorIdentity(str(actor_id)),
+        # [LAW:single-enforcer] The descended-step parent floor (C-CP-12) reaches the loop's
+        # one gate evaluation; a root step contributes none.
+        inherited_gate_floor=(
+            step_context.parent_gate_level if step_context.sub_agent_descent else GateLevel.AUTO
+        ),
     )
+
+
+_POLICY_REFUSAL_TEXT = "policy refused this tool call"
+
+
+def _record_policy_overrides(results: Sequence[Any]) -> None:
+    """Mark the enclosing dispatch span `policy_override` once per refused tool call.
+
+    Same class and attribute the tool-step gate composer records on its refusal span; with
+    no recording span a dedicated span carries it, so a refusal is never unobserved.
+    """
+    from opentelemetry import trace
+
+    for result in results:
+        if getattr(result, "refusal", None) is None:
+            continue
+        span = trace.get_current_span()
+        if span.is_recording():
+            span.set_attribute("sandbox.fail.class", "policy_override")
+        else:
+            with trace.get_tracer("harness.runtime.hitl_tool_loop").start_as_current_span(
+                "hitl.tool_loop.policy_override"
+            ) as refusal_span:
+                refusal_span.set_attribute("sandbox.fail.class", "policy_override")
 
 
 def _anthropic_tool_result_content(result: Any) -> str:
     if result is None:
         return "HITL tool loop did not return a result for this tool call."
+    refusal = getattr(result, "refusal", None)
+    if refusal is not None:
+        text = getattr(refusal, "response_text", None)
+        return _POLICY_REFUSAL_TEXT if not text else f"{_POLICY_REFUSAL_TEXT}: {text}"
     dispatch_result = getattr(result, "dispatch_result", None)
     if not isinstance(dispatch_result, Mapping):
         return "HITL rejected or skipped this tool call."
@@ -3740,7 +3774,11 @@ def _anthropic_tool_result_block(tool_use_block: Any, result: Any) -> dict[str, 
         "tool_use_id": tool_call_id,
         "content": _anthropic_tool_result_content(result),
     }
-    if result is None or getattr(result, "dispatch_result", None) is None:
+    if (
+        result is None
+        or getattr(result, "refusal", None) is not None
+        or getattr(result, "dispatch_result", None) is None
+    ):
         block["is_error"] = True
     return block
 
@@ -3835,6 +3873,7 @@ async def _dispatch_anthropic_with_hitl_tool_loop(
             for block in tool_use_blocks
         )
         results = await hitl_tool_loop.run_tool_calls(calls, context)
+        _record_policy_overrides(results)
         result_by_id = {result.tool_call_id: result for result in results}
 
         messages.append(

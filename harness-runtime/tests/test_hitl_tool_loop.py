@@ -10,6 +10,7 @@ from harness_core import PersonaTier
 from harness_core.deployment_surface import DeploymentSurface
 from harness_core.workload_class import WorkloadClass
 from harness_cp.cp_shared_types import ActorIdentity
+from harness_cp.gate_level_rule import GateLevel
 from harness_cp.hitl_response_palette import HITLResponse
 from harness_cp.persona_engine_hitl_matrix import SynchronyClass
 from harness_cp.topology_pattern import TopologyPattern
@@ -26,6 +27,7 @@ from harness_runtime.lifecycle.cp_is_wiring import (
 from harness_runtime.lifecycle.hitl_placement import RuntimeHITLPlacementRegistry
 from harness_runtime.lifecycle.hitl_tool_loop import (
     HITLGateDecision,
+    HITLToolCallAssessment,
     HITLToolLoopContext,
     ModelToolCall,
     RuntimeHITLToolLoop,
@@ -99,6 +101,7 @@ def _context() -> HITLToolLoopContext:
         cell_synchrony_class=SynchronyClass.SYNC_BLOCKING,
         cross_trust_boundary_state=CrossTrustBoundaryState.NONE,
         actor=_ACTOR,
+        inherited_gate_floor=GateLevel.AUTO,
     )
 
 
@@ -126,8 +129,9 @@ class _Gate:
         *,
         call: ModelToolCall,
         context: HITLToolLoopContext,
+        palette: frozenset[HITLResponse],
     ) -> HITLGateDecision:
-        _ = context
+        _ = (context, palette)
         self.calls.append(call)
         return HITLGateDecision(response=self.response)
 
@@ -144,7 +148,10 @@ def _loop(
     loop = RuntimeHITLToolLoop(
         wiring=_wiring(tmp_path),
         placement_registry=RuntimeHITLPlacementRegistry(),
-        hitl_required=lambda call, _context: call.tool_call_id in hitl_required_ids,
+        assess=lambda call, _context: HITLToolCallAssessment(
+            level=GateLevel.ASK if call.tool_call_id in hitl_required_ids else GateLevel.AUTO,
+            owner=call.server,
+        ),
         gate=gate,
         dispatcher=dispatcher,
     )

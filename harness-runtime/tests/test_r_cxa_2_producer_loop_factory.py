@@ -12,8 +12,9 @@ from harness_as.tool_contract import ToolContract
 from harness_core import PersonaTier
 from harness_core.deployment_surface import DeploymentSurface
 from harness_core.workload_class import WorkloadClass
-from harness_cp.cp_shared_types import ActorIdentity
+from harness_cp.cp_shared_types import ActorIdentity, MCPTrustTier
 from harness_cp.engine_class import EngineClass
+from harness_cp.gate_level_rule import GateLevel
 from harness_cp.hitl_response_palette import HITLResponse
 from harness_cp.pause_resume_protocol import PauseReason, ResumeOutcomeKind
 from harness_cp.persona_engine_hitl_matrix import SynchronyClass
@@ -131,6 +132,7 @@ def _context() -> HITLToolLoopContext:
         cell_synchrony_class=SynchronyClass.SYNC_BLOCKING,
         cross_trust_boundary_state=CrossTrustBoundaryState.NONE,
         actor=_ACTOR,
+        inherited_gate_floor=GateLevel.AUTO,
     )
 
 
@@ -150,6 +152,25 @@ class _FakeMCPHost:
 
     def __init__(self, registry: ToolRegistry) -> None:
         self.tool_registry = registry
+        self.trust_tier: MCPTrustTier | None = None
+
+
+def _signed_host_with_search() -> dict[str, Any]:
+    """An L1 host owning the `search` tool, so the model call resolves to ASK (not DENY)."""
+    registry = ToolRegistry()
+    registry.register(
+        ToolContract(
+            name="search",
+            description="search",
+            input_schema={"type": "object"},
+            output_schema={"type": "object"},
+            minimum_tier=SandboxTier.TIER_1_PROCESS,
+            blast_radius_tier=BlastRadiusTier.READ_ONLY,
+        )
+    )
+    host = _FakeMCPHost(registry)
+    host.trust_tier = MCPTrustTier.LEVEL_1_SIGNED_PINNED
+    return {"mcp-main": host}
 
 
 def _deferred_hosts() -> dict[str, Any]:
@@ -211,6 +232,7 @@ def test_factory_binds_r_cxa_2_loops_to_context(tmp_path: Path) -> None:
 def test_bound_hitl_loop_emits_rewrite_before_tool_dispatch(tmp_path: Path) -> None:
     order: list[str] = []
     ctx, config, ask_surface, tool_dispatcher = _post_tool_dispatcher_context(tmp_path, order)
+    ctx.mcp_client_hosts = _signed_host_with_search()
     stage = materialize_r_cxa_2_producer_loop_stage(ctx, config)
 
     results = asyncio.run(stage.hitl_tool_loop.run_tool_calls([_call()], _context()))
@@ -301,7 +323,8 @@ def test_search_tools_call_answered_without_reaching_tool_dispatcher(tmp_path: P
             "input_schema": {"type": "object"},
         }
     ]
-    assert ask_surface.calls[0][0] == "HITL tool call search_tools on mcp-main"
+    # Asked under the in-process owner, not the model-supplied `mcp-main` label.
+    assert ask_surface.calls[0][0] == "HITL tool call search_tools on <in-process>"
 
 
 def test_search_tools_no_match_returns_empty_matches(tmp_path: Path) -> None:
