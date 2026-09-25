@@ -638,7 +638,7 @@ class CodexCLIAdapter:
             on_wire=on_wire,
         )
         _raise_for_codex_nonzero(self.command, result)
-        events = _parse_json_lines(result.stdout, "Codex inference response")
+        events = _parse_codex_json_lines(result.stdout, "Codex inference response")
         text = _codex_answer_text(events, "Codex inference response")
         return ExternalCLITextResult(
             text=text,
@@ -922,6 +922,71 @@ def _parse_json_lines(raw: str, label: str) -> tuple[Mapping[str, Any], ...]:
         if not isinstance(parsed, Mapping):
             raise ExternalCLIOutputError(f"{label} line {line_number} was not a JSON object")
         events.append(dict(cast(Mapping[str, Any], parsed)))
+    if not events:
+        raise ExternalCLIOutputError(f"{label} did not contain JSON events")
+    return tuple(events)
+
+
+class _CodexJSONBoundaryError(ValueError):
+    """A Codex JSONL line broke the boundary; `reason` is a fixed label, never CLI output."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
+def _codex_object_without_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    """`object_pairs_hook`: runs for every object at every depth, on ESCAPE-DECODED keys, so
+    `"\\u0074ype"` and `"type"` collide. `json.loads` alone keeps the last duplicate."""
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise _CodexJSONBoundaryError("contained a duplicate object key")
+        result[key] = value
+    return result
+
+
+def _codex_reject_non_finite(_literal: str) -> Any:
+    raise _CodexJSONBoundaryError("contained a non-finite number")
+
+
+def _codex_finite_float(literal: str) -> float:
+    """`parse_float`: `1e999` overflows to infinity without ever reaching `parse_constant`."""
+    value = float(literal)
+    if value != value or value in (float("inf"), float("-inf")):
+        raise _CodexJSONBoundaryError("contained a non-finite number")
+    return value
+
+
+def _parse_codex_json_lines(raw: str, label: str) -> tuple[Mapping[str, Any], ...]:
+    """Parse the WHOLE Codex JSONL stream before anything is classified or answered.
+
+    Codex-only: the shared `_parse_json_lines` (last duplicate key wins) still serves every
+    other provider. Every line must be one JSON object with no duplicate key at any depth
+    (compared after escape decoding) and no non-finite number. A failing line refuses the
+    entire stream with a fixed diagnostic naming only the line number: no exception text and
+    no raw content is echoed, because the line is untrusted CLI output. Lines split on `\\n`
+    only (JSONL), so a raw U+2028 inside a string is text, not a break.
+    [LAW:parse-dont-validate] [LAW:no-silent-failure]
+    """
+    events: list[Mapping[str, Any]] = []
+    for line_number, line in enumerate(raw.split("\n"), start=1):
+        if not line.strip(" \t\r"):
+            continue
+        try:
+            parsed = json.loads(
+                line,
+                object_pairs_hook=_codex_object_without_duplicate_keys,
+                parse_constant=_codex_reject_non_finite,
+                parse_float=_codex_finite_float,
+            )
+        except _CodexJSONBoundaryError as exc:
+            raise ExternalCLIOutputError(f"{label} line {line_number} {exc.reason}") from None
+        except (ValueError, RecursionError):
+            raise ExternalCLIOutputError(f"{label} line {line_number} was not valid JSON") from None
+        if not isinstance(parsed, dict):
+            raise ExternalCLIOutputError(f"{label} line {line_number} was not a JSON object")
+        events.append(cast(dict[str, Any], parsed))
     if not events:
         raise ExternalCLIOutputError(f"{label} did not contain JSON events")
     return tuple(events)

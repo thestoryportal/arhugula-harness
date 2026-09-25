@@ -454,3 +454,132 @@ async def test_a_completed_agent_message_with_non_string_text_is_no_answer() -> 
 
     with pytest.raises(ExternalCLIOutputError, match="agent text result"):
         await _dispatch(_events(THREAD, bad, TURN_DONE))
+
+
+# --- Codex JSON boundary HOLD: duplicate keys and non-finite numbers never reach the grammar --
+#
+# `json.loads` keeps the LAST duplicate key, so a tool item could vanish before classification.
+# The Codex route parses the whole stream with duplicate rejection at every depth (after escape
+# decoding), refuses non-finite numbers and malformed lines, and only then classifies.
+
+_DUP_OUTER_ITEM = (
+    '{"type":"item.completed","item":{"type":"command_execution","command":"SECRET"},'
+    '"item":{"type":"agent_message","text":"LEAKED"}}'
+)
+_DUP_OUTER_TYPE = (
+    '{"type":"command_execution","type":"item.completed",'
+    '"item":{"type":"agent_message","text":"LEAKED"}}'
+)
+_ANSWER_LINE = json.dumps(ANSWER)
+
+
+async def _refusal_of(stdout: str) -> ExternalCLIOutputError:
+    with pytest.raises(ExternalCLIOutputError) as caught:
+        await _dispatch(stdout)
+    return caught.value
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "line",
+    [
+        _DUP_OUTER_ITEM,
+        _DUP_OUTER_TYPE,
+        # duplicate only after JSON escape decoding: "type" is "type"
+        '{"type":"item.completed","\\u0074ype":"command_execution",'
+        '"item":{"type":"agent_message","text":"LEAKED"}}',
+        '{"type":"item.completed","item":{"type":"agent_message","text":"LEAKED"},'
+        '"\\u0069tem":{"type":"command_execution"}}',
+        # nested duplicates, at depth 2 and inside an array of objects
+        '{"type":"item.completed","item":{"type":"agent_message","text":"LEAKED","text":"B"}}',
+        '{"type":"turn.completed","usage":{"input_tokens":1,"input_tokens":2}}',
+        '{"type":"turn.completed","usage":{"rows":[{"a":1},{"b":1,"b":2}]}}',
+    ],
+    ids=[
+        "sealed-duplicate-item",
+        "sealed-duplicate-type",
+        "escaped-duplicate-type",
+        "escaped-duplicate-item",
+        "nested-duplicate-text",
+        "nested-duplicate-usage",
+        "duplicate-inside-array",
+    ],
+)
+async def test_a_duplicate_object_key_at_any_depth_is_refused(line: str) -> None:
+    error = await _refusal_of(f"{json.dumps(THREAD)}\n{line}\n")
+
+    assert "LEAKED" not in str(error) and "SECRET" not in str(error)
+    assert "duplicate" in str(error)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "value", ["NaN", "Infinity", "-Infinity", "1e999", "-1e999"], ids=lambda v: v.strip("-")
+)
+async def test_a_non_finite_number_is_refused(value: str) -> None:
+    line = '{"type":"turn.completed","usage":{"input_tokens":' + value + "}}"
+    error = await _refusal_of(f"{_ANSWER_LINE}\n{line}\n")
+
+    assert "non-finite" in str(error)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "line",
+    [
+        f'{{"type":"{SENTINEL}"',
+        f'{{"type":"item.completed" {SENTINEL}}}',
+        f"[{json.dumps(ANSWER)}]",
+        f'"{SENTINEL}"',
+        SENTINEL,
+        "7",
+        "null",
+    ],
+    ids=["truncated", "junk", "array", "string", "bare-word", "number", "null"],
+)
+async def test_a_malformed_or_non_object_line_after_a_safe_answer_refuses_the_stream(
+    line: str,
+) -> None:
+    error = await _refusal_of(f"{_ANSWER_LINE}\n{line}\n")
+
+    assert SENTINEL not in str(error) and "OK" not in str(error)
+    assert "line 2" in str(error)
+
+
+@pytest.mark.asyncio
+async def test_a_late_duplicate_key_line_refuses_an_earlier_safe_answer() -> None:
+    error = await _refusal_of(f"{_ANSWER_LINE}\n{_DUP_OUTER_ITEM}\n")
+
+    assert "line 2" in str(error) and "LEAKED" not in str(error)
+
+
+@pytest.mark.asyncio
+async def test_a_canonical_stream_with_nested_and_repeated_shapes_is_still_accepted() -> None:
+    usage = {"type": "turn.completed", "usage": {"input_tokens": 1, "rows": [{"a": 1}, {"a": 2}]}}
+    stdout = _events(THREAD, TURN_STARTED, REASONING, ANSWER, usage) + "\n\n"
+
+    assert await _dispatch(stdout) == "OK"
+
+
+@pytest.mark.asyncio
+async def test_a_raw_unicode_line_separator_inside_a_json_string_is_not_a_line_break() -> None:
+    answer = {"type": "item.completed", "item": {"type": "agent_message", "text": "a b"}}
+
+    assert await _dispatch(json.dumps(answer, ensure_ascii=False) + "\n") == "a b"
+
+
+def test_the_shared_line_parser_and_its_last_key_wins_behavior_are_unchanged() -> None:
+    from harness_runtime.lifecycle.external_cli_provider import (
+        _parse_json_lines,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    assert _parse_json_lines('{"a":1,"a":2}\n', "x")[0]["a"] == 2
+
+
+@pytest.mark.asyncio
+async def test_pathologically_deep_nesting_is_refused_without_a_crash() -> None:
+    line = '{"type":"turn.completed","usage":' + "[" * 100_000 + "]" * 100_000 + "}"
+
+    error = await _refusal_of(f"{_ANSWER_LINE}\n{line}\n")
+
+    assert "line 2" in str(error) and "not valid JSON" in str(error)
