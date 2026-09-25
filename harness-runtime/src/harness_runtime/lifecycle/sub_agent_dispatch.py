@@ -985,7 +985,7 @@ class RuntimeSubAgentDispatcher:
 
             # --- Step 6: invoke child runner (AC #7) -----------------------
             # B-HIERARCHICAL-PAUSE — when the parent fan-out is RESUMING a
-            # previously-paused child, the CP driver set `child_resume_snapshot` on
+            # previously-paused child, the CP driver set `child_resume` on
             # this worker's StepExecutionContext (the hash-inert per-step carrier).
             # Forward it so the child re-enters at its cursor rather than re-running
             # from scratch (the grandchild's completed steps are recovered, NOT
@@ -1108,7 +1108,7 @@ class RuntimeSubAgentDispatcher:
                     # [LAW:one-source-of-truth] the child's depth derives from the parent's
                     # `descent_depth`; no second counter exists.
                     descent_depth=step_context.descent_depth + 1,
-                    pause_snapshot_input=step_context.child_resume_snapshot,
+                    child_resume=step_context.child_resume,
                     child_run_id_seed=_child_run_id_seed,
                     # B-39 Slice B — the operator's resume payload, read off the SAME
                     # step_context the composer already receives (a CP driver-stamped

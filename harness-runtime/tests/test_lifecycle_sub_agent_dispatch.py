@@ -55,7 +55,11 @@ from harness_cp.cross_family_fallback_chain import (
 from harness_cp.engine_class import EngineClass
 from harness_cp.gate_level_rule import GateLevel
 from harness_cp.handoff_context import ActionKind, StateSummary
-from harness_cp.pause_resume_protocol_types import PauseSnapshot, WorkflowPauseReason
+from harness_cp.pause_resume_protocol_types import (
+    PausedChildCapture,
+    PauseSnapshot,
+    WorkflowPauseReason,
+)
 from harness_cp.per_step_override_evaluator import StepEffectiveBinding
 from harness_cp.sub_agent_brief import (
     ClearTaskBoundaries,
@@ -85,6 +89,7 @@ from harness_is.state_ledger_entry_schema import Actor, ActorClass
 from harness_is.state_ledger_entry_schema import Identifier as _Identifier
 from harness_od.audit_ledger_types import SignatureAlgorithm
 from harness_runtime.lifecycle.audit_writer import RuntimeAuditLedgerWriter
+from harness_runtime.lifecycle.durable_child_admission import RefuseDurableChildAdmission
 from harness_runtime.lifecycle.handoff import RuntimeHandoffRegistry
 from harness_runtime.lifecycle.state_ledger import LedgerWriter
 from harness_runtime.lifecycle.sub_agent_dispatch import (
@@ -250,7 +255,7 @@ class _MockChildWorkflowRunner:
         descent: SubAgentGateLevelDescent,
         default_model_binding: ModelBinding,
         descent_depth: int,
-        pause_snapshot_input: Any = None,
+        child_resume: Any = None,
         child_run_id_seed: str | None = None,
         resume_context: Any = None,
         hitl_uniform_fallback_eligible_run_id: str | None = None,
@@ -268,7 +273,7 @@ class _MockChildWorkflowRunner:
                 "default_model_binding": default_model_binding,
                 # B-HIERARCHICAL-PAUSE — the child resume snapshot threaded on resume
                 # (None on a first dispatch).
-                "pause_snapshot_input": pause_snapshot_input,
+                "child_resume": child_resume,
                 # B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT — the deterministic child run_id
                 # seed (None when the child is non-recoverable / a non-fanout dispatch).
                 "child_run_id_seed": child_run_id_seed,
@@ -773,19 +778,22 @@ def test_child_runner_receives_the_parent_depth_plus_one(tmp_path: Path, parent_
 
 def test_child_resume_snapshot_forwarded_to_runner(tmp_path: Path) -> None:
     """B-HIERARCHICAL-PAUSE — on resume, `step_context.child_resume_snapshot` is
-    forwarded to the child runner as `pause_snapshot_input` so the child re-enters at
+    forwarded to the child runner as `child_resume` so the child re-enters at
     its cursor. `None` on a normal (first) dispatch."""
     snap = _child_snapshot()
     dispatcher, runner, _ = _dispatcher(tmp_path)
 
-    # Normal dispatch → runner receives pause_snapshot_input=None.
+    # Normal dispatch → runner receives child_resume=None.
     dispatcher.dispatch(_binding(), _step(), step_context=_step_context())
-    assert runner.calls[-1]["pause_snapshot_input"] is None
+    assert runner.calls[-1]["child_resume"] is None
 
     # Resume dispatch → the step context carries the child snapshot → forwarded.
-    resume_ctx = _step_context().model_copy(update={"child_resume_snapshot": snap})
+    capture = PausedChildCapture(
+        child_workflow_id="child-wf", child_snapshot=snap, child_record_ref=None
+    )
+    resume_ctx = _step_context().model_copy(update={"child_resume": capture})
     dispatcher.dispatch(_binding(), _step(), step_context=resume_ctx)
-    assert runner.calls[-1]["pause_snapshot_input"] is snap
+    assert runner.calls[-1]["child_resume"] is capture
 
 
 def test_resume_context_forwarded_to_runner_for_downward_threading(tmp_path: Path) -> None:
@@ -846,7 +854,10 @@ def test_child_runner_resume_workflow_id_mismatch_fails_closed() -> None:
     from harness_runtime.lifecycle.child_workflow_runner import compose_child_workflow_runner
 
     snap = _child_snapshot()  # workflow_id="child-wf"
-    runner = compose_child_workflow_runner(cast(Any, SimpleNamespace(step_dispatchers=None)))
+    runner = compose_child_workflow_runner(
+        cast(Any, SimpleNamespace(step_dispatchers=None)),
+        durable_admission=RefuseDurableChildAdmission(),
+    )
     with pytest.raises(ValueError, match="child resume workflow-id mismatch"):
         runner(
             workflow_id="a-different-child-wf",
@@ -856,7 +867,9 @@ def test_child_runner_resume_workflow_id_mismatch_fails_closed() -> None:
             descent=cast(Any, None),
             default_model_binding=cast(Any, None),
             descent_depth=1,
-            pause_snapshot_input=snap,
+            child_resume=PausedChildCapture(
+                child_workflow_id="child-wf", child_snapshot=snap, child_record_ref=None
+            ),
         )
 
 
@@ -883,7 +896,10 @@ def test_child_workflow_runner_opts_into_final_state_reconstruct(
         return _success_result()
 
     monkeypatch.setattr(cwr, "execute_workflow_at_depth", _spy_execute_workflow)
-    runner = cwr.compose_child_workflow_runner(cast(Any, SimpleNamespace(step_dispatchers={})))
+    runner = cwr.compose_child_workflow_runner(
+        cast(Any, SimpleNamespace(step_dispatchers={})),
+        durable_admission=RefuseDurableChildAdmission(),
+    )
     result = runner(
         workflow_id="child-wf",
         manifest_entry=cast(Any, None),
@@ -892,7 +908,7 @@ def test_child_workflow_runner_opts_into_final_state_reconstruct(
         descent=cast(Any, None),
         default_model_binding=cast(Any, None),
         descent_depth=1,
-        pause_snapshot_input=None,  # first dispatch → skips the workflow-id guard
+        child_resume=None,  # first dispatch → skips the workflow-id guard
     )
     # The opt-in is forwarded → execute_workflow reconstructs the child's final_state.
     assert captured.get("reconstruct_final_state") is True
@@ -917,7 +933,10 @@ def test_child_workflow_runner_forwards_the_numeric_depth_to_execute_workflow(
         return _success_result()
 
     monkeypatch.setattr(cwr, "execute_workflow_at_depth", _spy_execute_workflow)
-    runner = cwr.compose_child_workflow_runner(cast(Any, SimpleNamespace(step_dispatchers={})))
+    runner = cwr.compose_child_workflow_runner(
+        cast(Any, SimpleNamespace(step_dispatchers={})),
+        durable_admission=RefuseDurableChildAdmission(),
+    )
     runner(
         workflow_id="child-wf",
         manifest_entry=cast(Any, None),
@@ -1247,7 +1266,7 @@ def test_step8_failure_swallowed_on_failed_child_path(tmp_path: Path) -> None:
 
 
 def test_compose_child_workflow_runner_factory_is_constructible(tmp_path: Path) -> None:
-    """Smoke check: real `compose_child_workflow_runner(ctx)` builds a callable.
+    """Smoke check: real `compose_child_workflow_runner(ctx, durable_admission=RefuseDurableChildAdmission())` builds a callable.
 
     Validates the factory shape without invoking the runner (which would
     require a fully-bootstrapped HarnessContext + ctx.step_dispatchers
@@ -1263,7 +1282,9 @@ def test_compose_child_workflow_runner_factory_is_constructible(tmp_path: Path) 
     class _CtxStub:
         step_dispatchers: Any = None
 
-    runner = compose_child_workflow_runner(cast(Any, _CtxStub()))
+    runner = compose_child_workflow_runner(
+        cast(Any, _CtxStub()), durable_admission=RefuseDurableChildAdmission()
+    )
     assert callable(runner)
 
 

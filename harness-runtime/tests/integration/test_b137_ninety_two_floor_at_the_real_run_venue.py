@@ -1249,10 +1249,10 @@ def test_a_nested_child_resume_runs_under_subagent_span() -> None:
         if isinstance(node, ast.Call)
         and isinstance(node.func, ast.Attribute)
         and node.func.attr == "child_workflow_runner"
-        and any(kw.arg == "pause_snapshot_input" for kw in node.keywords)
+        and any(kw.arg == "child_resume" for kw in node.keywords)
     ]
     assert dispatch_calls, (
-        "no `child_workflow_runner(..., pause_snapshot_input=...)` call was found inside "
+        "no `child_workflow_runner(..., child_resume=...)` call was found inside "
         "the `subagent.span` block — if the nested resume moved out of the span, "
         "`resume.attempted` may now be a root there too and B-162 must be re-scoped"
     )

@@ -828,7 +828,7 @@ def test_resume_orchestrator_identity_mismatch_fails_closed() -> None:
 # re-dispatch (which would make counter == 2). The child is a REAL recursive
 # `execute_workflow` fan-out; only the SUB_AGENT_DISPATCH dispatcher is a faithful
 # double of `RuntimeSubAgentDispatcher` (raise SubAgentChildPausedError on a child
-# PAUSED + forward `step_context.child_resume_snapshot` as the child's
+# PAUSED + forward `step_context.child_resume` as the child's
 # `pause_snapshot_input`) — that runtime seam is unit-proven in
 # `harness-runtime/tests/test_lifecycle_sub_agent_dispatch.py`. The INFERENCE-child
 # real-provider e2e is blocked by a pre-existing runtime sync/async deadlock
@@ -887,7 +887,7 @@ def _child_steps() -> list[WorkflowStep]:
 class _FaithfulSubAgentDispatcher:
     """A faithful double of `RuntimeSubAgentDispatcher` for the B-HIERARCHICAL-PAUSE
     seam: dispatches a REAL child `execute_workflow`, reading
-    `step_context.child_resume_snapshot` to thread the child's resume snapshot (so a
+    `step_context.child_resume` to thread the child's resume snapshot (so a
     resumed child re-enters at its cursor), and RAISING `SubAgentChildPausedError`
     (carrying the child's PauseSnapshot) when the child returns PAUSED — exactly what
     the runtime dispatcher does at `sub_agent_dispatch.py`."""
@@ -901,7 +901,7 @@ class _FaithfulSubAgentDispatcher:
         self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
     ) -> dict[str, Any]:
         self.child_calls += 1
-        child_resume = getattr(step_context, "child_resume_snapshot", None)
+        child_resume = getattr(getattr(step_context, "child_resume", None), "child_snapshot", None)
         self.received_resume.append(child_resume)
         child_ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
         child_result = execute_workflow(
@@ -1546,7 +1546,7 @@ def _child_steps_with_synthesis() -> list[WorkflowStep]:
 
 class _SynthChildSubAgentDispatcher:
     """Faithful sub-agent double that re-enters a SYNTHESIS-bearing child fan-out, threading
-    `step_context.child_resume_snapshot` as the child's `pause_snapshot_input` (exactly the
+    `step_context.child_resume` as the child's `pause_snapshot_input` (exactly the
     runtime `sub_agent_dispatch.py` seam) so the child re-enters at its cursor."""
 
     def __init__(self, *, child_dispatcher: _ChildSynthDispatcher) -> None:
@@ -1556,7 +1556,7 @@ class _SynthChildSubAgentDispatcher:
     def dispatch(
         self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
     ) -> dict[str, Any]:
-        child_resume = getattr(step_context, "child_resume_snapshot", None)
+        child_resume = getattr(getattr(step_context, "child_resume", None), "child_snapshot", None)
         self.received_resume.append(child_resume)
         child_ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
         child_result = execute_workflow(
@@ -3362,7 +3362,7 @@ class _B60PausingThenTrippingSubAgent:
         from harness_cp.sub_agent_dispatch_cancellation import DispatchFenceTrippedSignal
 
         step_id = str(step.step_id)
-        child_resume = getattr(step_context, "child_resume_snapshot", None)
+        child_resume = getattr(getattr(step_context, "child_resume", None), "child_snapshot", None)
         if child_resume is None:
             self.first_run_calls.append(step_id)
             raise SubAgentChildPausedError(
@@ -3661,7 +3661,9 @@ def test_b60_phase0_group_wrapped_fence_signal_reraise_proceed_tier() -> None:
         def dispatch(
             self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
         ) -> dict[str, Any]:
-            child_resume = getattr(step_context, "child_resume_snapshot", None)
+            child_resume = getattr(
+                getattr(step_context, "child_resume", None), "child_snapshot", None
+            )
             if child_resume is None:
                 return super().dispatch(binding, step, step_context=step_context)
             self.resume_calls.append(str(step.step_id))
@@ -4259,7 +4261,9 @@ class _RoundTwoResolveOnePausedChildFireOtherDispatcherOW:
             holder = getattr(step_context, "hitl_delivery_holder", None)
             resolved = holder.consume_and_clear() if holder is not None else None
             assert resolved is not None, "worker-0-sub must receive its delivery cell this round"
-            child_resume = getattr(step_context, "child_resume_snapshot", None)
+            child_resume = getattr(
+                getattr(step_context, "child_resume", None), "child_snapshot", None
+            )
             child_ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
             child_result = execute_workflow(
                 _manifest("wf-child-0", TopologyPattern.ORCHESTRATOR_WORKERS),

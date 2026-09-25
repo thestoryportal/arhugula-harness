@@ -78,6 +78,7 @@ from harness_is.state_ledger_entry_schema import Identifier as _Identifier
 from harness_od.audit_ledger_types import SignatureAlgorithm
 from harness_runtime.lifecycle.audit_writer import RuntimeAuditLedgerWriter
 from harness_runtime.lifecycle.child_workflow_runner import compose_child_workflow_runner
+from harness_runtime.lifecycle.durable_child_admission import RefuseDurableChildAdmission
 from harness_runtime.lifecycle.engine_output_store import EngineOutputStore, engine_output_dir_for
 from harness_runtime.lifecycle.handoff import RuntimeHandoffRegistry
 from harness_runtime.lifecycle.state_ledger import LedgerWriter
@@ -343,7 +344,9 @@ def test_recursive_child_crash_resume_reconstructs_full_final_state(
 
     _pin_child_run_id(monkeypatch)
     ctx = _resume_ctx(store)
-    runner = compose_child_workflow_runner(cast(Any, ctx))
+    runner = compose_child_workflow_runner(
+        cast(Any, ctx), durable_admission=RefuseDurableChildAdmission()
+    )
     result = runner(
         workflow_id=_CHILD_WF,
         manifest_entry=_manifest(),
@@ -352,7 +355,7 @@ def test_recursive_child_crash_resume_reconstructs_full_final_state(
         descent=cast(Any, None),  # not forwarded to execute_workflow
         descent_depth=1,  # a direct child-runner call is a depth-1 child of the root
         default_model_binding=_DEFAULT_BINDING,
-        pause_snapshot_input=None,  # CRASH-resume (not a pause-resume)
+        child_resume=None,  # CRASH-resume (not a pause-resume)
     )
 
     assert result.status is RunStatus.SUCCESS
@@ -390,7 +393,9 @@ def test_recursive_child_crash_resume_save_point_reconstructs_full_final_state(
 
     _pin_child_run_id(monkeypatch)
     ctx = _resume_ctx(store)
-    runner = compose_child_workflow_runner(cast(Any, ctx))
+    runner = compose_child_workflow_runner(
+        cast(Any, ctx), durable_admission=RefuseDurableChildAdmission()
+    )
     result = runner(
         workflow_id=_CHILD_WF,
         manifest_entry=_manifest(engine_class=EngineClass.SAVE_POINT_CHECKPOINT),
@@ -399,7 +404,7 @@ def test_recursive_child_crash_resume_save_point_reconstructs_full_final_state(
         descent=cast(Any, None),
         descent_depth=1,  # a direct child-runner call is a depth-1 child of the root
         default_model_binding=_DEFAULT_BINDING,
-        pause_snapshot_input=None,  # CRASH-resume (not a pause-resume)
+        child_resume=None,  # CRASH-resume (not a pause-resume)
     )
 
     assert result.status is RunStatus.SUCCESS
@@ -451,7 +456,9 @@ def test_recursive_child_crash_resume_reconciler_clean_cas_auto_resumes(
 
     _pin_child_run_id(monkeypatch)
     ctx = _reconciler_resume_ctx(store, outcome_kind=ResumeOutcomeKind.RESUME_CLEAN)
-    runner = compose_child_workflow_runner(cast(Any, ctx))
+    runner = compose_child_workflow_runner(
+        cast(Any, ctx), durable_admission=RefuseDurableChildAdmission()
+    )
     result = runner(
         workflow_id=_CHILD_WF,
         manifest_entry=_manifest(engine_class=EngineClass.RECONCILER_LOOP),
@@ -460,7 +467,7 @@ def test_recursive_child_crash_resume_reconciler_clean_cas_auto_resumes(
         descent=cast(Any, None),
         descent_depth=1,  # a direct child-runner call is a depth-1 child of the root
         default_model_binding=_DEFAULT_BINDING,
-        pause_snapshot_input=None,  # CRASH-resume
+        child_resume=None,  # CRASH-resume
     )
 
     # The U-CP-97 engine-layer reconverge actually FIRED (the binding is real, not vacuous).
@@ -497,7 +504,9 @@ def test_recursive_child_crash_resume_reconciler_f1_abort_fails_closed_at_most_o
 
     _pin_child_run_id(monkeypatch)
     ctx = _reconciler_resume_ctx(store, outcome_kind=ResumeOutcomeKind.ABORT_REVALIDATION_FAILED)
-    runner = compose_child_workflow_runner(cast(Any, ctx))
+    runner = compose_child_workflow_runner(
+        cast(Any, ctx), durable_admission=RefuseDurableChildAdmission()
+    )
     result = runner(
         workflow_id=_CHILD_WF,
         manifest_entry=_manifest(engine_class=EngineClass.RECONCILER_LOOP),
@@ -506,7 +515,7 @@ def test_recursive_child_crash_resume_reconciler_f1_abort_fails_closed_at_most_o
         descent=cast(Any, None),
         descent_depth=1,  # a direct child-runner call is a depth-1 child of the root
         default_model_binding=_DEFAULT_BINDING,
-        pause_snapshot_input=None,  # CRASH-resume
+        child_resume=None,  # CRASH-resume
     )
 
     # The reconverge fired and ABORTed → the child fails closed BEFORE any step re-executes.
@@ -554,7 +563,9 @@ def test_recursive_child_crash_resume_e1_live_seed_reconstructs_full_final_state
     # resume ctx keyed on the SEED-derived run_key (no uuid pin — the seed IS the id).
     reader = _LedgerReader({_seeded_step_key(seed, 0): 1, _seeded_step_key(seed, 1): 1})
     ctx = _Ctx(ledger=_Ledger(), reader=reader, store=store, dispatchers=_Registry(_Echo()))
-    runner = compose_child_workflow_runner(cast(Any, ctx))
+    runner = compose_child_workflow_runner(
+        cast(Any, ctx), durable_admission=RefuseDurableChildAdmission()
+    )
     result = runner(
         workflow_id=_CHILD_WF,
         manifest_entry=_manifest(),
@@ -563,7 +574,7 @@ def test_recursive_child_crash_resume_e1_live_seed_reconstructs_full_final_state
         descent=cast(Any, None),
         descent_depth=1,  # a direct child-runner call is a depth-1 child of the root
         default_model_binding=_DEFAULT_BINDING,
-        pause_snapshot_input=None,  # CRASH-resume (not a pause-resume)
+        child_resume=None,  # CRASH-resume (not a pause-resume)
         child_run_id_seed=seed,  # E1-LIVE: the deterministic seed, NOT a pinned uuid
     )
 
@@ -588,7 +599,9 @@ def test_recursive_child_crash_resume_without_store_degrades_to_suffix_only(
     _ = tmp_path
     _pin_child_run_id(monkeypatch)
     ctx = _resume_ctx(store=None)  # NO store bound
-    runner = compose_child_workflow_runner(cast(Any, ctx))
+    runner = compose_child_workflow_runner(
+        cast(Any, ctx), durable_admission=RefuseDurableChildAdmission()
+    )
     result = runner(
         workflow_id=_CHILD_WF,
         manifest_entry=_manifest(),
@@ -597,7 +610,7 @@ def test_recursive_child_crash_resume_without_store_degrades_to_suffix_only(
         descent=cast(Any, None),
         descent_depth=1,  # a direct child-runner call is a depth-1 child of the root
         default_model_binding=_DEFAULT_BINDING,
-        pause_snapshot_input=None,
+        child_resume=None,
     )
 
     assert result.status is RunStatus.SUCCESS
@@ -706,7 +719,9 @@ def test_maybe_ran_reconciler_child_f1_abort_parent_folds_fail_closed(tmp_path: 
         dispatchers=_Registry(_Echo()),
         engine_recovery_loop=loop,
     )
-    runner = compose_child_workflow_runner(cast(Any, child_ctx))
+    runner = compose_child_workflow_runner(
+        cast(Any, child_ctx), durable_admission=RefuseDurableChildAdmission()
+    )
 
     ledger_writer = _parent_ledger_writer(tmp_path)
     dispatcher = RuntimeSubAgentDispatcher(
@@ -860,7 +875,9 @@ def test_maybe_ran_nonleaf_child_grandchild_auto_resumes_at_most_once(tmp_path: 
     gc_ctx = _Ctx(
         ledger=_Ledger(), reader=gc_reader, store=gc_store, dispatchers=_Registry(gc_echo)
     )
-    gc_runner = compose_child_workflow_runner(cast(Any, gc_ctx))
+    gc_runner = compose_child_workflow_runner(
+        cast(Any, gc_ctx), durable_admission=RefuseDurableChildAdmission()
+    )
 
     # --- the real child->grandchild dispatcher seam ---
     gc_ledger_writer = _parent_ledger_writer(tmp_path)
@@ -901,7 +918,9 @@ def test_maybe_ran_nonleaf_child_grandchild_auto_resumes_at_most_once(tmp_path: 
             ),
         ),
     )
-    child_runner = compose_child_workflow_runner(cast(Any, child_ctx))
+    child_runner = compose_child_workflow_runner(
+        cast(Any, child_ctx), durable_admission=RefuseDurableChildAdmission()
+    )
 
     grandchild_step = WorkflowStep(
         step_id=StepID("step-1"),
@@ -919,7 +938,7 @@ def test_maybe_ran_nonleaf_child_grandchild_auto_resumes_at_most_once(tmp_path: 
         descent=cast(Any, None),
         descent_depth=1,  # a direct child-runner call is a depth-1 child of the root
         default_model_binding=_DEFAULT_BINDING,
-        pause_snapshot_input=None,  # CRASH-resume
+        child_resume=None,  # CRASH-resume
         child_run_id_seed=_CHILD_RUN,
     )
 

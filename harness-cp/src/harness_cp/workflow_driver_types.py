@@ -205,6 +205,31 @@ class SubAgentChildPausedError(Exception):
         return self.capture.child_snapshot
 
 
+class ChildResumeRefusal(StrEnum):
+    """Why the Runtime refused to run a durable paused child (B-104 Task 4c)."""
+
+    MISSING_REF = "missing-ref"
+    UNREADABLE_RECORD = "unreadable-record"
+    SNAPSHOT_MISMATCH = "snapshot-mismatch"
+    DEPTH_MISMATCH = "depth-mismatch"
+    GATEWAY_NOT_INSTALLED = "gateway-not-installed"
+
+
+class ChildResumeRefusedError(Exception):
+    """A durable paused child was refused BEFORE any of its steps ran.
+
+    Raised by the Runtime child runner (its verification or its required admission step).
+    Defined here so the CP fan-out barrier can catch it typed without importing Runtime.
+    It is terminal for the parent run: no new pause snapshot, no fresh child dispatch and
+    no journal capture follow it, so the prior durable pause stays the only record.
+    """
+
+    def __init__(self, reason: ChildResumeRefusal, detail: str = "") -> None:
+        self.reason = reason
+        self.detail = detail
+        super().__init__(f"child resume refused ({reason.value}){': ' + detail if detail else ''}")
+
+
 class StepExecutionContext(BaseModel):
     """Per-step parent context surface composed by the driver and passed to
     the `StepDispatcher` Protocol (NEW at C-CP-25 v1.6 Path A — resolves the
@@ -374,11 +399,11 @@ class StepExecutionContext(BaseModel):
         C10 condition-2 gap). Monotonic-sticky because a grandchild's depth stays > 0."""
         return self.descent_depth > 0
 
-    child_resume_snapshot: PauseSnapshot | None = None
+    child_resume: PausedChildCapture | None = None
     """B-HIERARCHICAL-PAUSE (R-FS-1) — on RESUME, the `PauseSnapshot` a recursive
     child sub-workflow paused at, threaded to its `SUB_AGENT_DISPATCH` worker so the
     runtime dispatcher re-enters the child via `execute_workflow(pause_snapshot_input=
-    child_resume_snapshot)` — the child resumes at its cursor (the grandchild's
+    child_resume)` — the child resumes at its cursor (the grandchild's
     completed steps are NOT re-executed), the THIRD branch disposition distinct from
     skip-terminal and re-dispatch-fresh. Set by the CP driver ONLY on the specific
     paused-child worker's context when re-dispatching it on resume (sourced from the
@@ -507,7 +532,7 @@ class StepExecutionContext(BaseModel):
     fan-out) read it directly in place of the retired `getattr(ctx,
     "resume_context_holder", None)` + `.peek()`.
 
-    Same hash-inert / per-step-transient posture as `child_resume_snapshot` (NOT
+    Same hash-inert / per-step-transient posture as `child_resume` (NOT
     persisted, NOT in any §5.2 / outcome-hash); `None` default → byte-identical to
     pre-arc (a non-resume dispatch, or a resume with no HITL/effect-fence
     ambiguity, sees no behavior change)."""
@@ -976,6 +1001,8 @@ def compose_branch_terminal_path(branch_context: StepExecutionContext) -> str:
 
 
 __all__ = [
+    "ChildResumeRefusal",
+    "ChildResumeRefusedError",
     "RunResult",
     "RunStatus",
     "StepExecutionContext",

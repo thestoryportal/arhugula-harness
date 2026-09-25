@@ -119,7 +119,7 @@ class _MockChildWorkflowRunner:
         descent: SubAgentGateLevelDescent,
         default_model_binding: ModelBinding,
         descent_depth: int,
-        pause_snapshot_input: Any = None,
+        child_resume: Any = None,
         child_run_id_seed: str | None = None,
         resume_context: Any = None,
         hitl_uniform_fallback_eligible_run_id: str | None = None,
@@ -136,7 +136,7 @@ class _MockChildWorkflowRunner:
         # uniform-fallback eligibility payload.
         _ = (
             descent_depth,
-            pause_snapshot_input,
+            child_resume,
             child_run_id_seed,
             resume_context,
             hitl_uniform_fallback_eligible_run_id,

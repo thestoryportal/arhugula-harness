@@ -44,13 +44,18 @@ from typing import Any, Protocol, cast, runtime_checkable
 
 from harness_cp.cp_shared_types import ModelBinding
 from harness_cp.handoff_context import HandoffContext
-from harness_cp.pause_resume_protocol_types import PauseSnapshot, ResumeContext
+from harness_cp.pause_resume_protocol_types import PausedChildCapture, ResumeContext
 from harness_cp.sub_agent_gate_level_descent import SubAgentGateLevelDescent
 from harness_cp.workflow_driver import DriverContext as _CpDriverContext
 from harness_cp.workflow_driver import execute_workflow_at_depth
 from harness_cp.workflow_driver_types import RunResult, WorkflowStep
 from harness_cp.workflow_manifest_entry import WorkflowManifestEntry
 
+from harness_runtime.lifecycle.durable_child_admission import (
+    DurableChildAdmission,
+    verify_durable_child_resume,
+)
+from harness_runtime.lifecycle.durable_pause_resume_protocol import DurablePauseResumeProtocol
 from harness_runtime.types import HarnessContext
 
 __all__ = [
@@ -83,7 +88,7 @@ class ChildWorkflowRunner(Protocol):
         descent: SubAgentGateLevelDescent,
         default_model_binding: ModelBinding,
         descent_depth: int,
-        pause_snapshot_input: PauseSnapshot | None = None,
+        child_resume: PausedChildCapture | None = None,
         child_run_id_seed: str | None = None,
         resume_context: ResumeContext | None = None,
         hitl_uniform_fallback_eligible_run_id: str | None = None,
@@ -96,9 +101,10 @@ class ChildWorkflowRunner(Protocol):
         — its parent's depth + 1 — so the recursive `execute_workflow_at_depth` records a true
         ancestry (child 1, grandchild 2) with each pause it captures.
 
-        B-HIERARCHICAL-PAUSE (R-FS-1): `pause_snapshot_input` (additive, default
-        `None`) — when the parent fan-out is RESUMING a previously-paused child, the
-        child's own `PauseSnapshot` is threaded here so the child re-enters at its
+        B-HIERARCHICAL-PAUSE (R-FS-1): `child_resume` (additive, default
+        `None`) — when the parent fan-out is RESUMING a previously-paused child, its
+        capture (the child's own `PauseSnapshot` plus, under a durable protocol, the exact
+        journal ref of its record) is threaded here so the child re-enters at its
         cursor (`execute_workflow_at_depth(pause_snapshot_input=...)`) rather than re-running
         from scratch. `None` on a first (non-resume) child dispatch → byte-identical
         to the pre-arc behavior.
@@ -161,7 +167,9 @@ class ChildWorkflowRunner(Protocol):
         ...
 
 
-def compose_child_workflow_runner(ctx: HarnessContext) -> ChildWorkflowRunner:
+def compose_child_workflow_runner(
+    ctx: HarnessContext, *, durable_admission: DurableChildAdmission
+) -> ChildWorkflowRunner:
     """Build a `ChildWorkflowRunner` closing over the parent `HarnessContext`.
 
     Per `Spec_Harness_Runtime_v1.md` v1.6 §14.7.4 "Composer module residence":
@@ -185,6 +193,13 @@ def compose_child_workflow_runner(ctx: HarnessContext) -> ChildWorkflowRunner:
         The parent `HarnessContext`. The runner closes over this context;
         `ctx.step_dispatchers` must be populated (which it is post stage 5
         per the bootstrap orchestrator's stage ordering).
+    durable_admission
+        B-104 Task 4c — REQUIRED, no default. Under a durable pause protocol a resumed
+        paused child is verified against its exact journal record and then passed to this
+        step before any of its steps run; the step either admits it or raises
+        `ChildResumeRefusedError`. Every caller must state its binding: stage 5 binds the
+        always-refusing `RefuseDurableChildAdmission` until Task 5's claim/started gateway.
+        Not consulted for a first dispatch or an ephemeral protocol.
     """
 
     def _runner(
@@ -196,7 +211,7 @@ def compose_child_workflow_runner(ctx: HarnessContext) -> ChildWorkflowRunner:
         descent: SubAgentGateLevelDescent,
         default_model_binding: ModelBinding,
         descent_depth: int,
-        pause_snapshot_input: PauseSnapshot | None = None,
+        child_resume: PausedChildCapture | None = None,
         child_run_id_seed: str | None = None,
         resume_context: ResumeContext | None = None,
         hitl_uniform_fallback_eligible_run_id: str | None = None,
@@ -209,12 +224,28 @@ def compose_child_workflow_runner(ctx: HarnessContext) -> ChildWorkflowRunner:
         # edited between pause + resume so the same SUB_AGENT_DISPATCH step_id points to
         # a DIFFERENT child workflow, the parent resume guard still passes, and applying
         # the old child's cursor/run_id to the new child would silently corrupt lineage.
+        pause_snapshot_input = child_resume.child_snapshot if child_resume is not None else None
         if pause_snapshot_input is not None and pause_snapshot_input.workflow_id != workflow_id:
             raise ValueError(
                 "child resume workflow-id mismatch: snapshot.workflow_id="
                 f"{pause_snapshot_input.workflow_id!r}, resume child workflow_id="
                 f"{workflow_id!r} (the paused child's snapshot cannot resume a different "
                 "child workflow)"
+            )
+        # B-104 Task 4c — under a DURABLE protocol a resumed paused child must be the exact
+        # journal record its parent carried (verified by position and digest, full snapshot
+        # equality and depth), and must then pass the required admission step, BEFORE
+        # anything of it executes. Both refuse with `ChildResumeRefusedError`. An ephemeral
+        # protocol has no journal record and keeps its existing behavior.
+        # [LAW:single-enforcer] This is the only path from a resume capture to
+        # `execute_workflow_at_depth`.
+        if child_resume is not None and isinstance(
+            ctx.pause_resume_protocol, DurablePauseResumeProtocol
+        ):
+            durable_admission.admit(
+                verify_durable_child_resume(
+                    ctx.pause_resume_protocol, child_resume, descent_depth=descent_depth
+                )
             )
         # Reuse the paused child's ORIGINAL run_id (not a fresh uuid) so the resumed
         # child's run/step idempotency keys + ledger/audit lineage stay coherent with

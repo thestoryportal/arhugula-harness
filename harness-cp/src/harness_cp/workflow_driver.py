@@ -159,6 +159,7 @@ from harness_cp.workflow_driver_errors import (
     TopologyPatternNotYetMaterializedError,
 )
 from harness_cp.workflow_driver_types import (
+    ChildResumeRefusedError,
     RunResult,
     RunStatus,
     StepExecutionContext,
@@ -8169,8 +8170,8 @@ def _execute_parallelization(
     # the branch is RE-DISPATCHED with its child's snapshot threaded so the child re-enters
     # at its cursor (the THIRD branch disposition). Rebuilt fresh per round (re-dispatch IS
     # the carry — no carry-seed).
-    _recovered_paused_child: dict[int, PauseSnapshot] = (
-        {b.branch_index: b.child_snapshot for b in _peer_resume.paused_child_branches}
+    _recovered_paused_child: dict[int, PausedChildCapture] = (
+        {b.branch_index: b.as_capture() for b in _peer_resume.paused_child_branches}
         if _peer_resume is not None
         else {}
     )
@@ -8317,12 +8318,19 @@ def _execute_parallelization(
             # the terminal `branches` (`seen`) — a paused-child ordinal is the disjoint THIRD
             # disposition (the ORCHESTRATOR_WORKERS analogue), so a snapshot listing the same
             # ordinal as both terminal AND paused-child is corrupt (fail closed).
+            _seen_child_refs: set[JournalRecordRef] = set()
             for pc in _peer_resume.paused_child_branches:
                 if not (0 <= pc.branch_index < len(steps)):
                     return f"paused-child-index-out-of-range: {pc.branch_index} ∉ [0, {len(steps)})"
                 if pc.branch_index in seen:
                     return f"paused-child-overlaps-terminal-or-duplicate: {pc.branch_index}"
                 seen.add(pc.branch_index)
+                # B-104 Task 4c — two paused children never share one journal record: a duplicate
+                # ref means one child's record is being presented for another (fail closed).
+                if pc.child_record_ref is not None:
+                    if pc.child_record_ref in _seen_child_refs:
+                        return f"paused-child-duplicate-record-ref at {pc.branch_index}"
+                    _seen_child_refs.add(pc.child_record_ref)
                 if str(steps[pc.branch_index].step_id) != pc.step_id:
                     return (
                         f"paused-child-identity-mismatch at {pc.branch_index}: snapshot "
@@ -8710,7 +8718,7 @@ def _execute_parallelization(
             # tuple (keyed from manifest_entry, so no sibling/parent leak; the child
             # inherits manifest_entry.hitl_placements from fanout_parent otherwise).
             update={
-                "child_resume_snapshot": _child_resume,
+                "child_resume": _child_resume,
                 "effect_fence_resolution": _branch_effect_fence_directive,
                 "hitl_delivery_holder": _branch_hitl_delivery_cell,
                 "hitl_placements": fold_step_hitl_placements(
@@ -8876,6 +8884,11 @@ def _execute_parallelization(
     # LINEAR effect-fence ABORT does (out-of-family Codex [P1]: without this an ABORT re-supplied
     # under CascadePolicy.PAUSE fell through the generic branch-failure path → re-pause).
     effect_fence_aborted_dispositions: set[int] = set()
+    # B-104 Task 4c — ordinals whose durable paused child was REFUSED by the Runtime before it
+    # ran (`ChildResumeRefusedError`). TERMINAL like the fence ABORT: the post-barrier forces
+    # RunStatus.FAILED, tier-agnostically, so a refusal never re-pauses, re-dispatches or
+    # captures anything; the prior durable pause stays the only record.
+    child_resume_refused_dispositions: set[int] = set()
     # B-72 impl leg (CP spec v1.108 §1) — peer ordinals whose OWN dispatch raised the runtime's
     # `HITLPauseRequestedSignal` THIS round (its own `SUB_AGENT_BOUNDARY` gate fired before any
     # child run was dispatched). DISJOINT from `terminal_dispositions` (caught at a dedicated
@@ -9600,6 +9613,11 @@ def _execute_parallelization(
                     procedural_tier_snapshot_ref=snapshot_ref,
                 )
                 raise
+            except ChildResumeRefusedError:
+                # B-104 Task 4c — the Runtime refused this durable paused child before running it.
+                # TERMINAL for the run (post-barrier forces FAILED): record + re-raise, no capture.
+                child_resume_refused_dispositions.add(branch_index)
+                raise
             except SubAgentChildPausedError as _paused:
                 # B-21 — this branch's own dispatch is a `SUB_AGENT_DISPATCH` step whose
                 # recursive child sub-workflow PAUSED. Under `proceed` (SOLO) there is no
@@ -9879,6 +9897,13 @@ def _execute_parallelization(
             # port intentionally preserves, not a gap unique to PARALLELIZATION.
             _synthesize_undispatched_terminals()
             return _finish(RunStatus.PARTIAL, fail_class=None, salvage=True)
+        # B-104 Task 4c — a durable paused child refused before it ran is a terminal run
+        # failure even under `proceed` (never degraded into PARTIAL/SUCCESS).
+        if child_resume_refused_dispositions:
+            _synthesize_undispatched_terminals()
+            return _finish(
+                RunStatus.FAILED, fail_class="parallelization-child-resume-refused", salvage=False
+            )
         if paused_child_dispositions:
             # B-21 — a recursive child PAUSED under `proceed`. There is no resumable-pause
             # boundary here (proceed degrades, it does not pause), so the suspended child
@@ -10031,6 +10056,11 @@ def _execute_parallelization(
                 _inflight_exc = (
                     inflight.exception() if (inflight.done() and not inflight.cancelled()) else None
                 )
+                if isinstance(_inflight_exc, ChildResumeRefusedError):
+                    # B-104 Task 4c — an in-flight sibling's durable paused child was refused (the
+                    # shielded drain suppresses it, as it does a child pause): same terminal record.
+                    child_resume_refused_dispositions.add(branch_index)
+                    raise
                 if isinstance(_inflight_exc, SubAgentChildPausedError):
                     # B-21 — this branch was cancelled because a SIBLING raised first, but its OWN
                     # in-flight child sub-workflow may have PAUSED: `dispatch_branch_step_shielded`
@@ -10155,6 +10185,11 @@ def _execute_parallelization(
                         output=None,
                     )
                 raise  # honor the cancellation (the barrier cancelled this branch)
+            except ChildResumeRefusedError:
+                # B-104 Task 4c — the Runtime refused this durable paused child before running it.
+                # TERMINAL for the run (post-barrier forces FAILED): record + re-raise, no capture.
+                child_resume_refused_dispositions.add(branch_index)
+                raise
             except SubAgentChildPausedError as _paused:
                 # B-21 — this branch's own dispatch is a `SUB_AGENT_DISPATCH` step whose
                 # recursive child sub-workflow PAUSED (a grandchild failed under
@@ -10521,6 +10556,14 @@ def _execute_parallelization(
     # branch AND the withheld followers (v1.91 item 6a). The aborted arm records the ABORTED
     # branch `completed` terminal-ONLY; withheld recovered fence peers `completed`
     # (capture-less); plain withheld branches `cancelled`. fail_class + run status unchanged.
+    # B-104 Task 4c — a durable paused child was refused before it ran: TERMINAL, forced
+    # FAILED before any policy branching so nothing re-pauses, re-dispatches or captures.
+    if child_resume_refused_dispositions:
+        _synthesize_undispatched_terminals()
+        return _finish(
+            RunStatus.FAILED, fail_class="parallelization-child-resume-refused", salvage=False
+        )
+
     if effect_fence_aborted_dispositions:
         _synthesize_undispatched_terminals()
         return _finish(
@@ -12172,8 +12215,8 @@ def _execute_orchestrator_workers(
     # re-dispatched THIS round → it either completes (→ terminal), fails, or pauses again
     # (→ recaptured into this round's paused_child set), so the set is rebuilt fresh per
     # round (no carry-seed — re-dispatch IS the carry).
-    _recovered_paused_child: dict[int, PauseSnapshot] = (
-        {b.branch_index: b.child_snapshot for b in _fan_out_resume.paused_child_branches}
+    _recovered_paused_child: dict[int, PausedChildCapture] = (
+        {b.branch_index: b.as_capture() for b in _fan_out_resume.paused_child_branches}
         if _fan_out_resume is not None
         else {}
     )
@@ -12360,6 +12403,7 @@ def _execute_orchestrator_workers(
             # PLUS no-overlap with the terminal `branches` (`seen`) — a paused-child
             # ordinal is the disjoint THIRD disposition, so a snapshot listing the same
             # ordinal as both terminal AND paused-child is corrupt (fail closed).
+            _seen_child_refs: set[JournalRecordRef] = set()
             for pc in _fan_out_resume.paused_child_branches:
                 if not (0 <= pc.branch_index < len(worker_steps)):
                     return (
@@ -12369,6 +12413,12 @@ def _execute_orchestrator_workers(
                 if pc.branch_index in seen:
                     return f"paused-child-overlaps-terminal-or-duplicate: {pc.branch_index}"
                 seen.add(pc.branch_index)
+                # B-104 Task 4c — two paused children never share one journal record: a duplicate
+                # ref means one child's record is being presented for another (fail closed).
+                if pc.child_record_ref is not None:
+                    if pc.child_record_ref in _seen_child_refs:
+                        return f"paused-child-duplicate-record-ref at {pc.branch_index}"
+                    _seen_child_refs.add(pc.child_record_ref)
                 if str(worker_steps[pc.branch_index].step_id) != pc.step_id:
                     return (
                         f"paused-child-identity-mismatch at {pc.branch_index}: snapshot "
@@ -13181,7 +13231,7 @@ def _execute_orchestrator_workers(
             # the orchestrator's own placement override never leaks to a worker).
             update={
                 "step_index": branch_index + 1,
-                "child_resume_snapshot": _child_resume,
+                "child_resume": _child_resume,
                 "effect_fence_resolution": _branch_effect_fence_directive,
                 "hitl_delivery_holder": _branch_hitl_delivery_cell,
                 "hitl_placements": fold_step_hitl_placements(
@@ -13284,6 +13334,11 @@ def _execute_orchestrator_workers(
     # post-barrier forces RunStatus.FAILED tier-agnostic, BEFORE the pause path (the LINEAR ABORT
     # → FAILED analogue; Codex [P1]).
     effect_fence_aborted_dispositions: set[int] = set()
+    # B-104 Task 4c — ordinals whose durable paused child was REFUSED by the Runtime before it
+    # ran (`ChildResumeRefusedError`). TERMINAL like the fence ABORT: the post-barrier forces
+    # RunStatus.FAILED, tier-agnostically, so a refusal never re-pauses, re-dispatches or
+    # captures anything; the prior durable pause stays the only record.
+    child_resume_refused_dispositions: set[int] = set()
     # B-72 impl leg (CP spec v1.108 §1) — worker ordinals whose OWN dispatch raised the runtime's
     # `HITLPauseRequestedSignal` THIS round (its own `SUB_AGENT_BOUNDARY` gate fired before any
     # child run was dispatched — the ORCHESTRATOR_WORKERS analogue of the PARALLELIZATION set).
@@ -14212,6 +14267,11 @@ def _execute_orchestrator_workers(
                     procedural_tier_snapshot_ref=snapshot_ref,
                 )
                 raise
+            except ChildResumeRefusedError:
+                # B-104 Task 4c — the Runtime refused this durable paused child before running it.
+                # TERMINAL for the run (post-barrier forces FAILED): record + re-raise, no capture.
+                child_resume_refused_dispositions.add(branch_index)
+                raise
             except SubAgentChildPausedError as _paused:
                 # B-HIERARCHICAL-PAUSE — this worker's recursive child PAUSED. Under
                 # `proceed` (SOLO) there is no resumable-pause boundary to honor it (the
@@ -14456,6 +14516,15 @@ def _execute_orchestrator_workers(
             # CancelledError handler.
             _synthesize_undispatched_terminals()
             return _finish(RunStatus.PARTIAL, fail_class=None, salvage=True)
+        # B-104 Task 4c — a durable paused child refused before it ran is a terminal run
+        # failure even under `proceed` (never degraded into PARTIAL/SUCCESS).
+        if child_resume_refused_dispositions:
+            _synthesize_undispatched_terminals()
+            return _finish(
+                RunStatus.FAILED,
+                fail_class="orchestrator-workers-child-resume-refused",
+                salvage=False,
+            )
         if paused_child_dispositions:
             # B-HIERARCHICAL-PAUSE — a recursive child PAUSED under `proceed`. There is
             # no resumable-pause boundary here (proceed degrades, it does not pause), so
@@ -14591,6 +14660,11 @@ def _execute_orchestrator_workers(
                 _inflight_exc = (
                     inflight.exception() if (inflight.done() and not inflight.cancelled()) else None
                 )
+                if isinstance(_inflight_exc, ChildResumeRefusedError):
+                    # B-104 Task 4c — an in-flight sibling's durable paused child was refused (the
+                    # shielded drain suppresses it, as it does a child pause): same terminal record.
+                    child_resume_refused_dispositions.add(branch_index)
+                    raise
                 if isinstance(_inflight_exc, SubAgentChildPausedError):
                     paused_child_dispositions[branch_index] = _inflight_exc.capture
                     raise
@@ -14714,6 +14788,11 @@ def _execute_orchestrator_workers(
                         output=None,
                     )
                 raise  # honor the cancellation (the barrier cancelled this branch)
+            except ChildResumeRefusedError:
+                # B-104 Task 4c — the Runtime refused this durable paused child before running it.
+                # TERMINAL for the run (post-barrier forces FAILED): record + re-raise, no capture.
+                child_resume_refused_dispositions.add(branch_index)
+                raise
             except SubAgentChildPausedError as _paused:
                 # B-HIERARCHICAL-PAUSE — this worker's recursive child sub-workflow PAUSED
                 # (a grandchild failed under cascade_policy=pause). NOT a terminal branch
@@ -15056,6 +15135,14 @@ def _execute_orchestrator_workers(
     # re-paused peer records `completed` + the durable capture (the v1.65 §1(c) trade, named);
     # withheld recovered peers record `completed` capture-less; plain withheld `cancelled`.
     # fail_class + run status unchanged.
+    # B-104 Task 4c — a durable paused child was refused before it ran: TERMINAL, forced
+    # FAILED before any policy branching so nothing re-pauses, re-dispatches or captures.
+    if child_resume_refused_dispositions:
+        _synthesize_undispatched_terminals()
+        return _finish(
+            RunStatus.FAILED, fail_class="orchestrator-workers-child-resume-refused", salvage=False
+        )
+
     if effect_fence_aborted_dispositions:
         _synthesize_undispatched_terminals()
         return _finish(

@@ -59,6 +59,7 @@ from harness_runtime.lifecycle.audit_signing_fail_closed_validation import (
 )
 from harness_runtime.lifecycle.cacheable_epoch import select_cache_ttl
 from harness_runtime.lifecycle.child_workflow_runner import compose_child_workflow_runner
+from harness_runtime.lifecycle.durable_child_admission import RefuseDurableChildAdmission
 from harness_runtime.lifecycle.engine_output_store import (
     EngineOutputStore,
     engine_output_dir_for,
@@ -610,7 +611,11 @@ async def execute(
     # casts ctx to the CP driver's structural `DriverContext` Protocol.
     # The mutable ctx satisfies the Protocol structurally — same pattern
     # api.py uses on the frozen ctx.
-    child_runner = compose_child_workflow_runner(cast(HarnessContext, ctx))
+    # B-104 Task 4c: no claim/started gateway exists yet (Task 5), so a durable paused
+    # child is verified and then REFUSED; Task 5 replaces only this binding.
+    child_runner = compose_child_workflow_runner(
+        cast(HarnessContext, ctx), durable_admission=RefuseDurableChildAdmission()
+    )
 
     # v1.7 §14.7.2 step 8 4-substep audit composition extends the
     # dispatcher's dependency set with the IS state-ledger writer (8b F2-

@@ -1235,6 +1235,19 @@ class PausedChildBranchResumeState(BaseModel):
             )
         return self
 
+    def as_capture(self) -> PausedChildCapture:
+        """This carrier as the capture the resume path hands the child runner.
+
+        [LAW:one-source-of-truth] The one derivation of a resume-side capture; a legacy
+        carrier with no recorded `child_workflow_id` (necessarily also ref-less) takes the
+        workflow id from its own child snapshot.
+        """
+        return PausedChildCapture(
+            child_workflow_id=self.child_workflow_id or self.child_snapshot.workflow_id,
+            child_snapshot=self.child_snapshot,
+            child_record_ref=self.child_record_ref,
+        )
+
 
 class EffectFencePausedBranchResumeState(BaseModel):
     """A fan-out branch whose own dispatch raised the runtime effect fence's

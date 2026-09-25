@@ -43,7 +43,10 @@ from harness_cp.pause_resume_protocol_types import (
 )
 
 if TYPE_CHECKING:
+    from harness_core import JournalRecordRef
+
     from harness_runtime.lifecycle.journal_workflow_pause_store import (
+        JournalRecordAtRef,
         JournalWorkflowPauseStore,
     )
 
@@ -130,3 +133,7 @@ class DurablePauseResumeProtocol(PauseResumeProtocol):
         )
         record_ref = self._store.capture(captured.snapshot, depth=descent_depth)
         return DurableCapturedPause(snapshot=captured.snapshot, record_ref=record_ref)
+
+    def read_exact(self, ref: JournalRecordRef) -> JournalRecordAtRef | None:
+        """Read-only accessor: the record at exactly `ref`, or `None` (never the latest)."""
+        return self._store.read_exact(ref)

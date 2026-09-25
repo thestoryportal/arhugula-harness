@@ -2045,7 +2045,7 @@ def _peer_child_steps() -> list[WorkflowStep]:
 
 class _PeerFaithfulSubAgentDispatcher:
     """A faithful double of `RuntimeSubAgentDispatcher` for the B-21 seam: dispatches a
-    REAL child `execute_workflow`, reading `step_context.child_resume_snapshot` to
+    REAL child `execute_workflow`, reading `step_context.child_resume` to
     thread the child's resume snapshot, and RAISING `SubAgentChildPausedError`
     (carrying the child's `PauseSnapshot`) when the child returns PAUSED — exactly what
     the runtime dispatcher does at `sub_agent_dispatch.py`, and exactly the double
@@ -2060,7 +2060,7 @@ class _PeerFaithfulSubAgentDispatcher:
         self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
     ) -> dict[str, Any]:
         self.child_calls += 1
-        child_resume = getattr(step_context, "child_resume_snapshot", None)
+        child_resume = getattr(getattr(step_context, "child_resume", None), "child_snapshot", None)
         self.received_resume.append(child_resume)
         child_ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
         child_result = execute_workflow(
@@ -3242,7 +3242,9 @@ class _RoundTwoResolveOnePausedChildFireOtherDispatcher:
             holder = getattr(step_context, "hitl_delivery_holder", None)
             resolved = holder.consume_and_clear() if holder is not None else None
             assert resolved is not None, "branch-0-sub must receive its delivery cell this round"
-            child_resume = getattr(step_context, "child_resume_snapshot", None)
+            child_resume = getattr(
+                getattr(step_context, "child_resume", None), "child_snapshot", None
+            )
             child_ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
             child_result = execute_workflow(
                 _peer_child_manifest("wf-child-0"),
