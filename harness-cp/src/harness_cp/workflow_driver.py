@@ -159,6 +159,7 @@ from harness_cp.workflow_driver_errors import (
     TopologyPatternNotYetMaterializedError,
 )
 from harness_cp.workflow_driver_types import (
+    ChildResumeAuthority,
     ChildResumeRefusedError,
     RunResult,
     RunStatus,
@@ -3275,6 +3276,7 @@ def execute_workflow_at_depth(
     reconstruct_final_state: bool = True,
     parent_gate_floor: GateLevel = GateLevel.AUTO,
     resume_context: ResumeContext | None = None,
+    child_resume_authority: ChildResumeAuthority | None = None,
     hitl_uniform_fallback_eligible_run_id: str | None = None,
     effect_fence_uniform_fallback_eligible_key: str | None = None,
     effect_fence_tree_wide_abort_present: bool = False,
@@ -3611,6 +3613,7 @@ def execute_workflow_at_depth(
             # B-39 Slice B — the operator's resume payload, threaded verbatim (this
             # execute_workflow call's own top-level parameter; unmodified pass-through).
             resume_context=resume_context,
+            child_resume_authority=child_resume_authority,
             hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
             effect_fence_uniform_fallback_eligible_key=effect_fence_uniform_fallback_eligible_key,
             effect_fence_tree_wide_abort_present=effect_fence_tree_wide_abort_present,
@@ -3654,6 +3657,7 @@ def _execute_workflow_body(
     reconstruct_final_state: bool = True,
     descent_depth: int,
     resume_context: ResumeContext | None = None,
+    child_resume_authority: ChildResumeAuthority | None = None,
     hitl_uniform_fallback_eligible_run_id: str | None = None,
     effect_fence_uniform_fallback_eligible_key: str | None = None,
     effect_fence_tree_wide_abort_present: bool = False,
@@ -4705,6 +4709,7 @@ def _execute_workflow_body(
             synthesis_step=_synthesis_step,
             descent_depth=descent_depth,
             resume_context=resume_context,
+            child_resume_authority=child_resume_authority,
             hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
             effect_fence_uniform_fallback_eligible_key=effect_fence_uniform_fallback_eligible_key,
             effect_fence_tree_wide_abort_present=effect_fence_tree_wide_abort_present,
@@ -4726,6 +4731,7 @@ def _execute_workflow_body(
             resume_snapshot=resume_snapshot,
             descent_depth=descent_depth,
             resume_context=resume_context,
+            child_resume_authority=child_resume_authority,
             hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
             effect_fence_uniform_fallback_eligible_key=effect_fence_uniform_fallback_eligible_key,
             effect_fence_tree_wide_abort_present=effect_fence_tree_wide_abort_present,
@@ -4768,6 +4774,7 @@ def _execute_workflow_body(
             synthesis_step=_synthesis_step,
             descent_depth=descent_depth,
             resume_context=resume_context,
+            child_resume_authority=child_resume_authority,
             hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
             effect_fence_uniform_fallback_eligible_key=effect_fence_uniform_fallback_eligible_key,
             effect_fence_tree_wide_abort_present=effect_fence_tree_wide_abort_present,
@@ -4808,6 +4815,7 @@ def _execute_workflow_body(
             synthesis_step=_synthesis_step,
             descent_depth=descent_depth,
             resume_context=resume_context,
+            child_resume_authority=child_resume_authority,
             hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
             effect_fence_uniform_fallback_eligible_key=effect_fence_uniform_fallback_eligible_key,
             effect_fence_tree_wide_abort_present=effect_fence_tree_wide_abort_present,
@@ -4830,6 +4838,7 @@ def _execute_workflow_body(
             resume_snapshot=resume_snapshot,
             descent_depth=descent_depth,
             resume_context=resume_context,
+            child_resume_authority=child_resume_authority,
             hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
             effect_fence_uniform_fallback_eligible_key=effect_fence_uniform_fallback_eligible_key,
             effect_fence_tree_wide_abort_present=effect_fence_tree_wide_abort_present,
@@ -5648,6 +5657,7 @@ def _execute_workflow_body(
             # step (a `RuntimeSubAgentDispatcher` reads it off a SUB_AGENT_DISPATCH
             # step's context to forward into the recursive `execute_workflow` call).
             resume_context=resume_context,
+            child_resume_authority=child_resume_authority,
             hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
             effect_fence_uniform_fallback_eligible_key=effect_fence_uniform_fallback_eligible_key,
             effect_fence_tree_wide_abort_present=effect_fence_tree_wide_abort_present,
@@ -8118,6 +8128,7 @@ def _execute_parallelization(
     synthesis_step: WorkflowStep | None = None,
     descent_depth: int,
     resume_context: ResumeContext | None = None,
+    child_resume_authority: ChildResumeAuthority | None = None,
     hitl_uniform_fallback_eligible_run_id: str | None = None,
     effect_fence_uniform_fallback_eligible_key: str | None = None,
     effect_fence_tree_wide_abort_present: bool = False,
@@ -8568,6 +8579,7 @@ def _execute_parallelization(
         # B-39 Slice B — plain pass-through; branch children inherit it via
         # compose_branch_child_context's model_copy (deliberately not reset).
         resume_context=resume_context,
+        child_resume_authority=child_resume_authority,
         hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
         effect_fence_uniform_fallback_eligible_key=effect_fence_uniform_fallback_eligible_key,
         effect_fence_tree_wide_abort_present=effect_fence_tree_wide_abort_present,
@@ -11142,6 +11154,7 @@ def _execute_evaluator_optimizer(
     resume_snapshot: PauseSnapshot | None = None,
     descent_depth: int,
     resume_context: ResumeContext | None = None,
+    child_resume_authority: ChildResumeAuthority | None = None,
     hitl_uniform_fallback_eligible_run_id: str | None = None,
     effect_fence_uniform_fallback_eligible_key: str | None = None,
     effect_fence_tree_wide_abort_present: bool = False,
@@ -11457,6 +11470,7 @@ def _execute_evaluator_optimizer(
             descent_depth=descent_depth,
             # B-39 Slice B — plain pass-through (no fan-out at this strategy).
             resume_context=resume_context,
+            child_resume_authority=child_resume_authority,
             hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
             effect_fence_uniform_fallback_eligible_key=effect_fence_uniform_fallback_eligible_key,
             effect_fence_tree_wide_abort_present=effect_fence_tree_wide_abort_present,
@@ -12167,6 +12181,7 @@ def _execute_orchestrator_workers(
     synthesis_step: WorkflowStep | None = None,
     descent_depth: int,
     resume_context: ResumeContext | None = None,
+    child_resume_authority: ChildResumeAuthority | None = None,
     hitl_uniform_fallback_eligible_run_id: str | None = None,
     effect_fence_uniform_fallback_eligible_key: str | None = None,
     effect_fence_tree_wide_abort_present: bool = False,
@@ -12818,6 +12833,7 @@ def _execute_orchestrator_workers(
         # B-39 Slice B — plain pass-through; workers inherit it via
         # compose_branch_child_context's model_copy (deliberately not reset).
         resume_context=resume_context,
+        child_resume_authority=child_resume_authority,
         hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
         effect_fence_uniform_fallback_eligible_key=effect_fence_uniform_fallback_eligible_key,
         effect_fence_tree_wide_abort_present=effect_fence_tree_wide_abort_present,
@@ -15524,6 +15540,7 @@ def _execute_hierarchical_delegation(
     synthesis_step: WorkflowStep | None = None,
     descent_depth: int,
     resume_context: ResumeContext | None = None,
+    child_resume_authority: ChildResumeAuthority | None = None,
     hitl_uniform_fallback_eligible_run_id: str | None = None,
     effect_fence_uniform_fallback_eligible_key: str | None = None,
     effect_fence_tree_wide_abort_present: bool = False,
@@ -15639,6 +15656,7 @@ def _execute_hierarchical_delegation(
         synthesis_step=synthesis_step,
         descent_depth=descent_depth,
         resume_context=resume_context,
+        child_resume_authority=child_resume_authority,
         hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
         effect_fence_uniform_fallback_eligible_key=effect_fence_uniform_fallback_eligible_key,
         effect_fence_tree_wide_abort_present=effect_fence_tree_wide_abort_present,
@@ -15724,6 +15742,7 @@ def _execute_decentralized_handoff(
     resume_snapshot: PauseSnapshot | None = None,
     descent_depth: int,
     resume_context: ResumeContext | None = None,
+    child_resume_authority: ChildResumeAuthority | None = None,
     hitl_uniform_fallback_eligible_run_id: str | None = None,
     effect_fence_uniform_fallback_eligible_key: str | None = None,
     effect_fence_tree_wide_abort_present: bool = False,
@@ -16105,6 +16124,7 @@ def _execute_decentralized_handoff(
             # B-39 Slice B — plain pass-through; stage_ctx inherits it via
             # compose_branch_child_context's model_copy (deliberately not reset).
             resume_context=resume_context,
+            child_resume_authority=child_resume_authority,
             hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
             effect_fence_uniform_fallback_eligible_key=effect_fence_uniform_fallback_eligible_key,
             effect_fence_tree_wide_abort_present=effect_fence_tree_wide_abort_present,

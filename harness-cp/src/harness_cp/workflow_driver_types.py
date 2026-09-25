@@ -27,9 +27,9 @@ Authority:
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from enum import StrEnum
-from typing import Any, Literal
+from typing import Any, Literal, Protocol, runtime_checkable
 
 from harness_as.sandbox_tier import SandboxTier
 from harness_core import JournalRecordRef
@@ -240,6 +240,24 @@ class ChildResumeRefusedError(Exception):
         super().__init__(f"child resume refused ({reason.value}){': ' + detail if detail else ''}")
 
 
+@runtime_checkable
+class ChildResumeAuthority(Protocol):
+    """The Runtime-owned permission to run one durable paused child, carried by CP as opaque data.
+
+    CP declares only the shape so the value can ride `StepExecutionContext` from
+    `execute_workflow_at_depth` to the sub-agent dispatch. CP never calls, reads or inspects
+    an authority (it is not an input to any hash, snapshot or decision); the Runtime child
+    runner alone invokes `run_admitted` with the verified record it proved, and the
+    implementation either runs `body` exactly when it admits the child or raises
+    `ChildResumeRefusedError` without calling it.
+
+    [LAW:one-way-deps] The `verified` record is deliberately opaque here: its type belongs to
+    Runtime, which CP must never import.
+    """
+
+    def run_admitted[R](self, verified: Any, body: Callable[[], R]) -> R: ...
+
+
 class StepExecutionContext(BaseModel):
     """Per-step parent context surface composed by the driver and passed to
     the `StepDispatcher` Protocol (NEW at C-CP-25 v1.6 Path A — resolves the
@@ -341,7 +359,7 @@ class StepExecutionContext(BaseModel):
     U-CP-83).
     """
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True, arbitrary_types_allowed=True)
 
     workflow_id: str
     parent_action_id: str
@@ -408,6 +426,20 @@ class StepExecutionContext(BaseModel):
         external-irreversible tools from the child's visibility (closing the F1 latent
         C10 condition-2 gap). Monotonic-sticky because a grandchild's depth stays > 0."""
         return self.descent_depth > 0
+
+    child_resume_authority: ChildResumeAuthority | None = Field(
+        default=None, exclude=True, repr=False
+    )
+    """B-104 Task 5b-1 — the Runtime's permission to run a durable paused child, carried as
+    ordinary data from `execute_workflow_at_depth(child_resume_authority=...)` to the
+    `SUB_AGENT_DISPATCH` dispatcher beside `child_resume`. CP only threads it: onto EVERY
+    `StepExecutionContext` a strategy composes (linear + the 5 non-linear strategies;
+    branch children inherit the SAME object through `compose_branch_child_context`'s
+    `model_copy`) and never invokes or reads it.
+
+    Hash-inert and non-persistent (`exclude=True`, so it is absent from every `model_dump`,
+    hence from any snapshot or hash input); `None` (every existing caller) is byte-identical
+    to pre-arc. NOT a ContextVar, thread-local or registry: it travels with the dispatch call."""
 
     child_resume: PausedChildCapture | None = None
     """B-HIERARCHICAL-PAUSE (R-FS-1) — on RESUME, the `PauseSnapshot` a recursive
