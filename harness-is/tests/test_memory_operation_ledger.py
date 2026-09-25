@@ -186,6 +186,37 @@ def test_projection_mismatch_rejected_on_entry() -> None:
         )
 
 
+def test_memory_entry_rejects_inherited_recovery_audit_before_hashing() -> None:
+    audit = {
+        "schema_version": 1,
+        "scope": "claim",
+        "phase": "intent",
+        "record_identity": {
+            "tenant_id": "tenant", "workflow_id": "workflow", "record_count": 1,
+            "latest_digest": "a" * 64, "snapshot_hash": "b" * 64,
+        },
+        "subject_id": "1" * 64, "action_id": "recover-1", "action": "release",
+        "operator_uid": 1000, "reason_digest": "c" * 64,
+        "observation": {
+            "claim_bytes_digest": "d" * 64,
+            "canonical_claim_path": "/state/claim-1",
+            "claim_st_dev": 8, "claim_st_ino": 42,
+            "lease_generation": "a" * 32, "lease_st_dev": 8, "lease_st_ino": 43,
+        },
+    }
+    with pytest.raises(ValidationError, match="memory operation entries cannot carry recovery_audit"):
+        MemoryOperationEntry.model_validate({
+            "action_id": "mem-1", "idempotency_key": "mem-key",
+            "actor": {"actor_class": "agent", "actor_id": "agent-memory"},
+            "response_hash": ALL_ZEROS_SENTINEL,
+            "timestamp": _BASE_TIME,
+            "prior_event_hash": ALL_ZEROS_SENTINEL,
+            "operation_kind": MemoryOperationKind.CAPTURE,
+            "operation_projection": MemoryOperationProjection.PROMOTION_DECISIONS,
+            "recovery_audit": audit,
+        })
+
+
 def test_redaction_event_required_for_redact_and_tombstone_kinds() -> None:
     """B-28 finding #2 — REDACT/TOMBSTONE operations without a redaction_event
     must raise ``ValidationError``."""

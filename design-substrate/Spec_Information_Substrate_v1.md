@@ -40,8 +40,20 @@
 | Revision date | 2026-07-22 |
 | Revision | v1.12 → v1.13 (`B-57` spec leg — **per-call-site writer-owned timestamp election on DIRECT append surfaces**, ratified **Reading A** — Class 2 fork `.harness/class_2_fork_b57_direct_append_writer_owned_opt_in.md`, operator-ratified 2026-08-07. NEW **§7.6.1** under C-IS-07 §7.6: a DIRECT-append call site MAY **elect** writer-owned sampling by supplying the EXISTING `WRITER_OWNED_TIMESTAMP` sentinel (§7.6, v1.11) as its write payload's `timestamp`; on an electing call the persisted `timestamp` is sampled by the writer INSIDE the write serialization point, exactly as on the buffered/branch-drain surface. **The election is PER CALL SITE — never a default, never a writer mode**: a direct producer that supplies any other value retains caller-supplied semantics BYTE-VERBATIM, so §7.6's direct-path contract is unchanged for every non-electing producer, and the writer acquires no surface discriminator, mode flag or path gate. **Eligibility rule:** a site MAY elect only where its entry's `timestamp` means *when the entry was appended*; where it means *when the event happened*, caller-supplied semantics are REQUIRED and an out-of-order refusal is the honest outcome. The §7.6 *"Surfaces that do NOT change"* paragraph and its *registered residual* are **PRESERVED VERBATIM as historical record** (both remain accurate for every non-electing producer) with ONE added status paragraph recording that the residual's demanded back-flow HAS NOW BEEN PERFORMED and DISCHARGED in this narrow form — mirroring how §7.5 preserved the §7.4 deferral text it lifted; the §7.1 row-7 *"Timestamp authority"* cell gains a CROSS-REFERENCE-ONLY clause naming §7.6.1 (zero new semantics at that cell — authored so the summary row does not become stale-as-described). **ZERO new contract numbers** (the EXISTING C-IS-07 §7.6 is extended; a spec leg cannot mint one). **ZERO change to the §5 six-field shape / §5.1–§5.6 sidecars / §6 hash-chain construction + canonicalization / §7.2–§7.5 / §7.7 / §8 / §9 / §10 seam exports — no field added, no shape changed, no recipe touched, no `snapshot_hash` or migration surface**; only WHICH INSTANT a consenting call site records changes. **ZERO CXA rows** (the sentinel is already exported from `harness-is` and every converting call site already imports the C-IS-07 §7.1 write contract — no new package edge, no new typed seam). **ZERO new plan units** — U-IS-11 already owns the §7.1/§7.6 write surface; the per-site ELECT / RETAIN / DEFER roster is carried at the PLAN (`Implementation_Plan_Information_Substrate_v2_9.md` U-IS-11), not here, per Reading A. **SPEC-ONLY leg** — the call-site conversions, the injection-caveat resolutions and the two-process contention witness are the separate impl leg (the `B-33-A`/`B-59-A` spec-leg-then-impl-leg precedent). v1.12 + v1.11 + v1.10 + v1.9 + v1.8 + v1.7 + v1.6 + v1.5 + v1.4 + v1.3 + v1.2 + v1.1 + v1 PRESERVED VERBATIM per delta-only convention. 2026-08-07) |
 | Revision date | 2026-08-07 |
+| Revision | v1.13 → v1.14 (B-104 Task 1: optional versioned `recovery_audit` D-derivative sidecar, hash coverage, and JSONL representation; the six F-layer fields and absent-sidecar legacy bytes remain unchanged. Durable recovery append and runtime recovery remain later tasks.) |
+| Revision date | 2026-09-24 |
+| Revision | v1.14 → v1.15 (B-104 Task 2: C-IS-07 §7.8 durable, payload-comparing recovery audit append; deterministic key/action identity, writer-owned timestamp, writer-local stored-hash/chain validation, whole-line append and strict file/ancestor-directory sync. Ordinary append refuses recovery sidecars while retaining legacy bytes and key-only dedupe. C-IS-06 §6.4 verification contract remains unchanged.) |
+| Revision date | 2026-09-24 |
 
 ---
+
+## Change-note (v1.14 → v1.15)
+
+B-104 Task 2 adds C-IS-07 §7.8 for the durable recovery-audit append. The ordinary append refuses a recovery sidecar while keeping its previous bytes and key-only duplicate behavior. The recovery writer derives its key and action ID, validates the complete prior ledger before mutation, compares the stable audit payload on retry, and syncs the file and two containing directories. C-IS-06 §6.4 and all other IS contracts remain unchanged. Independent Task 2 source review remains pending.
+
+## Change-note (v1.13 → v1.14)
+
+The operator-ratified B-104 amendment adds §5.7's recovery audit sidecar. §6.1 includes every present audit field in the entry hash, and §7.3 carries the same nested fields in JSONL. Entries without the sidecar retain their existing canonical, hash, and serialized bytes. This revision does not add the durable append operation or recovery behavior.
 
 ## Change-note (v1.12 → v1.13)
 
@@ -655,6 +667,19 @@ These are distinct token sets recorded on **distinct carriers** — a `subagent.
 
 ---
 
+### §5.7 D-derivative sidecar field — `recovery_audit` (v1.14, B-104 Task 1)
+
+`StateLedgerEntry` and its write payload MAY carry a version-1 `recovery_audit` record. The field defaults to `None`; it does not change the six F-layer fields in §5. A present audit names the exact journal record (`tenant_id`, `workflow_id`, `record_count`, `latest_digest`, `snapshot_hash`), `subject_id`, action ID, action, operator UID, reason digest, scope, phase, and stable observation. `tenant_id` is required and is JSON `null` for an untenanted journal; absence and sentinel strings cannot stand for that scope. `subject_id` and every digest are lowercase 64-character SHA-256 hex. `action_id` is 1–128 ASCII characters, starts with an alphanumeric character, and thereafter permits only alphanumeric characters, `.`, `_`, `:`, or `-`. The sidecar excludes raw reasons, claim tokens, and HITL answers. Memory operation entries cannot carry it because their separate hash and JSONL format do not represent it.
+
+| Scope and phase | Required observation and transition |
+|---|---|
+| Claim INTENT | `release` or `abandon`; original claim-byte digest, canonical claim path, claim `st_dev/st_ino`, original lease generation as 32 lowercase hex characters, and original lease file `st_dev/st_ino`. No transition fields. |
+| Claim COMPLETE | The same claim observation plus transition kind and digest. `release_archive` requires `release`; `claim_tombstone` requires `abandon`; `none` records a proved unchanged claim without authorizing execution. The structured lease fields must compare exactly with INTENT during reconciliation. |
+| Record INTENT | `abandon` only; `claim_absent`, `claim_no_token`, or `claim_unreadable` observation with canonical claim path and parent `st_dev/st_ino`. The two claim-present variants also carry claim `st_dev/st_ino`; `claim_no_token` includes its readable raw-byte digest. No transition fields. |
+| Record COMPLETE | The same record observation plus `record_tombstone` transition kind and digest. |
+
+A record-scoped audit requires `QuiescenceAttestation(operator_uid, attested_at, stopped_services_digest, no_workers_observed=true, restart_disabled=true)`. A claim-scoped abandon MAY carry this attestation when quiescence is required; a release cannot. `attested_at` requires a timezone-aware instant and is stored in UTC, so equal instants have one hash representation. The attestation states the operator's observation, not independent product proof, and its UID must match the audit operator UID. Illegal scope, phase, action, observation, attestation, or transition combinations are refused at the schema boundary; JSONL readers parse a present sidecar strictly rather than coercing field types. A present sidecar retains explicit JSON `null` values, while an absent sidecar omits the outer key. The durable INTENT/COMPLETE write and retry contract, including refusal of audit data through the ordinary append path, belongs to the later C-IS-07 recovery append amendment.
+
 ## §6 C-IS-06 — Hash-chain integrity construction discipline
 
 **Contract surface.** Construction-time discipline + verification-time procedure + tamper-evidence contract.
@@ -676,6 +701,8 @@ Hash-chain integrity is constructed **at write-time** via the following four-ste
 **Discipline.** Each state-ledger entry is canonicalized to a deterministic byte representation prior to hashing. RFC 8785 JSON Canonicalization Scheme (JCS) is the corpus-converged baseline candidate **[MODERATE — per ADR-F2 §Rationale (a.1), library binding to be confirmed at the D-ADR on canonicalization library per language ecosystem]**.
 
 **Contract.** Canonicalization is deterministic — given the same logical entry, two canonicalizations on different runs / machines / library versions of the same canonicalization scheme produce identical byte sequences. Non-determinism in canonicalization is a contract violation.
+
+The optional §5.7 `recovery_audit` contributes its complete typed nested record to the canonical payload, including explicit `null` values and scope, phase, observation, transition, and quiescence attestation. The outer audit key is omitted entirely when the sidecar is `None`, preserving historical canonical bytes and hashes. A changed present audit value changes that entry's computed hash.
 
 ### §6.2 Per-entry hash computation
 
@@ -742,10 +769,10 @@ T-perm-2 (C2 ↔ C3 — within-turn vs across-turn) is **structurally permanent*
 | **Append-only** | Writes to the state-ledger append new entries; existing entries are immutable post-write |
 | **Structured** | Every entry conforms to the six-field shape per C-IS-05 |
 | **JSON-not-Markdown** | Structured entry fields are JSON-encoded; Markdown-only representation is precluded per ADR-F2 §Rationale (b)(iii) Anthropic Nov 26 2025 guidance [HIGH] |
-| **Idempotent** | Writes are keyed on `(thread_id, step_id, idempotency_key)` per Stripe-style convention per ADR-F2 §Consequences (c); a second write with the same key is a no-op against the existing entry |
+| **Idempotent** | Ordinary writes retain key-only deduplication under §7.5; a second ordinary write with the same persisted `idempotency_key` is a no-op against the existing entry. The §7.8 recovery writer compares the stable payload and refuses a changed same-key request. |
 | **Per-event JSONL with stable indexable shape** | The on-disk representation is JSONL (one entry per line); the line-per-entry structure enables indexable access without parsing the entire ledger |
 | **Hash-chain-integrity-preserving** | Every write computes `response_hash` and `prior_event_hash` per C-IS-06 before persisting the entry |
-| **Timestamp authority (v1.11)** | Caller-supplied `timestamp` on DIRECT appends, validated monotonic-non-decreasing per C-IS-05 §5 (detect-then-refuse); **writer-owned** on the buffered/branch-drain append surface — the writer samples the persisted `timestamp` at each entry's append inside the write serialization point, per §7.6; PLUS (B-48 apply-PR round-28/29 carve-out) the OFFLOADED SUB-AGENT dispatch audit appends — the one direct surface B-48's own concurrency newly exercises — which adopt writer-owned sampling per §7.6's scope-widening; PLUS (v1.13, `B-57`) any DIRECT call site that **ELECTS** writer-owned sampling per **§7.6.1** — per call site, never a default, never a writer mode; every non-electing direct producer keeps caller-supplied semantics byte-verbatim (cross-reference only — §7.6.1 is the authorizing text) |
+| **Timestamp authority (v1.11)** | Caller-supplied `timestamp` on DIRECT appends, validated monotonic-non-decreasing per C-IS-05 §5 (detect-then-refuse); **writer-owned** on the buffered/branch-drain append surface — the writer samples the persisted `timestamp` at each entry's append inside the write serialization point, per §7.6; PLUS (B-48 apply-PR round-28/29 carve-out) the OFFLOADED SUB-AGENT dispatch audit appends — the one direct surface B-48's own concurrency newly exercises — which adopt writer-owned sampling per §7.6's scope-widening; PLUS (v1.13, `B-57`) any DIRECT call site that **ELECTS** writer-owned sampling per **§7.6.1** — per call site, never a default, never a writer mode; every non-electing direct producer keeps caller-supplied semantics byte-verbatim (cross-reference only — §7.6.1 is the authorizing text); the §7.8 recovery writer requires writer-owned append time |
 
 ### §7.2 C2-pole read contract
 
@@ -764,6 +791,7 @@ The composition contract commits:
 
 - **Storage representation** — JSONL file (one JSON-serialized entry per line) at workflow-canonical path per C-IS-01.
 - **Per-entry shape** — six-field record per C-IS-05.
+- **Recovery audit line field** — when §5.7 `recovery_audit` is present, the line includes its complete versioned nested record, including explicit `null` values; when absent, the key is omitted. A reader reconstructs the same typed audit from the line with strict field types. Legacy lines remain byte-identical.
 - **Indexable access** — line-per-entry structure permits offset-based indexing; navigation primitives exposed as Skills or in-process tools per the C2-pole read contract.
 - **Concurrent access** — the C3-pole append-only write contract serializes writers; the C2-pole selective read contract permits concurrent readers.
 
@@ -855,6 +883,20 @@ This reading keeps the C-IS-05 §5 six-field shape **inviolate** (IS-AL-3) — i
 **Deferred to implementation discretion.** The precise consumer-side error taxonomy for a non-emptiness, presence, or uniqueness failure (a CP-owned typed exception, per `B-33-A`'s impl leg); the CONCRETE OD-anchoring mechanism a consumer uses to authenticate a window's boundaries (tied to the OD pair's entry references / a hash-covered boundary marker — a CP-side write-cadence + read-cadence decision, mirroring the §5.4/§5.6 write-cadence deferrals); the concrete chain-head tamper-coverage mechanism (an OD-signature-based check, CP-owned) — only the mechanisms are deferred; the REQUIREMENTS (OD-anchored, not merely id-independent; chain-head needs OD-signature coverage) are pinned above, not deferred. §7.7 states what the IS chain guarantees once an OD-anchored window is identified, not how OD-anchoring is performed.
 
 ---
+
+### §7.8 Durable recovery-audit append (v1.15 — B-104 Task 2)
+
+**Authority and boundary.** The operator-ratified B-104 amendment adds `append_recovery_audit_entry(handle: JsonlLedgerHandle, payload: RecoveryAuditPayload, key: WriteKey) -> WriteResult`. `RecoveryAuditPayload` requires the §5.7 `RecoveryAudit` sidecar; its other three sidecars are absent. This is an IS-only append contract. It neither authorizes Runtime recovery nor changes the global `verify_chain` procedure of C-IS-06 §6.4. Ordinary `append_ledger_entry` refuses any non-`None` recovery audit sidecar with a typed error; ordinary entries retain their existing JSONL bytes, key-only deduplication, timestamp election and lack of fsync.
+
+**Identity.** IS derives one `idempotency_key` for each audit action as lowercase hex SHA-256 of the UTF-8 encoding of these five parts joined by a single NUL byte (`0x00`): `harness-is/recovery-audit/v1`, `audit.scope`, `audit.phase`, `audit.subject_id`, `audit.action_id`. No trailing NUL is added. The writer refuses if either the payload's or `WriteKey`'s `idempotency_key` differs. The entry `action_id` is exactly `recovery:{scope}:{phase}:{audit.action_id}` and a different payload value is refused. The domain and fields make a retry use the same persisted identity; a caller cannot select a second key for the same recovery action. [LAW:one-source-of-truth]
+
+**Admission before mutation.** Under the existing cross-process directory/file lock followed by the same-process write lock, the writer reads the entire prior JSONL ledger. A non-empty file without a final newline, an invalid line, any entry whose stored `response_hash` differs from `compute_response_hash(entry)`, or a failed inception/link check refuses with a typed integrity error before writing. This stored-hash check is local to the durable writer: C-IS-06 §6.4's `verify_chain` still checks links only, including for its other callers. A key occurring more than once is an integrity error. A single matching non-recovery entry is a conflict. [LAW:single-enforcer]
+
+**Stable duplicate comparison.** A matching recovery entry is an identical retry only when its `action_id`, `idempotency_key`, `actor`, and complete `recovery_audit` equal the requested values and all other sidecars are absent. The comparison excludes `timestamp`, `response_hash`, and `prior_event_hash`. A changed stable field conflicts without appending. An identical retry returns `IDEMPOTENT_NOOP`, preserves the original line and timestamp, and repeats the sync sequence below. The caller must supply `WRITER_OWNED_TIMESTAMP`; the writer samples append time inside the write lock for a new entry, consistent with §7.6.1's append-time eligibility rule. A new sample preceding the last entry beyond the existing skew tolerance refuses. [LAW:behavior-not-structure]
+
+**Write and durability boundary.** A new entry is encoded as one complete canonical UTF-8 JSONL line including its newline. A line exceeding 1 MiB is refused before mutation; an admitted line is appended through one `O_APPEND` write. A short write refuses. After a new append, and after every identical retry, the writer fsyncs the ledger file, its parent directory, then that directory's parent, in that order, unconditionally. Any write or sync error refuses; a later retry may reconcile a complete persisted line and must re-sync it. This order covers directory entries whose creator cannot be reliably inferred across processes. A partial line remains an integrity fault on retry. The writer never imports Runtime or takes a journal lock. [LAW:effects-at-boundaries] [LAW:no-silent-failure]
+
+**Limit.** The sync contract and process-exit witnesses establish ordering and retry idempotency on the tested local filesystem. They do not establish power-loss durability or crash safety for the later recovery workflow. After any `RecoveryAuditDurabilityError`, a later `IDEMPOTENT_NOOP` proves idempotent reconciliation only, not that the earlier line reached stable storage. Task 6 owns INTENT/COMPLETE pairing and one-open-action-per-claim enforcement. A durability error on an action INTENT holds that action without transition until an operator verifies durability.
 
 ## §8 C-IS-08 — Workload-class-opt-in shadow-Git checkpoint contract
 

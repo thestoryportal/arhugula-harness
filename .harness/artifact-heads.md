@@ -41,7 +41,7 @@ is the one that resolved the head.
 | `spec-action-surface` | `v1.14` | 2026-07-15 | `design-substrate/Spec_Action_Surface_v1.md` | 6 | `spec-action-surface-v1-14-cleared-2026-07-15.md` |
 | `spec-control-plane` | `v1.119` | 2026-08-13 | `design-substrate/Spec_Control_Plane_v1_119.md` | 94 | `spec-control-plane-v1-119-cleared-2026-08-13.md` |
 | `spec-harness-runtime` | `v1.121` | 2026-08-13 | `design-substrate/Spec_Harness_Runtime_v1.md` | 84 | `spec-harness-runtime-v1-121-cleared-2026-08-13.md` |
-| `spec-information-substrate` | `v1.13` | 2026-08-07 | `design-substrate/Spec_Information_Substrate_v1.md` | 11 | `spec-information-substrate-v1-13-cleared-2026-08-07.md` |
+| `spec-information-substrate` | `v1.15` | 2026-09-24 | `design-substrate/Spec_Information_Substrate_v1.md` | 13 | `spec-information-substrate-v1-15-cleared-2026-09-24.md` |
 | `spec-memory-substrate` | `v1.3` | 2026-08-06 | `design-substrate/Spec_Memory_Substrate_v1.md` | 4 | `spec-memory-substrate-v1-3-cleared-2026-08-06.md` |
 | `spec-operational-discipline` | `v1.42` | 2026-08-16 | `design-substrate/Spec_Operational_Discipline_v1_42.md` | 16 | `spec-operational-discipline-v1-42-cleared-2026-08-16.md` |
 

@@ -155,6 +155,9 @@ class MemoryOperationEntry(StateLedgerEntry):
 
     @model_validator(mode="after")
     def _projection_matches_kind(self) -> Self:
+        # [LAW:no-silent-failure] The memory hash/codec cannot represent this inherited sidecar.
+        if self.recovery_audit is not None:
+            raise ValueError("memory operation entries cannot carry recovery_audit")
         expected = MemoryOperationProjection.for_operation_kind(self.operation_kind)
         if self.operation_projection is not expected:
             raise MemoryOperationProjectionMismatchError(
