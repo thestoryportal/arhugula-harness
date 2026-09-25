@@ -498,8 +498,12 @@ class AsyncioSubprocessRunner:
         )
 
 
-class _ClaudeCodeSubprocessRunner(AsyncioSubprocessRunner):
-    """Production Claude boundary; one empty private cwd per child."""
+class _PrivateCwdSubprocessRunner(AsyncioSubprocessRunner):
+    """A production boundary that runs each child in its own fresh empty private cwd."""
+
+    _cwd_prefix: str
+    _scratch_uncertain: str
+    _child_env: Callable[[], dict[str, str]]
 
     async def run(
         self,
@@ -510,14 +514,14 @@ class _ClaudeCodeSubprocessRunner(AsyncioSubprocessRunner):
         on_wire: Callable[[], None] | None = None,
     ) -> CLIProcessResult:
         # [LAW:no-ambient-temporal-coupling] The process group settles before cwd removal.
-        cwd = tempfile.mkdtemp(prefix="arhugula-claude-", dir="/tmp")
+        cwd = tempfile.mkdtemp(prefix=self._cwd_prefix, dir="/tmp")
         try:
             return await self._run_process(
                 argv,
                 stdin=stdin,
                 timeout_seconds=timeout_seconds,
                 on_wire=on_wire,
-                env=_claude_child_env(),
+                env=self._child_env(),
                 cwd=cwd,
             )
         finally:
@@ -526,9 +530,25 @@ class _ClaudeCodeSubprocessRunner(AsyncioSubprocessRunner):
                 shutil.rmtree(cwd)
             except Exception:
                 # [LAW:no-silent-failure] Removal cannot replace the call outcome.
-                _LOG.warning("%s", _SCRATCH_UNCERTAIN)
+                _LOG.warning("%s", self._scratch_uncertain)
                 if outcome is not None:
-                    outcome.add_note(_SCRATCH_UNCERTAIN)
+                    outcome.add_note(self._scratch_uncertain)
+
+
+class _ClaudeCodeSubprocessRunner(_PrivateCwdSubprocessRunner):
+    """Production Claude boundary; one empty private cwd per child."""
+
+    _cwd_prefix = "arhugula-claude-"
+    _scratch_uncertain = _SCRATCH_UNCERTAIN
+    _child_env = staticmethod(_claude_child_env)
+
+
+class _CodexSubprocessRunner(_PrivateCwdSubprocessRunner):
+    """Production Codex boundary; one empty private cwd per child, credentials scrubbed."""
+
+    _cwd_prefix = "arhugula-codex-"
+    _scratch_uncertain = "Codex scratch directory removal failed"
+    _child_env = staticmethod(_scrubbed_child_env)
 
 
 class RecordingSubprocessRunner:
@@ -617,6 +637,7 @@ class CodexCLIAdapter:
         )
         _raise_for_nonzero(self.command, result)
         events = _parse_json_lines(result.stdout, "Codex inference response")
+        _reject_codex_tool_items(events, "Codex inference response")
         text = _extract_jsonl_text_result(events, "Codex inference response")
         return ExternalCLITextResult(
             text=text,
@@ -922,6 +943,29 @@ def _extract_jsonl_text_result(events: Sequence[Mapping[str, Any]], label: str) 
     raise ExternalCLIOutputError(f"{label} did not contain an agent text result")
 
 
+_CODEX_NON_TOOL_ITEM_TYPES = frozenset({"agent_message", "reasoning"})
+"""The only Codex JSONL item types that are model output rather than tool activity."""
+
+
+def _reject_codex_tool_items(events: Sequence[Mapping[str, Any]], label: str) -> None:
+    """Refuse Codex output that shows tool activity: detection after the fact, not prevention.
+
+    Lifecycle events (`thread.*`, `turn.*`) carry no `item` and stay valid. Any item that is
+    not a recognisable non-tool type is treated as a tool item, so a new Codex item kind
+    fails closed instead of being skipped by the text extractor.
+    """
+    for event in events:
+        item = event.get("item")
+        if item is None:
+            continue
+        item_type = cast(Mapping[str, Any], item).get("type") if isinstance(item, Mapping) else None
+        if not (isinstance(item_type, str) and item_type in _CODEX_NON_TOOL_ITEM_TYPES):
+            kind = item_type[:64] if isinstance(item_type, str) else "unrecognised"
+            raise ExternalCLIOutputError(
+                f"{label} contained a tool item ({kind}); tool use is not supported on this route"
+            )
+
+
 def _render_argv_templates(
     args: Sequence[str],
     *,
@@ -1068,7 +1112,7 @@ async def construct_codex_cli_adapter(
 ) -> CodexCLIAdapter:
     if config.kind is not ExternalCLIProviderKind.CODEX:
         raise ValueError(f"unsupported Codex adapter kind: {config.kind}")
-    process_runner = runner if runner is not None else AsyncioSubprocessRunner()
+    process_runner = runner if runner is not None else _CodexSubprocessRunner()
     if config.auth_check:
         await _assert_codex_authenticated(config, process_runner)
     return CodexCLIAdapter(
