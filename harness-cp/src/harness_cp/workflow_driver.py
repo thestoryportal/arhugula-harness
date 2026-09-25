@@ -39,7 +39,7 @@ import hashlib
 import inspect
 import json
 import logging
-from collections.abc import Awaitable, Collection, Coroutine, Iterable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Collection, Coroutine, Iterable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import ContextVar
 from datetime import UTC, datetime
@@ -68,6 +68,11 @@ from harness_core import (
 
 from harness_cp.cp_shared_types import ActorIdentity, AgentRole, ModelBinding
 from harness_cp.engine_class import EngineClass
+from harness_cp.evaluator_verdict import (
+    EvaluatorVerdict,
+    EvaluatorVerdictMalformedError,
+    parse_evaluator_verdict_mapping,
+)
 from harness_cp.gate_level_rule import GateLevel
 from harness_cp.handoff_context import (
     ActionKind,
@@ -10896,16 +10901,16 @@ def _execute_parallelization(
 # the #648 buffered-branch drain) + cross-step resume rehydration (the
 # B-ENGINE-OUTPUT-REPLAY output-carrying substrate) are registered follow-ons.
 
-_EVALUATOR_OPTIMIZER_ACCEPT_KEY = "accepted"
-"""The reserved key the EVALUATE step's output sets truthy to signal acceptance
-(C-CP-25 §25.11 EVALUATOR_OPTIMIZER terminal-on-accept; §25.18 impl-discretion).
-
-The evaluator/optimizer roles are distinguished by per-step prompt (R-PM-1 §29);
-the accept SIGNAL the driver reads from the evaluator's structured output is this
-boolean key. A missing/false key ⟹ regenerate (continue the loop). The signal
-SHAPE is impl-discretion (§25.18 — the contract specifies observable behavior,
-not the signal encoding); no other accept/terminal convention exists in step
-outputs (grep-clean at authoring)."""
+# The EVALUATE step's accept signal is a strict `EvaluatorVerdict` (CP spec v1.121 §25.11
+# encoding): a mapping with a literal bool `accepted`, optional string `feedback`, no other
+# keys — read through `harness_cp.evaluator_verdict` at every decision point (the live loop,
+# the resume pending-evaluate, the resume-prefix coherence check). A missing or malformed
+# verdict is NOT a regenerate: it ends the run FAILED with its own fail class (the evaluate
+# effect already landed, so a retry/pause would re-fire it). Only `accepted is True`
+# terminates on accept; explicit rejects run to the cap (SUCCESS, `accepted=False`).
+# A Runtime that must read a provider-shaped response binds an optional
+# `ctx.evaluator_verdict_reader` (Mapping -> EvaluatorVerdict); when unbound the CP mapping
+# is parsed directly, so an unbound production ctx fails closed on a raw provider dump.
 
 _DEFAULT_EVALUATOR_OPTIMIZER_MAX_ITERATIONS = 3
 """The max-iteration cap on the generate→evaluate loop (C-CP-25 §25.11 "bounded
@@ -10914,15 +10919,6 @@ first evaluator-accept OR when this many iterations have run without accept (a
 best-effort SUCCESS, `accepted=False`; §25.17 lists no cap-failure mode — cap is
 a normal bounded termination, NOT a failure). A manifest-surfaced per-workflow
 cap is a forward field (not surfaced at v1.32)."""
-
-
-def _evaluator_optimizer_accepted(evaluation: Mapping[str, Any]) -> bool:
-    """`True` when the evaluator's output signals acceptance (terminal-on-accept).
-
-    Reads the `_EVALUATOR_OPTIMIZER_ACCEPT_KEY` reserved key (truthy ⟹ accept;
-    absent/false ⟹ regenerate). Pure; no side effects.
-    """
-    return bool(evaluation.get(_EVALUATOR_OPTIMIZER_ACCEPT_KEY, False))
 
 
 def _append_buffered_sequential_entry(
@@ -11030,7 +11026,7 @@ def _execute_evaluator_optimizer(
 
     `steps[0]` is the GENERATE step, `steps[1]` is the EVALUATE step. The loop
     dispatches generate then evaluate, terminating on the first evaluator-accept
-    (`_evaluator_optimizer_accepted`) or when
+    (a strict `EvaluatorVerdict`, `evaluator_verdict.py`) or when
     `_DEFAULT_EVALUATOR_OPTIMIZER_MAX_ITERATIONS` iterations have run. Each
     dispatched step buffers a plain (no-branch_metadata) ledger entry keyed by a
     MONOTONIC `entry_index`; the buffer drains through the single real writer at
@@ -11063,6 +11059,18 @@ def _execute_evaluator_optimizer(
     mirroring the #681 `DECENTRALIZED_HANDOFF` extension — not a re-reading of the row).
     """
     workflow_id = manifest_entry.workflow_id
+
+    # The ONE read of the evaluator's accept signal, used at all three decision points. A
+    # bound Runtime reader converts a provider-shaped response to the CP `EvaluatorVerdict`;
+    # unbound, the CP mapping is parsed directly (fail-closed on anything else).
+    _verdict_reader: Callable[[Mapping[str, Any]], EvaluatorVerdict] | None = getattr(
+        ctx, "evaluator_verdict_reader", None
+    )
+
+    def _read_verdict(evaluation: Mapping[str, Any]) -> EvaluatorVerdict:
+        if _verdict_reader is not None:
+            return _verdict_reader(evaluation)
+        return parse_evaluator_verdict_mapping(evaluation)
 
     # B-FANOUT-PAUSE-EVALUATOR-OPTIMIZER (R-FS-1) — iteration-cursor resume reconstruction
     # state (None on a normal first run). The cursor: a CONTIGUOUS completed-step prefix
@@ -11127,12 +11135,22 @@ def _execute_evaluator_optimizer(
                 # An accept in the recovered prefix is incoherent — an accepting evaluate
                 # would have terminated the loop SUCCESS, not paused. Fail closed on a
                 # tampered cursor smuggling an accept into the prefix.
-                if cs.declared_step_index == 1 and _evaluator_optimizer_accepted(cs.output):
-                    return (
-                        f"accepted-step-in-prefix at entry {cs.entry_index}: a recovered "
-                        "evaluation signals accept, but an accept terminates the loop "
-                        "SUCCESS (a paused prefix is all non-accepts)"
-                    )
+                if cs.declared_step_index == 1:
+                    # A malformed recovered verdict is a resume MISMATCH (this check runs
+                    # before the strategy's `try`, so an exception here would escape).
+                    try:
+                        prefix_verdict = _read_verdict(cs.output)
+                    except EvaluatorVerdictMalformedError as malformed:
+                        return (
+                            f"malformed-verdict-in-prefix at entry {cs.entry_index}: "
+                            f"{malformed.reason}"
+                        )
+                    if prefix_verdict.accepted:
+                        return (
+                            f"accepted-step-in-prefix at entry {cs.entry_index}: a recovered "
+                            "evaluation signals accept, but an accept terminates the loop "
+                            "SUCCESS (a paused prefix is all non-accepts)"
+                        )
             # Resumable-tail + cap-coherence check (mirrors the handoff no-resumable-stage
             # guard). A legitimate pause leaves a failed step to re-dispatch AND never
             # exceeds the max-iteration cap. The cap bound differs by cursor parity:
@@ -11518,7 +11536,7 @@ def _execute_evaluator_optimizer(
                 evaluate_step, declared_step_index=1, entry_index=entry_index
             )
             entry_index += 1
-            if _evaluator_optimizer_accepted(last_evaluation):
+            if _read_verdict(last_evaluation).accepted:
                 accepted = True
         # The bounded generate→evaluate loop. `iterations` (generates started) spans the
         # resume boundary so the original max-iteration cap is honored across pause/resume
@@ -11539,7 +11557,7 @@ def _execute_evaluator_optimizer(
                 evaluate_step, declared_step_index=1, entry_index=entry_index
             )
             entry_index += 1
-            if _evaluator_optimizer_accepted(last_evaluation):
+            if _read_verdict(last_evaluation).accepted:
                 accepted = True
                 break
     except SubAgentChildPausedError as child_paused:
@@ -11822,6 +11840,25 @@ def _execute_evaluator_optimizer(
             partial_state=None,
             final_state=None,
             fail_class=_step_fail_class("evaluator-optimizer-step-failure", exc),
+        ), entry_index - _resume_completed_count
+    except EvaluatorVerdictMalformedError as malformed:
+        # The evaluate step DISPATCHED (its effect landed and its entry is buffered) but its
+        # output is not a valid verdict. FAILED for ALL cascade policies — never a retry, a
+        # resumable PAUSED or a fallback candidate (any of those would re-fire the completed
+        # evaluate) and never the generic bookkeeping class, which would mislabel it. The
+        # evaluate entry is the one just buffered (`entry_index` already advanced past it).
+        drain_branch_buffers(ctx.ledger_writer, [writer])
+        return RunResult(
+            workflow_id=workflow_id,
+            run_id=run_id,
+            status=RunStatus.FAILED,
+            terminal_step_index=None,
+            partial_state=None,
+            final_state=None,
+            fail_class=(
+                f"evaluator-optimizer-verdict-malformed at entry {entry_index - 1}: "
+                f"{malformed.reason}"
+            ),
         ), entry_index - _resume_completed_count
     except Exception as exc:
         # A SETUP failure (dispatcher lookup / binding resolution) or a post-dispatch

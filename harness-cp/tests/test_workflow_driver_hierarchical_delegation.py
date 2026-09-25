@@ -364,6 +364,22 @@ class _HierarchicalDispatcher:
         return {"role": step_id, "echoed": dict(step.step_payload)}
 
 
+class _EvaluatorAcceptingDispatcher(_HierarchicalDispatcher):
+    """As `_HierarchicalDispatcher`, but the EVALUATOR_OPTIMIZER evaluate step (`second`)
+    emits an explicit accepting verdict — a missing verdict now FAILS the run (CP spec
+    v1.121 §25.11), and this double records contexts, not verdicts."""
+
+    def dispatch(
+        self,
+        binding: StepEffectiveBinding,
+        step: WorkflowStep,
+        *,
+        step_context: Any = None,
+    ) -> dict[str, Any]:
+        output = super().dispatch(binding, step, step_context=step_context)
+        return {"accepted": True} if str(step.step_id) == "second" else output
+
+
 class _Registry:
     """Binds the hierarchical dispatcher for both DECLARATIVE_STEP (orchestrators
     + leaf workers) and SUB_AGENT_DISPATCH (the recursion primitive)."""
@@ -1477,7 +1493,11 @@ def test_descended_non_linear_contexts_keep_parent_floor(topology: TopologyPatte
     ledger = _RecordingLedger()
     emitter = _Emitter()
     ctx = cast(DriverContext, _Ctx(ledger=ledger, emitter=emitter))
-    dispatcher = _HierarchicalDispatcher(ctx=ctx)
+    dispatcher = (
+        _EvaluatorAcceptingDispatcher(ctx=ctx)
+        if topology is TopologyPattern.EVALUATOR_OPTIMIZER
+        else _HierarchicalDispatcher(ctx=ctx)
+    )
     registry = cast(StepDispatcherRegistry, _Registry(cast(StepDispatcher, dispatcher)))
     dispatcher.registry = registry
     steps = (
