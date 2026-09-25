@@ -28,10 +28,7 @@ from pathlib import Path
 from typing import Any, assert_never, cast
 
 from harness_core import JournalRecordRef
-from harness_cp.pause_resume_protocol import (
-    _compute_snapshot_hash,  # pyright: ignore[reportPrivateUsage]
-)
-from harness_cp.pause_resume_protocol_types import PauseSnapshot
+from harness_cp.pause_resume_protocol import verify_pause_snapshot_hash
 from pydantic import ValidationError
 
 from harness_runtime.config.state_placement import PlacedStateDir
@@ -469,23 +466,6 @@ def _read_fd(fd: int) -> bytes:
     return b"".join(chunks)
 
 
-def _snapshot_hash_of(snapshot: PauseSnapshot) -> str:
-    """CP's own canonical hash over a snapshot's fields, for the carrier-coverage check."""
-    return _compute_snapshot_hash(
-        workflow_id=snapshot.workflow_id,
-        run_id=snapshot.run_id,
-        step_index=snapshot.step_index,
-        state_summary=snapshot.state_summary,
-        fan_out_resume=snapshot.fan_out_resume,
-        peer_fan_out_resume=snapshot.peer_fan_out_resume,
-        handoff_resume=snapshot.handoff_resume,
-        evaluator_optimizer_resume=snapshot.evaluator_optimizer_resume,
-        effect_fence_resume=snapshot.effect_fence_resume,
-        orchestrator_effect_fence_resume=snapshot.orchestrator_effect_fence_resume,
-        hitl_gate_config_hash=snapshot.hitl_gate_config_hash,
-    )
-
-
 def _read_regular_no_follow(path: Path) -> bytes:
     """Read a small regular single-link file without following a final symlink."""
     fd = os.open(path, _OPEN_FLAGS)
@@ -702,7 +682,8 @@ class ResumeClaimStore:
         if parent_record.depth is None or child_record.depth != parent_record.depth + 1:
             raise ClaimRefusedError("child depth is not the parent's depth plus one")
         parent_snapshot = parent_record.snapshot
-        if _snapshot_hash_of(parent_snapshot) != parent_snapshot.snapshot_hash:
+        # [LAW:one-source-of-truth] CP alone decides what a snapshot's hash covers.
+        if not verify_pause_snapshot_hash(parent_snapshot):
             raise ClaimRefusedError("parent snapshot hash does not cover its carriers")
         carriers = [
             *(
