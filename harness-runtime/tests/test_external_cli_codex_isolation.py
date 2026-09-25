@@ -123,6 +123,46 @@ async def test_the_refusal_names_no_command_or_output_from_the_tool() -> None:
     assert "SECRET" not in str(caught.value) and "command_execution" in str(caught.value)
 
 
+# --- Codex HOLD codex-cli-isolation-codex-1: malformed item events, untrusted type text ------
+
+SENTINEL = "SECRET_SENTINEL"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("phase", ["item.started", "item.completed"])
+@pytest.mark.parametrize("shape", ["item-missing", "item-null"])
+async def test_an_item_event_without_an_item_fails_closed(phase: str, shape: str) -> None:
+    event: dict[str, Any] = (
+        {"type": phase} if shape == "item-missing" else {"type": phase, "item": None}
+    )
+
+    with pytest.raises(ExternalCLIOutputError, match="malformed item event"):
+        await _dispatch(_events(THREAD, event, ANSWER, TURN_DONE))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "item_type",
+    [f"command_execution {SENTINEL}", f"a_future_item_kind_{SENTINEL}", f"{SENTINEL}" * 10],
+    ids=["known-prefix", "unknown", "long"],
+)
+async def test_the_refusal_never_echoes_an_unrecognised_item_type(item_type: str) -> None:
+    with pytest.raises(ExternalCLIOutputError) as caught:
+        await _dispatch(_events(THREAD, _tool_item(item_type), ANSWER))
+
+    assert SENTINEL not in str(caught.value)
+    assert "unrecognised item type" in str(caught.value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "item", [{"id": "i1", "type": 7}, "str"], ids=["non-string-type", "non-mapping"]
+)
+async def test_a_malformed_item_is_classified_without_echoing_it(item: object) -> None:
+    with pytest.raises(ExternalCLIOutputError, match="malformed item event"):
+        await _dispatch(_events({"type": "item.completed", "item": item}, ANSWER))
+
+
 # --- ordinary output stays valid ----------------------------------------------------------------
 
 

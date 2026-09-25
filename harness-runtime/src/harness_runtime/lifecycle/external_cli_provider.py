@@ -946,23 +946,48 @@ def _extract_jsonl_text_result(events: Sequence[Mapping[str, Any]], label: str) 
 _CODEX_NON_TOOL_ITEM_TYPES = frozenset({"agent_message", "reasoning"})
 """The only Codex JSONL item types that are model output rather than tool activity."""
 
+_CODEX_NAMED_TOOL_ITEM_TYPES = frozenset(
+    {"command_execution", "mcp_tool_call", "file_change", "web_search"}
+)
+"""Tool item types a refusal may name. The name comes from this fixed set, never from the
+untrusted output: any other type is reported only as unrecognised."""
+
+
+def _codex_item_refusal(event: Mapping[str, Any]) -> str | None:
+    """The fixed classification of an event that shows, or could hide, tool activity.
+
+    `None` for a lifecycle event (`thread.*`, `turn.*`: no `item` key, not an `item.*` type)
+    and for a well-formed non-tool item. An `item.*` event, or any event carrying an `item`
+    key, whose item is missing, null, not an object or has no string type is malformed and
+    refused, so a tool item cannot pass by hiding its shape.
+    """
+    event_type = event.get("type")
+    if "item" not in event and not (isinstance(event_type, str) and event_type.startswith("item.")):
+        return None
+    item = event.get("item")
+    item_type = cast(Mapping[str, Any], item).get("type") if isinstance(item, Mapping) else None
+    if not isinstance(item_type, str):
+        return "malformed item event"
+    if item_type in _CODEX_NON_TOOL_ITEM_TYPES:
+        return None
+    if item_type in _CODEX_NAMED_TOOL_ITEM_TYPES:
+        return item_type
+    return "unrecognised item type"
+
 
 def _reject_codex_tool_items(events: Sequence[Mapping[str, Any]], label: str) -> None:
     """Refuse Codex output that shows tool activity: detection after the fact, not prevention.
 
-    Lifecycle events (`thread.*`, `turn.*`) carry no `item` and stay valid. Any item that is
-    not a recognisable non-tool type is treated as a tool item, so a new Codex item kind
-    fails closed instead of being skipped by the text extractor.
+    Any item that is not a recognisable non-tool type is treated as a tool item, so a new
+    Codex item kind fails closed instead of being skipped by the text extractor. The error
+    carries only a fixed classification (`_codex_item_refusal`), never output text.
     """
     for event in events:
-        item = event.get("item")
-        if item is None:
-            continue
-        item_type = cast(Mapping[str, Any], item).get("type") if isinstance(item, Mapping) else None
-        if not (isinstance(item_type, str) and item_type in _CODEX_NON_TOOL_ITEM_TYPES):
-            kind = item_type[:64] if isinstance(item_type, str) else "unrecognised"
+        refusal = _codex_item_refusal(event)
+        if refusal is not None:
             raise ExternalCLIOutputError(
-                f"{label} contained a tool item ({kind}); tool use is not supported on this route"
+                f"{label} contained a tool item or unverifiable item event ({refusal}); "
+                "tool use is not supported on this route"
             )
 
 
