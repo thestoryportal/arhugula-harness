@@ -2,14 +2,16 @@
 
 Between Task 4c and Task 5 no durable paused child may run. The runner therefore parses a
 resume capture into a `VerifiedChildRecord` (the one proof of "this is exactly the journal
-record the parent carried, at exactly this depth") and hands it to a REQUIRED admission
-step. The only production binding today, `RefuseDurableChildAdmission`, always refuses;
-Task 5 replaces it with the parent-carried claim, the fsynced `started` record and the
-worker-owned lease behind the same `DurableChildAdmission` seam.
+record the parent carried, at exactly this depth") and hands it, with the child's execution as
+a zero-argument body, to a REQUIRED admission step. The admission owns WHEN the body runs, so a
+gateway can put the claim and the fsynced `started` record before it and the lease release
+after it. The only production binding today, `RefuseDurableChildAdmission`, always refuses
+without calling the body; Task 5 replaces it behind the same `DurableChildAdmission` seam.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -39,16 +41,17 @@ class VerifiedChildRecord:
 class DurableChildAdmission(Protocol):
     """The seam between verification and execution of a durable paused child.
 
-    Implementations return only to admit; they raise `ChildResumeRefusedError` otherwise.
+    An implementation either runs `body` (the child's execution) exactly when it admits the
+    child and returns its result, or raises `ChildResumeRefusedError` without calling it.
     """
 
-    def admit(self, verified: VerifiedChildRecord) -> None: ...
+    def run_admitted[R](self, verified: VerifiedChildRecord, body: Callable[[], R]) -> R: ...
 
 
 class RefuseDurableChildAdmission:
     """The Task 4c production binding: no claim/started gateway exists yet, so refuse."""
 
-    def admit(self, verified: VerifiedChildRecord) -> None:
+    def run_admitted[R](self, verified: VerifiedChildRecord, body: Callable[[], R]) -> R:
         raise ChildResumeRefusedError(
             ChildResumeRefusal.GATEWAY_NOT_INSTALLED,
             f"no claim/started gateway for child record {verified.ref.workflow_id!r}"

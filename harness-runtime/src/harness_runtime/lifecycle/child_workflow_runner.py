@@ -241,6 +241,80 @@ def compose_child_workflow_runner(
                 f"{workflow_id!r} (the paused child's snapshot cannot resume a different "
                 "child workflow)",
             )
+
+        def _execute() -> RunResult:
+            # Reuse the paused child's ORIGINAL run_id (not a fresh uuid) so the resumed
+            # child's run/step idempotency keys + ledger/audit lineage stay coherent with
+            # the original run — the same discipline the root resume path follows
+            # (it threads `snapshot.run_id`). A fresh id on resume would re-key the child's
+            # per-step idempotency + sever its run lineage (Codex [P2]).
+            #
+            # B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT (R-FS-1) — on a FIRST dispatch
+            # (no `pause_snapshot_input`), prefer the composer-supplied DETERMINISTIC
+            # `child_run_id_seed` over a fresh `uuid`. The seed is derived from the
+            # spawning worker's stable, recoverable per-branch idempotency key, so a
+            # parent-crash re-dispatch of a maybe-ran SUB_AGENT_DISPATCH worker
+            # RE-DERIVES the SAME child run_id → the child's durable store + effect-fence
+            # reserves are recoverable → the child's own crash-resume auto-resumes
+            # (at-most-once compositional). The composer passes a seed ONLY for a
+            # recoverable child (`{ESR,WAL}` ∧ LINEAR ∧ leaf); a non-recoverable child
+            # gets `None` → legacy fresh-`uuid` (byte-identical to pre-arc; no auto-resume
+            # so no suffix-only-reconstruction corruption).
+            child_run_id = (
+                pause_snapshot_input.run_id
+                if pause_snapshot_input is not None
+                else child_run_id_seed
+                if child_run_id_seed is not None
+                else uuid.uuid4().hex
+            )
+            # The CP driver consumes `ctx` via its structural `DriverContext`
+            # Protocol (subset of HarnessContext). Cast for the type layer; the
+            # runtime objects satisfy both Protocols — same pattern as
+            # `harness_runtime.api.run` per the existing api.py:386 invocation.
+            #
+            # B-HIERARCHICAL-PAUSE — forward the child's resume snapshot (None on a
+            # first dispatch) so a resumed child re-enters at its own cursor.
+            #
+            # B-CHILD-CRASH-RESUME-FINAL-STATE-RECONSTRUCT (R-FS-1) — opt the child run into
+            # final_state reconstruction: on a durable-engine-class (EVENT_SOURCED_REPLAY /
+            # WAL_SEGMENT) child resume over a committed prefix, the CP driver returns a
+            # suffix-only `final_state` (the loop starts at `resume_at` with `accumulated`
+            # empty); the parent fold (`sub_agent_dispatch` SUCCESS → `step_output =
+            # child_result.final_state`; the B-HIERARCHICAL-PAUSE re-enter fold) would
+            # otherwise consume that truncated state and silently corrupt the parent
+            # aggregate. The opt-in seeds the committed prefix from the durable output store
+            # so the child's `final_state` reconstructs the COMPLETE terminal state. ALL FOUR
+            # durable resumable engine classes reconstruct (the EngineOutputStore is
+            # class-agnostic: ESR/WAL #766, SAVE_POINT_CHECKPOINT v1.79 #779, RECONCILER_LOOP
+            # v1.80 #781); only PURE_PATTERN_NO_ENGINE (non-durable) degrades to suffix-only.
+            # A first (non-resume) dispatch is unaffected.
+            # Top-level runs (`harness_runtime.api.run`) do NOT pass this → their accepted
+            # suffix-only resume semantic is untouched (the fork-bearing top-level
+            # reconstruction is a separate registered arc).
+            return execute_workflow_at_depth(
+                manifest_entry,
+                steps,
+                child_run_id,
+                cast(_CpDriverContext, ctx),
+                default_model_binding=default_model_binding,
+                step_dispatchers=cast(Any, ctx.step_dispatchers),
+                pause_snapshot_input=pause_snapshot_input,
+                resume_context=resume_context,
+                hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
+                effect_fence_uniform_fallback_eligible_key=effect_fence_uniform_fallback_eligible_key,
+                effect_fence_tree_wide_abort_present=effect_fence_tree_wide_abort_present,
+                reconstruct_final_state=True,
+                # U-1 slice 3a (B-18) — mark the child run as a DESCENDED sub-agent so
+                # every child `StepExecutionContext` reports `sub_agent_descent` (derived
+                # from `descent_depth > 0`); a child INFERENCE step then emits the downgraded
+                # (external-irreversible-REMOVE'd) frozen_tool_superset per ADR-D4 §1.5,
+                # closing the F1 latent C10 condition-2 gap. B-104 Task 4a: the depth is the
+                # dispatcher-supplied parent depth + 1, so a grandchild re-enters here at 2.
+                descent_depth=descent_depth,
+                # [LAW:single-enforcer] CP clamps the child manifest to this recorded descent.
+                parent_gate_floor=descent.child_gate_level,
+            )
+
         # B-104 Task 4c — under a DURABLE protocol a resumed paused child must be the exact
         # journal record its parent carried (verified by position and digest, full snapshot
         # equality and depth), and must then pass the required admission step, BEFORE
@@ -251,81 +325,14 @@ def compose_child_workflow_runner(
         if child_resume is not None and isinstance(
             ctx.pause_resume_protocol, DurablePauseResumeProtocol
         ):
-            durable_admission.admit(
+            # [LAW:no-ambient-temporal-coupling] The admission decides WHEN the body runs; a
+            # gateway may put a claim and a durable `started` frame before it.
+            return durable_admission.run_admitted(
                 verify_durable_child_resume(
                     ctx.pause_resume_protocol, child_resume, descent_depth=descent_depth
-                )
+                ),
+                _execute,
             )
-        # Reuse the paused child's ORIGINAL run_id (not a fresh uuid) so the resumed
-        # child's run/step idempotency keys + ledger/audit lineage stay coherent with
-        # the original run — the same discipline the root resume path follows
-        # (it threads `snapshot.run_id`). A fresh id on resume would re-key the child's
-        # per-step idempotency + sever its run lineage (Codex [P2]).
-        #
-        # B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT (R-FS-1) — on a FIRST dispatch
-        # (no `pause_snapshot_input`), prefer the composer-supplied DETERMINISTIC
-        # `child_run_id_seed` over a fresh `uuid`. The seed is derived from the
-        # spawning worker's stable, recoverable per-branch idempotency key, so a
-        # parent-crash re-dispatch of a maybe-ran SUB_AGENT_DISPATCH worker
-        # RE-DERIVES the SAME child run_id → the child's durable store + effect-fence
-        # reserves are recoverable → the child's own crash-resume auto-resumes
-        # (at-most-once compositional). The composer passes a seed ONLY for a
-        # recoverable child (`{ESR,WAL}` ∧ LINEAR ∧ leaf); a non-recoverable child
-        # gets `None` → legacy fresh-`uuid` (byte-identical to pre-arc; no auto-resume
-        # so no suffix-only-reconstruction corruption).
-        child_run_id = (
-            pause_snapshot_input.run_id
-            if pause_snapshot_input is not None
-            else child_run_id_seed
-            if child_run_id_seed is not None
-            else uuid.uuid4().hex
-        )
-        # The CP driver consumes `ctx` via its structural `DriverContext`
-        # Protocol (subset of HarnessContext). Cast for the type layer; the
-        # runtime objects satisfy both Protocols — same pattern as
-        # `harness_runtime.api.run` per the existing api.py:386 invocation.
-        #
-        # B-HIERARCHICAL-PAUSE — forward the child's resume snapshot (None on a
-        # first dispatch) so a resumed child re-enters at its own cursor.
-        #
-        # B-CHILD-CRASH-RESUME-FINAL-STATE-RECONSTRUCT (R-FS-1) — opt the child run into
-        # final_state reconstruction: on a durable-engine-class (EVENT_SOURCED_REPLAY /
-        # WAL_SEGMENT) child resume over a committed prefix, the CP driver returns a
-        # suffix-only `final_state` (the loop starts at `resume_at` with `accumulated`
-        # empty); the parent fold (`sub_agent_dispatch` SUCCESS → `step_output =
-        # child_result.final_state`; the B-HIERARCHICAL-PAUSE re-enter fold) would
-        # otherwise consume that truncated state and silently corrupt the parent
-        # aggregate. The opt-in seeds the committed prefix from the durable output store
-        # so the child's `final_state` reconstructs the COMPLETE terminal state. ALL FOUR
-        # durable resumable engine classes reconstruct (the EngineOutputStore is
-        # class-agnostic: ESR/WAL #766, SAVE_POINT_CHECKPOINT v1.79 #779, RECONCILER_LOOP
-        # v1.80 #781); only PURE_PATTERN_NO_ENGINE (non-durable) degrades to suffix-only.
-        # A first (non-resume) dispatch is unaffected.
-        # Top-level runs (`harness_runtime.api.run`) do NOT pass this → their accepted
-        # suffix-only resume semantic is untouched (the fork-bearing top-level
-        # reconstruction is a separate registered arc).
-        return execute_workflow_at_depth(
-            manifest_entry,
-            steps,
-            child_run_id,
-            cast(_CpDriverContext, ctx),
-            default_model_binding=default_model_binding,
-            step_dispatchers=cast(Any, ctx.step_dispatchers),
-            pause_snapshot_input=pause_snapshot_input,
-            resume_context=resume_context,
-            hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
-            effect_fence_uniform_fallback_eligible_key=effect_fence_uniform_fallback_eligible_key,
-            effect_fence_tree_wide_abort_present=effect_fence_tree_wide_abort_present,
-            reconstruct_final_state=True,
-            # U-1 slice 3a (B-18) — mark the child run as a DESCENDED sub-agent so
-            # every child `StepExecutionContext` reports `sub_agent_descent` (derived
-            # from `descent_depth > 0`); a child INFERENCE step then emits the downgraded
-            # (external-irreversible-REMOVE'd) frozen_tool_superset per ADR-D4 §1.5,
-            # closing the F1 latent C10 condition-2 gap. B-104 Task 4a: the depth is the
-            # dispatcher-supplied parent depth + 1, so a grandchild re-enters here at 2.
-            descent_depth=descent_depth,
-            # [LAW:single-enforcer] CP clamps the child manifest to this recorded descent.
-            parent_gate_floor=descent.child_gate_level,
-        )
+        return _execute()
 
     return _runner

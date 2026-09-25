@@ -7,6 +7,7 @@ the same driver-to-journal run as the Task 4b witnesses. Provider-free, no live 
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -69,8 +70,9 @@ class _RecordingAdmission:
     def __init__(self) -> None:
         self.admitted: list[VerifiedChildRecord] = []
 
-    def admit(self, verified: VerifiedChildRecord) -> None:
+    def run_admitted(self, verified: VerifiedChildRecord, body: Callable[[], Any]) -> Any:
         self.admitted.append(verified)
+        return body()
 
 
 class _ExecuteSpy:
