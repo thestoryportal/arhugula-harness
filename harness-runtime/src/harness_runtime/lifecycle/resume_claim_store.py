@@ -1,7 +1,8 @@
 """Crash-durable, at-most-once admission for one exact pause-journal record.
 
-This slice owns the lease and sticky ``claimed`` frame. The invocation-side
-``started`` barrier and audited recovery transitions are separate consumers.
+This module owns the lease, the sticky ``claimed`` frame and the durable ``started``
+transition (``mark_started``). Gateway wiring and audited recovery transitions are separate
+consumers.
 
 The store exists only over a journal directory placed under a verified external
 state root (``PlacedStateDir``), and re-proves that placement before its first
@@ -21,9 +22,13 @@ import uuid
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, assert_never, cast
 
 from harness_core import JournalRecordRef
+from harness_cp.pause_resume_protocol import (
+    _compute_snapshot_hash,  # pyright: ignore[reportPrivateUsage]
+)
+from harness_cp.pause_resume_protocol_types import PauseSnapshot
 from pydantic import ValidationError
 
 from harness_runtime.config.state_placement import PlacedStateDir
@@ -36,6 +41,7 @@ from harness_runtime.lifecycle.journal_workflow_pause_store import (
 from harness_runtime.lifecycle.protected_result_store import normalize_tenant_scope
 
 __all__ = [
+    "Admission",
     "ClaimBusyError",
     "ClaimRefusedError",
     "HeldClaim",
@@ -45,7 +51,10 @@ __all__ = [
     "LeaseInvalid",
     "LeaseMissing",
     "LeaseProbe",
+    "ParentCarriedAdmission",
     "ResumeClaimStore",
+    "RootLatestAdmission",
+    "StartedClaim",
     "StartedOrUnknown",
     "UnstartedProof",
     "parse_claim",
@@ -53,6 +62,7 @@ __all__ = [
 ]
 
 _OPEN_FLAGS = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+_OPEN_FLAGS_NO_ACCESS = getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
 _CREATE_FLAGS = (
     os.O_WRONLY
     | os.O_CREAT
@@ -222,6 +232,63 @@ class HeldLease:
             self.fd = -1
 
 
+@dataclass
+class StartedClaim:
+    """A claim whose ``started`` frame is durable; the only value that may lead to a body.
+
+    [LAW:types-are-the-program] Produced solely by `ResumeClaimStore.mark_started`. It wraps
+    (aliases) the SAME `HeldClaim`, so the lease fd stays with the caller: closing either
+    object closes the one descriptor, once.
+    """
+
+    claim: HeldClaim
+
+    @property
+    def token(self) -> str:
+        return self.claim.token
+
+    @property
+    def record_ref(self) -> JournalRecordRef:
+        return self.claim.record_ref
+
+    @property
+    def lease_fd(self) -> int:
+        return self.claim.lease_fd
+
+    def close(self) -> None:
+        self.claim.close()
+
+    def __enter__(self) -> StartedClaim:
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self.close()
+
+
+@dataclass(frozen=True)
+class RootLatestAdmission:
+    """Direct root input: the ref must name the journal's CURRENT latest record."""
+
+
+@dataclass(frozen=True)
+class ParentCarriedAdmission:
+    """A child ref admitted through its live, STARTED parent claim.
+
+    The child may be positional (not the journal latest) only because its parent's own
+    hash-covered snapshot carries this exact child exactly once.
+    """
+
+    parent: StartedClaim
+
+
+Admission = RootLatestAdmission | ParentCarriedAdmission
+"""How a claim's recency is proven.
+
+The `claim` default is the conservative root-latest form (the pre-5a behavior, kept so the
+Task 3b/6 callers are untouched); the child form must be requested explicitly."""
+_ROOT_LATEST = RootLatestAdmission()
+
+
 def started_frame(claim: HeldClaim) -> bytes:
     """The Task 5 writer's exact v1 phase bytes; this function does not write them."""
     return _encode_frame("started", claim.token, claim.record_ref)
@@ -272,6 +339,35 @@ def _read_fd(fd: int) -> bytes:
         if sum(map(len, chunks)) > 65536:
             raise ValueError("oversized lease")
     return b"".join(chunks)
+
+
+def _snapshot_hash_of(snapshot: PauseSnapshot) -> str:
+    """CP's own canonical hash over a snapshot's fields, for the carrier-coverage check."""
+    return _compute_snapshot_hash(
+        workflow_id=snapshot.workflow_id,
+        run_id=snapshot.run_id,
+        step_index=snapshot.step_index,
+        state_summary=snapshot.state_summary,
+        fan_out_resume=snapshot.fan_out_resume,
+        peer_fan_out_resume=snapshot.peer_fan_out_resume,
+        handoff_resume=snapshot.handoff_resume,
+        evaluator_optimizer_resume=snapshot.evaluator_optimizer_resume,
+        effect_fence_resume=snapshot.effect_fence_resume,
+        orchestrator_effect_fence_resume=snapshot.orchestrator_effect_fence_resume,
+        hitl_gate_config_hash=snapshot.hitl_gate_config_hash,
+    )
+
+
+def _read_regular_no_follow(path: Path) -> bytes:
+    """Read a small regular single-link file without following a final symlink."""
+    fd = os.open(path, _OPEN_FLAGS)
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1:
+            raise ValueError("invalid claim inode")
+        return _read_fd(fd)
+    finally:
+        os.close(fd)
 
 
 class ResumeClaimStore:
@@ -427,7 +523,70 @@ class ResumeClaimStore:
         if self._journal.read_exact(ref) is None:
             raise ClaimRefusedError("invalid exact journal record")
 
-    def claim(self, ref: JournalRecordRef, *, deadline_seconds: float | None = None) -> HeldClaim:
+    def _require_parent_carried(self, ref: JournalRecordRef, parent: StartedClaim) -> None:
+        """Admit a positional child ref only through a live STARTED parent that carries it once."""
+        # [LAW:single-enforcer] The one place child recency is decided; every fault refuses.
+        if parent.lease_fd < 0 or parent.record_ref.tenant != ref.tenant:
+            raise ClaimRefusedError("parent claim is closed or in another tenant scope")
+        parent_paths = self.paths_for(parent.record_ref)
+        try:
+            if not self._same_inode(parent.lease_fd, parent_paths.lease):
+                raise ValueError("parent lease is not live")
+            self._valid_lease(parent.lease_fd, parent.record_ref)
+            state = parse_claim(_read_regular_no_follow(parent_paths.claim), parent.record_ref)
+        except (OSError, ValueError) as exc:
+            raise ClaimRefusedError("parent claim evidence is not trustworthy") from exc
+        if not (
+            isinstance(state, StartedOrUnknown)
+            and state.phase == "started"
+            and state.token == parent.token
+        ):
+            raise ClaimRefusedError("parent claim is not started")
+        parent_record = self._journal.read_exact(parent.record_ref)
+        child_record = self._journal.read_exact(ref)
+        if parent_record is None or child_record is None:
+            raise ClaimRefusedError("parent or child journal record is not exact")
+        if parent_record.depth is None or child_record.depth != parent_record.depth + 1:
+            raise ClaimRefusedError("child depth is not the parent's depth plus one")
+        parent_snapshot = parent_record.snapshot
+        if _snapshot_hash_of(parent_snapshot) != parent_snapshot.snapshot_hash:
+            raise ClaimRefusedError("parent snapshot hash does not cover its carriers")
+        carriers = [
+            *(
+                parent_snapshot.fan_out_resume.paused_child_branches
+                if parent_snapshot.fan_out_resume is not None
+                else ()
+            ),
+            *(
+                parent_snapshot.peer_fan_out_resume.paused_child_branches
+                if parent_snapshot.peer_fan_out_resume is not None
+                else ()
+            ),
+        ]
+        # This base predates the Task 4b `child_record_ref` carrier field, so the carrier is
+        # matched by the FULL child snapshot equalling the exact journal record's snapshot
+        # (workflow, run, hash and content). Once 4b is integrated this must tighten to
+        # ref equality so two byte-identical records at different positions cannot both match.
+        matching = [c for c in carriers if c.child_snapshot == child_record.snapshot]
+        if len(matching) != 1:
+            raise ClaimRefusedError("parent does not carry this child exactly once")
+
+    def _require_admitted(self, ref: JournalRecordRef, admission: Admission) -> None:
+        match admission:
+            case RootLatestAdmission():
+                self._require_current_exact(ref)
+            case ParentCarriedAdmission(parent):
+                self._require_parent_carried(ref, parent)
+            case _ as unreachable:
+                assert_never(unreachable)
+
+    def claim(
+        self,
+        ref: JournalRecordRef,
+        admission: Admission = _ROOT_LATEST,
+        *,
+        deadline_seconds: float | None = None,
+    ) -> HeldClaim:
         """Return a held sticky claim; busy is retryable, all evidence faults refuse.
 
         [LAW:no-ambient-temporal-coupling] Publication holds only journal;
@@ -443,7 +602,7 @@ class ResumeClaimStore:
         # The journal lock creates its lock file, so placement is proved before it.
         self._placement.revalidate()
         with cross_process_journal_lock(paths.journal, deadline_seconds=deadline_seconds):
-            self._require_current_exact(ref)
+            self._require_admitted(ref, admission)
             if self._tombstoned(paths) or os.path.lexists(paths.claim):
                 raise ClaimRefusedError("record is ineligible")
             self._prepare_lease(paths, ref)
@@ -456,7 +615,7 @@ class ResumeClaimStore:
             with cross_process_journal_lock(paths.journal, deadline_seconds=deadline_seconds):
                 # [LAW:no-ambient-temporal-coupling] Recency is checked under the
                 # same journal lock as O_EXCL creation, after taking the lease lock.
-                self._require_current_exact(ref)
+                self._require_admitted(ref, admission)
                 if (
                     self._tombstoned(paths)
                     or os.path.lexists(paths.claim)
@@ -479,3 +638,63 @@ class ResumeClaimStore:
         except BaseException:
             probe.close()
             raise
+
+    def mark_started(
+        self, held: HeldClaim, *, deadline_seconds: float | None = None
+    ) -> StartedClaim:
+        """Durably record ``started`` for a held claim; only the result may lead to a body.
+
+        Under lease then journal lock it revalidates the placed root, proves the live
+        lease fd still names the canonical lease inode, requires the claim file to be an
+        exact `UnstartedProof` for THIS token and ref, appends the v1 ``started`` frame
+        (no symlink followed) and fsyncs before returning. Missing, closed, changed,
+        already-started, tampered or ambiguous evidence refuses (`ClaimRefusedError`,
+        never the retryable busy). The lease stays with the caller on every outcome.
+
+        [LAW:no-silent-failure] A failed write/fsync raises and leaves whatever bytes reached
+        the file; they parse as started or invalid, never as an unstarted claim.
+        """
+        if (
+            journal_exclusion_is_degraded()
+            or not hasattr(os, "O_NOFOLLOW")
+            or not hasattr(os, "O_CLOEXEC")
+        ):
+            raise ClaimRefusedError("journal exclusion or safe open flags are unavailable")
+        if held.lease_fd < 0:
+            raise ClaimRefusedError("lease is closed")
+        paths = self.paths_for(held.record_ref)
+        self._placement.revalidate()
+        with cross_process_journal_lock(paths.journal, deadline_seconds=deadline_seconds):
+            # The last barrier before the append: a swapped root must not receive it.
+            self._placement.revalidate()
+            try:
+                # The lease frame carries the LEASE token (distinct from the claim token,
+                # which the claim file proves below): the fd must name the canonical inode
+                # and hold a canonical lease frame for this exact ref.
+                if not self._same_inode(held.lease_fd, paths.lease):
+                    raise ValueError("lease is not the canonical live lease")
+                self._valid_lease(held.lease_fd, held.record_ref)
+                fd = os.open(paths.claim, os.O_RDWR | os.O_APPEND | _OPEN_FLAGS_NO_ACCESS)
+            except (OSError, ValueError) as exc:
+                raise ClaimRefusedError(f"claim evidence unavailable: {exc}") from exc
+            try:
+                st = os.fstat(fd)
+                if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1:
+                    raise ClaimRefusedError("invalid claim inode")
+                state = parse_claim(_read_fd(fd), held.record_ref)
+                if not (
+                    isinstance(state, UnstartedProof)
+                    and state.token == held.token
+                    and state.record_ref == held.record_ref
+                ):
+                    raise ClaimRefusedError("claim is not an exact unstarted proof")
+                if self._tombstoned(paths):
+                    raise ClaimRefusedError("record is ineligible")
+                try:
+                    _write_all(fd, started_frame(held))
+                    os.fsync(fd)
+                except OSError as exc:
+                    raise ClaimRefusedError("started frame was not made durable") from exc
+            finally:
+                os.close(fd)
+        return StartedClaim(held)
