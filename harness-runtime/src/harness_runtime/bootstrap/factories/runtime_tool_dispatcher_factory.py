@@ -58,6 +58,7 @@ from harness_runtime.config.sandbox_defaults import (
     resolve_effective_sandbox_defaults,
     resolve_per_tool_sandbox_defaults,
 )
+from harness_runtime.config.state_placement import StateKind, resolve_state_path
 from harness_runtime.lifecycle.as_is_wiring import RuntimeAsIsWiring
 from harness_runtime.lifecycle.audit_signing_fail_closed_validation import (
     resolve_audit_signing_fail_closed,
@@ -424,7 +425,7 @@ async def materialize_runtime_tool_dispatcher_stage(
     # auto-fence WITHOUT the operator flag (the daemon-reused dispatcher cannot
     # know the per-run engine class at bootstrap, so the gate is per-dispatch).
     effect_fence = RuntimeEffectFence(
-        fence_dir=config.repository_root / ".harness" / "effect-fence"
+        fence_dir=resolve_state_path(StateKind.EFFECT_FENCE, config, ctx.verified_state_root)
     )
 
     # --- Step 3: bare RuntimeToolDispatcher (C-RT-19) ------------------------

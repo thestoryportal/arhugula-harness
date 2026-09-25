@@ -1095,8 +1095,9 @@ def _read_protected_result_store_if_engaged(
     """Snapshot the protected result store when its root exists; else `None`.
 
     ROOT RESOLUTION IS PINNED: the root is the one the composition root
-    derives — `RuntimeConfig.repository_root / PROTECTED_RESULT_STORE_ROOT_SUBPATH`,
-    the SAME expression `materialize_protected_result_store_stage` uses — and
+    derives — `resolve_state_path(StateKind.PROTECTED_RESULTS, config, verified)`,
+    the SAME derivation `materialize_protected_result_store_stage` uses (a declared
+    external state root is probed read-only for its stamp) — and
     NOT `--ledger-path`, which selects the state ledger and has nothing to do
     with this store. A report rendered against a different directory than the
     one the sweep collects would be an acceptance failure, so there is exactly
@@ -1107,8 +1108,13 @@ def _read_protected_result_store_if_engaged(
     `_authoritative_tenant_scope` takes for the same input, and never a
     silently-wrong directory.
     """
-    from harness_runtime.bootstrap.factories.protected_result_store_factory import (
-        PROTECTED_RESULT_STORE_ROOT_SUBPATH,
+    from harness_runtime.config.state_placement import (
+        StateKind,
+        StateRootPlacementError,
+        linux_filesystem_type,
+        probe_state_root,
+        resolve_state_path,
+        transient_worktree_base,
     )
     from harness_runtime.config_source import RuntimeConfigLoadError, RuntimeConfigSource
     from harness_runtime.lifecycle.protected_result_store import (
@@ -1119,8 +1125,23 @@ def _read_protected_result_store_if_engaged(
         config = RuntimeConfigSource.load(config_file=args.runtime_config)
     except RuntimeConfigLoadError:
         return None
+    verified = None
+    if config.state_placement is not None:
+        # Read-only: probe never creates. A placement that cannot be verified leaves the
+        # root UNRESOLVABLE (no row) — never a guessed checkout-local directory. Reporting
+        # the typed refusal itself belongs to the inspect placement surface (S3).
+        try:
+            verified = probe_state_root(
+                config.state_placement,
+                repository_root=config.repository_root,
+                worktree_base=transient_worktree_base(config.repository_root),
+                path_bindings=config.path_bindings,
+                filesystem_type=linux_filesystem_type,
+            )
+        except StateRootPlacementError:
+            return None
     return read_protected_result_store_snapshot(
-        config.repository_root / PROTECTED_RESULT_STORE_ROOT_SUBPATH
+        resolve_state_path(StateKind.PROTECTED_RESULTS, config, verified)
     )
 
 

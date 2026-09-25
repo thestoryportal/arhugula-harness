@@ -68,6 +68,7 @@ from harness_runtime.types import (
     Skill,
     ToolName,
     TopologyDispatcher,
+    VerifiedStateRoot,
 )
 
 __all__ = [
@@ -224,6 +225,7 @@ class _MutableHarnessContext:
     # Stage 1 IS.
     path_resolver: PathResolver | None = None
     worktree_manager: WorktreeIsolationManager | None = None
+    verified_state_root: VerifiedStateRoot | None = None
     shadow_git: ShadowGitSupervisor | None = None
     ledger_writer: LedgerWriter | None = None
     ledger_reader: LedgerReader | None = None
@@ -528,6 +530,7 @@ class _MutableHarnessContext:
             pause_resume_protocol=self.pause_resume_protocol,
             path_resolver=_bound(self.path_resolver),
             worktree_manager=_bound(self.worktree_manager),
+            verified_state_root=self.verified_state_root,
             shadow_git=self.shadow_git,
             ledger_writer=_bound(self.ledger_writer),
             ledger_reader=self.ledger_reader,

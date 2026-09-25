@@ -28,8 +28,9 @@ import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
+from harness_runtime.config.state_placement import StateKind, resolve_state_path
 from harness_runtime.lifecycle.protected_result_store import ProtectedResultStore
-from harness_runtime.types import RuntimeConfig
+from harness_runtime.types import RuntimeConfig, VerifiedStateRoot
 
 if TYPE_CHECKING:
     from harness_runtime.lifecycle.memory_tool_encrypted import FernetLike
@@ -46,7 +47,7 @@ __all__ = [
 #: independent resolution — a report rendered against a different directory
 #: than the one the sweep collects is an acceptance FAILURE, not a
 #: configuration nuance.
-PROTECTED_RESULT_STORE_ROOT_SUBPATH = Path(".harness") / "protected-results"
+PROTECTED_RESULT_STORE_ROOT_SUBPATH = Path(".harness") / StateKind.PROTECTED_RESULTS.value
 
 
 def _create_fernet_from_key(key: bytes) -> FernetLike | None:
@@ -68,7 +69,9 @@ def _create_fernet_from_key(key: bytes) -> FernetLike | None:
         return cast(Any, None)
 
 
-def materialize_protected_result_store_stage(config: RuntimeConfig) -> ProtectedResultStore | None:
+def materialize_protected_result_store_stage(
+    config: RuntimeConfig, state_root: VerifiedStateRoot | None = None
+) -> ProtectedResultStore | None:
     """Construct the stage-4 `ProtectedResultStore` instance, or `None` when
     the configured key env var is unset/malformed.
 
@@ -86,7 +89,7 @@ def materialize_protected_result_store_stage(config: RuntimeConfig) -> Protected
     if codec is None:
         return None
     return ProtectedResultStore(
-        root=config.repository_root / PROTECTED_RESULT_STORE_ROOT_SUBPATH,
+        root=resolve_state_path(StateKind.PROTECTED_RESULTS, config, state_root),
         codec=codec,
         ttl_seconds=config.protected_result_store_ttl_seconds,
     )

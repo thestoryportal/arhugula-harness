@@ -38,6 +38,7 @@ import asyncio
 import contextvars
 import re
 from collections.abc import Mapping
+from dataclasses import dataclass
 from enum import Enum, StrEnum
 from pathlib import Path
 from types import MappingProxyType  # stdlib `types`, not this module (absolute import)
@@ -1815,6 +1816,23 @@ class StatePlacementConfig(BaseModel):
     itself; an empty tuple is NOT evidence that no non-Git restore scope exists."""
 
 
+@dataclass(frozen=True, slots=True)
+class VerifiedStateRoot:
+    """The stamp a verified external state root hands out (produced only by
+    `harness_runtime.config.state_placement`).
+
+    Equality is the revalidation test: the same realpath, device, inode and marker
+    content mean the same root; anything else is a different (or replaced) directory.
+    Lives beside `StatePlacementConfig` so the frozen `HarnessContext` can carry it
+    without an import cycle; `state_placement` re-exports it.
+    """
+
+    realpath: Path
+    st_dev: int
+    st_ino: int
+    root_id: str
+
+
 class RuntimeConfig(BaseModel):
     """Input configuration to the runtime; frozen post-construction.
 
@@ -2741,6 +2759,11 @@ class HarnessContext(BaseModel):
     # Stage 1 IS.
     path_resolver: PathResolver
     worktree_manager: WorktreeIsolationManager
+    verified_state_root: VerifiedStateRoot | None = None
+    """S2: the external persistent state root verified at stage 1 before the path
+    registry, or `None` when no `RuntimeConfig.state_placement` was declared (every
+    persistent path then keeps its legacy repo-local derivation). The one stamp every
+    persistent-store factory derives through."""
     shadow_git: ShadowGitSupervisor
     ledger_writer: LedgerWriter
     ledger_reader: LedgerReader

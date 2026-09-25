@@ -23,6 +23,7 @@ from harness_cp.workflow_driver_types import StepExecutionContext, StepKind, Wor
 from harness_is.state_ledger_entry_schema import Actor, ActorClass, Identifier
 
 from harness_runtime.bootstrap.mutable_context import _MutableHarnessContext
+from harness_runtime.config.state_placement import StateKind, resolve_state_path
 from harness_runtime.lifecycle.cp_is_wiring import RuntimeCpIsWiring
 from harness_runtime.lifecycle.engine_recovery_loop import RuntimeEngineRecoveryLoop
 from harness_runtime.lifecycle.hitl_placement import RuntimeHITLPlacementRegistry
@@ -301,11 +302,15 @@ def materialize_r_cxa_2_producer_loop_stage(
         wiring=wiring,
         substrate_by_engine_class={
             EngineClass.WAL_SEGMENT: WALSegmentEnginePauseResumeSubstrate(
-                journal_dir=config.repository_root / ".harness" / "engine-recovery-segments",
+                journal_dir=resolve_state_path(
+                    StateKind.ENGINE_RECOVERY_SEGMENTS, config, ctx.verified_state_root
+                ),
                 state_summary_provider=_default_engine_state_summary,
             ),
             EngineClass.RECONCILER_LOOP: ReconcilerEnginePauseResumeSubstrate(
-                journal_dir=config.repository_root / ".harness" / "engine-recovery-reconciler",
+                journal_dir=resolve_state_path(
+                    StateKind.ENGINE_RECOVERY_RECONCILER, config, ctx.verified_state_root
+                ),
                 state_summary_provider=_default_engine_state_summary,
             ),
         },

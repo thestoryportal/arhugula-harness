@@ -41,7 +41,12 @@ from pathlib import Path
 from harness_is.path_class_registry import PathClass
 
 from harness_runtime.config.path_bindings import build_path_binding
-from harness_runtime.types import PathBindingConfig, StatePlacementConfig
+from harness_runtime.types import (
+    PathBindingConfig,
+    RuntimeConfig,
+    StatePlacementConfig,
+    VerifiedStateRoot,
+)
 
 __all__ = [
     "MARKER_NAME",
@@ -53,8 +58,11 @@ __all__ = [
     "filesystem_type_from_mountinfo",
     "linux_filesystem_type",
     "probe_state_root",
+    "require_inside_state_root",
+    "resolve_state_path",
     "revalidate_state_root",
     "state_path",
+    "transient_worktree_base",
 ]
 
 MARKER_NAME = ".arhugula-state-root"
@@ -86,6 +94,8 @@ class StatePlacementRefusal(StrEnum):
     MARKER_INVALID = "marker-invalid"
     MARKER_UNSAFE = "marker-unsafe"
     IDENTITY_CHANGED = "identity-changed"
+    UNVERIFIED_PLACEMENT = "unverified-placement"
+    PATH_OUTSIDE_ROOT = "path-outside-root"
 
 
 class StateRootPlacementError(Exception):
@@ -116,20 +126,6 @@ class StateKind(StrEnum):
     MEMORY = "memory"
 
 
-@dataclass(frozen=True, slots=True)
-class VerifiedStateRoot:
-    """The stamp `verify` hands out: a root that passed every placement check.
-
-    Equality is the revalidation test: the same realpath, device, inode and marker
-    content mean the same root; anything else is a different (or replaced) directory.
-    """
-
-    realpath: Path
-    st_dev: int
-    st_ino: int
-    root_id: str
-
-
 def state_path(kind: StateKind, root: VerifiedStateRoot | None, repository_root: Path) -> Path:
     """The one derivation of a persistent store path.
 
@@ -138,6 +134,62 @@ def state_path(kind: StateKind, root: VerifiedStateRoot | None, repository_root:
     """
     base = repository_root / ".harness" if root is None else root.realpath
     return base / kind.value
+
+
+def transient_worktree_base(repository_root: Path) -> Path:
+    """Where isolation worktrees live: checkout-local and transient, NEVER under the root.
+
+    One definition for the stage-1 isolation stage, the placement verifier call and the
+    inspect probe, so the tree the verifier protects is the tree the runtime uses.
+    """
+    return repository_root / ".harness" / "worktrees"
+
+
+def _require_verified_when_declared(
+    config: RuntimeConfig, verified: VerifiedStateRoot | None
+) -> None:
+    # [LAW:no-silent-failure] A declared placement with no verified stamp must never fall
+    # back to a repo-local path: refuse, typed and inspectable.
+    if config.state_placement is not None and verified is None:
+        raise StateRootPlacementError(
+            StatePlacementRefusal.UNVERIFIED_PLACEMENT,
+            "state_placement is declared but no verified state root reached this store; "
+            "refusing to derive a repo-local persistent path",
+        )
+
+
+def resolve_state_path(
+    kind: StateKind, config: RuntimeConfig, verified: VerifiedStateRoot | None
+) -> Path:
+    """`state_path` for a config: the derivation every persistent-store factory calls.
+
+    With `config.state_placement` unset the result is the exact legacy path. With it
+    declared, an absent `verified` stamp refuses (`UNVERIFIED_PLACEMENT`) instead of
+    quietly deriving a checkout-local path.
+    """
+    _require_verified_when_declared(config, verified)
+    return state_path(kind, verified, config.repository_root)
+
+
+def require_inside_state_root(
+    path: Path, config: RuntimeConfig, verified: VerifiedStateRoot | None, *, what: str
+) -> Path:
+    """An explicit operator path override must sit under the verified root when declared.
+
+    With no placement declared the override passes through untouched. With one declared,
+    an override that resolves outside the root (or is relative) refuses
+    (`PATH_OUTSIDE_ROOT`) rather than silently writing persistent state elsewhere.
+    """
+    _require_verified_when_declared(config, verified)
+    if verified is not None and not (
+        path.is_absolute() and _is_within(_prospective_realpath(path), verified.realpath)
+    ):
+        raise StateRootPlacementError(
+            StatePlacementRefusal.PATH_OUTSIDE_ROOT,
+            f"{what} {str(path)!r} is not inside the verified state root "
+            f"{str(verified.realpath)!r}",
+        )
+    return path
 
 
 # --- pure path judgment -----------------------------------------------------------------
