@@ -327,7 +327,7 @@ class StepExecutionContext(BaseModel):
 
     CP spec v1.120 §17.3: for a sub-agent child the tuple begins with the
     `PRE_ACTION` placements inherited from its ancestors (outermost first,
-    supplied via `execute_workflow(inherited_hitl_placements=...)`), then the
+    supplied via `execute_workflow_at_depth(inherited_hitl_placements=...)`), then the
     child's own; the governing placement for an action is the first match
     (`select_governing_pre_action_placement`).
 
@@ -346,7 +346,7 @@ class StepExecutionContext(BaseModel):
     threads its `descent_depth` param onto EVERY `StepExecutionContext` it composes
     (linear + the 5 non-linear strategies; branch children inherit via
     `compose_branch_child_context`'s `model_copy`). The runtime `child_workflow_runner`
-    re-enters `execute_workflow(descent_depth=<parent depth + 1>)`; the top-level
+    re-enters `execute_workflow_at_depth(descent_depth=<parent depth + 1>)`; the top-level
     `harness_runtime.api.run` is the depth-0 root. It is the single source for the
     ancestry the durable journal records at capture and for `sub_agent_descent`.
     Rides `StepExecutionContext` (per-step execution metadata, NOT persisted here, NOT in

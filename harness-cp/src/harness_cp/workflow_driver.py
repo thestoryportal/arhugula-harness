@@ -3218,7 +3218,46 @@ def execute_workflow(
     step_dispatchers: StepDispatcherRegistry,
     pause_snapshot_input: PauseSnapshot | None = None,
     reconstruct_final_state: bool = True,
-    descent_depth: int = 0,
+    resume_context: ResumeContext | None = None,
+    hitl_uniform_fallback_eligible_run_id: str | None = None,
+    effect_fence_uniform_fallback_eligible_key: str | None = None,
+    effect_fence_tree_wide_abort_present: bool = False,
+) -> RunResult:
+    """Run a ROOT workflow: the depth-0 entry of `execute_workflow_at_depth`.
+
+    Takes no depth, parent gate floor or inherited placements, so a caller cannot
+    describe a descended child here and have it journaled as root.
+    [LAW:types-are-the-program] Every child entry goes through `execute_workflow_at_depth`,
+    where the depth has no default. All other parameters are documented there.
+    """
+    return execute_workflow_at_depth(
+        manifest_entry,
+        steps,
+        run_id,
+        ctx,
+        default_model_binding=default_model_binding,
+        step_dispatchers=step_dispatchers,
+        pause_snapshot_input=pause_snapshot_input,
+        reconstruct_final_state=reconstruct_final_state,
+        descent_depth=0,
+        resume_context=resume_context,
+        hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
+        effect_fence_uniform_fallback_eligible_key=effect_fence_uniform_fallback_eligible_key,
+        effect_fence_tree_wide_abort_present=effect_fence_tree_wide_abort_present,
+    )
+
+
+def execute_workflow_at_depth(
+    manifest_entry: WorkflowManifestEntry,
+    steps: Sequence[WorkflowStep],
+    run_id: str,
+    ctx: DriverContext,
+    *,
+    default_model_binding: ModelBinding,
+    step_dispatchers: StepDispatcherRegistry,
+    descent_depth: int,
+    pause_snapshot_input: PauseSnapshot | None = None,
+    reconstruct_final_state: bool = True,
     parent_gate_floor: GateLevel = GateLevel.AUTO,
     resume_context: ResumeContext | None = None,
     hitl_uniform_fallback_eligible_run_id: str | None = None,
@@ -3258,6 +3297,10 @@ def execute_workflow(
         `step_dispatchers.lookup(step.kind).dispatch(...)` (§25.3.3.4
         opaque-step-body discipline preserved — driver routes on the
         declared enum field, not on opaque payload content).
+    descent_depth
+        Required, no default: 0 for a root run, the parent's depth + 1 for each
+        descended child. It is journaled with every captured pause, so a child that
+        omitted it would otherwise be recorded as a root.
     inherited_hitl_placements
         CP spec v1.120 §17.3: the `PRE_ACTION` placements a sub-agent child
         inherits from its ancestors, outermost first. Prepended to the child's own
@@ -16360,6 +16403,7 @@ __all__ = [
     "dispatch_branch_step_shielded",
     "drain_branch_buffers",
     "execute_workflow",
+    "execute_workflow_at_depth",
     "reset_offloaded_job_branch_inflight_registry",
     "resume_should_redispatch",
 ]

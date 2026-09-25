@@ -32,7 +32,7 @@ from harness_cp.workflow_driver import (
     DriverContext,
     StepDispatcherRegistry,
     StepKindDispatcherNotBoundError,
-    execute_workflow,
+    execute_workflow_at_depth,
 )
 from harness_cp.workflow_driver_types import RunStatus, StepKind, WorkflowStep
 from harness_cp.workflow_manifest_entry import WorkflowManifestEntry
@@ -240,7 +240,7 @@ def test_driver_pause_journals_its_depth_and_returns_the_matching_ref(
         for name in ("s0", "s1")
     ]
 
-    result = execute_workflow(
+    result = execute_workflow_at_depth(
         manifest,
         steps,
         run_id="run-1",

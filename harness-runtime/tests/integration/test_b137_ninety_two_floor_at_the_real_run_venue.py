@@ -962,17 +962,17 @@ def test_the_scope_is_inside_the_envelope_not_all_nineteen() -> None:
     # exempting `skill.activation` outright — pinned by the containment witness below,
     # which is the same structure the nested-resume case relies on.
     # The load-bearing structural fact behind that qualification: the emit lives inside
-    # `execute_workflow`, which is precisely the function the child runner re-enters under
-    # `subagent.span`. So the same line is a root on a top-level call and a child on a
-    # nested one.
+    # `execute_workflow_at_depth` (the body behind the root-only `execute_workflow`), which is
+    # precisely the function the child runner re-enters under `subagent.span`. So the same
+    # line is a root on a top-level call and a child on a nested one.
     tree_fns = [
         node
         for node in ast.walk(tree)
         if isinstance(node, ast.FunctionDef)
         and node.lineno < emit_line <= (node.end_lineno or node.lineno)
     ]
-    assert any(fn.name == "execute_workflow" for fn in tree_fns), (
-        f"the skill-activation emit at :{emit_line} is no longer inside `execute_workflow` "
+    assert any(fn.name == "execute_workflow_at_depth" for fn in tree_fns), (
+        f"the skill-activation emit at :{emit_line} is no longer inside `execute_workflow_at_depth` "
         f"(enclosing: {[fn.name for fn in tree_fns]}) — the top-level-vs-nested "
         "qualification on B-137's root counterexample must be re-derived"
     )

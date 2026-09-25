@@ -882,7 +882,7 @@ def test_child_workflow_runner_opts_into_final_state_reconstruct(
         captured.update(kwargs)
         return _success_result()
 
-    monkeypatch.setattr(cwr, "execute_workflow", _spy_execute_workflow)
+    monkeypatch.setattr(cwr, "execute_workflow_at_depth", _spy_execute_workflow)
     runner = cwr.compose_child_workflow_runner(cast(Any, SimpleNamespace(step_dispatchers={})))
     result = runner(
         workflow_id="child-wf",
@@ -916,7 +916,7 @@ def test_child_workflow_runner_forwards_the_numeric_depth_to_execute_workflow(
         captured.update(kwargs)
         return _success_result()
 
-    monkeypatch.setattr(cwr, "execute_workflow", _spy_execute_workflow)
+    monkeypatch.setattr(cwr, "execute_workflow_at_depth", _spy_execute_workflow)
     runner = cwr.compose_child_workflow_runner(cast(Any, SimpleNamespace(step_dispatchers={})))
     runner(
         workflow_id="child-wf",

@@ -350,6 +350,7 @@ def test_recursive_child_crash_resume_reconstructs_full_final_state(
         steps=[_step(0), _step(1), _step(2)],
         handoff_context=cast(Any, None),  # not forwarded to execute_workflow
         descent=cast(Any, None),  # not forwarded to execute_workflow
+        descent_depth=1,  # a direct child-runner call is a depth-1 child of the root
         default_model_binding=_DEFAULT_BINDING,
         pause_snapshot_input=None,  # CRASH-resume (not a pause-resume)
     )
@@ -396,6 +397,7 @@ def test_recursive_child_crash_resume_save_point_reconstructs_full_final_state(
         steps=[_step(0), _step(1), _step(2)],
         handoff_context=cast(Any, None),
         descent=cast(Any, None),
+        descent_depth=1,  # a direct child-runner call is a depth-1 child of the root
         default_model_binding=_DEFAULT_BINDING,
         pause_snapshot_input=None,  # CRASH-resume (not a pause-resume)
     )
@@ -456,6 +458,7 @@ def test_recursive_child_crash_resume_reconciler_clean_cas_auto_resumes(
         steps=[_step(0), _step(1), _step(2)],
         handoff_context=cast(Any, None),
         descent=cast(Any, None),
+        descent_depth=1,  # a direct child-runner call is a depth-1 child of the root
         default_model_binding=_DEFAULT_BINDING,
         pause_snapshot_input=None,  # CRASH-resume
     )
@@ -501,6 +504,7 @@ def test_recursive_child_crash_resume_reconciler_f1_abort_fails_closed_at_most_o
         steps=[_step(0), _step(1), _step(2)],
         handoff_context=cast(Any, None),
         descent=cast(Any, None),
+        descent_depth=1,  # a direct child-runner call is a depth-1 child of the root
         default_model_binding=_DEFAULT_BINDING,
         pause_snapshot_input=None,  # CRASH-resume
     )
@@ -557,6 +561,7 @@ def test_recursive_child_crash_resume_e1_live_seed_reconstructs_full_final_state
         steps=[_step(0), _step(1), _step(2)],
         handoff_context=cast(Any, None),
         descent=cast(Any, None),
+        descent_depth=1,  # a direct child-runner call is a depth-1 child of the root
         default_model_binding=_DEFAULT_BINDING,
         pause_snapshot_input=None,  # CRASH-resume (not a pause-resume)
         child_run_id_seed=seed,  # E1-LIVE: the deterministic seed, NOT a pinned uuid
@@ -590,6 +595,7 @@ def test_recursive_child_crash_resume_without_store_degrades_to_suffix_only(
         steps=[_step(0), _step(1), _step(2)],
         handoff_context=cast(Any, None),
         descent=cast(Any, None),
+        descent_depth=1,  # a direct child-runner call is a depth-1 child of the root
         default_model_binding=_DEFAULT_BINDING,
         pause_snapshot_input=None,
     )
@@ -911,6 +917,7 @@ def test_maybe_ran_nonleaf_child_grandchild_auto_resumes_at_most_once(tmp_path: 
         steps=[_step(0), grandchild_step],
         handoff_context=cast(Any, None),
         descent=cast(Any, None),
+        descent_depth=1,  # a direct child-runner call is a depth-1 child of the root
         default_model_binding=_DEFAULT_BINDING,
         pause_snapshot_input=None,  # CRASH-resume
         child_run_id_seed=_CHILD_RUN,

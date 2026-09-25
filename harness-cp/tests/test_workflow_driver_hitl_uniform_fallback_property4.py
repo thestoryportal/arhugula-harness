@@ -52,6 +52,7 @@ from harness_cp.workflow_driver import (
     _pre_dispatch_gate_owning_branch_identity,
     compute_hitl_uniform_fallback_eligible_run_id,
     execute_workflow,
+    execute_workflow_at_depth,
 )
 from harness_cp.workflow_driver_types import RunStatus, StepKind, WorkflowStep
 from harness_cp.workflow_manifest_entry import WorkflowManifestEntry
@@ -607,7 +608,7 @@ def _resume(
     dispatcher = _HITLPauseDispatcher(
         pause_requested_flag=ctx.pause_requested_flag, raise_on="__never__"
     )
-    result = execute_workflow(
+    result = execute_workflow_at_depth(
         _manifest(),
         [_step("s0"), _step("s1")],
         run_id=pause_snapshot_input.run_id,

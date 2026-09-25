@@ -13,6 +13,7 @@ from typing import Any, cast
 
 import pytest
 from harness_core import JournalRecordRef, PersonaTier, StepID, WorkloadClass
+from harness_cp import workflow_driver as _wd
 from harness_cp.cp_shared_types import ModelBinding
 from harness_cp.cross_family_fallback_chain import (
     FallbackChain,
@@ -299,6 +300,19 @@ def _handoff_manifest() -> WorkflowManifestEntry:
 
 
 def _run_paused(protocol: _RecordingProtocol, **kwargs: Any) -> RunResult:
+    """Drive through the depth-explicit entry (the only one that can express a child)."""
+    return _wd.execute_workflow_at_depth(
+        _handoff_manifest(),
+        _steps(),
+        run_id="run-1",
+        ctx=cast(DriverContext, _Ctx(protocol)),
+        default_model_binding=_BINDING,
+        step_dispatchers=cast(StepDispatcherRegistry, _Registry(cast(Any, _FailingDispatcher()))),
+        **kwargs,
+    )
+
+
+def _run_root(protocol: _RecordingProtocol, **kwargs: Any) -> RunResult:
     return execute_workflow(
         _handoff_manifest(),
         _steps(),
@@ -326,3 +340,25 @@ def test_paused_run_result_carries_the_ref_from_the_same_capture() -> None:
     assert protocol.refs == [result.pause_record_ref]
     assert result.pause_record_ref is not None
     assert result.pause_record_ref.snapshot_hash == result.pause_snapshot.snapshot_hash
+
+
+def test_the_public_root_entry_captures_at_depth_zero() -> None:
+    protocol = _RecordingProtocol()
+    result = _run_root(protocol)
+    assert result.status is RunStatus.PAUSED
+    assert protocol.depths == [0]
+
+
+def test_a_child_entry_without_depth_cannot_be_journaled_as_root() -> None:
+    """Counterexample: a caller-supplied child run that omits its depth never reaches capture.
+
+    The depth-explicit entry has no default, and the root-only entry has no way to say
+    "child", so neither can silently label a child manifest depth 0.
+    """
+    protocol = _RecordingProtocol()
+    with pytest.raises(TypeError, match="descent_depth"):
+        _run_paused(protocol)
+    for child_only in ({"descent_depth": 1}, {"parent_gate_floor": None}):
+        with pytest.raises(TypeError, match=next(iter(child_only))):
+            _run_root(protocol, **child_only)
+    assert protocol.depths == []

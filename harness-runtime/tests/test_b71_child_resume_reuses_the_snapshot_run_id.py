@@ -86,7 +86,7 @@ def _capture_child_run_id(
         seen.append(child_run_id)
         return cast(Any, object())
 
-    monkeypatch.setattr(_cwr, "execute_workflow", _fake_execute_workflow)
+    monkeypatch.setattr(_cwr, "execute_workflow_at_depth", _fake_execute_workflow)
 
     runner = _cwr.compose_child_workflow_runner(cast(Any, _Ctx()))
     runner(
@@ -171,7 +171,7 @@ def test_child_runner_forwards_recorded_gate_floor(
         seen.append(kwargs["parent_gate_floor"])
         return cast(Any, object())
 
-    monkeypatch.setattr(_cwr, "execute_workflow", _capture)
+    monkeypatch.setattr(_cwr, "execute_workflow_at_depth", _capture)
     runner = _cwr.compose_child_workflow_runner(cast(Any, _Ctx()))
     runner(
         workflow_id=_WF,

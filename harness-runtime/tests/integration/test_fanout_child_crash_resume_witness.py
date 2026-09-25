@@ -167,6 +167,7 @@ def _drive(
         steps=[_branch_step(0, kind), _branch_step(1, kind), _branch_step(2, kind)],
         handoff_context=cast(Any, None),
         descent=cast(Any, None),
+        descent_depth=1,  # a direct child-runner call is a depth-1 child of the root
         default_model_binding=_DEFAULT_BINDING,
         pause_snapshot_input=None,  # CRASH-resume
         child_run_id_seed=seed,

@@ -3,7 +3,7 @@
 Per `Spec_Harness_Runtime_v1.md` v1.6 §14.7.4 (C-RT-17 contract). The
 "child workflow runner" callable is injected at `RuntimeSubAgentDispatcher`
 construction; the composer invokes it at §14.7.2 step 6 to re-enter
-`execute_workflow()` for the child sub-workflow body.
+`execute_workflow_at_depth()` for the child sub-workflow body.
 
 **v1.6 MVP composition (§14.7.4).**
 
@@ -22,14 +22,14 @@ construction; the composer invokes it at §14.7.2 step 6 to re-enter
 **Sync surface (operator-ratified 2026-05-20).** Spec §14.7.4 declares the
 `ChildWorkflowRunner` Protocol with `async def __call__`; operator ratified
 sync end-to-end per the Stage 1 Protocol freeze at `workflow_driver.py:175`
-(`StepDispatcher.dispatch` is sync; `execute_workflow` is sync). Rolled into
+(`StepDispatcher.dispatch` is sync; `execute_workflow_at_depth` is sync). Rolled into
 the U-RT-59 Class 3 spec-prose-drift note at landing. Recursive sync re-entry
 is sufficient at v1.6 MVP because the spec-pinned scope is "single-sub-agent
 within linear parent" — no fan-out concurrency at the composer level.
 
 **`default_model_binding` additive extension.** Spec §14.7.4 lists 5 kwargs
 on the runner Protocol (`workflow_id`, `manifest_entry`, `steps`,
-`handoff_context`, `descent`). `execute_workflow` requires a
+`handoff_context`, `descent`). `execute_workflow_at_depth` requires a
 `default_model_binding` for the child's per-step binding resolution per
 C-CP-06 §6.2; the composer forwards its parent `binding.model_binding`
 (per C-CP-13 §13.3 brief-authoring inheritance MVP reading). Additive vs
@@ -47,7 +47,7 @@ from harness_cp.handoff_context import HandoffContext
 from harness_cp.pause_resume_protocol_types import PauseSnapshot, ResumeContext
 from harness_cp.sub_agent_gate_level_descent import SubAgentGateLevelDescent
 from harness_cp.workflow_driver import DriverContext as _CpDriverContext
-from harness_cp.workflow_driver import execute_workflow
+from harness_cp.workflow_driver import execute_workflow_at_depth
 from harness_cp.workflow_driver_types import RunResult, WorkflowStep
 from harness_cp.workflow_manifest_entry import WorkflowManifestEntry
 
@@ -93,13 +93,13 @@ class ChildWorkflowRunner(Protocol):
         """Run the child sub-workflow and return its terminal `RunResult`.
 
         B-104 Task 4a: `descent_depth` (required, never defaulted) is the CHILD's own depth
-        — its parent's depth + 1 — so the recursive `execute_workflow` records a true
+        — its parent's depth + 1 — so the recursive `execute_workflow_at_depth` records a true
         ancestry (child 1, grandchild 2) with each pause it captures.
 
         B-HIERARCHICAL-PAUSE (R-FS-1): `pause_snapshot_input` (additive, default
         `None`) — when the parent fan-out is RESUMING a previously-paused child, the
         child's own `PauseSnapshot` is threaded here so the child re-enters at its
-        cursor (`execute_workflow(pause_snapshot_input=...)`) rather than re-running
+        cursor (`execute_workflow_at_depth(pause_snapshot_input=...)`) rather than re-running
         from scratch. `None` on a first (non-resume) child dispatch → byte-identical
         to the pre-arc behavior.
 
@@ -122,7 +122,7 @@ class ChildWorkflowRunner(Protocol):
 
         B-39 impl leg Slice B (CP spec v1.106 §1): `resume_context` (additive,
         default `None`) — the operator's full resume payload, forwarded verbatim
-        into the recursive `execute_workflow(resume_context=...)` call so the
+        into the recursive `execute_workflow_at_depth(resume_context=...)` call so the
         child's OWN reconstruction can resolve its own effect-fence directive +
         per-branch HITL delivery cell (replacing the retired ctx-level, run-tree-
         wide-shared `ResumeContextHolder` singleton). `None` on a first (non-resume)
@@ -168,7 +168,7 @@ def compose_child_workflow_runner(ctx: HarnessContext) -> ChildWorkflowRunner:
     bootstrap stage 5 calls this factory + injects the result into
     `RuntimeSubAgentDispatcher` construction.
 
-    The returned callable re-enters `execute_workflow()` (the same C-CP-25
+    The returned callable re-enters `execute_workflow_at_depth()` (the same C-CP-25
     §25.3 driver loop the top-level workflow uses per C-RT-08). Child shares
     parent `HarnessContext` per v1.6 MVP — substrate access (state ledger,
     audit writer, tracer provider, retry/breaker registry, providers,
@@ -264,7 +264,7 @@ def compose_child_workflow_runner(ctx: HarnessContext) -> ChildWorkflowRunner:
         # Top-level runs (`harness_runtime.api.run`) do NOT pass this → their accepted
         # suffix-only resume semantic is untouched (the fork-bearing top-level
         # reconstruction is a separate registered arc).
-        return execute_workflow(
+        return execute_workflow_at_depth(
             manifest_entry,
             steps,
             child_run_id,
