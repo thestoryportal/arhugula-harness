@@ -246,7 +246,7 @@ def test_durable_refuses_untrusted_prior_ledger(tmp_path: Path, mutation: str) -
 
 
 @pytest.mark.parametrize("sync_call", [1, 2, 3])
-def test_each_sync_failure_refuses_then_retry_reconciles(
+def test_each_sync_failure_refuses_then_retry_is_idempotent(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     sync_call: int,
