@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -276,6 +277,113 @@ def test_noncreating_probe_and_held_lease(placed: Placed) -> None:
     probe = store.probe_lease(ref)
     assert hasattr(probe, "close")
     probe.close()
+
+
+def _open_fd_count() -> int:
+    return len(os.listdir("/proc/self/fd"))
+
+
+needs_proc_fds = pytest.mark.skipif(
+    not os.path.isdir("/proc/self/fd"), reason="fd cleanup is observed through /proc"
+)
+
+DAMAGE = {
+    "empty": b"",
+    "garbage": b"not a lease\n",
+    "noncanonical": None,  # the canonical bytes with a whitespace-padded ending
+}
+
+
+def _damage_lease(store: ResumeClaimStore, ref, kind: str) -> bytes:
+    """Rewrite the lease IN PLACE (same inode, so a holder's flock still covers it)."""
+    paths = store.paths_for(ref)
+    damaged = DAMAGE[kind]
+    if damaged is None:
+        damaged = paths.lease.read_bytes()[:-1] + b"  \n"
+    paths.lease.write_bytes(damaged)
+    return damaged
+
+
+@needs_proc_fds
+@pytest.mark.parametrize("kind", list(DAMAGE))
+def test_a_busy_lease_with_damaged_bytes_is_busy_not_invalid(placed: Placed, kind: str) -> None:
+    from harness_runtime.lifecycle.resume_claim_store import LeaseBusy
+
+    ref = _capture(placed.journal_dir)
+    store = placed.store()
+    fds_before = _open_fd_count()
+    with store.claim(ref):
+        damaged = _damage_lease(store, ref, kind)
+        before = store.paths_for(ref).lease.stat()
+
+        probe = store.probe_lease(ref)
+
+        assert isinstance(probe, LeaseBusy)  # a live holder is contention, never "invalid"
+        after = store.paths_for(ref).lease.stat()
+        assert store.paths_for(ref).lease.read_bytes() == damaged
+        assert (after.st_ino, after.st_size) == (before.st_ino, before.st_size)
+    assert _open_fd_count() == fds_before  # the probe's descriptor was closed, the claim's too
+
+
+@needs_proc_fds
+@pytest.mark.parametrize("kind", list(DAMAGE))
+def test_a_free_damaged_lease_is_invalid_and_keeps_no_lock_or_descriptor(
+    placed: Placed, kind: str
+) -> None:
+    import fcntl
+
+    from harness_runtime.lifecycle.resume_claim_store import LeaseInvalid
+
+    ref = _capture(placed.journal_dir)
+    store = placed.store()
+    with store.claim(ref):
+        damaged = _damage_lease(store, ref, kind)
+    fds_before = _open_fd_count()
+
+    probe = store.probe_lease(ref)
+
+    assert isinstance(probe, LeaseInvalid)
+    assert store.paths_for(ref).lease.read_bytes() == damaged  # never repaired or replaced
+    assert _open_fd_count() == fds_before
+    other = os.open(store.paths_for(ref).lease, os.O_RDONLY)
+    try:
+        fcntl.flock(other, fcntl.LOCK_EX | fcntl.LOCK_NB)  # the probe left no lock behind
+    finally:
+        os.close(other)
+
+
+@needs_proc_fds
+def test_a_healthy_busy_lease_is_busy_and_a_free_valid_lease_is_held_then_released(
+    placed: Placed,
+) -> None:
+    import fcntl
+
+    from harness_runtime.lifecycle.resume_claim_store import HeldLease, LeaseBusy
+
+    ref = _capture(placed.journal_dir)
+    store = placed.store()
+    fds_before = _open_fd_count()
+    with store.claim(ref) as claim:
+        assert isinstance(store.probe_lease(ref), LeaseBusy)
+        token = claim.token
+    assert _open_fd_count() == fds_before
+    lease = store.paths_for(ref).lease
+    inode, content = lease.stat().st_ino, lease.read_bytes()
+
+    probe = store.probe_lease(ref)
+
+    assert isinstance(probe, HeldLease)
+    assert probe.token != token  # the lease's own token, not the claim token
+    assert (lease.stat().st_ino, lease.read_bytes()) == (inode, content)
+    other = os.open(lease, os.O_RDONLY)
+    try:
+        with pytest.raises(BlockingIOError):
+            fcntl.flock(other, fcntl.LOCK_EX | fcntl.LOCK_NB)  # the held probe owns the lock
+        probe.close()
+        fcntl.flock(other, fcntl.LOCK_EX | fcntl.LOCK_NB)  # closing releases it
+    finally:
+        os.close(other)
+    assert _open_fd_count() == fds_before
 
 
 def test_two_process_claimants_admit_at_most_one(placed: Placed) -> None:
