@@ -590,6 +590,7 @@ def test_a_replaced_same_path_root_with_a_copied_marker_is_identity_changed(lay:
     root.rename(lay.home / "state" / "old")
     root.mkdir(mode=0o700)
     (root / ".arhugula-state-root").write_text(marker_text)
+    (root / ".arhugula-state-root").chmod(0o600)
 
     with pytest.raises(StateRootPlacementError) as excinfo:
         _revalidate(lay, stamp, root)
@@ -673,3 +674,126 @@ def test_mountinfo_without_any_covering_mount_is_undetermined() -> None:
 )
 def test_the_real_resolver_identifies_dev_shm_as_volatile(tmp_path: Path) -> None:
     assert linux_filesystem_type(Path("/dev/shm")) in {"tmpfs", "ramfs"}
+
+
+# --- private-state invariant for EXISTING roots and markers (S1 delta) --------------------
+
+
+def _private_root(lay: Layout) -> Path:
+    root = lay.home / "state" / "root"
+    _bootstrap(lay, root)
+    return root
+
+
+@pytest.mark.parametrize("mode", [0o755, 0o750, 0o705, 0o710])
+def test_an_existing_root_with_any_group_or_other_access_is_refused_everywhere(
+    lay: Layout, mode: int
+) -> None:
+    root = _private_root(lay)
+    stamp = _probe(lay, root)
+    root.chmod(mode)
+
+    _assert_refused_without_mutation(lay, Refusal.PERMISSIONS, lambda: _probe(lay, root))
+    _assert_refused_without_mutation(lay, Refusal.PERMISSIONS, lambda: _bootstrap(lay, root))
+    _assert_refused_without_mutation(
+        lay, Refusal.PERMISSIONS, lambda: _revalidate(lay, stamp, root)
+    )
+
+
+@pytest.mark.parametrize("mode", [0o666, 0o644, 0o640, 0o604, 0o660])
+def test_an_existing_marker_with_any_group_or_other_access_is_never_a_valid_identity(
+    lay: Layout, mode: int
+) -> None:
+    root = _private_root(lay)
+    stamp = _probe(lay, root)
+    (root / ".arhugula-state-root").chmod(mode)
+
+    _assert_refused_without_mutation(lay, Refusal.MARKER_UNSAFE, lambda: _probe(lay, root))
+    _assert_refused_without_mutation(lay, Refusal.MARKER_UNSAFE, lambda: _bootstrap(lay, root))
+    _assert_refused_without_mutation(
+        lay, Refusal.MARKER_UNSAFE, lambda: _revalidate(lay, stamp, root)
+    )
+
+
+def test_a_marker_not_owned_by_the_effective_user_is_unsafe(
+    lay: Layout, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from harness_runtime.config import state_placement as sp
+
+    root = _private_root(lay)
+    real_uid = os.geteuid()
+    monkeypatch.setattr(os, "geteuid", lambda: real_uid + 1)
+
+    with pytest.raises(StateRootPlacementError) as excinfo:
+        sp._read_marker(root)  # pyright: ignore[reportPrivateUsage]
+
+    assert excinfo.value.reason is Refusal.MARKER_UNSAFE
+
+
+def test_a_symlinked_marker_is_refused(lay: Layout) -> None:
+    root = _private_root(lay)
+    marker = root / ".arhugula-state-root"
+    real = marker.read_text()
+    marker.unlink()
+    elsewhere = lay.home / "state" / "elsewhere"
+    elsewhere.write_text(real)
+    elsewhere.chmod(0o600)
+    marker.symlink_to(elsewhere)
+
+    _assert_refused_without_mutation(lay, Refusal.MARKER_INVALID, lambda: _probe(lay, root))
+
+
+def test_a_private_root_and_marker_are_still_accepted(lay: Layout) -> None:
+    root = _private_root(lay)
+
+    assert stat.S_IMODE(root.stat().st_mode) == 0o700
+    assert _probe(lay, root) == _bootstrap(lay, root)
+
+
+def test_the_marker_is_opened_close_on_exec(lay: Layout, monkeypatch: pytest.MonkeyPatch) -> None:
+    root = _private_root(lay)
+    flags_seen: list[int] = []
+    real_open = os.open
+
+    def spy(path: Any, flags: int, *args: Any, **kwargs: Any) -> int:
+        if str(path).endswith(".arhugula-state-root"):
+            flags_seen.append(flags)
+        return real_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(os, "open", spy)
+    _probe(lay, root)
+
+    assert flags_seen
+    assert all(f & os.O_CLOEXEC and f & os.O_NOFOLLOW for f in flags_seen)
+
+
+# --- the known checkout-local onboarding STATE_LEDGER is legacy state ---------------------
+
+_ONBOARDING_LEDGER = Path(".harness") / "onboarding" / "state-ledger"
+
+
+@pytest.mark.parametrize("child", ["state.jsonl", "pause-journal/run-1.json", "claims/lease"])
+def test_a_nonempty_onboarding_state_ledger_refuses_external_placement(
+    lay: Layout, child: str
+) -> None:
+    target = lay.repo / _ONBOARDING_LEDGER / child
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("x")
+
+    _assert_refused_without_mutation(
+        lay, Refusal.LEGACY_STATE_PRESENT, lambda: _bootstrap(lay, lay.home / "state" / "root")
+    )
+
+
+def test_an_empty_onboarding_state_ledger_and_unrelated_harness_files_do_not_refuse(
+    lay: Layout,
+) -> None:
+    (lay.repo / _ONBOARDING_LEDGER).mkdir(parents=True)
+    unrelated = lay.repo / ".harness" / "clearance" / "marker.md"
+    unrelated.parent.mkdir(parents=True)
+    unrelated.write_text("tracked checkout data that is not harness state")
+
+    stamp = _bootstrap(lay, lay.home / "state" / "root")
+
+    assert stamp.root_id
+    assert unrelated.read_text() == "tracked checkout data that is not harness state"

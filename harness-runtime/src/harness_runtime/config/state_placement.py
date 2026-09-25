@@ -20,7 +20,11 @@ Checks run in this order (first failing reason wins):
 RELATIVE, SYMLINK_ROOT, NOT_A_DIRECTORY, INSIDE_CHECKOUT, CONTAINS_CHECKOUT,
 INSIDE_FORBIDDEN, LEDGER_CELL_OUTSIDE, NON_DURABLE_FS / FS_UNDETERMINED,
 PERMISSIONS / PARENT_MISSING / PARENT_UNSAFE, LEGACY_STATE_PRESENT (bootstrap only),
-then identity (marker + inode/device).
+then identity (marker: regular, effective-user-owned, 0600-class; inode/device).
+
+Private-state invariant: an existing root must be effective-user-owned with no group/other
+permissions (0700-class) and its marker likewise (0600-class), checked on every path that
+returns a `VerifiedStateRoot` (bootstrap, probe, revalidate).
 """
 
 from __future__ import annotations
@@ -58,6 +62,7 @@ MARKER_NAME = ".arhugula-state-root"
 
 _ROOT_ID_PATTERN = re.compile(r"[0-9a-f]{32}")
 _VOLATILE_FILESYSTEMS = frozenset({"tmpfs", "ramfs"})
+_GROUP_OTHER_BITS = stat.S_IRWXG | stat.S_IRWXO
 
 
 class StatePlacementRefusal(StrEnum):
@@ -79,6 +84,7 @@ class StatePlacementRefusal(StrEnum):
     ROOT_MISSING = "root-missing"
     MARKER_MISSING = "marker-missing"
     MARKER_INVALID = "marker-invalid"
+    MARKER_UNSAFE = "marker-unsafe"
     IDENTITY_CHANGED = "identity-changed"
 
 
@@ -279,10 +285,11 @@ def _judge(
 
     if exists:
         st = os.stat(resolved)
-        if st.st_uid != os.geteuid() or st.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+        if st.st_uid != os.geteuid() or st.st_mode & _GROUP_OTHER_BITS:
             raise StateRootPlacementError(
                 StatePlacementRefusal.PERMISSIONS,
-                "state root must be owned by the effective user and not group/other-writable",
+                "state root must be owned by the effective user with no group/other "
+                "permissions (0700-class)",
             )
     elif creating:
         _require_safe_parent(resolved.parent)
@@ -309,10 +316,24 @@ def _require_safe_parent(parent: Path) -> None:
         )
 
 
+_KNOWN_LEGACY_LEDGER = Path(".harness") / "onboarding" / "state-ledger"
+"""Where the shipped local examples bind STATE_LEDGER inside the checkout."""
+
+
 def _legacy_state_present(repository_root: Path) -> list[Path]:
+    """Known checkout-local stores that a new external placement would leave behind.
+
+    Covers the `StateKind` stores under `<repo>/.harness/` and the shipped examples'
+    STATE_LEDGER (`.harness/onboarding/state-ledger`, including its journal and claim
+    children). This is NOT a universal detector: an older custom ledger binding cannot be
+    discovered from the new config, so S2/S3 migration needs an operator inventory or the
+    old binding as explicit input. Nothing else in the checkout is scanned or touched.
+    """
     present: list[Path] = []
-    for kind in StateKind:
-        legacy = state_path(kind, None, repository_root)
+    for legacy in (
+        *(state_path(kind, None, repository_root) for kind in StateKind),
+        repository_root / _KNOWN_LEGACY_LEDGER,
+    ):
         try:
             if legacy.is_dir():
                 nonempty = any(legacy.iterdir())
@@ -329,7 +350,7 @@ def _read_marker(root: Path) -> str | None:
     """The marker's root_id, `None` when absent; `MARKER_INVALID` when unusable."""
     marker = root / MARKER_NAME
     try:
-        fd = os.open(marker, os.O_RDONLY | os.O_NOFOLLOW)
+        fd = os.open(marker, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
     except FileNotFoundError:
         return None
     except OSError as exc:
@@ -337,9 +358,18 @@ def _read_marker(root: Path) -> str | None:
             StatePlacementRefusal.MARKER_INVALID, f"marker unreadable: {exc.strerror}"
         ) from exc
     try:
-        if not stat.S_ISREG(os.fstat(fd).st_mode):
+        marker_stat = os.fstat(fd)
+        if not stat.S_ISREG(marker_stat.st_mode):
             raise StateRootPlacementError(
                 StatePlacementRefusal.MARKER_INVALID, "marker is not a regular file"
+            )
+        # [LAW:single-enforcer] The identity marker is only trustworthy if nobody else can
+        # have written it: effective-user-owned and 0600-class, judged on the opened fd.
+        if marker_stat.st_uid != os.geteuid() or marker_stat.st_mode & _GROUP_OTHER_BITS:
+            raise StateRootPlacementError(
+                StatePlacementRefusal.MARKER_UNSAFE,
+                "marker must be owned by the effective user with no group/other "
+                "permissions (0600-class)",
             )
         text = os.read(fd, 64).decode("ascii", errors="replace")
     finally:
@@ -361,7 +391,11 @@ def _fsync_dir(path: Path) -> None:
 
 def _write_marker_exclusively(root: Path) -> None:
     root_id = secrets.token_hex(16)
-    fd = os.open(root / MARKER_NAME, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    fd = os.open(
+        root / MARKER_NAME,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+        0o600,
+    )
     try:
         os.write(fd, root_id.encode("ascii"))
         os.fsync(fd)
@@ -419,8 +453,9 @@ def bootstrap_state_root(
     `parents=True`). An existing root keeps its marker; an existing EMPTY directory is
     adopted; an existing non-empty directory without a marker is refused
     (`MARKER_MISSING`) because adopting someone else's data as harness state is unsafe.
-    A non-empty legacy repo-local store refuses (`LEGACY_STATE_PRESENT`): migration is an
-    explicit operator step, never an automatic copy.
+    A non-empty KNOWN legacy repo-local store refuses (`LEGACY_STATE_PRESENT`; see
+    `_legacy_state_present` for exactly which and for what it cannot discover): migration is
+    an explicit operator step, never an automatic copy.
     """
     judged = _judge(
         placement,
