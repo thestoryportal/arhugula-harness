@@ -201,6 +201,7 @@ def _run_record_mode(args: argparse.Namespace, ledger_path: Path) -> int:
     from harness_runtime.lifecycle.audit_signing_fail_closed_validation import (
         AuditSigningConfigInvalidError,
         IncompatibleConfigVersion,
+        configured_cutover_record_path,
         validate_mtc_audit_signing_config,
         validate_record_key_distinctness,
     )
@@ -213,8 +214,13 @@ def _run_record_mode(args: argparse.Namespace, ledger_path: Path) -> int:
     # Placement stamp for the record path: a mutating admin never creates the root, so this
     # is the read-only probe. An unverifiable declared root refuses here, before any I/O
     # (the outside-root judgment itself runs inside the record modes, before their writes).
+    # The configured record path is judged HERE too, ahead of backend construction and the
+    # ledger read lock, so a bad path cannot be masked by an outage or contention. The
+    # record modes re-run the same judgment for direct library callers ([LAW:single-enforcer]:
+    # one helper, `configured_cutover_record_path`; this is an early call, not a second rule).
     try:
         verified_state_root = probe_declared_state_root(config)
+        configured_cutover_record_path(config, verified_state_root)
     except StateRootPlacementError as exc:
         print(f"record migration refused: {exc}", file=sys.stderr)
         return 1

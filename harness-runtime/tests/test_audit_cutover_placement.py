@@ -280,6 +280,56 @@ def test_migration_refuses_an_outside_root_record_before_any_write(
     assert dep.sidecar_path.read_bytes() == sidecar_bytes
 
 
+@pytest.mark.parametrize("mode", [_AUTHOR, ["--retag"]], ids=["author", "retag"])
+def test_migration_refuses_an_outside_root_record_before_backend_or_ledger_access(
+    site: Site,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    mode: list[str],
+) -> None:
+    """The placement refusal must not be maskable: with the signing backend unavailable and
+    the ledger read lock contended, an outside-root path still reports the placement class,
+    and neither the backend factory nor the ledger read is ever reached."""
+    from harness_core.cross_process_lock_deadline import CrossProcessLockTimeoutError
+    from harness_runtime.config.audit_signing import SigningBackendSdkUnavailableError
+
+    dep = _Deployment(tmp_path)
+    entry_hash = _seed_history(dep)
+    site.stamp(site.config(placement=True))
+    outside = dep.record_path
+    if mode == ["--retag"]:
+        dep.write_record(_row(entry_hash))
+    _install_migration_config(monkeypatch, dep, site, outside)
+    reached: list[str] = []
+
+    def _backend_unavailable(_config: object) -> object:
+        reached.append("backend")
+        raise SigningBackendSdkUnavailableError("backend down")
+
+    def _ledger_contended(*_args: object, **_kwargs: object) -> object:
+        reached.append("ledger")
+        raise CrossProcessLockTimeoutError("ledger read lock contended")
+
+    monkeypatch.setattr(
+        "harness_runtime.config.audit_signing.make_audit_signing_backend", _backend_unavailable
+    )
+    monkeypatch.setattr("harness_is.state_ledger_write.read_ledger", _ledger_contended)
+    before = sorted(os.listdir(tmp_path))
+    sidecar_bytes = dep.sidecar_path.read_bytes()
+    record_bytes = outside.read_bytes() if outside.exists() else None
+
+    exit_code = migrate_cli.main([str(dep.ledger_path), *mode, "--runtime-config", "unused.toml"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert f"RT-FAIL-STATE-ROOT-PLACEMENT:{_OUTSIDE}" in captured.err
+    assert reached == []
+    assert sorted(os.listdir(tmp_path)) == before
+    assert dep.sidecar_path.read_bytes() == sidecar_bytes
+    assert (outside.read_bytes() if outside.exists() else None) == record_bytes
+
+
 def test_migration_authors_a_record_inside_the_verified_root(
     site: Site,
     tmp_path: Path,
