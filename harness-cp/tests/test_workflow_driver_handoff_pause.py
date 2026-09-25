@@ -534,8 +534,9 @@ def _captured_handoff_snapshot(handoff_resume: HandoffResumeState) -> PauseSnaps
             step_index=2,
             pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
             handoff_resume=handoff_resume,
+            descent_depth=0,
         )
-    )
+    ).snapshot
 
 
 def test_handoff_snapshot_hash_covers_handoff_resume_tamper_rejected() -> None:
@@ -646,8 +647,9 @@ def test_handoff_resume_cursor_step_index_mismatch_fails_closed() -> None:
                 ),
                 stage_count=3,
             ),
+            descent_depth=0,
         )
-    )
+    ).snapshot
     ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
     result = _run(
         steps=[_stage("s0"), _stage("s1"), _stage("s2")],

@@ -308,31 +308,34 @@ async def test_api_resume_evaluator_optimizer_pause_restart_proof_round_trip(
     # ---- "Pause" — capture a real EO PauseSnapshot via a bootstrapped protocol.
     capture_ctx = await run_bootstrap(config, workload_class=_WORKLOAD)
     assert capture_ctx.pause_resume_protocol is not None
-    snapshot = await capture_ctx.pause_resume_protocol.capture_pause_snapshot(
-        workflow_id=_WORKFLOW_ID,
-        run_id="run-eo-resume-e2e",
-        # The failed iteration-1 generate's DECLARED ordinal (0), NOT its entry_index (2):
-        # `step_index` must be a valid `steps` position for the runtime api.resume guard
-        # (`0 <= step_index < len(steps)`); the cursor carries the full resume position.
-        step_index=0,
-        pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
-        evaluator_optimizer_resume=EvaluatorOptimizerResumeState(
-            completed_steps=(
-                EvaluatorOptimizerStepResumeState(
-                    entry_index=0,
-                    declared_step_index=0,
-                    step_id=_GENERATE,
-                    output={"draft": 1, "recovered": True},
-                ),
-                EvaluatorOptimizerStepResumeState(
-                    entry_index=1,
-                    declared_step_index=1,
-                    step_id=_EVALUATE,
-                    output=_ollama_verdict(False),
+    snapshot = (
+        await capture_ctx.pause_resume_protocol.capture_pause_snapshot(
+            workflow_id=_WORKFLOW_ID,
+            run_id="run-eo-resume-e2e",
+            # The failed iteration-1 generate's DECLARED ordinal (0), NOT its entry_index (2):
+            # `step_index` must be a valid `steps` position for the runtime api.resume guard
+            # (`0 <= step_index < len(steps)`); the cursor carries the full resume position.
+            step_index=0,
+            pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
+            evaluator_optimizer_resume=EvaluatorOptimizerResumeState(
+                completed_steps=(
+                    EvaluatorOptimizerStepResumeState(
+                        entry_index=0,
+                        declared_step_index=0,
+                        step_id=_GENERATE,
+                        output={"draft": 1, "recovered": True},
+                    ),
+                    EvaluatorOptimizerStepResumeState(
+                        entry_index=1,
+                        declared_step_index=1,
+                        step_id=_EVALUATE,
+                        output=_ollama_verdict(False),
+                    ),
                 ),
             ),
-        ),
-    )
+            descent_depth=0,
+        )
+    ).snapshot
 
     # ---- "Restart" — persist + reload across a process boundary (JSON round-trip).
     rehydrated = PauseSnapshot.model_validate_json(snapshot.model_dump_json())

@@ -602,8 +602,9 @@ def _child_pause_snapshot() -> PauseSnapshot:
             run_id="child-run",
             step_index=0,
             pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
+            descent_depth=0,
         )
-    )
+    ).snapshot
 
 
 # ---------------------------------------------------------------------------
@@ -905,6 +906,7 @@ def test_ow_protocol_not_bound_union_arm_completed_no_snapshot() -> None:
         resume_snapshot=snapshot,
         pause_resumable=True,
         inherited_hitl_placements=(),
+        descent_depth=0,
     )
 
     assert result.status is RunStatus.FAILED
@@ -1073,6 +1075,7 @@ def test_ow_not_yet_materialized_direct_call_scan_runs() -> None:
         run_idempotency_key="ow9-direct",
         effective_parent_gate_level=GateLevel.AUTO,
         inherited_hitl_placements=(),
+        descent_depth=0,
     )
 
     assert result.status is RunStatus.FAILED

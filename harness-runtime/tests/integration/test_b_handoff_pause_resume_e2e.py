@@ -290,27 +290,30 @@ async def test_api_resume_handoff_pause_restart_proof_round_trip(
     # ---- "Pause" — capture a real handoff PauseSnapshot via a bootstrapped protocol.
     capture_ctx = await run_bootstrap(config, workload_class=_WORKLOAD)
     assert capture_ctx.pause_resume_protocol is not None
-    snapshot = await capture_ctx.pause_resume_protocol.capture_pause_snapshot(
-        workflow_id=_WORKFLOW_ID,
-        run_id="run-handoff-resume-e2e",
-        step_index=2,  # the failed tail stage
-        pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
-        handoff_resume=HandoffResumeState(
-            completed_stages=(
-                HandoffStageResumeState(
-                    stage_index=0,
-                    step_id="stage-0",
-                    output={"step_id": "stage-0", "recovered": True},
+    snapshot = (
+        await capture_ctx.pause_resume_protocol.capture_pause_snapshot(
+            workflow_id=_WORKFLOW_ID,
+            run_id="run-handoff-resume-e2e",
+            step_index=2,  # the failed tail stage
+            pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
+            handoff_resume=HandoffResumeState(
+                completed_stages=(
+                    HandoffStageResumeState(
+                        stage_index=0,
+                        step_id="stage-0",
+                        output={"step_id": "stage-0", "recovered": True},
+                    ),
+                    HandoffStageResumeState(
+                        stage_index=1,
+                        step_id="stage-1",
+                        output={"step_id": "stage-1", "recovered": True},
+                    ),
                 ),
-                HandoffStageResumeState(
-                    stage_index=1,
-                    step_id="stage-1",
-                    output={"step_id": "stage-1", "recovered": True},
-                ),
+                stage_count=3,
             ),
-            stage_count=3,
-        ),
-    )
+            descent_depth=0,
+        )
+    ).snapshot
 
     # ---- "Restart" — persist + reload across a process boundary (JSON round-trip).
     rehydrated = PauseSnapshot.model_validate_json(snapshot.model_dump_json())

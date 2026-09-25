@@ -470,6 +470,9 @@ def materialize_mcp_server_stage(
                     harness_ctx,
                     default_model_binding=workflow.default_model_binding,
                     step_dispatchers=cast(Any, effective_step_dispatchers),
+                    # B-104 Task 4a: the top-level run is the depth-0 root; every descent
+                    # goes through `child_workflow_runner`, which passes parent depth + 1.
+                    descent_depth=0,
                     pause_snapshot_input=_resume_snapshot,
                     resume_context=_resume_context,
                     hitl_uniform_fallback_eligible_run_id=(_hitl_uniform_fallback_eligible_run_id),

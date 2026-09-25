@@ -249,6 +249,7 @@ class _MockChildWorkflowRunner:
         handoff_context: Any,
         descent: SubAgentGateLevelDescent,
         default_model_binding: ModelBinding,
+        descent_depth: int,
         pause_snapshot_input: Any = None,
         child_run_id_seed: str | None = None,
         resume_context: Any = None,
@@ -258,6 +259,7 @@ class _MockChildWorkflowRunner:
     ) -> RunResult:
         self.calls.append(
             {
+                "descent_depth": descent_depth,
                 "workflow_id": workflow_id,
                 "manifest_entry": manifest_entry,
                 "steps": tuple(steps),
@@ -759,6 +761,16 @@ def test_paused_child_without_snapshot_fails_honestly(tmp_path: Path) -> None:
         dispatcher.dispatch(_binding(), _step(), step_context=_step_context())
 
 
+@pytest.mark.parametrize("parent_depth", [0, 1])
+def test_child_runner_receives_the_parent_depth_plus_one(tmp_path: Path, parent_depth: int) -> None:
+    """B-104 Task 4a — a root parent (depth 0) dispatches a depth-1 child; that child,
+    dispatching in turn, hands its own child depth 2. Never a defaulted 0."""
+    dispatcher, runner, _ = _dispatcher(tmp_path)
+    ctx = _step_context().model_copy(update={"descent_depth": parent_depth})
+    dispatcher.dispatch(_binding(), _step(), step_context=ctx)
+    assert runner.calls[-1]["descent_depth"] == parent_depth + 1
+
+
 def test_child_resume_snapshot_forwarded_to_runner(tmp_path: Path) -> None:
     """B-HIERARCHICAL-PAUSE — on resume, `step_context.child_resume_snapshot` is
     forwarded to the child runner as `pause_snapshot_input` so the child re-enters at
@@ -843,6 +855,7 @@ def test_child_runner_resume_workflow_id_mismatch_fails_closed() -> None:
             handoff_context=cast(Any, None),
             descent=cast(Any, None),
             default_model_binding=cast(Any, None),
+            descent_depth=1,
             pause_snapshot_input=snap,
         )
 
@@ -878,11 +891,43 @@ def test_child_workflow_runner_opts_into_final_state_reconstruct(
         handoff_context=cast(Any, None),
         descent=cast(Any, None),
         default_model_binding=cast(Any, None),
+        descent_depth=1,
         pause_snapshot_input=None,  # first dispatch → skips the workflow-id guard
     )
     # The opt-in is forwarded → execute_workflow reconstructs the child's final_state.
     assert captured.get("reconstruct_final_state") is True
     assert result.status is RunStatus.SUCCESS
+
+
+@pytest.mark.parametrize("child_depth", [1, 2])
+def test_child_workflow_runner_forwards_the_numeric_depth_to_execute_workflow(
+    monkeypatch: pytest.MonkeyPatch, child_depth: int
+) -> None:
+    """B-104 Task 4a — the recursive entry re-enters `execute_workflow` at exactly the
+    depth the dispatcher computed (child 1, grandchild 2), so the capture beneath it
+    journals a true depth instead of the old boolean-derived guess."""
+    from types import SimpleNamespace
+
+    import harness_runtime.lifecycle.child_workflow_runner as cwr
+
+    captured: dict[str, Any] = {}
+
+    def _spy_execute_workflow(*_args: Any, **kwargs: Any) -> RunResult:
+        captured.update(kwargs)
+        return _success_result()
+
+    monkeypatch.setattr(cwr, "execute_workflow", _spy_execute_workflow)
+    runner = cwr.compose_child_workflow_runner(cast(Any, SimpleNamespace(step_dispatchers={})))
+    runner(
+        workflow_id="child-wf",
+        manifest_entry=cast(Any, None),
+        steps=(),
+        handoff_context=cast(Any, None),
+        descent=cast(Any, SimpleNamespace(child_gate_level=None)),
+        default_model_binding=cast(Any, None),
+        descent_depth=child_depth,
+    )
+    assert captured["descent_depth"] == child_depth
 
 
 # ---------------------------------------------------------------------------

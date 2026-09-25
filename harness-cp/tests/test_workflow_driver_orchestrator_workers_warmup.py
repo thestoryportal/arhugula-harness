@@ -767,8 +767,9 @@ def _child_pause_snapshot() -> PauseSnapshot:
             run_id="child-run",
             step_index=0,
             pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
+            descent_depth=0,
         )
-    )
+    ).snapshot
 
 
 # ---------------------------------------------------------------------------

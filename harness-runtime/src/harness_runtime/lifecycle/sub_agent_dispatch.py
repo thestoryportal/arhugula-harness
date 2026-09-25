@@ -1104,6 +1104,9 @@ class RuntimeSubAgentDispatcher:
                     handoff_context=handoff_context,
                     descent=descent,
                     default_model_binding=binding.model_binding,
+                    # [LAW:one-source-of-truth] the child's depth derives from the parent's
+                    # `descent_depth`; no second counter exists.
+                    descent_depth=step_context.descent_depth + 1,
                     pause_snapshot_input=step_context.child_resume_snapshot,
                     child_run_id_seed=_child_run_id_seed,
                     # B-39 Slice B — the operator's resume payload, read off the SAME

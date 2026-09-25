@@ -112,8 +112,9 @@ def test_pause_captured_span_emits(
             run_id="run-1",
             step_index=3,
             pause_reason=WorkflowPauseReason.HITL_PENDING,
+            descent_depth=0,
         )
-    )
+    ).snapshot
     emit_pause_captured_span(snapshot, tracer=tracer)
 
     spans = exporter.get_finished_spans()
@@ -140,8 +141,9 @@ def test_pause_captured_attribute_names_byte_exact(
             run_id="run-1",
             step_index=0,
             pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
+            descent_depth=0,
         )
-    )
+    ).snapshot
     emit_pause_captured_span(snapshot, tracer=tracer)
 
     spans = list(exporter.get_finished_spans())
@@ -169,8 +171,9 @@ def test_resume_attempted_span_clean_resume(
             run_id="run-1",
             step_index=0,
             pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
+            descent_depth=0,
         )
-    )
+    ).snapshot
     result = asyncio.run(
         protocol.attempt_resume(snapshot, material_diff_policy=MaterialDiffPolicy.STRICT)
     )
@@ -208,8 +211,9 @@ def test_resume_attempted_span_diff_aborted_outcome(
             run_id="run-1",
             step_index=0,
             pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
+            descent_depth=0,
         )
-    )
+    ).snapshot
     resume_proto = PauseResumeProtocol(
         state_ledger_writer=object(),
         state_ledger_reader=object(),
@@ -248,8 +252,9 @@ def test_resume_attempted_span_arbitration_owed_outcome(
             run_id="run-1",
             step_index=0,
             pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
+            descent_depth=0,
         )
-    )
+    ).snapshot
     resume_proto = PauseResumeProtocol(
         state_ledger_writer=object(),
         state_ledger_reader=object(),
@@ -289,8 +294,9 @@ def test_resume_attempted_attribute_names_byte_exact(
             run_id="run-1",
             step_index=0,
             pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
+            descent_depth=0,
         )
-    )
+    ).snapshot
     result = asyncio.run(
         protocol.attempt_resume(snapshot, material_diff_policy=MaterialDiffPolicy.LENIENT)
     )
@@ -326,8 +332,9 @@ def test_integration_pause_then_resume_emits_both_spans(
             run_id="run-integration",
             step_index=5,
             pause_reason=WorkflowPauseReason.VALIDATOR_ESCALATION,
+            descent_depth=0,
         )
-    )
+    ).snapshot
     emit_pause_captured_span(snapshot, tracer=tracer)
 
     # Resume leg (clean — same anchor)
@@ -388,8 +395,9 @@ def test_resume_attempted_span_lenient_with_diff(
             run_id="run-1",
             step_index=0,
             pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
+            descent_depth=0,
         )
-    )
+    ).snapshot
     resume_proto = PauseResumeProtocol(
         state_ledger_writer=object(),
         state_ledger_reader=object(),

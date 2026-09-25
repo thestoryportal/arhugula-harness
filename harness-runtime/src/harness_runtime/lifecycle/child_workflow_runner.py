@@ -82,6 +82,7 @@ class ChildWorkflowRunner(Protocol):
         handoff_context: HandoffContext,
         descent: SubAgentGateLevelDescent,
         default_model_binding: ModelBinding,
+        descent_depth: int,
         pause_snapshot_input: PauseSnapshot | None = None,
         child_run_id_seed: str | None = None,
         resume_context: ResumeContext | None = None,
@@ -90,6 +91,10 @@ class ChildWorkflowRunner(Protocol):
         effect_fence_tree_wide_abort_present: bool = False,
     ) -> RunResult:
         """Run the child sub-workflow and return its terminal `RunResult`.
+
+        B-104 Task 4a: `descent_depth` (required, never defaulted) is the CHILD's own depth
+        — its parent's depth + 1 — so the recursive `execute_workflow` records a true
+        ancestry (child 1, grandchild 2) with each pause it captures.
 
         B-HIERARCHICAL-PAUSE (R-FS-1): `pause_snapshot_input` (additive, default
         `None`) — when the parent fan-out is RESUMING a previously-paused child, the
@@ -190,6 +195,7 @@ def compose_child_workflow_runner(ctx: HarnessContext) -> ChildWorkflowRunner:
         handoff_context: HandoffContext,
         descent: SubAgentGateLevelDescent,
         default_model_binding: ModelBinding,
+        descent_depth: int,
         pause_snapshot_input: PauseSnapshot | None = None,
         child_run_id_seed: str | None = None,
         resume_context: ResumeContext | None = None,
@@ -272,12 +278,12 @@ def compose_child_workflow_runner(ctx: HarnessContext) -> ChildWorkflowRunner:
             effect_fence_tree_wide_abort_present=effect_fence_tree_wide_abort_present,
             reconstruct_final_state=True,
             # U-1 slice 3a (B-18) — mark the child run as a DESCENDED sub-agent so
-            # every child `StepExecutionContext` carries `sub_agent_descent=True`;
-            # a child INFERENCE step then emits the downgraded (external-irreversible-
-            # REMOVE'd) frozen_tool_superset per ADR-D4 §1.5, closing the F1 latent
-            # C10 condition-2 gap. Monotonic-sticky: a grandchild re-enters here with
-            # True again (the REMOVE downgrade is idempotent).
-            sub_agent_descent=True,
+            # every child `StepExecutionContext` reports `sub_agent_descent` (derived
+            # from `descent_depth > 0`); a child INFERENCE step then emits the downgraded
+            # (external-irreversible-REMOVE'd) frozen_tool_superset per ADR-D4 §1.5,
+            # closing the F1 latent C10 condition-2 gap. B-104 Task 4a: the depth is the
+            # dispatcher-supplied parent depth + 1, so a grandchild re-enters here at 2.
+            descent_depth=descent_depth,
             # [LAW:single-enforcer] CP clamps the child manifest to this recorded descent.
             parent_gate_floor=descent.child_gate_level,
         )

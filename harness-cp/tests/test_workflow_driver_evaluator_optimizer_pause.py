@@ -589,8 +589,9 @@ def _captured_eo_snapshot(eo: EvaluatorOptimizerResumeState, *, step_index: int)
             step_index=step_index,
             pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
             evaluator_optimizer_resume=eo,
+            descent_depth=0,
         )
-    )
+    ).snapshot
 
 
 def test_eo_snapshot_hash_covers_eo_resume_tamper_rejected() -> None:

@@ -96,6 +96,7 @@ def _capture_child_run_id(
         handoff_context=cast(Any, object()),
         descent=cast(Any, SimpleNamespace(child_gate_level=GateLevel.AUTO)),
         default_model_binding=cast(Any, object()),
+        descent_depth=1,
         pause_snapshot_input=pause_snapshot_input,
         child_run_id_seed=child_run_id_seed,
     )
@@ -179,6 +180,7 @@ def test_child_runner_forwards_recorded_gate_floor(
         handoff_context=cast(Any, object()),
         descent=cast(Any, SimpleNamespace(child_gate_level=GateLevel.ASK)),
         default_model_binding=cast(Any, object()),
+        descent_depth=1,
         pause_snapshot_input=_snapshot("run-original") if resuming else None,
     )
     assert seen == [GateLevel.ASK]

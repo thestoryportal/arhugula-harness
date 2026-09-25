@@ -617,7 +617,7 @@ def _resume(
         pause_snapshot_input=pause_snapshot_input,
         resume_context=resume_context,
         hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
-        sub_agent_descent=sub_agent_descent,
+        descent_depth=1 if sub_agent_descent else 0,
     )
     assert result.status is RunStatus.SUCCESS
     return dispatcher

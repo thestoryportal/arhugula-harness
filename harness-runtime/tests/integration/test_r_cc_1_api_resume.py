@@ -362,12 +362,15 @@ async def test_api_resume_restart_proof_round_trip(
     # ---- "Pause" — capture a real PauseSnapshot via a bootstrapped protocol.
     capture_ctx = await run_bootstrap(config, workload_class=_WORKLOAD)
     assert capture_ctx.pause_resume_protocol is not None
-    snapshot = await capture_ctx.pause_resume_protocol.capture_pause_snapshot(
-        workflow_id=_WORKFLOW_ID,
-        run_id="run-resume-e2e",
-        step_index=0,
-        pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
-    )
+    snapshot = (
+        await capture_ctx.pause_resume_protocol.capture_pause_snapshot(
+            workflow_id=_WORKFLOW_ID,
+            run_id="run-resume-e2e",
+            step_index=0,
+            pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
+            descent_depth=0,
+        )
+    ).snapshot
 
     # ---- "Restart" — persist + reload across a process boundary (JSON round-trip).
     rehydrated = PauseSnapshot.model_validate_json(snapshot.model_dump_json())
@@ -400,12 +403,15 @@ async def test_api_resume_corrupt_snapshot_surfaces_failed(
 
     capture_ctx = await run_bootstrap(config, workload_class=_WORKLOAD)
     assert capture_ctx.pause_resume_protocol is not None
-    snapshot = await capture_ctx.pause_resume_protocol.capture_pause_snapshot(
-        workflow_id=_WORKFLOW_ID,
-        run_id="run-resume-corrupt",
-        step_index=0,
-        pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
-    )
+    snapshot = (
+        await capture_ctx.pause_resume_protocol.capture_pause_snapshot(
+            workflow_id=_WORKFLOW_ID,
+            run_id="run-resume-corrupt",
+            step_index=0,
+            pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
+            descent_depth=0,
+        )
+    ).snapshot
     corrupted = snapshot.model_copy(update={"snapshot_hash": "f" * 64})
 
     result = await resume(_Workflow(), pause_snapshot=corrupted, config=config)
@@ -628,9 +634,11 @@ async def test_durable_wrapper_persists_on_capture(tmp_path: Path) -> None:
         store=store,
     )
 
-    returned = await protocol.capture_pause_snapshot(
-        _WORKFLOW_ID, "run-x", 0, WorkflowPauseReason.EXPLICIT_OPERATOR
-    )
+    returned = (
+        await protocol.capture_pause_snapshot(
+            _WORKFLOW_ID, "run-x", 0, WorkflowPauseReason.EXPLICIT_OPERATOR, descent_depth=0
+        )
+    ).snapshot
     assert returned.workflow_id == _WORKFLOW_ID
     assert returned.run_id == "run-x"
     # A fresh store over the same dir reads it back (durable across instances —
@@ -673,13 +681,16 @@ async def test_durable_wrapper_forwards_handoff_resume(tmp_path: Path) -> None:
         stage_count=2,
     )
 
-    returned = await protocol.capture_pause_snapshot(
-        _WORKFLOW_ID,
-        "run-handoff",
-        1,
-        WorkflowPauseReason.EXPLICIT_OPERATOR,
-        handoff_resume=handoff_resume,
-    )
+    returned = (
+        await protocol.capture_pause_snapshot(
+            _WORKFLOW_ID,
+            "run-handoff",
+            1,
+            WorkflowPauseReason.EXPLICIT_OPERATOR,
+            handoff_resume=handoff_resume,
+            descent_depth=0,
+        )
+    ).snapshot
     # The carrier survived the durable capture (forwarded to the parent, not dropped).
     assert returned.handoff_resume == handoff_resume
     assert returned.fan_out_resume is None
@@ -734,13 +745,16 @@ async def test_durable_wrapper_forwards_evaluator_optimizer_resume(tmp_path: Pat
         ),
     )
 
-    returned = await protocol.capture_pause_snapshot(
-        _WORKFLOW_ID,
-        "run-eo",
-        2,
-        WorkflowPauseReason.EXPLICIT_OPERATOR,
-        evaluator_optimizer_resume=eo_resume,
-    )
+    returned = (
+        await protocol.capture_pause_snapshot(
+            _WORKFLOW_ID,
+            "run-eo",
+            2,
+            WorkflowPauseReason.EXPLICIT_OPERATOR,
+            evaluator_optimizer_resume=eo_resume,
+            descent_depth=0,
+        )
+    ).snapshot
     # The carrier survived the durable capture (forwarded to the parent, not dropped).
     assert returned.evaluator_optimizer_resume == eo_resume
     assert returned.fan_out_resume is None
@@ -779,12 +793,15 @@ async def test_api_resume_durable_handle_restart_proof(
     # ---- "Pause" — capture via the DURABLE protocol → persists to the journal.
     capture_ctx = await run_bootstrap(config, workload_class=_WORKLOAD)
     assert capture_ctx.pause_resume_protocol is not None
-    snapshot = await capture_ctx.pause_resume_protocol.capture_pause_snapshot(
-        workflow_id=_WORKFLOW_ID,
-        run_id="run-durable-e2e",
-        step_index=0,
-        pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
-    )
+    snapshot = (
+        await capture_ctx.pause_resume_protocol.capture_pause_snapshot(
+            workflow_id=_WORKFLOW_ID,
+            run_id="run-durable-e2e",
+            step_index=0,
+            pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
+            descent_depth=0,
+        )
+    ).snapshot
 
     # ---- The harness owns the durable copy (NOT the caller). A fresh store over
     # the resolved STATE_LEDGER pause-journal dir reads it back across instances.
@@ -855,12 +872,15 @@ async def test_api_resume_durable_handle_skips_completed_prefix(
     # ---- "Pause" at step_index=1 — capture via the DURABLE protocol → journaled.
     capture_ctx = await run_bootstrap(config, workload_class=_WORKLOAD)
     assert capture_ctx.pause_resume_protocol is not None
-    await capture_ctx.pause_resume_protocol.capture_pause_snapshot(
-        workflow_id=_WORKFLOW_ID,
-        run_id="run-prefix-skip",
-        step_index=1,
-        pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
-    )
+    (
+        await capture_ctx.pause_resume_protocol.capture_pause_snapshot(
+            workflow_id=_WORKFLOW_ID,
+            run_id="run-prefix-skip",
+            step_index=1,
+            pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
+            descent_depth=0,
+        )
+    ).snapshot
 
     # ---- "Resume" by HANDLE — fresh bootstrap; only step-1 runs.
     result = await resume(workflow, resume_handle=_WORKFLOW_ID, config=config)

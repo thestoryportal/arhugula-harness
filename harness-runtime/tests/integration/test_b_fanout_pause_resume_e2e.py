@@ -285,25 +285,28 @@ async def test_api_resume_fan_out_pause_restart_proof_round_trip(
     # ---- "Pause" — capture a real fan-out PauseSnapshot via a bootstrapped protocol.
     capture_ctx = await run_bootstrap(config, workload_class=_WORKLOAD)
     assert capture_ctx.pause_resume_protocol is not None
-    snapshot = await capture_ctx.pause_resume_protocol.capture_pause_snapshot(
-        workflow_id=_WORKFLOW_ID,
-        run_id="run-fanout-resume-e2e",
-        step_index=0,
-        pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
-        fan_out_resume=FanOutResumeState(
-            orchestrator_output={"role": "orchestrator", "recovered": True},
-            orchestrator_step_id="orchestrator",
-            branches=(
-                FanOutBranchResumeState(
-                    branch_index=0,
-                    step_id="worker-0",
-                    terminal_status="completed",
-                    output={"step_id": "worker-0", "recovered": True},
-                ),
-            ),  # worker-1 absent → re-dispatchable
-            worker_count=2,
-        ),
-    )
+    snapshot = (
+        await capture_ctx.pause_resume_protocol.capture_pause_snapshot(
+            workflow_id=_WORKFLOW_ID,
+            run_id="run-fanout-resume-e2e",
+            step_index=0,
+            pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
+            fan_out_resume=FanOutResumeState(
+                orchestrator_output={"role": "orchestrator", "recovered": True},
+                orchestrator_step_id="orchestrator",
+                branches=(
+                    FanOutBranchResumeState(
+                        branch_index=0,
+                        step_id="worker-0",
+                        terminal_status="completed",
+                        output={"step_id": "worker-0", "recovered": True},
+                    ),
+                ),  # worker-1 absent → re-dispatchable
+                worker_count=2,
+            ),
+            descent_depth=0,
+        )
+    ).snapshot
 
     # ---- "Restart" — persist + reload across a process boundary (JSON round-trip).
     rehydrated = PauseSnapshot.model_validate_json(snapshot.model_dump_json())

@@ -409,8 +409,9 @@ def _captured_snapshot(
             step_index=0,
             pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
             fan_out_resume=fan_out_resume,
+            descent_depth=0,
         )
-    )
+    ).snapshot
 
 
 def test_resume_skips_terminal_recovers_outputs_and_redispatches_rest() -> None:
@@ -1597,8 +1598,9 @@ def test_hierarchical_child_synthesis_real_nested_round_trip() -> None:
                 worker_count=2,
                 synthesis_step_id="child-synthesis",
             ),
+            descent_depth=0,
         )
-    )
+    ).snapshot
     # A parent snapshot embedding the child as a paused-child branch (the sub-worker, ordinal 0).
     parent_fan = FanOutResumeState(
         orchestrator_output={"role": "parent-orch", "recovered": True},
@@ -1618,8 +1620,9 @@ def test_hierarchical_child_synthesis_real_nested_round_trip() -> None:
             step_index=0,
             pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
             fan_out_resume=parent_fan,
+            descent_depth=0,
         )
-    )
+    ).snapshot
     # (1) REAL nested capture: the child's synthesis identity survives inside the parent snapshot.
     assert parent_snap.fan_out_resume is not None
     nested = parent_snap.fan_out_resume.paused_child_branches[0].child_snapshot
@@ -3321,8 +3324,9 @@ def _b60_linear_child_snapshot() -> PauseSnapshot:
             run_id="child-run",
             step_index=0,
             pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
+            descent_depth=0,
         )
-    )
+    ).snapshot
 
 
 class _B60PausingThenTrippingSubAgent:

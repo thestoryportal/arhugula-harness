@@ -198,12 +198,15 @@ async def test_pause_resume_e2e_capture_pause_snapshot_via_real_substrate(
     ctx = await run_bootstrap(config, workload_class=WORKLOAD)
     assert ctx.pause_resume_protocol is not None
 
-    snapshot = await ctx.pause_resume_protocol.capture_pause_snapshot(
-        workflow_id="test-workflow",
-        run_id="test-run-1",
-        step_index=2,
-        pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
-    )
+    snapshot = (
+        await ctx.pause_resume_protocol.capture_pause_snapshot(
+            workflow_id="test-workflow",
+            run_id="test-run-1",
+            step_index=2,
+            pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
+            descent_depth=0,
+        )
+    ).snapshot
 
     assert isinstance(snapshot, PauseSnapshot)
     assert snapshot.workflow_id == "test-workflow"
@@ -235,12 +238,15 @@ async def test_pause_resume_e2e_clean_resume_cycle_via_real_substrate(
     assert ctx.pause_resume_protocol is not None
 
     # Capture snapshot.
-    snapshot = await ctx.pause_resume_protocol.capture_pause_snapshot(
-        workflow_id="test-workflow-clean-resume",
-        run_id="test-run-clean",
-        step_index=0,
-        pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
-    )
+    snapshot = (
+        await ctx.pause_resume_protocol.capture_pause_snapshot(
+            workflow_id="test-workflow-clean-resume",
+            run_id="test-run-clean",
+            step_index=0,
+            pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
+            descent_depth=0,
+        )
+    ).snapshot
 
     # Attempt resume (STRICT policy default per spec §26.6 invariant 4).
     resume_result = await ctx.pause_resume_protocol.attempt_resume(
@@ -279,12 +285,15 @@ async def test_pause_resume_e2e_snapshot_corruption_path(
     assert ctx.pause_resume_protocol is not None
 
     # Capture a valid snapshot.
-    snapshot = await ctx.pause_resume_protocol.capture_pause_snapshot(
-        workflow_id="test-workflow-corruption",
-        run_id="test-run-corruption",
-        step_index=0,
-        pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
-    )
+    snapshot = (
+        await ctx.pause_resume_protocol.capture_pause_snapshot(
+            workflow_id="test-workflow-corruption",
+            run_id="test-run-corruption",
+            step_index=0,
+            pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
+            descent_depth=0,
+        )
+    ).snapshot
 
     # Construct a corrupted snapshot — mutate snapshot_hash so the resume-time
     # recomputed hash will not match.

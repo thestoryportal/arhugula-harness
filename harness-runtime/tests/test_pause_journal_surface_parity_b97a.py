@@ -347,12 +347,15 @@ async def test_the_factory_keys_the_capture_side_store_by_the_configured_tenant(
         "the durable branch was not taken — the probe would be vacuous"
     )
 
-    await protocol.capture_pause_snapshot(
-        workflow_id=_WORKFLOW_ID,
-        run_id="run-capture",
-        step_index=0,
-        pause_reason=WorkflowPauseReason.HITL_PENDING,
-    )
+    (
+        await protocol.capture_pause_snapshot(
+            workflow_id=_WORKFLOW_ID,
+            run_id="run-capture",
+            step_index=0,
+            pause_reason=WorkflowPauseReason.HITL_PENDING,
+            descent_depth=0,
+        )
+    ).snapshot
 
     # The capture landed at the TENANT-COMPOSITE key, and NOT at the untenanted
     # one a `tenant_id=None` factory would have produced.

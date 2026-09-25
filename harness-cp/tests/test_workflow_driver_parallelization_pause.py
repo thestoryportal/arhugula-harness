@@ -338,8 +338,9 @@ def _captured_snapshot(
             step_index=0,
             pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
             peer_fan_out_resume=peer_fan_out_resume,
+            descent_depth=0,
         )
-    )
+    ).snapshot
 
 
 # ---------------------------------------------------------------------------
@@ -723,8 +724,9 @@ def test_synthesis_material_diff_helper_covers_both_carriers() -> None:
                 step_index=0,
                 pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
                 fan_out_resume=fan,
+                descent_depth=0,
             )
-        )
+        ).snapshot
 
     no_synth = _steps(1)
     with_synth = [*_steps(1), _synthesis_step("synthesis")]
@@ -902,8 +904,9 @@ def _captured_with(**carrier: Any) -> PauseSnapshot:
             step_index=0,
             pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
             **carrier,
+            descent_depth=0,
         )
-    )
+    ).snapshot
 
 
 def _a_fan_out(synthesis_step_id: str | None = None) -> FanOutResumeState:

@@ -618,8 +618,9 @@ def _captured_peer_snapshot(
             step_index=0,
             pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
             peer_fan_out_resume=peer,
+            descent_depth=0,
         )
-    )
+    ).snapshot
 
 
 class _MiniFanoutStore:

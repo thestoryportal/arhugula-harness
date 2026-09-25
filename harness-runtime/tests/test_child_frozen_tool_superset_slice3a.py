@@ -236,7 +236,7 @@ def _step_context(*, sub_agent_descent: bool) -> StepExecutionContext:
         parent_idempotency_key="test-step-key",
         tenant_id=None,
         step_index=0,
-        sub_agent_descent=sub_agent_descent,
+        descent_depth=1 if sub_agent_descent else 0,
     )
 
 

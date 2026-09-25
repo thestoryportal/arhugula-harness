@@ -38,7 +38,9 @@ from harness_cp.cp_shared_types import ActorIdentity
 from harness_cp.handoff_context import ExternalReference, StateSummary
 from harness_cp.material_diff_detection import MaterialDiff
 from harness_cp.pause_resume_protocol_types import (
+    CapturedPause,
     EffectFenceResumeState,
+    EphemeralCapturedPause,
     EvaluatorOptimizerResumeState,
     FanOutResumeState,
     HandoffResumeState,
@@ -422,8 +424,15 @@ class PauseResumeProtocol:
         effect_fence_resume: EffectFenceResumeState | None = None,
         orchestrator_effect_fence_resume: OrchestratorEffectFencePausedResumeState | None = None,
         hitl_gate_config_hash: str | None = None,
-    ) -> PauseSnapshot:
+        descent_depth: int,
+    ) -> CapturedPause:
         """Capture a workflow-layer pause snapshot per CP spec v1.11 §26.1.
+
+        Returns an `EphemeralCapturedPause`: this class journals nothing, so there is no
+        record ref. A durable subclass returns a `DurableCapturedPause` carrying the exact
+        ref of the record it appended. ``descent_depth`` (B-104 Task 4a; required, no
+        default — root 0, child 1, grandchild 2) is the ancestry a durable capture
+        records; it is inert here.
 
         Per §26.6 invariants 1-3:
         1. Snapshot is immutable once captured (frozen Pydantic model).
@@ -466,22 +475,24 @@ class PauseResumeProtocol:
             orchestrator_effect_fence_resume=orchestrator_effect_fence_resume,
             hitl_gate_config_hash=hitl_gate_config_hash,
         )
-        return PauseSnapshot(
-            workflow_id=workflow_id,
-            run_id=run_id,
-            step_index=step_index,
-            pause_reason=pause_reason,
-            state_summary=state_summary,
-            snapshot_hash=snapshot_hash,
-            created_at=_now_epoch_ms(),
-            state_ledger_anchor=state_ledger_anchor,
-            fan_out_resume=fan_out_resume,
-            peer_fan_out_resume=peer_fan_out_resume,
-            handoff_resume=handoff_resume,
-            evaluator_optimizer_resume=evaluator_optimizer_resume,
-            effect_fence_resume=effect_fence_resume,
-            orchestrator_effect_fence_resume=orchestrator_effect_fence_resume,
-            hitl_gate_config_hash=hitl_gate_config_hash,
+        return EphemeralCapturedPause(
+            snapshot=PauseSnapshot(
+                workflow_id=workflow_id,
+                run_id=run_id,
+                step_index=step_index,
+                pause_reason=pause_reason,
+                state_summary=state_summary,
+                snapshot_hash=snapshot_hash,
+                created_at=_now_epoch_ms(),
+                state_ledger_anchor=state_ledger_anchor,
+                fan_out_resume=fan_out_resume,
+                peer_fan_out_resume=peer_fan_out_resume,
+                handoff_resume=handoff_resume,
+                evaluator_optimizer_resume=evaluator_optimizer_resume,
+                effect_fence_resume=effect_fence_resume,
+                orchestrator_effect_fence_resume=orchestrator_effect_fence_resume,
+                hitl_gate_config_hash=hitl_gate_config_hash,
+            )
         )
 
     async def attempt_resume(

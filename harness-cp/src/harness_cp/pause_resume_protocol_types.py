@@ -39,7 +39,8 @@ from enum import StrEnum
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Any
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, PrivateAttr
+from harness_core import JournalRecordRef
+from pydantic import AfterValidator, BaseModel, ConfigDict, PrivateAttr, model_validator
 
 from harness_cp.handoff_context import StateSummary
 
@@ -1069,6 +1070,59 @@ class PauseSnapshot(BaseModel):
     `_strip_default_fanout_resume_fields` (byte-compat with pre-arc nested snapshots). `api.resume`
     key-binds the operator's `ResumeContext.effect_fence_resolution` to it and re-dispatches the
     orchestrator (RE_FIRE → clear + fresh dispatch / ABORT → FAILED; SKIP_AS_FIRED rejected)."""
+
+
+def require_ref_binds_snapshot(record_ref: JournalRecordRef, snapshot: PauseSnapshot) -> None:
+    """Refuse a journal ref that does not name this snapshot's own record.
+
+    [LAW:single-enforcer] The one place the ref-to-snapshot binding is defined; both the
+    capture result and a paused `RunResult` enforce it here rather than each re-deriving it.
+    """
+    if (record_ref.workflow_id, record_ref.run_id, record_ref.snapshot_hash) != (
+        snapshot.workflow_id,
+        snapshot.run_id,
+        snapshot.snapshot_hash,
+    ):
+        raise ValueError(
+            "journal record ref does not identify this snapshot: ref names "
+            f"({record_ref.workflow_id!r}, {record_ref.run_id!r}, {record_ref.snapshot_hash}), "
+            f"snapshot is ({snapshot.workflow_id!r}, {snapshot.run_id!r}, "
+            f"{snapshot.snapshot_hash})"
+        )
+
+
+class EphemeralCapturedPause(BaseModel):
+    """A capture that was not journaled: there is no record to reference."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    snapshot: PauseSnapshot
+
+    @property
+    def record_ref(self) -> None:
+        return None
+
+
+class DurableCapturedPause(BaseModel):
+    """A capture plus the exact journal record its own append created.
+
+    The ref is a sibling of the snapshot, never a field inside it: the record digest
+    covers the journaled snapshot bytes, so a ref stored within them could not exist.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    snapshot: PauseSnapshot
+    record_ref: JournalRecordRef
+
+    @model_validator(mode="after")
+    def _ref_names_this_snapshot(self) -> DurableCapturedPause:
+        require_ref_binds_snapshot(self.record_ref, self.snapshot)
+        return self
+
+
+CapturedPause = EphemeralCapturedPause | DurableCapturedPause
+"""The protocol boundary's capture result: journaled (with its exact ref) or not."""
 
 
 class PausedChildBranchResumeState(BaseModel):
