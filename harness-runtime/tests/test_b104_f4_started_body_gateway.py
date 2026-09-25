@@ -45,8 +45,10 @@ from .test_b104_resume_claim_started import (
 )
 from .test_b104_resume_claim_started import family as family  # fixture
 from .test_b104_resume_claim_store import (
+    _ABSENT,  # pyright: ignore[reportPrivateUsage]
     Placed,
     _capture,  # pyright: ignore[reportPrivateUsage]
+    _capture_with_recorded_depth,  # pyright: ignore[reportPrivateUsage]
 )
 from .test_b104_resume_claim_store import placed as placed
 from .test_state_placement import world  # noqa: F401  (fixture: scratch dir with no .git above)
@@ -130,6 +132,22 @@ def test_a_stale_or_unadmitted_ref_never_reaches_the_body(placed: Placed) -> Non
         _gateway().run_started(store, ref, RootLatestAdmission(), body)
 
     assert body.calls == 0 and not store.paths_for(ref).claim.exists()
+
+
+@pytest.mark.parametrize("depth", [1, 2, None, _ABSENT, -1, True, "0"])
+def test_a_non_root_or_unknown_depth_root_request_never_reaches_the_body(
+    placed: Placed, depth: object
+) -> None:
+    ref = _capture_with_recorded_depth(placed.journal_dir, depth)
+    store = placed.store()
+    body = _Body(store, ref)
+
+    for admission in (RootLatestAdmission(), rcs._ROOT_LATEST):  # pyright: ignore[reportPrivateUsage]
+        with pytest.raises(ClaimRefusedError):
+            _gateway().run_started(store, ref, admission, body)
+
+    paths = store.paths_for(ref)
+    assert body.calls == 0 and not paths.claim.exists() and not paths.lease.exists()
 
 
 def test_a_busy_lease_never_reaches_the_body(placed: Placed) -> None:

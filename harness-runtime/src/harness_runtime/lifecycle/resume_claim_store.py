@@ -644,7 +644,7 @@ class ResumeClaimStore:
                 os.close(fd)
 
     def _require_current_exact(self, ref: JournalRecordRef) -> None:
-        """Check latest identity and exact validity while the caller holds journal lock."""
+        """Check latest identity, exact validity and root depth under the caller's journal lock."""
         # [LAW:single-enforcer] Claim admission alone requires a current record;
         # positional read_exact remains available to other journal consumers.
         latest = self._journal.read_latest_attributed(ref.workflow_id)
@@ -653,8 +653,13 @@ class ResumeClaimStore:
             or latest.latest_record_digest != ref.latest_digest
         ):
             raise ClaimRefusedError("stale or missing journal record")
-        if self._journal.read_exact(ref) is None:
+        record = self._journal.read_exact(ref)
+        if record is None:
             raise ClaimRefusedError("invalid exact journal record")
+        # [LAW:parse-dont-validate] The journal's verified depth is the only proof of rootness;
+        # unknown (`None`) is never read as zero, so no child or legacy record takes root authority.
+        if record.depth != 0:
+            raise ClaimRefusedError("journal record is not a root (depth must be exactly 0)")
 
     def _require_parent_carried(
         self, ref: JournalRecordRef, parent: StartedClaim, parent_fd: int

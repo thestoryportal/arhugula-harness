@@ -60,7 +60,7 @@ def placed(world: Path) -> Placed:  # noqa: F811
     return Placed(site, config, stamp, journal_dir)
 
 
-def _capture(root: Path):
+def _capture(root: Path, depth: int | None = 0):
     journal = JournalWorkflowPauseStore(journal_dir=root, tenant_id=None)
     snapshot = PauseSnapshot(
         workflow_id="wf-claim",
@@ -78,7 +78,80 @@ def _capture(root: Path):
         created_at=0,
         state_ledger_anchor="0" * 64,
     )
-    return journal.capture(snapshot, depth=None)
+    return journal.capture(snapshot, depth=depth)
+
+
+def _rewrite_depth(root: Path, ref, depth: object):
+    """Rewrite the sole journal line's depth (key removed for ``_ABSENT``); return its new ref."""
+    import hashlib
+    import json
+
+    journal = JournalWorkflowPauseStore(journal_dir=root, tenant_id=None)
+    path = journal._journal_file(ref.workflow_id)
+    record = json.loads(path.read_bytes())
+    if depth is _ABSENT:
+        del record["depth"]
+    else:
+        record["depth"] = depth
+    line = json.dumps(record, sort_keys=True).encode("utf-8")
+    path.write_bytes(line + b"\n")
+    return ref.model_copy(update={"latest_digest": hashlib.sha256(line).hexdigest()})
+
+
+_ABSENT = object()
+
+
+def _capture_with_recorded_depth(root: Path, depth: object):
+    """A current record whose journal line carries exactly `depth` (int, None, malformed or _ABSENT)."""
+    ref = _capture(root, depth=0)
+    return _rewrite_depth(root, ref, depth)
+
+
+def _assert_refused_before_any_claim_evidence(store: ResumeClaimStore, ref, match: str) -> None:
+    from harness_runtime.lifecycle.resume_claim_store import ClaimRefusedError
+
+    with pytest.raises(ClaimRefusedError, match=match):
+        store.claim(ref)
+    paths = store.paths_for(ref)
+    assert not paths.lease.exists() and not paths.claim.exists()
+
+
+@pytest.mark.parametrize("depth", [1, 2])
+def test_root_latest_refuses_a_current_child_record_before_any_lease_or_claim(
+    placed: Placed, depth: int
+) -> None:
+    from harness_runtime.lifecycle.resume_claim_store import ClaimRefusedError, RootLatestAdmission
+
+    ref = _capture_with_recorded_depth(placed.journal_dir, depth)
+    store = placed.store()
+    _assert_refused_before_any_claim_evidence(store, ref, "not a root")
+    with pytest.raises(ClaimRefusedError, match="not a root"):
+        store.claim(ref, RootLatestAdmission())
+    assert not store.paths_for(ref).lease.exists()
+
+
+@pytest.mark.parametrize("how", ["captured-unknown", "key-absent"])
+def test_root_latest_refuses_unknown_depth_and_never_reads_it_as_zero(
+    placed: Placed, how: str
+) -> None:
+    ref = _capture_with_recorded_depth(placed.journal_dir, _ABSENT if how == "key-absent" else None)
+    _assert_refused_before_any_claim_evidence(placed.store(), ref, "not a root")
+
+
+@pytest.mark.parametrize("depth", [-1, True, "0", 1.5])
+def test_root_latest_refuses_a_malformed_depth_as_an_invalid_exact_record(
+    placed: Placed, depth: object
+) -> None:
+    ref = _capture_with_recorded_depth(placed.journal_dir, depth)
+    _assert_refused_before_any_claim_evidence(placed.store(), ref, "invalid exact")
+
+
+def test_root_latest_admits_the_depth_zero_root_record(placed: Placed) -> None:
+    ref = _capture(placed.journal_dir, depth=0)
+    store = placed.store()
+    with store.claim(ref) as held:
+        assert held.record_ref == ref
+        assert store.paths_for(ref).claim.exists()
 
 
 def test_stale_record_refuses_after_later_valid_append(placed: Placed) -> None:
@@ -434,10 +507,7 @@ def test_two_process_claimants_admit_at_most_one(placed: Placed) -> None:
     assert paths.claim.exists()
 
 
-def test_started_frame_format_and_legacy_unknown_depth(placed: Placed) -> None:
-    import hashlib
-    import json
-
+def test_started_frame_format_on_a_depth_zero_root_record(placed: Placed) -> None:
     from harness_runtime.lifecycle.resume_claim_store import (
         StartedOrUnknown,
         parse_claim,
@@ -445,21 +515,22 @@ def test_started_frame_format_and_legacy_unknown_depth(placed: Placed) -> None:
     )
 
     ref = _capture(placed.journal_dir)
-    journal = JournalWorkflowPauseStore(journal_dir=placed.journal_dir, tenant_id=None)
-    path = journal._journal_file(ref.workflow_id)
-    record = json.loads(path.read_bytes())
-    del record["depth"]
-    line = json.dumps(record, sort_keys=True).encode("utf-8")
-    path.write_bytes(line + b"\n")
-    legacy_ref = ref.model_copy(update={"latest_digest": hashlib.sha256(line).hexdigest()})
-    exact = journal.read_exact(legacy_ref)
-    assert exact is not None and exact.depth is None
     store = placed.store()
-    with store.claim(legacy_ref) as held:
-        claimed = store.paths_for(legacy_ref).claim.read_bytes()
-        parsed = parse_claim(claimed + started_frame(held), legacy_ref)
+    with store.claim(ref) as held:
+        claimed = store.paths_for(ref).claim.read_bytes()
+        parsed = parse_claim(claimed + started_frame(held), ref)
         assert isinstance(parsed, StartedOrUnknown)
         assert parsed.phase == "started"
+
+
+def test_a_legacy_record_with_no_depth_is_still_exactly_readable_but_never_root_claimable(
+    placed: Placed,
+) -> None:
+    ref = _capture_with_recorded_depth(placed.journal_dir, _ABSENT)
+    journal = JournalWorkflowPauseStore(journal_dir=placed.journal_dir, tenant_id=None)
+    exact = journal.read_exact(ref)
+    assert exact is not None and exact.depth is None
+    _assert_refused_before_any_claim_evidence(placed.store(), ref, "not a root")
 
 
 def test_archive_without_tombstone_does_not_bar_claim(placed: Placed) -> None:

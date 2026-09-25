@@ -134,7 +134,7 @@ def _carrying(workflow: str, run: str, child_workflow: str, child_snapshot: Any,
     )
 
 
-def test_a_depth_two_grandchild_is_admitted_through_its_own_started_depth_one_parent(
+def test_a_depth_two_grandchild_is_admitted_through_the_started_root_zero_to_child_one_chain(
     placed: Any,
 ) -> None:
     journal = JournalWorkflowPauseStore(journal_dir=Path(placed.journal_dir), tenant_id=None)
@@ -142,8 +142,13 @@ def test_a_depth_two_grandchild_is_admitted_through_its_own_started_depth_one_pa
     grand_ref = journal.capture(grand_snapshot, depth=2)
     mid_snapshot = _carrying("wf-mid", "run-mid", "wf-grand", grand_snapshot, grand_ref)
     mid_ref = journal.capture(mid_snapshot, depth=1)
+    root_snapshot = _carrying("wf-root", "run-root", "wf-mid", mid_snapshot, mid_ref)
+    root_ref = journal.capture(root_snapshot, depth=0)
     store = placed.store()
 
-    with store.mark_started(store.claim(mid_ref)) as mid:
-        with store.claim(grand_ref, ParentCarriedAdmission(mid)) as grand:
-            assert grand.record_ref == grand_ref
+    # Only the depth-0 root holds root authority; each lower level is admitted through the
+    # STARTED parent that carries it by exact ref, and every lease stays live until the end.
+    with store.mark_started(store.claim(root_ref)) as root:
+        with store.mark_started(store.claim(mid_ref, ParentCarriedAdmission(root))) as mid:
+            with store.claim(grand_ref, ParentCarriedAdmission(mid)) as grand:
+                assert grand.record_ref == grand_ref

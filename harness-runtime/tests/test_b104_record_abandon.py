@@ -77,7 +77,7 @@ def _capture(root: Path, workflow_id: str = "wf-claim") -> JournalRecordRef:
         created_at=0,
         state_ledger_anchor="0" * 64,
     )
-    return JournalWorkflowPauseStore(journal_dir=root, tenant_id=None).capture(snapshot, depth=None)
+    return JournalWorkflowPauseStore(journal_dir=root, tenant_id=None).capture(snapshot, depth=0)
 
 
 def _record_abandon(
