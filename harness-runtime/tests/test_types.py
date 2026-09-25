@@ -134,6 +134,9 @@ def test_harness_context_declares_all_c_rt_04_fields() -> None:
         # Stage 1 IS.
         "path_resolver",
         "worktree_manager",
+        # S2 external state root: the stamp verified before the path registry (None without
+        # a declared placement). Runtime spec C-RT-04 delta owed at the next free version.
+        "verified_state_root",
         "shadow_git",
         "ledger_writer",
         "ledger_reader",  # v2.12 — read-view counterpart of ledger_writer

@@ -1014,7 +1014,7 @@ async def test_stage_4_wires_record_initialization_through_real_ledger_handle(
 
         # [LAW:behavior-not-structure] GC offload is unrelated to record wiring and stalls on this host.
         monkeypatch.setattr(
-            stage_4_od, "materialize_protected_result_store_stage", lambda _cfg: None
+            stage_4_od, "materialize_protected_result_store_stage", lambda _cfg, _root: None
         )
         monkeypatch.setattr(stage_4_od, "make_audit_signing_backend", lambda _cfg: _FakeBackend())
         monkeypatch.setattr(

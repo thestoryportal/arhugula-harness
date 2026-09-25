@@ -304,6 +304,7 @@ async def execute(
             config,
             workload_class=workload_class,
             tracer_provider=tracer_provider,
+            state_root=ctx.verified_state_root,
         )
         # U-1 (B-18) — compute the deterministic frozen tool superset for the
         # Anthropic prompt-cache `cache_control` breakpoint (ADR-D3 §1.5 slice 1).

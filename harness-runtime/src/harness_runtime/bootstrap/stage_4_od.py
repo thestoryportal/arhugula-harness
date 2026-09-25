@@ -87,7 +87,9 @@ async def execute(
     # guarantees a resolved-ON bootstrap has a valid key env var. `None` here
     # is a normal outcome at fail-closed=OFF (the carrier is never raised on
     # that path).
-    ctx.protected_result_store = materialize_protected_result_store_stage(config)
+    ctx.protected_result_store = materialize_protected_result_store_stage(
+        config, ctx.verified_state_root
+    )
     # B-65-A (Runtime spec v1.103 §14.8.11 AC 7) — the BOOTSTRAP half of the
     # "GC sweep at bootstrap/shutdown" fallback: reaps entries a PRIOR
     # crashed/killed process abandoned past their TTL before any of THIS

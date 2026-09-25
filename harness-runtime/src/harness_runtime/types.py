@@ -38,6 +38,7 @@ import asyncio
 import contextvars
 import re
 from collections.abc import Mapping
+from dataclasses import dataclass
 from enum import Enum, StrEnum
 from pathlib import Path
 from types import MappingProxyType  # stdlib `types`, not this module (absolute import)
@@ -1789,6 +1790,49 @@ class RuntimeMemoryConfig(BaseModel):
 # ----------------------------------------------------------------------------
 # `RuntimeConfig` — C-RT-03 v1.1 schema.
 # ----------------------------------------------------------------------------
+class StatePlacementConfig(BaseModel):
+    """External persistent state-root declaration (S1 carrier; no wiring yet).
+
+    Declares WHERE persistent recovery state must live so it survives a checkout
+    clean/restore. This model only carries the operator's declaration, exactly as
+    written: no `~`/environment expansion and no normalisation beyond `Path`
+    parsing. Judging it (absolute, outside every checkout, safe, durable) is the
+    single job of `harness_runtime.config.state_placement`, which raises typed
+    refusals — nothing else re-checks these fields.
+
+    `RuntimeConfig.state_placement` defaults to `None`, which leaves every path and
+    behaviour byte-identical to a runtime with no declared placement (and makes no
+    durability claim).
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    state_root: Path
+    """The persistent state root; must be an absolute path with no `~` or `..`."""
+
+    forbidden_roots: tuple[Path, ...] = ()
+    """Operator-declared clean/restore scopes beyond Git checkouts (backup or
+    snapshot restore targets, dotfile managers). The verifier finds Git checkouts
+    itself; an empty tuple is NOT evidence that no non-Git restore scope exists."""
+
+
+@dataclass(frozen=True, slots=True)
+class VerifiedStateRoot:
+    """The stamp a verified external state root hands out (produced only by
+    `harness_runtime.config.state_placement`).
+
+    Equality is the revalidation test: the same realpath, device, inode and marker
+    content mean the same root; anything else is a different (or replaced) directory.
+    Lives beside `StatePlacementConfig` so the frozen `HarnessContext` can carry it
+    without an import cycle; `state_placement` re-exports it.
+    """
+
+    realpath: Path
+    st_dev: int
+    st_ino: int
+    root_id: str
+
+
 class RuntimeConfig(BaseModel):
     """Input configuration to the runtime; frozen post-construction.
 
@@ -1816,6 +1860,12 @@ class RuntimeConfig(BaseModel):
     every sub-table, which combined with the plaintext-secret detector
     false-match on `provider_secrets` (see config_source.py fix (B)) made the
     documented file-loader pathway unreachable from any source."""
+
+    state_placement: StatePlacementConfig | None = None
+    """External persistent state-root declaration (S1 carrier). `None` (default)
+    keeps every current path and loader behaviour byte-identical and makes no
+    durability claim; a declared placement is judged by
+    `harness_runtime.config.state_placement`, not here."""
 
     provider_secrets: ProviderSecretsConfig = Field(default_factory=ProviderSecretsConfig)
     """Keyring allowlist *keys* only — no secret values. Enriched at U-RT-06.
@@ -2709,6 +2759,11 @@ class HarnessContext(BaseModel):
     # Stage 1 IS.
     path_resolver: PathResolver
     worktree_manager: WorktreeIsolationManager
+    verified_state_root: VerifiedStateRoot | None = None
+    """S2: the external persistent state root verified at stage 1 before the path
+    registry, or `None` when no `RuntimeConfig.state_placement` was declared (every
+    persistent path then keeps its legacy repo-local derivation). The one stamp every
+    persistent-store factory derives through."""
     shadow_git: ShadowGitSupervisor
     ledger_writer: LedgerWriter
     ledger_reader: LedgerReader

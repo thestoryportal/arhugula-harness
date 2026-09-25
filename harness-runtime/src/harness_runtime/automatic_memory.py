@@ -53,6 +53,11 @@ from harness_is.memory_retrieval_index import (
 )
 from harness_is.memory_store import CanonicalMemoryStore, MemoryStoreRecord
 
+from harness_runtime.config.state_placement import (
+    StateKind,
+    require_inside_state_root,
+    resolve_state_path,
+)
 from harness_runtime.memory_capture import (
     RUN_START_EVENT_KIND,
     EpisodicMemoryCapture,
@@ -71,7 +76,7 @@ from harness_runtime.memory_context import (
 )
 from harness_runtime.memory_scope_family import canonical_scope_family
 from harness_runtime.memory_tool_executor import StandardMemoryToolExecutor
-from harness_runtime.types import RuntimeConfig
+from harness_runtime.types import RuntimeConfig, VerifiedStateRoot
 
 
 @runtime_checkable
@@ -123,8 +128,17 @@ class LocalAutomaticMemoryRuntime:
         config: RuntimeConfig,
         workload_class: WorkloadClass | None = None,
         tracer_provider: object | None = None,
+        state_root: VerifiedStateRoot | None = None,
     ) -> None:
-        memory_root = config.memory.root_path or (config.repository_root / ".harness" / "memory")
+        # An explicit `memory.root_path` is honoured only when it satisfies the placement
+        # invariant; a conflicting override refuses (typed) instead of falling back.
+        memory_root = (
+            require_inside_state_root(
+                config.memory.root_path, config, state_root, what="memory.root_path"
+            )
+            if config.memory.root_path is not None
+            else resolve_state_path(StateKind.MEMORY, config, state_root)
+        )
         self._surface = config.deployment_surface
         self._policy = _policy_from_config(config)
         self._policy_resolver = MemoryPolicyResolver(self._policy)
@@ -517,6 +531,7 @@ def materialize_automatic_memory_runtime(
     *,
     workload_class: WorkloadClass | None = None,
     tracer_provider: object | None = None,
+    state_root: VerifiedStateRoot | None = None,
 ) -> LocalAutomaticMemoryRuntime | None:
     """Materialize automatic memory when enabled in runtime config."""
 
@@ -526,6 +541,7 @@ def materialize_automatic_memory_runtime(
         config=config,
         workload_class=workload_class,
         tracer_provider=tracer_provider,
+        state_root=state_root,
     )
 
 

@@ -40,6 +40,11 @@ from __future__ import annotations
 from harness_core.workload_class import WorkloadClass
 
 from harness_runtime.bootstrap.mutable_context import _MutableHarnessContext
+from harness_runtime.config.state_placement import (
+    bootstrap_state_root,
+    linux_filesystem_type,
+    transient_worktree_base,
+)
 from harness_runtime.lifecycle.index_cache import materialize_index_cache
 from harness_runtime.lifecycle.path_registry import materialize_path_registry
 from harness_runtime.lifecycle.shadow_git import materialize_isolation_stage
@@ -60,6 +65,21 @@ async def execute(
     """Populate stage 1 IS fields on `ctx`."""
     assert ctx.config is not None, "stage 0 PREAMBLE must precede stage 1 IS"
     assert ctx.actor is not None, "stage 0 must construct ctx.actor"
+
+    # 0.5. External state root (S2). Verified BEFORE the path registry so a refused
+    # placement creates no registry directory, ledger or persistent store: the verifier
+    # raises typed before any mutation, and stage rollback sees nothing to undo.
+    # `worktree_base` is computed once and shared with the isolation stage below, so the
+    # verifier judges the exact transient tree the runtime will use (never inside the root).
+    worktree_base = transient_worktree_base(config.repository_root)
+    if config.state_placement is not None:
+        ctx.verified_state_root = bootstrap_state_root(
+            config.state_placement,
+            repository_root=config.repository_root,
+            worktree_base=worktree_base,
+            path_bindings=config.path_bindings,
+            filesystem_type=linux_filesystem_type,
+        )
 
     # 1. Path registry.
     registry = materialize_path_registry(
@@ -91,7 +111,7 @@ async def execute(
     # 3. Worktree isolation + shadow-Git supervisor.
     isolation = materialize_isolation_stage(
         repository_root=config.repository_root,
-        worktree_base=config.repository_root / ".harness" / "worktrees",
+        worktree_base=worktree_base,
         opt_ins=config.path_bindings.opt_ins,
         ledger_writer=ctx.ledger_writer,
     )

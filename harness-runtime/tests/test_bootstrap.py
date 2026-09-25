@@ -2018,7 +2018,9 @@ async def test_bootstrap_survives_protected_result_store_gc_sweep_failure(
 
     monkeypatch.setattr(real_store, "gc_sweep", _raising_gc_sweep)
     monkeypatch.setattr(
-        _stage_4_od_mod, "materialize_protected_result_store_stage", lambda _config: real_store
+        _stage_4_od_mod,
+        "materialize_protected_result_store_stage",
+        lambda _config, _root: real_store,
     )
 
     ctx = await run_bootstrap(_config(tmp_path), workload_class=_WORKLOAD)
@@ -2065,7 +2067,9 @@ async def test_bootstrap_protected_result_store_sweep_does_not_block_event_loop(
 
     monkeypatch.setattr(real_store, "gc_sweep", _blocking_gc_sweep)
     monkeypatch.setattr(
-        _stage_4_od_mod, "materialize_protected_result_store_stage", lambda _config: real_store
+        _stage_4_od_mod,
+        "materialize_protected_result_store_stage",
+        lambda _config, _root: real_store,
     )
 
     heartbeat_timestamps: list[float] = []
