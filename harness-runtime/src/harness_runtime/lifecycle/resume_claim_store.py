@@ -415,6 +415,37 @@ class ResumeClaimStore:
         current = os.stat(path, follow_symlinks=False)
         return (own.st_dev, own.st_ino) == (current.st_dev, current.st_ino)
 
+    def _require_lease_lock_held(self, fd: int, lease: Path) -> None:
+        """Prove THIS descriptor holds the lease's exclusive flock (nonblocking).
+
+        Inode and frame checks only show the fd names the canonical file; a fresh read-only
+        fd plus the disk-readable token would pass them. Two nonblocking attempts prove
+        ownership: a fresh open of the canonical lease must be REFUSED the lock (someone
+        holds it), and this fd's own re-lock must succeed (a holder's re-lock is a no-op,
+        a non-holder's would be refused). If the fresh open acquires the lock nobody holds
+        the lease, so this fd is no holder either. Never blocks; the transient probe lock
+        is released on close.
+        """
+        import fcntl  # POSIX-only; the degraded platform refuses before any caller gets here.
+
+        probe = os.open(lease, _OPEN_FLAGS)
+        try:
+            try:
+                fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError as exc:
+                if exc.errno not in (errno.EAGAIN, errno.EWOULDBLOCK, errno.EACCES):
+                    raise
+            else:
+                raise ValueError("lease lock is not held by anyone")
+        finally:
+            os.close(probe)  # also drops a transient lock taken by the probe
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as exc:
+            if exc.errno in (errno.EAGAIN, errno.EWOULDBLOCK, errno.EACCES):
+                raise ValueError("lease lock is held by another descriptor") from exc
+            raise
+
     def _publish_lease(self, paths: _Paths, ref: JournalRecordRef) -> None:
         """Call only under the journal lock; never replace the canonical inode."""
         token = uuid.uuid4().hex
@@ -532,6 +563,7 @@ class ResumeClaimStore:
         try:
             if not self._same_inode(parent.lease_fd, parent_paths.lease):
                 raise ValueError("parent lease is not live")
+            self._require_lease_lock_held(parent.lease_fd, parent_paths.lease)
             self._valid_lease(parent.lease_fd, parent.record_ref)
             state = parse_claim(_read_regular_no_follow(parent_paths.claim), parent.record_ref)
         except (OSError, ValueError) as exc:
@@ -673,6 +705,7 @@ class ResumeClaimStore:
                 # and hold a canonical lease frame for this exact ref.
                 if not self._same_inode(held.lease_fd, paths.lease):
                     raise ValueError("lease is not the canonical live lease")
+                self._require_lease_lock_held(held.lease_fd, paths.lease)
                 self._valid_lease(held.lease_fd, held.record_ref)
                 fd = os.open(paths.claim, os.O_RDWR | os.O_APPEND | _OPEN_FLAGS_NO_ACCESS)
             except (OSError, ValueError) as exc:

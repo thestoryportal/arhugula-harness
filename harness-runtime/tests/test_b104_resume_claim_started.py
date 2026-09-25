@@ -474,3 +474,74 @@ def test_a_child_that_is_not_one_level_below_its_parent_is_refused(placed: Place
     family.parent_ref = family.journal.capture(family.parent_with(family.child_refs), depth=0)
     with _started_parent(placed.store(), family) as parent:
         _parent_carried_refusal(placed, family, parent)
+
+
+# --- F2: the lease's exclusive lock must be held by THIS descriptor -----------------------
+
+
+def _unlocked_fd_for(store: ResumeClaimStore, ref: JournalRecordRef) -> int:
+    """A fresh read-only descriptor on the canonical lease inode: same bytes, no flock."""
+    return os.open(store.paths_for(ref).lease, os.O_RDONLY)
+
+
+def test_a_forged_claim_on_an_unlocked_fd_refuses_while_the_real_holder_is_live(
+    placed: Placed,
+) -> None:
+    store, ref, held = _held(placed)
+    claimed = _claim_bytes(store, ref)
+    forged = HeldClaim(held.token, held.record_ref, _unlocked_fd_for(store, ref))
+    try:
+        with pytest.raises(ClaimRefusedError) as raised:
+            store.mark_started(forged)
+        assert not isinstance(raised.value, ClaimBusyError)
+    finally:
+        forged.close()
+
+    assert _claim_bytes(store, ref) == claimed  # nothing was appended
+    assert _lease_is_held_elsewhere(store, ref)  # the real holder's lock is undisturbed
+    store.mark_started(held)  # and the real holder still proceeds
+
+
+def test_a_forged_claim_on_an_unlocked_fd_refuses_when_nobody_holds_the_lease(
+    placed: Placed,
+) -> None:
+    """No live holder at all: the descriptor still proves nothing, and the refused attempt
+    must not leave the lease locked behind it."""
+    store, ref, held = _held(placed)
+    claimed = _claim_bytes(store, ref)
+    forged = HeldClaim(held.token, held.record_ref, _unlocked_fd_for(store, ref))
+    held.close()
+    try:
+        with pytest.raises(ClaimRefusedError):
+            store.mark_started(forged)
+    finally:
+        forged.close()
+
+    assert _claim_bytes(store, ref) == claimed
+    assert not _lease_is_held_elsewhere(store, ref)  # no lock was left behind
+
+
+def test_a_forged_started_parent_on_an_unlocked_fd_admits_no_child(
+    placed: Placed, family: Family
+) -> None:
+    store = placed.store()
+    real_parent = _started_parent(store, family)  # the genuine holder stays live
+    forged = StartedClaim(
+        HeldClaim(
+            real_parent.token, real_parent.record_ref, _unlocked_fd_for(store, family.parent_ref)
+        )
+    )
+    try:
+        _parent_carried_refusal(placed, family, forged)
+    finally:
+        forged.close()
+        real_parent.close()
+
+
+def test_the_real_holder_is_unaffected_by_the_lock_proof_repeated_probes(placed: Placed) -> None:
+    store, ref, held = _held(placed)
+    for _ in range(3):
+        assert _lease_is_held_elsewhere(store, ref)
+    started = store.mark_started(held)
+    assert isinstance(started, StartedClaim) and _lease_is_held_elsewhere(store, ref)
+    started.close()
