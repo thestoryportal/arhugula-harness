@@ -1149,14 +1149,20 @@ async def _assert_codex_authenticated(
         stdin="",
         timeout_seconds=config.timeout_seconds,
     )
+    # [LAW:no-silent-failure] The login-status output is untrusted CLI output and may carry
+    # credentials: it selects the classification below but is never copied into an error.
+    # Only fixed text and the integer exit code reach `detail`.
     if result.exit_code != 0:
         raise ExternalCLINotAuthenticatedError(
             config.provider,
-            result.stderr.strip() or result.stdout.strip() or f"exit={result.exit_code}",
+            f"Codex login status exited {result.exit_code}",
         )
     output = f"{result.stdout}\n{result.stderr}".lower()
     if "not logged" in output or "logged out" in output or "not authenticated" in output:
-        raise ExternalCLINotAuthenticatedError(config.provider, output.strip())
+        raise ExternalCLINotAuthenticatedError(
+            config.provider,
+            "Codex reported it is not logged in",
+        )
     if "logged in" not in output and "authenticated" not in output:
         raise ExternalCLINotAuthenticatedError(
             config.provider,
