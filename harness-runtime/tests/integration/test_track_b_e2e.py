@@ -2515,6 +2515,7 @@ def test_ac6_daemon_concurrent_two_clients_complete_independently(
         descent_depth: int = 0,
         pause_snapshot_input: Any = None,
         resume_context: Any = None,
+        child_resume_authority: Any = None,
         hitl_uniform_fallback_eligible_run_id: Any = None,
         effect_fence_uniform_fallback_eligible_key: Any = None,
         effect_fence_tree_wide_abort_present: Any = False,
@@ -2522,6 +2523,7 @@ def test_ac6_daemon_concurrent_two_clients_complete_independently(
         _ = descent_depth  # B-104 Task 4a — the depth-0 root run path.
         _ = pause_snapshot_input  # C-RT-35 resume threading — None on the run path.
         _ = resume_context  # B-39 Slice B — None on the (non-resume) run path.
+        assert child_resume_authority is None  # B-104 — a daemon run is unclaimed.
         _ = hitl_uniform_fallback_eligible_run_id  # B-39 Slice B, codex round-2 [P1] fix.
         _ = effect_fence_uniform_fallback_eligible_key  # B-70 impl leg.
         _ = effect_fence_tree_wide_abort_present  # B-80 impl leg.

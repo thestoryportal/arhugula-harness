@@ -78,8 +78,10 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Sequence
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Protocol, cast, runtime_checkable
 
+from harness_core import JournalRecordRef
 from harness_core.identity import WorkflowID
 from harness_core.workload_class import WorkloadClass
 from harness_cp.cp_shared_types import ModelBinding
@@ -108,6 +110,18 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 from harness_runtime.lifecycle.journal_workflow_pause_store import (
     PauseJournalReadCause,
     PauseJournalReadResult,
+)
+from harness_runtime.lifecycle.protected_result_store import normalize_tenant_scope
+from harness_runtime.lifecycle.root_resume_admission import (
+    UNCLAIMED,
+    DurableRootResume,
+    ResumeAdmission,
+)
+from harness_runtime.lifecycle.root_resume_admission import (
+    ResumeClaimRefusedError as ResumeClaimRefusedError,
+)
+from harness_runtime.lifecycle.root_resume_admission import (
+    RootResumeRefusal as RootResumeRefusal,
 )
 from harness_runtime.types import COST_ACCUM_VAR, CostRecordAccumulator, RuntimeConfig
 
@@ -811,21 +825,8 @@ def _read_durable_pause_snapshot(
     permanent absence, and with the §30 staleness token's change-detector inputs
     carried so the token needs no second read.
     """
-    from harness_is.path_class_registry import PathClass
-    from harness_is.path_resolver import PathResolver
+    from harness_runtime.lifecycle.journal_workflow_pause_store import JournalWorkflowPauseStore
 
-    from harness_runtime.config.path_bindings import build_path_binding
-    from harness_runtime.lifecycle.journal_workflow_pause_store import (
-        JournalWorkflowPauseStore,
-        pause_journal_dir_for,
-    )
-
-    resolver = PathResolver(build_path_binding(config.path_bindings))
-    state_ledger_dir = resolver.resolve_path(
-        PathClass.STATE_LEDGER,
-        workflow.workload_class,
-        config.deployment_surface,
-    )
     # The tenant scope enters the KEY from `config` — Runtime spec v1.108
     # §14.14.9.1: keying is the §14.14.8 TENANT-COMPOSITE key, *"matching
     # `resume()` exactly"*, by that paragraph's OWN both-surfaces-or-neither
@@ -835,10 +836,33 @@ def _read_durable_pause_snapshot(
     # SECOND read path, which `test_.._both_surfaces_read_through_one_authority`
     # fails on. The caller-facing input triple is BYTE-UNCHANGED.
     store = JournalWorkflowPauseStore(
-        journal_dir=pause_journal_dir_for(state_ledger_dir),
+        journal_dir=_durable_pause_journal_dir(config, workflow),
         tenant_id=config.tenant_id,
     )
     return store.read_latest_attributed(resume_handle)
+
+
+def _durable_pause_journal_dir(config: RuntimeConfig, workflow: WorkflowObject) -> Path:
+    """The pause-journal directory the durable read uses: `<STATE_LEDGER dir>/pause-journal`.
+
+    Resolved from `config` for this workflow's `(workload_class, deployment_surface)` the SAME
+    way the stage-5 factory derives it at capture. Pure: `PathResolver.resolve_path` creates
+    nothing. `resume()` also hands it, beside the ref from the same read, to the root claim.
+    """
+    from harness_is.path_class_registry import PathClass
+    from harness_is.path_resolver import PathResolver
+
+    from harness_runtime.config.path_bindings import build_path_binding
+    from harness_runtime.lifecycle.journal_workflow_pause_store import pause_journal_dir_for
+
+    resolver = PathResolver(build_path_binding(config.path_bindings))
+    return pause_journal_dir_for(
+        resolver.resolve_path(
+            PathClass.STATE_LEDGER,
+            workflow.workload_class,
+            config.deployment_surface,
+        )
+    )
 
 
 async def _enforce_pause_state_staleness_precondition(
@@ -1259,6 +1283,14 @@ async def resume(
     discriminator is capture-side and is deferred under register row `B-104`'s
     four-disjunct demand test D-0…D-3.
 
+    **B-104 at-most-once admission (the `resume_handle` path only).** The read is
+    unchanged, but the resume worker now claims that exact root record under a verified
+    external `state_placement`, fsyncs `started`, and holds its lease until the body
+    returns (even after a drain timeout), before the first step runs. So a record that
+    was already claimed — whether its body finished, failed or crashed — is refused
+    rather than re-entered; manual recovery is the audited route. A caller-supplied
+    `pause_snapshot` takes no claim and keeps the limit above.
+
     Like `run()`, this is bootstrap-per-call (a fresh `HarnessContext`): the
     fresh process re-bootstraps, the driver's entry-point resume detection
     (C-RT-24 §14.14.3 / `workflow_driver.py`) validates the snapshot via
@@ -1281,9 +1313,8 @@ async def resume(
         The `workflow_id` to read the latest durable snapshot for, from the
         harness-owned store. Mutually exclusive with `pause_snapshot`; requires
         `config.pause_resume_protocol_config.durable=True`. The read reports the
-        LATEST record, not a liveness claim — an already-resolved pause is
-        byte-indistinguishable from an outstanding one and is re-entered without
-        refusal (see the durable-read limit above; Runtime spec v1.110 §30).
+        LATEST record, not a liveness claim (Runtime spec v1.110 §30); the B-104
+        claim above, not the read, is what refuses a record already resumed.
     resume_context
         Operator-supplied resume-time context (e.g. the HITL response the
         paused gate awaits); delivered one-shot to the resumed-step gate.
@@ -1299,6 +1330,12 @@ async def resume(
         `resume_handle`, or `resume_handle` without the durable opt-in.
     ResumeHandleUnknownError
         `RT-FAIL-RESUME-HANDLE-UNKNOWN` — no durable snapshot for the handle.
+    ResumeDirectChildHandleError
+        `RT-FAIL-RESUME-DIRECT-CHILD-HANDLE` — the latest record is not a depth-0 root.
+    ResumeClaimRefusedError
+        `RT-FAIL-RESUME-CLAIM-REFUSED` — the durable root record was not admitted and
+        its body did not run; `reason` is `placement`, `claim-refused`, `claim-busy`
+        (retryable) or `start-refused`, with the typed refusal as `__cause__`.
     InvalidWorkflowError
         `RT-FAIL-INVALID-WORKFLOW` — `workflow` is not a `WorkflowObject`.
     ConcurrentRunNotSupported
@@ -1396,14 +1433,31 @@ async def resume(
             )
         # B-104 Task 4d — the depth rides the SAME read as the snapshot; anything but an
         # exact depth of 0 (child, grandchild, legacy/unknown, malformed) is refused here,
-        # pre-bootstrap. A depth-0 record continues into the existing path (Task 5 still
-        # owns the claim/started barrier for it).
+        # pre-bootstrap. A depth-0 record continues to its claim below.
         if _read.depth != 0:
             raise ResumeDirectChildHandleError(depth=_read.depth)
         snapshot = _read.snapshot
+        # A populated snapshot was parsed from a latest line, so that line has a digest.
+        assert _read.latest_record_digest is not None
+        # B-104 — the root record's exact address, from this SAME read (never a second one).
+        # The resume worker claims it and fsyncs `started` before the body runs.
+        admission: ResumeAdmission = DurableRootResume(
+            journal_dir=_durable_pause_journal_dir(resolved_config, workflow),
+            ref=JournalRecordRef(
+                tenant=normalize_tenant_scope(resolved_config.tenant_id),
+                workflow_id=snapshot.workflow_id,
+                run_id=snapshot.run_id,
+                record_count=_read.record_count,
+                latest_digest=_read.latest_record_digest,
+                snapshot_hash=snapshot.snapshot_hash,
+            ),
+        )
     else:
         assert pause_snapshot is not None  # exactly-one-of guard guarantees this
         snapshot = pause_snapshot
+        # A caller-supplied snapshot is outside the durable claim contract: no claim, no
+        # authority, so its durable children still meet stage 5's refusing admission.
+        admission = UNCLAIMED
 
     # Detect-then-refuse: a snapshot's hash validates against its own embedded
     # fields, so a snapshot from another workflow would otherwise be applied
@@ -1466,16 +1520,26 @@ async def resume(
                 # + `pause_snapshot_input=` to the driver). C-RT-35.
                 mcp_server._state["_resume_pause_snapshot"] = snapshot  # pyright: ignore[reportPrivateUsage]
                 mcp_server._state["_resume_context"] = resume_context  # pyright: ignore[reportPrivateUsage]
+                mcp_server._state["_resume_admission"] = admission  # pyright: ignore[reportPrivateUsage]
                 mcp_server.workflow_registry[workflow.workflow_id] = workflow
                 try:
                     cp_result = await _invoke_run_workflow_via_in_process_mcp(
                         mcp_server.server, workflow.workflow_id
                     )
+                except RuntimeError:
+                    # A typed claim refusal does not survive the MCP text boundary; the worker
+                    # recorded it on the admission before any body ran. Never parse the text.
+                    refusal = admission.refusal
+                    if refusal is None:
+                        raise
+                    # The tool's text error is this same refusal rendered; keep the typed cause.
+                    raise refusal from refusal.__cause__
                 finally:
                     mcp_server.workflow_registry.pop(workflow.workflow_id, None)
                     mcp_server._state.pop("_harness_ctx", None)  # pyright: ignore[reportPrivateUsage]
                     mcp_server._state.pop("_resume_pause_snapshot", None)  # pyright: ignore[reportPrivateUsage]
                     mcp_server._state.pop("_resume_context", None)  # pyright: ignore[reportPrivateUsage]
+                    mcp_server._state.pop("_resume_admission", None)  # pyright: ignore[reportPrivateUsage]
                 timed_out = (
                     cp_result.status == _CpRunStatus.DRAINED
                     and cp_result.fail_class == "RT-FAIL-DRAIN-TIMEOUT"

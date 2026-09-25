@@ -345,8 +345,12 @@ def test_stage_five_still_binds_the_always_refusing_admission_and_nothing_calls_
 
     assert "durable_admission=RefuseDurableChildAdmission()" in stage5
     for path in _SRC.rglob("*.py"):
-        if path.name in {"started_body_gateway.py", "claimed_child_admission.py"}:
-            continue  # the gateway, and its one unbound consumer (guarded by the S1 test)
+        if path.name in {
+            "started_body_gateway.py",
+            "claimed_child_admission.py",
+            "root_resume_admission.py",
+        }:
+            continue  # the gateway, its child consumer (S1 test) and the one root consumer
         tree = ast.parse(path.read_text())
         names = {n.module or "" for n in ast.walk(tree) if isinstance(n, ast.ImportFrom)} | {
             a.name for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names

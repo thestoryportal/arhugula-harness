@@ -370,10 +370,10 @@ def test_dispatch_threads_the_step_contexts_authority_into_the_runner(tmp_path: 
     assert runner.calls[1]["child_resume_authority"] is None
 
 
-# --- no production entry can supply an authority ------------------------------------------------
+# --- stage 5 supplies no authority; only the durable root resume builds one ---------------------
 
 
-def test_stage_five_and_the_root_entries_still_supply_no_authority() -> None:
+def test_stage_five_supplies_no_authority_and_only_the_root_resume_admission_builds_one() -> None:
     src = Path(cwr.__file__).resolve().parents[1]
 
     assert (
@@ -381,8 +381,12 @@ def test_stage_five_and_the_root_entries_still_supply_no_authority() -> None:
         in (src / "bootstrap" / "stage_5_loop_init.py").read_text()
     )
     for path in src.rglob("*.py"):
-        if path.name in {"claimed_child_admission.py", "child_workflow_runner.py"}:
+        if path.name in {
+            "claimed_child_admission.py",
+            "child_workflow_runner.py",
+            "root_resume_admission.py",  # B-104: the durable `resume_handle` root claim
+        }:
             continue
         assert "ClaimedChildAdmission" not in path.read_text(), path
-        if path.name != "sub_agent_dispatch.py":
+        if path.name not in {"sub_agent_dispatch.py", "mcp_server.py"}:
             assert "child_resume_authority" not in path.read_text(), path

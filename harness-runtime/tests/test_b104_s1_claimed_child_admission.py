@@ -299,7 +299,9 @@ def test_stage_five_still_binds_the_refusing_admission_and_only_tests_touch_the_
         imports = {
             (n.module or "") for n in ast.walk(ast.parse(text)) if isinstance(n, ast.ImportFrom)
         }
-        if path.name != "child_workflow_runner.py":  # the one 5b-1 consumer
+        # The 5b-1 child runner, and the B-104 root resume admission that builds the root's.
+        consumers = {"child_workflow_runner.py", "root_resume_admission.py"}
+        if path.name not in consumers:
             assert not any("claimed_child_admission" in m for m in imports), path
-        if path.name not in {"started_body_gateway.py", "child_workflow_runner.py"}:
+        if path.name not in {"started_body_gateway.py", *consumers}:
             assert "ClaimedChildAdmission" not in text, path

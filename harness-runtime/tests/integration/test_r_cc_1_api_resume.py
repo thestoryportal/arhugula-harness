@@ -65,8 +65,9 @@ from harness_cp.workflow_driver_types import StepKind, WorkflowStep
 from harness_cp.workflow_manifest_entry import WorkflowManifestEntry
 from harness_is.path_class_registry import PathClass
 from harness_runtime.api import RunResult, _build_run_result, resume
-from harness_runtime.bootstrap import run_bootstrap
+from harness_runtime.bootstrap import run_bootstrap, stage_1_is
 from harness_runtime.bootstrap import stage_4_od as _stage_4_od_mod
+from harness_runtime.config import state_placement
 from harness_runtime.lifecycle.pause_resume_protocol_types import (
     PauseResumeProtocolConfig,
 )
@@ -77,7 +78,10 @@ from harness_runtime.types import (
     PathBindingConfig,
     ProviderSecretsConfig,
     RuntimeConfig,
+    StatePlacementConfig,
 )
+
+from ..test_state_placement import world  # noqa: F401  (fixture: scratch dir with no .git above)
 
 _WORKLOAD = WorkloadClass.SOFTWARE_ENGINEERING
 _SURFACE = DeploymentSurface.LOCAL_DEVELOPMENT
@@ -500,6 +504,27 @@ def _config_durable(tmp_path: Path) -> RuntimeConfig:
     )
 
 
+@pytest.fixture
+def _placed_root(world: Path, monkeypatch: pytest.MonkeyPatch) -> Path:  # noqa: F811
+    """An external state root beside a checkout: B-104 claims a durable `resume_handle`
+    record only under a declared, verified `state_placement` (see `_config_durable_placed`)."""
+    # The scratch dir may be tmpfs; the verifier's real resolver is covered in test_state_placement.
+    monkeypatch.setattr(stage_1_is, "linux_filesystem_type", lambda _p: "ext4")
+    monkeypatch.setattr(state_placement, "linux_filesystem_type", lambda _p: "ext4")
+    (world / "repo" / ".git").mkdir(parents=True)
+    return world / "state"
+
+
+def _config_durable_placed(root: Path) -> RuntimeConfig:
+    """`_config_durable` with every path (so the STATE_LEDGER cell) under the placed `root`."""
+    return _config_durable(root).model_copy(
+        update={
+            "repository_root": root.parent / "repo",
+            "state_placement": StatePlacementConfig(state_root=root),
+        }
+    )
+
+
 # ---- Store unit tests (no bootstrap) --------------------------------------
 
 
@@ -774,7 +799,7 @@ async def test_durable_wrapper_forwards_evaluator_optimizer_resume(tmp_path: Pat
 
 @pytest.mark.asyncio
 async def test_api_resume_durable_handle_restart_proof(
-    tmp_path: Path,
+    _placed_root: Path,
     _patched_runtime: None,
 ) -> None:
     """The harness-owned durability path: capture through a DURABLE-bootstrapped
@@ -788,7 +813,7 @@ async def test_api_resume_durable_handle_restart_proof(
     )
 
     _ = _patched_runtime
-    config = _config_durable(tmp_path)
+    config = _config_durable_placed(_placed_root)
 
     # ---- "Pause" — capture via the DURABLE protocol → persists to the journal.
     capture_ctx = await run_bootstrap(config, workload_class=_WORKLOAD)
@@ -805,7 +830,7 @@ async def test_api_resume_durable_handle_restart_proof(
 
     # ---- The harness owns the durable copy (NOT the caller). A fresh store over
     # the resolved STATE_LEDGER pause-journal dir reads it back across instances.
-    state_ledger_dir = tmp_path / PathClass.STATE_LEDGER.value.lower()
+    state_ledger_dir = _placed_root / PathClass.STATE_LEDGER.value.lower()
     durable = JournalWorkflowPauseStore(
         journal_dir=pause_journal_dir_for(state_ledger_dir), tenant_id=None
     ).read_latest(_WORKFLOW_ID)
@@ -824,7 +849,7 @@ async def test_api_resume_durable_handle_restart_proof(
 
 @pytest.mark.asyncio
 async def test_api_resume_durable_handle_skips_completed_prefix(
-    tmp_path: Path,
+    _placed_root: Path,
     _patched_runtime: None,
 ) -> None:
     """Position-only resume through the durable handle SKIPS the completed prefix.
@@ -835,7 +860,7 @@ async def test_api_resume_durable_handle_skips_completed_prefix(
     (continue from step k without re-running 0..k-1) end-to-end, which a 1-step
     pause-at-0 e2e cannot distinguish from a fresh run."""
     _ = _patched_runtime
-    config = _config_durable(tmp_path)
+    config = _config_durable_placed(_placed_root)
 
     dispatched: list[str] = []
 
