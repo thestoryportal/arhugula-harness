@@ -42,6 +42,10 @@ REFUSED = {
     "claim": {**CLAIM, "lease": "free"},
 }
 KILL_DIGEST = "d" * 64
+EXITED = {"exit": 0, "timeout": False, "output_ok": True, "kill": None}
+KILLED = {"signal": "SIGKILL", "returncode": -signal.SIGKILL, "group_gone": True}
+# Every phase the parent waits on to exit by itself (A is killed at its barrier).
+EXITING_PHASES = [p for p in w.PHASES if p != "resume-a"]
 
 
 def _ok(phase: str, observed: dict[str, Any]) -> dict[str, Any]:
@@ -63,17 +67,18 @@ def passing_evidence() -> dict[str, Any]:
     inventory = {"journal": "f" * 64}
     return {
         "runs": {
-            "capture": {"exit": 0, "timeout": False},
+            "capture": dict(EXITED),
             "resume-a": {
                 "exit": None,
                 "timeout": False,
+                "output_ok": True,
                 "barrier_entered": True,
-                "kill": {"signal": "SIGKILL", "returncode": -signal.SIGKILL, "group_gone": True},
+                "kill": dict(KILLED),
             },
-            "observe-held": {"exit": 0, "timeout": False},
-            "resume-b": {"exit": 0, "timeout": False},
-            "recover": {"exit": 0, "timeout": False},
-            "resume-after-abandon": {"exit": 0, "timeout": False},
+            "observe-held": dict(EXITED),
+            "resume-b": dict(EXITED),
+            "recover": dict(EXITED),
+            "resume-after-abandon": dict(EXITED),
             "webhooks_after_capture": 1,
         },
         "results": {
@@ -113,7 +118,7 @@ def passing_evidence() -> dict[str, Any]:
         "webhook_requests": [{"path": "/hook"}],
         "webhook_errors": [],
         "tool_calls": 0,
-        "tool_server": {"ready": True},
+        "tool_server": {"ready": True, "output_ok": True, "kill": dict(KILLED)},
     }
 
 
@@ -218,14 +223,122 @@ def test_each_broken_fact_fails_its_named_check(
     assert failed in verdict["failed_checks"]
 
 
-def test_a_timed_out_phase_is_inconclusive_not_pass_or_fail() -> None:
+def test_a_genuine_timeout_with_its_group_reaped_is_inconclusive_not_pass_or_fail() -> None:
     evidence = passing_evidence()
-    evidence["runs"]["resume-b"]["timeout"] = True
+    evidence["runs"]["resume-b"].update(timeout=True, exit=-signal.SIGKILL, kill=dict(KILLED))
 
     verdict = w.evaluate(evidence)
 
     assert verdict["status"] == "INCONCLUSIVE"
     assert verdict["timed_out_phases"] == ["resume-b"]
+
+
+def test_a_timeout_whose_owned_group_survived_fails_rather_than_inconclusive() -> None:
+    evidence = passing_evidence()
+    evidence["runs"]["resume-b"].update(
+        timeout=True, exit=-signal.SIGKILL, kill={**KILLED, "group_gone": False}
+    )
+
+    verdict = w.evaluate(evidence)
+
+    assert verdict["status"] == "FAIL"
+    assert "cleanup.resume-b-group-gone" in verdict["failed_checks"]
+
+
+# --- owned process groups and bounded phase records (Codex HOLD on 7619e06) --------------
+
+
+@pytest.mark.parametrize("owner", ["tool_server", "resume-a"])
+def test_a_surviving_owned_group_fails_even_when_every_other_fact_passes(owner: str) -> None:
+    evidence = passing_evidence()
+    record = evidence["tool_server"] if owner == "tool_server" else evidence["runs"][owner]
+    record["kill"] = {**KILLED, "group_gone": False}
+
+    verdict = w.evaluate(evidence)
+
+    assert verdict["status"] == "FAIL"
+    assert f"cleanup.{owner.replace('_', '-')}-group-gone" in verdict["failed_checks"]
+
+
+@pytest.mark.parametrize("phase", EXITING_PHASES)
+@pytest.mark.parametrize("exit_code", [1, -signal.SIGKILL, None])
+def test_a_phase_that_did_not_exit_zero_fails(phase: str, exit_code: int | None) -> None:
+    evidence = passing_evidence()
+    evidence["runs"][phase]["exit"] = exit_code
+
+    verdict = w.evaluate(evidence)
+
+    assert verdict["status"] == "FAIL"
+    assert f"processes.{phase}-exited-0" in verdict["failed_checks"]
+
+
+@pytest.mark.parametrize("phase", [*w.PHASES, "tool-server"])
+def test_a_phase_whose_output_hit_the_cap_fails(phase: str) -> None:
+    evidence = passing_evidence()
+    record = evidence["tool_server"] if phase == "tool-server" else evidence["runs"][phase]
+    record["output_ok"] = False
+
+    verdict = w.evaluate(evidence)
+
+    assert verdict["status"] == "FAIL"
+    assert f"processes.{phase}-output-bounded" in verdict["failed_checks"]
+
+
+@pytest.mark.parametrize(
+    "final",
+    [
+        pytest.param(None, id="final-phase-never-completed"),
+        pytest.param({**EXITED, "exit": 1}, id="final-phase-exited-nonzero"),
+        pytest.param({**EXITED, "timeout": None}, id="final-phase-timeout-unrecorded"),
+    ],
+)
+def test_the_final_phase_must_itself_complete(final: dict[str, object] | None) -> None:
+    evidence = passing_evidence()
+    if final is None:
+        evidence["runs"].pop("resume-after-abandon")
+    else:
+        evidence["runs"]["resume-after-abandon"] = final
+
+    verdict = w.evaluate(evidence)
+
+    assert verdict["status"] == "FAIL"
+    assert "processes.resume-after-abandon-exited-0" in verdict["failed_checks"]
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        pytest.param(lambda e: e.clear(), id="empty-evidence"),
+        pytest.param(lambda e: e.pop("runs"), id="runs-missing"),
+        pytest.param(lambda e: e.pop("tool_server"), id="tool-server-missing"),
+        pytest.param(lambda e: e["runs"].__setitem__("capture", "garbage"), id="run-not-a-mapping"),
+        pytest.param(
+            lambda e: e["tool_server"].__setitem__("kill", "garbage"), id="kill-malformed"
+        ),
+        pytest.param(
+            lambda e: e["results"]["recover"]["observed"].__setitem__("audits", "garbage"),
+            id="audits-malformed",
+        ),
+        pytest.param(
+            lambda e: e["results"]["recover"]["observed"].__setitem__("audits", ["garbage"]),
+            id="audit-entry-malformed",
+        ),
+        pytest.param(
+            lambda e: e["results"].__setitem__("capture", {"ok": "yes"}), id="ok-not-bool"
+        ),
+        pytest.param(lambda e: e.__setitem__("webhook_requests", None), id="webhooks-missing"),
+    ],
+)
+def test_a_missing_or_malformed_record_fails_instead_of_passing_or_crashing(
+    mutation: Callable[[dict[str, Any]], object],
+) -> None:
+    evidence = passing_evidence()
+    mutation(evidence)
+
+    verdict = w.evaluate(evidence)
+
+    assert verdict["status"] == "FAIL"
+    assert verdict["failed_checks"]
 
 
 def test_a_stopped_scenario_with_no_later_phases_fails_closed() -> None:

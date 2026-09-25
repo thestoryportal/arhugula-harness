@@ -1212,10 +1212,13 @@ def scenario(
         a = launch("resume-a")
         entered = wait_for_marker(a, layout.markers / "a-body.json", deadline)
         observed = entered and complete("observe-held")
+        # A genuine timeout is A still running without its marker; A exiting early without
+        # one is a failure, not a timeout.
+        still_running = a.proc.poll() is None
         runs["resume-a"] = {
             **stream_record(a),
             "exit": None,
-            "timeout": not entered,
+            "timeout": not entered and still_running,
             "kill": kill_group(a),
             "barrier_entered": entered,
         }
@@ -1227,31 +1230,46 @@ def scenario(
     return {"runs": runs, "results": results}
 
 
+def _dict(value: object) -> dict[str, Any]:
+    """A record as a mapping; a missing or malformed record reads as empty and fails its checks."""
+    return value if isinstance(value, dict) else {}  # pyright: ignore[reportUnknownVariableType]
+
+
 def _observed(results: dict[str, object], phase: str) -> dict[str, Any]:
-    item = results.get(phase)
-    return item["observed"] if isinstance(item, dict) and item.get("ok") else {}
+    item = _dict(results.get(phase))
+    return _dict(item.get("observed")) if item.get("ok") is True else {}
 
 
 def evaluate(evidence: dict[str, object]) -> dict[str, object]:
-    """Pure per-case predicates over the recorded evidence; PASS needs every check."""
-    runs: dict[str, Any] = evidence["runs"]
-    results: dict[str, Any] = evidence["results"]
-    webhooks: list[object] = evidence["webhook_requests"]
-    tool_calls: int = evidence["tool_calls"]
+    """Pure per-case predicates over the recorded evidence; PASS needs every check.
+
+    Verdict order: a surviving owned process group FAILs (cleanup is never inconclusive);
+    otherwise a genuine timeout is INCONCLUSIVE; otherwise PASS only if every check holds.
+    """
+    runs = _dict(evidence.get("runs"))
+    results = _dict(evidence.get("results"))
+    webhooks = evidence.get("webhook_requests")
+    tool_server = _dict(evidence.get("tool_server"))
+    tool_calls = evidence.get("tool_calls")
     capture = _observed(results, "capture")
     held = _observed(results, "observe-held")
     b = _observed(results, "resume-b")
     recover = _observed(results, "recover")
     d = _observed(results, "resume-after-abandon")
     ref = capture.get("ref")
-    kill = runs.get("resume-a", {}).get("kill") or {}
+    run_a = _dict(runs.get("resume-a"))
+    kill = _dict(run_a.get("kill"))
     # A result without its provenance counts as uninstalled, never as a crash of the verdict.
     provenance = [
-        item.get("provenance") or {}
-        for item in results.values()
-        if isinstance(item, dict) and item.get("ok")
+        _dict(item.get("provenance"))
+        for item in map(_dict, results.values())
+        if item.get("ok") is True
     ]
     receipt_hashes = {p.get("installation_receipt_sha256") for p in provenance}
+    raw_audits = recover.get("audits")
+    audits = [_dict(a) for a in raw_audits] if isinstance(raw_audits, list) else []
+    abandon_audits = [a for a in audits if a.get("action_id") == "b104w-abandon-1"]
+    release = _dict(recover.get("release"))
 
     def refused_without_replay(outcome: dict[str, Any]) -> dict[str, bool]:
         return {
@@ -1261,29 +1279,52 @@ def evaluate(evidence: dict[str, object]) -> dict[str, object]:
             and outcome.get("reason") == "claim-refused",
             "no_body": outcome.get("body_marker_present") is False,
             "same_record": outcome.get("ref") == ref,
-            "claim_still_started": outcome.get("claim", {}).get("phase") == "started",
+            "claim_still_started": _dict(outcome.get("claim")).get("phase") == "started",
         }
 
-    cases = {
+    # [LAW:no-silent-failure] Every owned group the parent killed must be proven gone, and
+    # every phase it waited for must have exited 0 within its cap with bounded output.
+    killed = {"tool-server": _dict(tool_server.get("kill"))} | {
+        phase: _dict(_dict(run).get("kill"))
+        for phase, run in runs.items()
+        if _dict(run).get("kill") is not None
+    }
+    cleanup = {f"{phase}-group-gone": k.get("group_gone") is True for phase, k in killed.items()}
+    processes = (
+        {
+            f"{phase}-exited-0": _dict(runs.get(phase)).get("exit") == 0
+            and _dict(runs.get(phase)).get("timeout") is False
+            for phase in PHASES
+            if phase != "resume-a"
+        }
+        | {
+            f"{phase}-output-bounded": _dict(runs.get(phase)).get("output_ok") is True
+            for phase in PHASES
+        }
+        | {"tool-server-output-bounded": tool_server.get("output_ok") is True}
+    )
+    cases: dict[str, dict[str, bool]] = {
+        "cleanup": cleanup,
+        "processes": processes,
         "provenance": {
             "every_phase_recorded": all(
                 isinstance(results.get(p), dict) for p in PHASES if p != "resume-a"
             ),
             "every_child_installed": len(provenance) == len(PHASES) - 1
-            and all(p.get("interpreter", {}).get("isolated") for p in provenance),
+            and all(_dict(p.get("interpreter")).get("isolated") for p in provenance),
             "one_receipt": len(receipt_hashes) == 1,
         },
         "capture": {
             "paused": capture.get("status") == "paused",
             "root_record": capture.get("depth") == 0 and ref is not None,
-            "snapshot_is_record": capture.get("snapshot_hash") == (ref or {}).get("snapshot_hash"),
-            "no_claim_yet": capture.get("claim", {}).get("phase") == "absent",
+            "snapshot_is_record": capture.get("snapshot_hash") == _dict(ref).get("snapshot_hash"),
+            "no_claim_yet": _dict(capture.get("claim")).get("phase") == "absent",
             "one_webhook": runs.get("webhooks_after_capture") == 1,
         },
         "resume-a-started": {
-            "barrier_entered": runs.get("resume-a", {}).get("barrier_entered") is True,
-            "started_before_kill": held.get("claim", {}).get("phase") == "started",
-            "lease_held_by_a": held.get("claim", {}).get("lease") == "busy",
+            "barrier_entered": run_a.get("barrier_entered") is True,
+            "started_before_kill": _dict(held.get("claim")).get("phase") == "started",
+            "lease_held_by_a": _dict(held.get("claim")).get("lease") == "busy",
             "same_record": held.get("ref") == ref,
             "killed_by_parent": kill.get("signal") == "SIGKILL"
             and kill.get("returncode") == -signal.SIGKILL
@@ -1292,48 +1333,52 @@ def evaluate(evidence: dict[str, object]) -> dict[str, object]:
         },
         "resume-b-refused": {
             **refused_without_replay(b),
-            "lease_released_by_kill": b.get("claim", {}).get("lease") == "free",
-            "claim_bytes_unchanged": b.get("claim", {}).get("claim_sha256")
-            == held.get("claim", {}).get("claim_sha256"),
+            "lease_released_by_kill": _dict(b.get("claim")).get("lease") == "free",
+            "claim_bytes_unchanged": _dict(b.get("claim")).get("claim_sha256")
+            == _dict(held.get("claim")).get("claim_sha256"),
         },
         "release-held": {
-            "held": recover.get("release", {}).get("outcome") == "held"
-            and str(recover.get("release", {}).get("reason", "")).startswith("release-forbidden"),
+            "held": release.get("outcome") == "held"
+            and str(release.get("reason", "")).startswith("release-forbidden"),
             "no_mutation": recover.get("inventory_before") is not None
             and recover.get("inventory_before") == recover.get("inventory_after_release"),
-            "no_release_audit": not any(
-                a["action"] == "release" for a in recover.get("audits", [])
-            ),
+            "no_release_audit": isinstance(raw_audits, list)
+            and not any(a.get("action") == "release" for a in audits),
         },
         "abandon-audited": {
-            "abandoned": recover.get("abandon", {}).get("outcome") == "abandoned",
+            "abandoned": _dict(recover.get("abandon")).get("outcome") == "abandoned",
             "exact_record": recover.get("claim_frame_names_record") is True
             and recover.get("ref") == ref,
-            "intent_and_complete": sorted(
-                a["phase"] for a in recover.get("audits", []) if a["action_id"] == "b104w-abandon-1"
-            )
+            "intent_and_complete": sorted(str(a.get("phase")) for a in abandon_audits)
             == ["complete", "intent"],
             "attested_by_kill_record": all(
-                a["stopped_services_digest"] == recover.get("kill_record_sha256")
-                for a in recover.get("audits", [])
-                if a["action_id"] == "b104w-abandon-1"
+                a.get("stopped_services_digest") == recover.get("kill_record_sha256")
+                for a in abandon_audits
             ),
-            "tombstoned": len(recover.get("tombstones", [])) == 1,
-            "claim_bytes_kept": recover.get("claim_after", {}).get("claim_sha256")
-            == held.get("claim", {}).get("claim_sha256"),
+            "tombstoned": isinstance(recover.get("tombstones"), list)
+            and len(recover["tombstones"]) == 1,
+            "claim_bytes_kept": _dict(recover.get("claim_after")).get("claim_sha256")
+            == _dict(held.get("claim")).get("claim_sha256"),
         },
         "resume-after-abandon-refused": refused_without_replay(d),
         "no-replay": {
-            "tool_server_ready": evidence["tool_server"]["ready"] is True,
-            "webhooks_total": len(webhooks) == 1 and not evidence["webhook_errors"],
+            "tool_server_ready": tool_server.get("ready") is True,
+            "webhooks_total": isinstance(webhooks, list)
+            and len(webhooks) == 1
+            and evidence.get("webhook_errors") == [],
             "tool_never_called": tool_calls == 0,
         },
     }
     failed = sorted(
         f"{case}.{name}" for case, checks in cases.items() for name, ok in checks.items() if not ok
     )
-    timed_out = sorted(p for p, r in runs.items() if isinstance(r, dict) and r.get("timeout"))
-    status = "INCONCLUSIVE" if timed_out else ("PASS" if not failed else "FAIL")
+    timed_out = sorted(p for p, r in runs.items() if _dict(r).get("timeout") is True)
+    if not all(cleanup.values()):
+        status = "FAIL"
+    elif timed_out:
+        status = "INCONCLUSIVE"
+    else:
+        status = "FAIL" if failed else "PASS"
     return {
         "status": status,
         "cases": cases,
