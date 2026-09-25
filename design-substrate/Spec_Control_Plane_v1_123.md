@@ -5,7 +5,7 @@ their terminal handling in both fan-out families, and the order of the three run
 under the `proceed` cascade policy. Every other v1.122 and earlier C-CP-01 … C-CP-29 term remains
 in force. No contract number, `RunStatus` value or pause-snapshot hash byte is added or changed.*
 
-**Status: DRAFT — not cleared. No clearance marker is filed and no artifact head is regenerated.**
+**Status: cleared — local isolated source contract only, after independent review (marker `.harness/clearance/spec-control-plane-v1-123-cleared-2026-09-25.md`). Not local-RC or installed acceptance.**
 
 **Filed:** 2026-09-25
 
