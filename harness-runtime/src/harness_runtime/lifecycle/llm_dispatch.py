@@ -58,7 +58,8 @@ import hashlib
 import json
 import logging
 import re
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Generator, Mapping, Sequence
+from contextlib import contextmanager
 from contextvars import ContextVar
 from copy import deepcopy
 from dataclasses import dataclass, field
@@ -3730,21 +3731,32 @@ def _record_policy_overrides(results: Sequence[Any]) -> None:
 
 
 def _record_policy_override() -> None:
-    """Mark the enclosing dispatch span `policy_override` for one refused tool call.
+    """Mark the enclosing dispatch span `policy_override` for one refused tool call."""
+    with _policy_override_span():
+        pass
+
+
+@contextmanager
+def _policy_override_span() -> Generator[Any]:
+    """The span classified `policy_override` for one refused tool call, to annotate further.
 
     Same class and attribute the tool-step gate composer records on its refusal span; with
-    no recording span a dedicated span carries it, so a refusal is never unobserved.
+    no recording span a dedicated span carries it, so a refusal is never unobserved. The
+    class is an attribute, so on the enclosing span it marks the dispatch once however many
+    calls were refused; a caller that must count refusals adds its own record per call.
     """
     from opentelemetry import trace
 
     span = trace.get_current_span()
     if span.is_recording():
         span.set_attribute("sandbox.fail.class", "policy_override")
-    else:
-        with trace.get_tracer("harness.runtime.hitl_tool_loop").start_as_current_span(
-            "hitl.tool_loop.policy_override"
-        ) as refusal_span:
-            refusal_span.set_attribute("sandbox.fail.class", "policy_override")
+        yield span
+        return
+    with trace.get_tracer("harness.runtime.hitl_tool_loop").start_as_current_span(
+        "hitl.tool_loop.policy_override"
+    ) as refusal_span:
+        refusal_span.set_attribute("sandbox.fail.class", "policy_override")
+        yield refusal_span
 
 
 def _anthropic_tool_result_content(result: Any) -> str:
@@ -4746,9 +4758,12 @@ async def _dispatch_ollama(
             return (response_mapping, usage)
         names = [_function_tool_name(call) for call in tool_calls]
         if iteration + 1 >= max_iterations:
+            _record_ollama_loop_exhausted(iteration, len(tool_calls))
             raise _continuation_loop_exhausted("Ollama unserved tool refusal loop", max_iterations)
         messages.extend(
-            _ollama_answer_tool_turn(response_mapping, names, memory_names=frozenset(), served=())
+            _ollama_answer_tool_turn(
+                response_mapping, names, turn=iteration, memory_names=frozenset(), served=()
+            )
         )
 
     raise _continuation_loop_exhausted("Ollama unserved tool refusal loop", max_iterations)
@@ -4886,6 +4901,7 @@ async def _dispatch_ollama_with_standard_memory_tools(
             standard_memory_tool_executor=standard_memory_tool_executor,
         )
         if iteration + 1 >= max_iterations:
+            _record_ollama_loop_exhausted(iteration, len(tool_calls))
             raise _memory_tool_loop_exhausted("Ollama", max_iterations)
 
         served = _ollama_memory_tool_result_messages(
@@ -4894,7 +4910,11 @@ async def _dispatch_ollama_with_standard_memory_tools(
         )
         messages.extend(
             _ollama_answer_tool_turn(
-                response_mapping, names, memory_names=_MEMORY_TOOL_NAMES, served=served
+                response_mapping,
+                names,
+                turn=iteration,
+                memory_names=_MEMORY_TOOL_NAMES,
+                served=served,
             )
         )
 
@@ -4971,6 +4991,24 @@ def _ollama_tool_calls(response: Mapping[str, Any]) -> tuple[Mapping[str, Any], 
     return tuple(calls)
 
 
+_OLLAMA_REFUSED_EVENT: Final[str] = "ollama.tool_call.refused"
+"""One span event per refused call: its turn, its position in the reply's batch and its
+name when it has one. Never its arguments or any result."""
+
+_OLLAMA_EXHAUSTED_EVENT: Final[str] = "ollama.tool_loop.exhausted"
+"""One span event when the bound is hit: the final turn's calls get no continuation, so
+they are recorded as unanswered here and never as refusals the model did not receive."""
+
+
+def _record_ollama_loop_exhausted(turn: int, calls: int) -> None:
+    from opentelemetry import trace
+
+    # The raised bound error is the authority; this event only annotates the dispatch span.
+    trace.get_current_span().add_event(
+        _OLLAMA_EXHAUSTED_EVENT, {"tool.call.turn": turn, "tool.call.count": calls}
+    )
+
+
 _OLLAMA_UNSERVED_TOOL_REFUSAL: Final[str] = (
     f"{_POLICY_REFUSAL_TEXT}: model tool calls are not supported on this route"
 )
@@ -4982,6 +5020,7 @@ def _ollama_answer_tool_turn(
     response: Mapping[str, Any],
     names: Sequence[str | None],
     *,
+    turn: int,
     memory_names: frozenset[str],
     served: Sequence[dict[str, Any]],
 ) -> list[dict[str, Any]]:
@@ -4990,18 +5029,24 @@ def _ollama_answer_tool_turn(
 
     ``served`` holds, in order, the result turns of exactly the calls naming a member of
     ``memory_names`` — the memory tools this arm executed (none on the plain arm). Every
-    other call is refused, never executed, and its refusal is recorded through the
-    `policy_override` seam, so an unserved call can neither pass through as the step's
-    result nor go unobserved. A call naming nothing is refused too, under a `None`
-    ``tool_name`` (the field is optional on Ollama's tool message).
+    other call is refused, never executed, and recorded: the dispatch is classified
+    `policy_override` and each refusal adds its own `_OLLAMA_REFUSED_EVENT`, so an unserved
+    call can neither pass through as the step's result nor go uncounted. A call naming
+    nothing is refused too, under a `None` ``tool_name`` (the field is optional on Ollama's
+    tool message), and is recorded by position alone.
     """
     results = iter(served)
     answers: list[dict[str, Any]] = [dict(_ollama_message(response))]
-    for name in names:
+    for index, name in enumerate(names):
         if name in memory_names:
             answers.append(next(results))
             continue
-        _record_policy_override()
+        identity = {"tool.call.turn": turn, "tool.call.index": index}
+        with _policy_override_span() as span:
+            span.add_event(
+                _OLLAMA_REFUSED_EVENT,
+                identity if name is None else {**identity, "gen_ai.tool.name": name},
+            )
         answers.append(
             {"role": "tool", "tool_name": name, "content": _OLLAMA_UNSERVED_TOOL_REFUSAL}
         )

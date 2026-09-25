@@ -243,3 +243,94 @@ async def test_the_memory_arm_stops_repeated_refusals_at_the_iteration_bound() -
     assert "exceeded 16 continuation turns" in str(excinfo.value)
     assert len(client.calls) == 16
     assert executor.requests == []
+
+
+# --- one trace record per refusal (Codex HOLD ollama-unserved-tool-refusal-codex-1) ---------
+
+REFUSAL_EVENT = "ollama.tool_call.refused"
+EXHAUSTED_EVENT = "ollama.tool_loop.exhausted"
+
+
+def _events(exporter: Any, name: str) -> list[dict[str, Any]]:
+    return [
+        dict(event.attributes or {})
+        for span in exporter.get_finished_spans()
+        for event in span.events
+        if event.name == name
+    ]
+
+
+def _refused(turn: int, index: int, tool: str) -> dict[str, Any]:
+    return {"tool.call.turn": turn, "tool.call.index": index, "gen_ai.tool.name": tool}
+
+
+async def test_three_refusals_are_three_ordered_records_without_arguments() -> None:
+    client = _OllamaClient()
+    client.responses = [_asks(WEATHER, ECHO, WEATHER)]
+    dispatcher, exporter = _plain(client)
+
+    await dispatcher.dispatch(_binding("ollama"), _tools_step(), step_context=_step_context())
+
+    assert _events(exporter, REFUSAL_EVENT) == [
+        _refused(0, 0, "weather.lookup"),
+        _refused(0, 1, "echo"),
+        _refused(0, 2, "weather.lookup"),
+    ]
+    # The enclosing dispatch classification is unchanged: one span carries it.
+    assert _policy_overrides(exporter) == 1
+
+
+async def test_a_mixed_batch_records_only_its_refused_calls_by_position() -> None:
+    client = _OllamaClient()
+    client.responses = [_asks(WEATHER, MEMORY_SEARCH, ECHO)]
+    dispatcher, exporter = _with_memory(client, _FakeStandardMemoryToolExecutor())
+
+    await dispatcher.dispatch(_binding("ollama"), _tools_step(), step_context=_step_context())
+
+    assert _events(exporter, REFUSAL_EVENT) == [
+        _refused(0, 0, "weather.lookup"),
+        _refused(0, 2, "echo"),
+    ]
+
+
+async def test_a_served_only_batch_records_no_refusal() -> None:
+    client = _OllamaClient()
+    client.responses = [_asks(MEMORY_SEARCH)]
+    dispatcher, exporter = _with_memory(client, _FakeStandardMemoryToolExecutor())
+
+    await dispatcher.dispatch(_binding("ollama"), _step(), step_context=_step_context())
+
+    assert _events(exporter, REFUSAL_EVENT) == []
+    assert _events(exporter, EXHAUSTED_EVENT) == []
+    assert _policy_overrides(exporter) == 0
+
+
+async def test_a_nameless_refusal_is_recorded_by_position_only() -> None:
+    client = _OllamaClient()
+    client.responses = [_asks({"function": {"arguments": {"secret": "x"}}})]
+    dispatcher, exporter = _plain(client)
+
+    await dispatcher.dispatch(_binding("ollama"), _tools_step(), step_context=_step_context())
+
+    assert _events(exporter, REFUSAL_EVENT) == [{"tool.call.turn": 0, "tool.call.index": 0}]
+
+
+@pytest.mark.parametrize("arm", ["plain", "memory"])
+async def test_the_terminal_turn_records_exhaustion_not_a_refusal_it_never_sent(arm: str) -> None:
+    client = _OllamaClient()
+    client.canned_response = _asks(WEATHER, ECHO)
+    if arm == "plain":
+        dispatcher, exporter = _plain(client)
+    else:
+        dispatcher, exporter = _with_memory(client, _FakeStandardMemoryToolExecutor())
+
+    with pytest.raises(RuntimeError, match="exceeded 16 continuation turns"):
+        await dispatcher.dispatch(_binding("ollama"), _tools_step(), step_context=_step_context())
+
+    refused = _events(exporter, REFUSAL_EVENT)
+    # Turns 0..14 were answered (two refusals each, both carried to the model); turn 15
+    # never gets a continuation, so it is recorded once as exhaustion, not as refusals.
+    assert [(e["tool.call.turn"], e["tool.call.index"]) for e in refused] == [
+        (turn, index) for turn in range(15) for index in (0, 1)
+    ]
+    assert _events(exporter, EXHAUSTED_EVENT) == [{"tool.call.turn": 15, "tool.call.count": 2}]
