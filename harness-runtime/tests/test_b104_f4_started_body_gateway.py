@@ -8,9 +8,10 @@ ORDER is proven on the real code path: claim, fsync'd `started`, body, one relea
 from __future__ import annotations
 
 import ast
+import contextlib
 import os
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -81,6 +82,17 @@ class _Body:
         return "ran"
 
 
+@contextlib.contextmanager
+def _gateway_refusal(phase: str, cause_type: type[Exception]) -> Iterator[None]:
+    """Expect the gateway's typed refusal: the phase and the original cause, by type."""
+    with pytest.raises(_gateway().GatewayRefusal) as caught:
+        yield
+    refusal = caught.value
+    assert refusal.phase is _gateway().GatewayPhase(phase)
+    assert type(refusal.cause) is cause_type and refusal.__cause__ is refusal.cause
+    assert str(refusal) == str(refusal.cause)  # the original text is retained for humans
+
+
 def _lease_is_free(store: ResumeClaimStore, ref: JournalRecordRef) -> bool:
     probe = store.probe_lease(ref)
     if isinstance(probe, HeldLease):
@@ -128,7 +140,7 @@ def test_a_stale_or_unadmitted_ref_never_reaches_the_body(placed: Placed) -> Non
     store = placed.store()
     body = _Body(store, ref)
 
-    with pytest.raises(ClaimRefusedError):
+    with _gateway_refusal("claim", ClaimRefusedError):
         _gateway().run_started(store, ref, RootLatestAdmission(), body)
 
     assert body.calls == 0 and not store.paths_for(ref).claim.exists()
@@ -159,7 +171,7 @@ def test_a_busy_lease_never_reaches_the_body(placed: Placed) -> None:
     assert isinstance(other, HeldLease)
     body = _Body(store, ref)
     try:
-        with pytest.raises(ClaimBusyError):
+        with _gateway_refusal("claim", ClaimBusyError):
             _gateway().run_started(store, ref, RootLatestAdmission(), body)
     finally:
         other.close()
@@ -181,7 +193,7 @@ def test_a_refused_start_leaves_the_body_uncalled_and_the_lease_released(placed:
     store = _StartRefusingStore(placement=placed.placement(), tenant_id=None)
     body = _Body(store, ref)
 
-    with pytest.raises(ClaimRefusedError):
+    with _gateway_refusal("start", ClaimRefusedError):
         _gateway().run_started(store, ref, RootLatestAdmission(), body)
 
     assert body.calls == 0
@@ -214,7 +226,7 @@ def test_an_fsync_fault_during_started_never_reaches_the_body_and_releases_the_l
     store = _FsyncFaultStore(placement=placed.placement(), tenant_id=None, patch=monkeypatch)
     body = _Body(store, ref)
 
-    with pytest.raises(ClaimRefusedError):
+    with _gateway_refusal("start", ClaimRefusedError):
         _gateway().run_started(store, ref, RootLatestAdmission(), body)
 
     assert body.calls == 0
@@ -285,7 +297,7 @@ def test_an_unstarted_parent_never_reaches_a_child_body(placed: Placed, family: 
     body = _Body(store, ref)
     unstarted = store.claim(family.parent_ref, RootLatestAdmission())
     with unstarted:
-        with pytest.raises(ClaimRefusedError):
+        with _gateway_refusal("claim", ClaimRefusedError):
             _gateway().run_started(
                 store, ref, ParentCarriedAdmission(StartedClaim(unstarted)), body
             )  # forged typestate over a claim that is only claimed
@@ -300,7 +312,7 @@ def test_a_closed_parent_never_reaches_a_child_body(placed: Placed, family: Fami
     closed = _started_parent(store, family)
     closed.close()
 
-    with pytest.raises(ClaimRefusedError):
+    with _gateway_refusal("claim", ClaimRefusedError):
         _gateway().run_started(store, ref, ParentCarriedAdmission(closed), body)
 
     assert body.calls == 0 and not store.paths_for(ref).claim.exists()
@@ -429,3 +441,89 @@ def test_the_refusing_binding_leaves_a_durable_resumed_child_unrun(
         _resume(runner, site.c, depth=1)
 
     assert caught.value.reason is ChildResumeRefusal.GATEWAY_NOT_INSTALLED and spy.calls == []
+
+
+# --- S1: the phase is typed, and only the two expected refusals are wrapped ----------------------
+
+
+def test_a_f1_exact_ref_mismatch_is_a_claim_phase_refusal(placed: Placed, family: Family) -> None:
+    store = placed.store()
+    other_ref = family.child_refs[1]  # a real ref the parent carries, but not the one requested
+    body = _Body(store, other_ref)
+    with _started_parent(store, family) as parent:
+        wrong = family.child_refs[0].model_copy(update={"latest_digest": "0" * 64})
+        with _gateway_refusal("claim", ClaimRefusedError):
+            _gateway().run_started(store, wrong, ParentCarriedAdmission(parent), body)
+
+    assert body.calls == 0
+
+
+def test_a_placement_fault_propagates_unchanged(placed: Placed) -> None:
+    from harness_runtime.config.state_placement import StateRootPlacementError
+
+    from .test_b104_resume_claim_store import (
+        _swap_marker,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    ref = _capture(placed.journal_dir)
+    store = placed.store()
+    body = _Body(store, ref)
+    _swap_marker(placed)
+
+    with pytest.raises(StateRootPlacementError):
+        _gateway().run_started(store, ref, RootLatestAdmission(), body)
+
+    assert body.calls == 0
+
+
+def test_a_journal_lock_timeout_propagates_unchanged(placed: Placed) -> None:
+    from harness_core.cross_process_lock_deadline import CrossProcessLockTimeoutError
+    from harness_runtime.lifecycle.journal_workflow_pause_store import cross_process_journal_lock
+
+    ref = _capture(placed.journal_dir)
+    store = placed.store()
+    body = _Body(store, ref)
+
+    with cross_process_journal_lock(store.paths_for(ref).journal):
+        with pytest.raises(CrossProcessLockTimeoutError):
+            _gateway().run_started(store, ref, RootLatestAdmission(), body, deadline_seconds=0.2)
+
+    assert body.calls == 0
+
+
+def test_a_raw_oserror_while_creating_the_claim_propagates_unchanged(
+    placed: Placed, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ref = _capture(placed.journal_dir)
+    store = placed.store()
+    body = _Body(store, ref)
+    real = rcs._write_all  # pyright: ignore[reportPrivateUsage]
+
+    def failing(fd: int, data: bytes) -> None:
+        if b'"claimed"' in data:
+            raise OSError(28, "injected write fault")
+        real(fd, data)
+
+    monkeypatch.setattr(rcs, "_write_all", failing)
+
+    with pytest.raises(OSError, match="injected write fault") as caught:
+        _gateway().run_started(store, ref, RootLatestAdmission(), body)
+
+    assert type(caught.value) is OSError and body.calls == 0
+
+
+def test_a_start_phase_busy_error_is_not_a_gateway_refusal(placed: Placed) -> None:
+    """Only the two expected refusals are wrapped: START wraps ClaimRefusedError alone."""
+    ref = _capture(placed.journal_dir)
+
+    class _BusyAtStart(ResumeClaimStore):
+        def mark_started(self, held: HeldClaim, *, deadline_seconds: float | None = None):
+            raise ClaimBusyError("unexpected")
+
+    store = _BusyAtStart(placement=placed.placement(), tenant_id=None)
+    body = _Body(store, ref)
+
+    with pytest.raises(ClaimBusyError):
+        _gateway().run_started(store, ref, RootLatestAdmission(), body)
+
+    assert body.calls == 0 and _lease_is_free(store, ref)
