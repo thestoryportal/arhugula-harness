@@ -26,14 +26,17 @@ def _reject_constant(_value: str) -> None:
     raise ValueError("nonfinite JSON constant")
 
 
-def read_ollama_evaluator_verdict(response: Mapping[str, Any]) -> EvaluatorVerdict:
+def read_ollama_evaluator_verdict(response: object) -> EvaluatorVerdict:
     """Parse the raw ``ChatResponse.model_dump()`` without changing it."""
     # [LAW:parse-dont-validate] The provider boundary returns CP's proven verdict.
     # [LAW:no-silent-failure] Every invalid reply has one explicit malformed arm.
     try:
-        if response.get("done") is not True or response.get("done_reason") == "length":
+        if not isinstance(response, Mapping):
+            raise EvaluatorVerdictMalformedError("response is not a mapping")
+        reply = cast(Mapping[str, Any], response)
+        if reply.get("done") is not True or reply.get("done_reason") == "length":
             raise EvaluatorVerdictMalformedError("response incomplete or truncated")
-        message = response.get("message")
+        message = reply.get("message")
         if not isinstance(message, Mapping):
             raise EvaluatorVerdictMalformedError("assistant message absent")
         assistant = cast(Mapping[str, Any], message)
@@ -50,7 +53,10 @@ def read_ollama_evaluator_verdict(response: Mapping[str, Any]) -> EvaluatorVerdi
         if not isinstance(payload, dict):
             raise EvaluatorVerdictMalformedError("verdict is not a JSON object")
         return parse_evaluator_verdict_mapping(payload)
-    except EvaluatorVerdictMalformedError as exc:
-        raise EvaluatorVerdictMalformedError("invalid Ollama evaluator verdict") from exc
-    except (ValueError, TypeError, RecursionError) as exc:
-        raise EvaluatorVerdictMalformedError("invalid Ollama evaluator JSON") from exc
+    except EvaluatorVerdictMalformedError:
+        failure_reason = "invalid Ollama evaluator verdict"
+    except (ValueError, TypeError, RecursionError):
+        failure_reason = "invalid Ollama evaluator JSON"
+    # [LAW:no-silent-failure] Raise after the handler unwinds so no model text survives
+    # in __cause__, __context__, or a formatted traceback.
+    raise EvaluatorVerdictMalformedError(failure_reason)

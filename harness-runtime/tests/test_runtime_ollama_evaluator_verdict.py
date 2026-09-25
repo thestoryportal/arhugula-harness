@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import copy
 import json
+import traceback
 from typing import Any
 
 import pytest
 from harness_cp.evaluator_verdict import EvaluatorVerdictMalformedError
+from harness_runtime.lifecycle import evaluator_verdict as verdict_reader
 from harness_runtime.lifecycle.evaluator_verdict import read_ollama_evaluator_verdict
 
 
@@ -106,6 +108,47 @@ def test_malformed_response_shape_is_one_typed_error(raw: dict[str, Any]) -> Non
     with pytest.raises(EvaluatorVerdictMalformedError):
         read_ollama_evaluator_verdict(raw)
     assert raw == before
+
+
+@pytest.mark.parametrize("raw", [None, "SECRET-TOKEN-XYZ", [1]], ids=["none", "str", "list"])
+def test_non_mapping_response_is_one_typed_error(raw: Any) -> None:
+    with pytest.raises(EvaluatorVerdictMalformedError) as caught:
+        read_ollama_evaluator_verdict(raw)
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+    assert "SECRET-TOKEN-XYZ" not in "".join(traceback.format_exception(caught.value))
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        '{"accepted":"SECRET-TOKEN-XYZ"}',
+        '{"accepted":SECRET-TOKEN-XYZ}',
+    ],
+    ids=["shape", "parse"],
+)
+def test_malformed_model_content_is_absent_from_exception_chain_and_traceback(
+    content: str,
+) -> None:
+    with pytest.raises(EvaluatorVerdictMalformedError) as caught:
+        read_ollama_evaluator_verdict(_response(content))
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+    assert "SECRET-TOKEN-XYZ" not in "".join(traceback.format_exception(caught.value))
+
+
+def test_json_recursion_error_is_a_sanitized_malformed_verdict(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _too_deep(*_args: Any, **_kwargs: Any) -> Any:
+        raise RecursionError("SECRET-TOKEN-XYZ")
+
+    monkeypatch.setattr(verdict_reader.json, "loads", _too_deep)
+    with pytest.raises(EvaluatorVerdictMalformedError) as caught:
+        read_ollama_evaluator_verdict(_response('{"accepted":true}'))
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+    assert "SECRET-TOKEN-XYZ" not in "".join(traceback.format_exception(caught.value))
 
 
 def test_thinking_is_ignored_when_content_is_valid() -> None:

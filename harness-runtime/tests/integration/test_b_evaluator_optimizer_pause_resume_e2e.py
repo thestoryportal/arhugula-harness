@@ -358,21 +358,29 @@ async def test_api_resume_evaluator_optimizer_pause_restart_proof_round_trip(
     )
 
 
+@pytest.mark.parametrize(
+    "malformed",
+    [
+        {
+            "done": True,
+            "done_reason": "stop",
+            "message": {"role": "assistant", "content": '{"accepted":'},
+        },
+        None,
+    ],
+    ids=["malformed-json", "non-mapping"],
+)
 @pytest.mark.asyncio
 async def test_api_resume_malformed_ollama_prefix_is_mismatch_without_dispatch(
     tmp_path: Path,
     _patched_runtime: None,
+    malformed: Any,
 ) -> None:
-    """A completed but malformed evaluator reply cannot be resumed or re-asked."""
+    """A malformed recovered reply is a mismatch, never an escaping exception."""
     _RESUME_DISPATCHED.clear()
     config = _config_opt_in(tmp_path)
     capture_ctx = await run_bootstrap(config, workload_class=_WORKLOAD)
     assert capture_ctx.pause_resume_protocol is not None
-    malformed = {
-        "done": True,
-        "done_reason": "stop",
-        "message": {"role": "assistant", "content": '{"accepted":'},
-    }
     snapshot = await capture_ctx.pause_resume_protocol.capture_pause_snapshot(
         workflow_id=_WORKFLOW_ID,
         run_id="run-eo-malformed-prefix",
@@ -386,7 +394,7 @@ async def test_api_resume_malformed_ollama_prefix_is_mismatch_without_dispatch(
                     step_id=_GENERATE,
                     output={"draft": 1},
                 ),
-                EvaluatorOptimizerStepResumeState(
+                EvaluatorOptimizerStepResumeState.model_construct(
                     entry_index=1,
                     declared_step_index=1,
                     step_id=_EVALUATE,
@@ -395,7 +403,13 @@ async def test_api_resume_malformed_ollama_prefix_is_mismatch_without_dispatch(
             ),
         ),
     )
-    rehydrated = PauseSnapshot.model_validate_json(snapshot.model_dump_json())
+    # A non-Mapping recovered output cannot pass the persisted schema. Exercise the
+    # in-memory CP boundary directly; the valid Mapping case retains the JSON round-trip.
+    rehydrated = (
+        PauseSnapshot.model_validate_json(snapshot.model_dump_json())
+        if isinstance(malformed, dict)
+        else snapshot
+    )
     result = await resume(_EoWorkflow(), pause_snapshot=rehydrated, config=config)
     assert result.status == "failed"
     assert result.failure_cause is not None
