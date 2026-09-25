@@ -1,4 +1,10 @@
-# Specification — Harness Runtime v1.125
+# Specification — Harness Runtime v1.126
+
+## Change-note (v1.125 → v1.126)
+
+**Ollama evaluator verdicts (C-RT-37).** At every Runtime bootstrap, the evaluator-optimizer decision reader accepts a completed Ollama assistant `ChatResponse.model_dump()` with one strict JSON object in nonempty `message.content`. Its only accepted verdict is the CP `EvaluatorVerdict` with a literal JSON boolean `accepted` and optional string `feedback`. Invalid shapes and JSON become `EvaluatorVerdictMalformedError`; the CP driver then returns FAILED with its dedicated malformed class and drains prior entries. A malformed resume prefix returns a resume mismatch. The same binding is visible to an evaluator-optimizer run inside a child sub-agent. §14.26 is the contract.
+
+**Scope and limits.** This reader recognizes Ollama response dumps only. Hosted or subscription-CLI response shapes fail closed when they reach it. The first installed witness uses an Ollama-only fallback chain and no memory context. The provider reply remains raw in the output store, pause cursor and inter-step channel. Installed values of `done_reason`, schema adherence, thinking-model output, and the interaction of `format` with automatic memory tools remain unverified; this version makes no installed acceptance claim.
 
 ## Change-note (v1.124 → v1.125)
 
@@ -3305,6 +3311,7 @@ The two-bool **named-cell** shape is normative: it can express **exactly** the t
 | `cost_chain` | `CostAttributionChain` (OD) | 4 | 5-step cost-attribution chain |
 | `audit_writer` | `AuditLedgerWriter` (runtime-defined, wraps IS+OD) | 4 | Multi-tenant audit-ledger writer |
 | `override_evaluator` | `PerStepOverrideEvaluator` (CP) | 5 | Override evaluator runtime |
+| `evaluator_verdict_reader` | `Callable[[Mapping[str, Any]], EvaluatorVerdict] | None` (CP result; `None` only on direct unbound constructions) | 5 | Reads completed Ollama assistant verdicts for all evaluator-optimizer decision points, including child runs (§14.26). |
 | `topology_dispatcher` | `TopologyDispatcher` (CP, runtime-bound) | 5 | TopologyPattern dispatcher |
 | `lifecycle_emitter` | `LifecycleEventEmitter` (runtime-defined) | 5 | Emits `workflow_event_class` events |
 | `drained_flag` | `asyncio.Event` | 0 (initialized) | Set by signal handler; polled by CP loop for drain |
@@ -7120,6 +7127,16 @@ The STATE_LEDGER directory is not derived: it is the operator-bound `STATE_LEDGE
 **§14.25.8 Owed and open.** (1) S3: the durable resume claim gateway and the recovery coordinator MUST take a `VerifiedStateRoot`, revalidate it before any lock or claim, and refuse a durable claim when `state_placement` is `None`; nothing in this version enforces that. (2) S4: shipped local Ollama and subscription-CLI profiles and their documentation must declare the placement. (3) S5: an installed-host witness must show the root outside every checkout and every restore scope, survive `git clean -xfd` and the approved restore, and be refused when swapped. (4) `audit_cutover_record_path` (an operator-supplied path to the authenticated cutover record) is NOT classified here; whether it must live under the root, and how, is an explicit open operator/spec decision. (5) Not constrained: local signer key PEM paths and embedding model/cache directories (operator-absolute configuration, not recovery state under this decision) and a custom ledger binding used before placement was declared. (6) The VM candidate location `/home/robbo/.local/state/arhugula-harness` is not accepted by this version.
 
 **Provenance.** Contract source: the reviewed S1+S2 code integrated in local RC `e104d9ca4723d9711c7e9b476078ad9a7e0bbaeb` (merge of `cd858d1`), its focused test files (`tests/test_state_placement.py`, 92 tests; `tests/test_state_placement_bootstrap.py`, 28 tests; 120 passed on that RC), the operator decisions in `external-state-root-first-release-decision-1.md`, the independent design at `evidence-external-state-root-design-opus-1/report.md`, and the operator-guard review at `evidence-state-root-s2-operator-guard-review-opus-1/verdict.md`. The refusal message form and the 21 reason strings were observed by running the verifier. The step orders and store names were read from source and exercised by those tests; the CLI exit behavior for a refused placement is UNVERIFIED.
+
+---
+
+## §14.26 C-RT-37 — Ollama evaluator verdict binding
+
+**Input and decision.** The reader consumes a raw Ollama `ChatResponse.model_dump()` mapping after the provider call completes. It requires `done is True`, rejects `done_reason="length"`, requires `message` to be a mapping with `role="assistant"` and nonempty string `content`, and rejects any nonempty `tool_calls`, even when content is present. `thinking` may be present; only `content` carries the verdict. The content must be one JSON object, allowing surrounding whitespace but refusing code fences, trailing text, duplicate keys at any depth and NaN or Infinity constants. The object is parsed by CP's strict `EvaluatorVerdict` contract: `accepted` must be a literal JSON boolean, `feedback` may be absent or a string, and no other keys are allowed. Any malformed shape or parse failure, including recursion depth failure, raises `EvaluatorVerdictMalformedError` with a reason that does not quote model content. [APPSPEC:condition-effect]
+
+**Binding and failure.** Stage 5 binds the typed reader to the mutable bootstrap context and stage 7 carries the same callable onto the frozen `HarnessContext`. A child sub-agent uses the same binding. The CP driver's live evaluate, pending evaluate on resume and completed resume-prefix checks all consume this reader. A malformed live or pending verdict returns FAILED with `evaluator-optimizer-verdict-malformed` and drains prior buffered entries; a malformed completed prefix returns a resume mismatch. Neither path retries the completed evaluation or advances to a hosted fallback. [APPSPEC:errors-are-api]
+
+**Recorded bytes and release scope.** Parsing does not change the provider response mapping recorded in the cursor, engine output store or inter-step channel, and does not change the ledger entries. A valid reject may continue to the iteration cap and end SUCCESS with `accepted=False`; only `terminal_state["accepted"] is True` proves acceptance. The reader's recognized response shape is Ollama-only. The local evaluator witness uses an Ollama-only chain and no memory context. Installed `done_reason` values, `format` schema adherence, thinking-model content and `format` plus automatic memory tools remain unverified. [APPSPEC:observed-beats-inferred]
 
 ---
 

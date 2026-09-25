@@ -37,7 +37,7 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from enum import Enum, StrEnum
 from pathlib import Path
@@ -62,6 +62,7 @@ from harness_cp.brief_authoring_inheritance import BriefAuthoringInheritance
 from harness_cp.cp_shared_types import ModelBinding
 from harness_cp.cross_family_fallback_chain import FallbackChain
 from harness_cp.engine_class import EngineClass
+from harness_cp.evaluator_verdict import EvaluatorVerdict
 from harness_cp.gate_level_rule import GateLevel as CPGateLevel
 from harness_cp.hitl_as_tool_call_rewriting import (
     HITLSemanticVariant,
@@ -2927,6 +2928,9 @@ class HarnessContext(BaseModel):
     # `arbitrary_types_allowed`; a typed container field would be Pydantic-copied
     # at `freeze()`, disconnecting the driver's records from the dispatcher's read.
     inter_step_output_channel: InterStepOutputChannel | None = None
+
+    # [LAW:types-are-the-program] The bound provider reader returns CP's verdict type.
+    evaluator_verdict_reader: Callable[[Mapping[str, Any]], EvaluatorVerdict] | None = None
 
     engine_output_store: EngineOutputStore | None = None
     """B-ENGINE-OUTPUT-REPLAY (runtime spec C-RT-32) — the durable per-run

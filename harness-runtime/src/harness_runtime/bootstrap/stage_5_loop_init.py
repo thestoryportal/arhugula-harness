@@ -63,6 +63,7 @@ from harness_runtime.lifecycle.engine_output_store import (
     EngineOutputStore,
     engine_output_dir_for,
 )
+from harness_runtime.lifecycle.evaluator_verdict import read_ollama_evaluator_verdict
 from harness_runtime.lifecycle.frozen_tool_superset import (
     CHILD_DOWNGRADE_REMOVE_TIERS,
     compute_frozen_tool_superset,
@@ -267,6 +268,9 @@ async def execute(
     # dispatcher injects nothing (byte-identical to pre-v1.59).
     if config.inter_step_data_flow and ctx.inter_step_output_channel is None:
         ctx.inter_step_output_channel = RunScopedInterStepOutputChannel()
+
+    # [LAW:single-enforcer] CP consumes this one provider-specific verdict boundary.
+    ctx.evaluator_verdict_reader = read_ollama_evaluator_verdict
 
     # B-ENGINE-OUTPUT-REPLAY (runtime spec C-RT-32) — the durable output-carrying
     # event-history store, co-located under the resolved STATE_LEDGER dir (the

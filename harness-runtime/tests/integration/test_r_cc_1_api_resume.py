@@ -725,7 +725,11 @@ async def test_durable_wrapper_forwards_evaluator_optimizer_resume(tmp_path: Pat
                 entry_index=1,
                 declared_step_index=1,
                 step_id="evaluate",
-                output={"accepted": False},
+                output={
+                    "done": True,
+                    "done_reason": "stop",
+                    "message": {"role": "assistant", "content": '{"accepted": false}'},
+                },
             ),
         ),
     )

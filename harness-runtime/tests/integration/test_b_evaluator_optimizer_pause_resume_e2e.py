@@ -22,6 +22,7 @@ Substrate (provider/tracer/OD fakes + the get_tracer-capable tracer) lifted by v
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterator, Sequence
 from pathlib import Path
 from typing import Any, cast
@@ -70,6 +71,20 @@ _SURFACE = DeploymentSurface.LOCAL_DEVELOPMENT
 _WORKFLOW_ID = "wf-b-eo-pause-resume-e2e"
 _GENERATE = "generate"
 _EVALUATE = "evaluate"
+
+
+def _ollama_verdict(accepted: bool) -> dict[str, Any]:
+    # [LAW:behavior-not-structure] Match the provider output seen by the reader.
+    return {
+        "done": True,
+        "done_reason": "stop",
+        "message": {
+            "role": "assistant",
+            "content": json.dumps({"accepted": accepted}),
+            "tool_calls": None,
+        },
+    }
+
 
 _CHAIN = FallbackChain(
     primary=ProviderCandidate(
@@ -208,7 +223,7 @@ class _EoRecordingDispatcher:
         sid = str(step.step_id)
         _RESUME_DISPATCHED.append(sid)
         if sid == _EVALUATE:
-            return {"accepted": True}
+            return _ollama_verdict(True)
         return {"draft": 99, "fresh": True}
 
 
@@ -313,7 +328,7 @@ async def test_api_resume_evaluator_optimizer_pause_restart_proof_round_trip(
                     entry_index=1,
                     declared_step_index=1,
                     step_id=_EVALUATE,
-                    output={"accepted": False},
+                    output=_ollama_verdict(False),
                 ),
             ),
         ),
@@ -341,3 +356,48 @@ async def test_api_resume_evaluator_optimizer_pause_restart_proof_round_trip(
     assert _RESUME_DISPATCHED == [_GENERATE, _EVALUATE], (
         f"resume must recover the completed prefix; dispatched={_RESUME_DISPATCHED}"
     )
+
+
+@pytest.mark.asyncio
+async def test_api_resume_malformed_ollama_prefix_is_mismatch_without_dispatch(
+    tmp_path: Path,
+    _patched_runtime: None,
+) -> None:
+    """A completed but malformed evaluator reply cannot be resumed or re-asked."""
+    _RESUME_DISPATCHED.clear()
+    config = _config_opt_in(tmp_path)
+    capture_ctx = await run_bootstrap(config, workload_class=_WORKLOAD)
+    assert capture_ctx.pause_resume_protocol is not None
+    malformed = {
+        "done": True,
+        "done_reason": "stop",
+        "message": {"role": "assistant", "content": '{"accepted":'},
+    }
+    snapshot = await capture_ctx.pause_resume_protocol.capture_pause_snapshot(
+        workflow_id=_WORKFLOW_ID,
+        run_id="run-eo-malformed-prefix",
+        step_index=0,
+        pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
+        evaluator_optimizer_resume=EvaluatorOptimizerResumeState(
+            completed_steps=(
+                EvaluatorOptimizerStepResumeState(
+                    entry_index=0,
+                    declared_step_index=0,
+                    step_id=_GENERATE,
+                    output={"draft": 1},
+                ),
+                EvaluatorOptimizerStepResumeState(
+                    entry_index=1,
+                    declared_step_index=1,
+                    step_id=_EVALUATE,
+                    output=malformed,
+                ),
+            ),
+        ),
+    )
+    rehydrated = PauseSnapshot.model_validate_json(snapshot.model_dump_json())
+    result = await resume(_EoWorkflow(), pause_snapshot=rehydrated, config=config)
+    assert result.status == "failed"
+    assert result.failure_cause is not None
+    assert "malformed-verdict-in-prefix" in str(result.failure_cause)
+    assert _RESUME_DISPATCHED == []

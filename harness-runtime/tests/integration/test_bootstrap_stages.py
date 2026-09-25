@@ -29,7 +29,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from harness_runtime.bootstrap import (
@@ -46,6 +46,7 @@ from harness_runtime.bootstrap import (
     stage_7_ingress,
 )
 from harness_runtime.bootstrap.mutable_context import _MutableHarnessContext
+from harness_runtime.lifecycle.evaluator_verdict import read_ollama_evaluator_verdict
 from harness_runtime.types import BootstrapStage
 
 from tests.integration.conftest import WORKLOAD, build_config
@@ -224,6 +225,9 @@ async def test_through_stage_n_post_conditions(
             f"stage {stage.name} post-condition violated: builder.{attr} is None"
         )
 
+    if stage is BootstrapStage.LOOP_INIT:
+        assert ctx.evaluator_verdict_reader is read_ollama_evaluator_verdict
+
 
 # ---------------------------------------------------------------------------
 # Per-stage rollback tests — failure at stage N rolls back stages 0..N-1.
@@ -281,6 +285,53 @@ async def test_stage_7_post_conditions_via_successful_bootstrap(
     assert pidfile.is_file()
     # Drained flag exists per U-RT-44 stage 0 initialization, unaffected by stage 7.
     assert ctx.drained_flag is not None
+    assert ctx.evaluator_verdict_reader is read_ollama_evaluator_verdict
+
+
+@pytest.mark.asyncio
+async def test_stage5_child_runner_reads_bound_ollama_verdict(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    patched_runtime: dict[str, Any],
+) -> None:
+    """An EO child closes over the live stage-5 builder and sees its reader."""
+    _ = patched_runtime
+    from types import SimpleNamespace
+
+    from harness_runtime.lifecycle import child_workflow_runner as child_module
+
+    captured: list[_MutableHarnessContext] = []
+    _capture_completed_stages_then_explode(monkeypatch, stage_6_cxa_wiring, captured)
+    with pytest.raises(BootstrapFailure):
+        await run_bootstrap(build_config(tmp_path), workload_class=WORKLOAD)
+    builder = captured[0]
+    seen: list[bool] = []
+
+    def _fake_child_driver(*args: Any, **kwargs: Any) -> object:
+        _ = kwargs
+        reader = args[3].evaluator_verdict_reader
+        seen.append(
+            reader(
+                {
+                    "done": True,
+                    "done_reason": "stop",
+                    "message": {"role": "assistant", "content": '{"accepted":true}'},
+                }
+            ).accepted
+        )
+        return object()
+
+    monkeypatch.setattr(child_module, "execute_workflow", _fake_child_driver)
+    runner = child_module.compose_child_workflow_runner(cast(Any, builder))
+    runner(
+        workflow_id="eo-child",
+        manifest_entry=cast(Any, object()),
+        steps=(),
+        handoff_context=cast(Any, object()),
+        descent=cast(Any, SimpleNamespace(child_gate_level=None)),
+        default_model_binding=cast(Any, object()),
+    )
+    assert seen == [True]
 
 
 # ---------------------------------------------------------------------------

@@ -7781,6 +7781,113 @@ class _FSCtx:
         self.tenant_id = None
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "verdict_text,expected_status",
+    [('{"accepted":true}', RunStatus.SUCCESS), ('{"accepted":', RunStatus.FAILED)],
+)
+async def test_ollama_evaluator_driver_boundary_preserves_raw_output_and_never_falls_back(
+    verdict_text: str, expected_status: RunStatus
+) -> None:
+    """One raw Ollama evaluate reply reaches the driver reader after dispatch."""
+    from harness_runtime.lifecycle.evaluator_verdict import read_ollama_evaluator_verdict
+
+    raw_draft = {
+        "done": True,
+        "done_reason": "stop",
+        "message": {"role": "assistant", "content": "draft"},
+    }
+    raw_verdict = {
+        "done": True,
+        "done_reason": "stop",
+        "message": {"role": "assistant", "content": verdict_text},
+    }
+    ollama = _OllamaFakeAdapter(_OllamaClient())
+    ollama.client.responses = [
+        _OllamaResponse(prompt_eval_count=1, eval_count=1, _dump=raw_draft),
+        _OllamaResponse(prompt_eval_count=1, eval_count=1, _dump=raw_verdict),
+    ]
+    hosted = _AnthropicFakeAdapter(_AnthropicClient())
+    tp, _ = _tracer_provider_with_exporter()
+    channel = InterStepOutputChannel()
+    inner = RuntimeLLMDispatcher(
+        providers={"ollama": ollama, "anthropic": hosted},
+        tracer_provider=tp,
+        inter_step_channel=channel,
+    )
+    chain = FallbackChain(
+        primary=_candidate("ollama", "local-evaluator"),
+        same_family=(),
+        cross_family=(_candidate("anthropic", "hosted-fallback"),),
+        terminal=None,
+    )
+    wrapper = RetryBreakerFallbackDispatcher(
+        inner=inner,
+        retry_breaker=_retry_breaker_with_llm_policy(),
+        fallback_chain=chain,
+        tracer_provider=tp,
+        sleep_fn=_noop_sleep,
+    )
+    facade = SyncDispatcherFacade(
+        inner=wrapper, loop=asyncio.get_running_loop(), result_timeout_seconds=5.0
+    )
+    manifest = WorkflowManifestEntry(
+        workflow_id="wf-ollama-evaluator-reader",
+        workload_class=WorkloadClass.SOFTWARE_ENGINEERING,
+        persona_tier=PersonaTier.TEAM_BINDING,
+        engine_class=EngineClass.PURE_PATTERN_NO_ENGINE,
+        topology_pattern=TopologyPattern.EVALUATOR_OPTIMIZER,
+        layer_budgets=(),
+        fallback_chain=chain,
+        hitl_placements=(),
+        per_step_overrides={},
+    )
+    steps = [
+        WorkflowStep(
+            step_id=StepID("generate"),
+            step_kind=StepKind.INFERENCE_STEP,
+            step_payload={
+                "messages": [{"role": "user", "content": "draft"}],
+                "tools": None,
+                "params": {"format": {"type": "object"}, "options": {"temperature": 0}},
+            },
+        ),
+        WorkflowStep(
+            step_id=StepID("evaluate"),
+            step_kind=StepKind.INFERENCE_STEP,
+            step_payload={
+                "messages": [{"role": "user", "content": "judge"}],
+                "tools": None,
+                "params": {"format": {"type": "object"}, "options": {"temperature": 0}},
+            },
+        ),
+    ]
+    ctx = _FSCtx()
+    ctx.evaluator_verdict_reader = read_ollama_evaluator_verdict
+    ctx.inter_step_output_channel = channel
+    result = await asyncio.to_thread(
+        partial(
+            execute_workflow,
+            manifest_entry=manifest,
+            steps=steps,
+            run_id="run-reader",
+            ctx=cast(Any, ctx),
+            default_model_binding=ModelBinding(provider="ollama", model="local-evaluator"),
+            step_dispatchers=cast(Any, _SingleKindFacadeRegistry(facade)),
+        )
+    )
+    assert result.status is expected_status, result.fail_class
+    assert len(ollama.client.calls) == 2  # generate, then one evaluate
+    assert hosted.client.messages.calls == []
+    assert ollama.client.calls[1]["format"] == {"type": "object"}
+    assert ollama.client.calls[1]["options"] == {"temperature": 0}
+    assert channel.most_recent_output() == raw_verdict
+    if expected_status is RunStatus.SUCCESS:
+        assert result.final_state["evaluation"] == raw_verdict
+    else:
+        assert "evaluator-optimizer-verdict-malformed" in result.fail_class
+
+
 class _SingleKindFacadeRegistry:
     def __init__(self, dispatcher: Any) -> None:
         self._d = dispatcher
