@@ -22,6 +22,8 @@ from harness_runtime.lifecycle.resume_claim_store import (
     ResumeClaimStore,
     RootLatestAdmission,
     StartedClaim,
+    StartedOrUnknown,
+    parse_claim,
 )
 
 from .test_b104_f4_started_body_gateway import (
@@ -73,7 +75,9 @@ def test_a_started_parent_admits_the_child_body_and_returns_its_result(
     assert body.calls == 1 and body.claim_phase == "started"
 
 
-def test_a_stale_or_mismatched_child_ref_is_claim_refused(placed: Placed, family: Family) -> None:
+def test_a_ref_naming_no_exact_journal_record_is_claim_refused(
+    placed: Placed, family: Family
+) -> None:
     store = placed.store()
     good = _verified(family)
     wrong = VerifiedChildRecord(
@@ -273,6 +277,9 @@ def test_a_body_failure_propagates_and_the_claim_stays_started(
             _admission(store, parent).run_admitted(verified, body)
 
     assert _lease_is_free(store, verified.ref)
+    # sticky: a body that failed after `started` leaves the claim started, never an unstarted proof
+    state = parse_claim(store.paths_for(verified.ref).claim.read_bytes(), verified.ref)
+    assert isinstance(state, StartedOrUnknown) and state.phase == "started"
 
 
 # --- nothing in production binds or imports the new binding ---------------------------------------

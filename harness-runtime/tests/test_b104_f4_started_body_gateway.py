@@ -446,9 +446,13 @@ def test_the_refusing_binding_leaves_a_durable_resumed_child_unrun(
 # --- S1: the phase is typed, and only the two expected refusals are wrapped ----------------------
 
 
-def test_a_f1_exact_ref_mismatch_is_a_claim_phase_refusal(placed: Placed, family: Family) -> None:
+def test_a_ref_naming_no_exact_journal_record_is_a_claim_phase_refusal(
+    placed: Placed, family: Family
+) -> None:
     store = placed.store()
-    other_ref = family.child_refs[1]  # a real ref the parent carries, but not the one requested
+    other_ref = family.child_refs[
+        1
+    ]  # only names the body's disk view; the request below is not exact
     body = _Body(store, other_ref)
     with _started_parent(store, family) as parent:
         wrong = family.child_refs[0].model_copy(update={"latest_digest": "0" * 64})
