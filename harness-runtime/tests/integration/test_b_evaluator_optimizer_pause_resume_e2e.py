@@ -208,7 +208,7 @@ class _EoRecordingDispatcher:
         sid = str(step.step_id)
         _RESUME_DISPATCHED.append(sid)
         if sid == _EVALUATE:
-            return {"accepted": True, "fresh": True}
+            return {"accepted": True}
         return {"draft": 99, "fresh": True}
 
 
@@ -313,7 +313,7 @@ async def test_api_resume_evaluator_optimizer_pause_restart_proof_round_trip(
                     entry_index=1,
                     declared_step_index=1,
                     step_id=_EVALUATE,
-                    output={"accepted": False, "recovered": True},
+                    output={"accepted": False},
                 ),
             ),
         ),
