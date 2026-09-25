@@ -155,7 +155,7 @@ def test_a_non_root_or_unknown_depth_root_request_never_reaches_the_body(
     body = _Body(store, ref)
 
     for admission in (RootLatestAdmission(), rcs._ROOT_LATEST):  # pyright: ignore[reportPrivateUsage]
-        with pytest.raises(ClaimRefusedError):
+        with _gateway_refusal("claim", ClaimRefusedError):
             _gateway().run_started(store, ref, admission, body)
 
     paths = store.paths_for(ref)
