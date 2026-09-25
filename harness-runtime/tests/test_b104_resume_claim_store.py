@@ -36,6 +36,55 @@ def _capture(root: Path):
     return journal.capture(snapshot, depth=None)
 
 
+def test_stale_record_refuses_after_later_valid_append(tmp_path: Path) -> None:
+    from harness_runtime.lifecycle.resume_claim_store import ClaimRefusedError
+
+    stale = _capture(tmp_path)
+    current = _capture(tmp_path)
+    journal = JournalWorkflowPauseStore(journal_dir=tmp_path, tenant_id=None)
+    assert journal.read_exact(stale) is not None  # Positional reads remain valid.
+    store = ResumeClaimStore(journal_dir=tmp_path, tenant_id=None)
+    with pytest.raises(ClaimRefusedError, match="stale"):
+        store.claim(stale)
+    assert not store.paths_for(stale).claim.exists()
+    with store.claim(current):
+        assert store.paths_for(current).claim.exists()
+
+
+def test_stale_append_between_lease_and_final_admission_refuses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from harness_runtime.lifecycle.resume_claim_store import ClaimRefusedError
+
+    stale = _capture(tmp_path)
+    store = ResumeClaimStore(journal_dir=tmp_path, tenant_id=None)
+    original_probe = store.probe_lease
+
+    def append_then_probe(ref):
+        _capture(tmp_path)
+        return original_probe(ref)
+
+    monkeypatch.setattr(store, "probe_lease", append_then_probe)
+    with pytest.raises(ClaimRefusedError, match="stale"):
+        store.claim(stale)
+    assert not store.paths_for(stale).claim.exists()
+
+
+def test_noncanonical_lease_bytes_refuse_before_claim(tmp_path: Path) -> None:
+    from harness_runtime.lifecycle.resume_claim_store import ClaimRefusedError
+
+    ref = _capture(tmp_path)
+    store = ResumeClaimStore(journal_dir=tmp_path, tenant_id=None)
+    paths = store.paths_for(ref)
+    token = "1" * 32
+    canonical = store._lease_bytes(ref, token)
+    paths.lease.write_bytes(canonical[:-1] + b"  \n")
+    with pytest.raises(ClaimRefusedError, match="noncanonical lease bytes"):
+        store.claim(ref)
+    assert paths.lease.read_bytes() == canonical[:-1] + b"  \n"
+    assert not paths.claim.exists()
+
+
 def test_claim_is_sticky_after_holder_closes(tmp_path: Path) -> None:
     ref = _capture(tmp_path)
     store = ResumeClaimStore(journal_dir=tmp_path, tenant_id=None)

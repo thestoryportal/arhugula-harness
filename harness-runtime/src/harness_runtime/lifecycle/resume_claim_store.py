@@ -300,6 +300,9 @@ class ResumeClaimStore:
         frame = _frame(data)
         if frame["phase"] != "lease" or frame["record_ref"] != ref:
             raise ValueError("invalid lease identity")
+        # [LAW:one-source-of-truth] The encoded frame is the sole accepted lease evidence.
+        if data != ResumeClaimStore._lease_bytes(ref, frame["token"]):
+            raise ValueError("noncanonical lease bytes")
         return frame["token"]
 
     @staticmethod
@@ -357,7 +360,7 @@ class ResumeClaimStore:
             self._valid_lease(fd, ref)
             _fsync_dir(paths.journal.parent)
         except (OSError, ValueError) as exc:
-            raise ClaimRefusedError("invalid canonical lease") from exc
+            raise ClaimRefusedError(f"invalid canonical lease: {exc}") from exc
         finally:
             os.close(fd)
 
@@ -399,6 +402,19 @@ class ResumeClaimStore:
             if not acquired:
                 os.close(fd)
 
+    def _require_current_exact(self, ref: JournalRecordRef) -> None:
+        """Check latest identity and exact validity while the caller holds journal lock."""
+        # [LAW:single-enforcer] Claim admission alone requires a current record;
+        # positional read_exact remains available to other journal consumers.
+        latest = self._journal.read_latest_attributed(ref.workflow_id)
+        if (
+            latest.record_count != ref.record_count
+            or latest.latest_record_digest != ref.latest_digest
+        ):
+            raise ClaimRefusedError("stale or missing journal record")
+        if self._journal.read_exact(ref) is None:
+            raise ClaimRefusedError("invalid exact journal record")
+
     def claim(self, ref: JournalRecordRef, *, deadline_seconds: float | None = None) -> HeldClaim:
         """Return a held sticky claim; busy is retryable, all evidence faults refuse.
 
@@ -413,11 +429,8 @@ class ResumeClaimStore:
             raise ClaimRefusedError("journal exclusion or safe open flags are unavailable")
         paths = self.paths_for(ref)
         with cross_process_journal_lock(paths.journal, deadline_seconds=deadline_seconds):
-            if (
-                self._journal.read_exact(ref) is None
-                or self._tombstoned(paths)
-                or os.path.lexists(paths.claim)
-            ):
+            self._require_current_exact(ref)
+            if self._tombstoned(paths) or os.path.lexists(paths.claim):
                 raise ClaimRefusedError("record is ineligible")
             self._prepare_lease(paths, ref)
         probe = self.probe_lease(ref)
@@ -427,9 +440,11 @@ class ResumeClaimStore:
             raise ClaimRefusedError("lease is missing or invalid")
         try:
             with cross_process_journal_lock(paths.journal, deadline_seconds=deadline_seconds):
+                # [LAW:no-ambient-temporal-coupling] Recency is checked under the
+                # same journal lock as O_EXCL creation, after taking the lease lock.
+                self._require_current_exact(ref)
                 if (
-                    self._journal.read_exact(ref) is None
-                    or self._tombstoned(paths)
+                    self._tombstoned(paths)
                     or os.path.lexists(paths.claim)
                     or not self._same_inode(probe.fd, paths.lease)
                     or self._valid_lease(probe.fd, ref) != probe.token
