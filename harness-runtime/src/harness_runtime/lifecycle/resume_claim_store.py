@@ -395,15 +395,17 @@ class ResumeClaimStore:
             return LeaseInvalid()
         acquired = False
         try:
-            token = self._valid_lease(fd, ref)
-            if not self._same_inode(fd, paths.lease):
-                raise ValueError("lease inode changed")
+            # [LAW:no-ambient-temporal-coupling] The lock is taken BEFORE the bytes are
+            # trusted: a live holder can leave damaged bytes, and only the lock says "live".
             try:
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except OSError as exc:
                 if exc.errno in (errno.EAGAIN, errno.EWOULDBLOCK, errno.EACCES):
                     return LeaseBusy()
                 raise
+            token = self._valid_lease(fd, ref)
+            if not self._same_inode(fd, paths.lease):
+                raise ValueError("lease inode changed")
             acquired = True
             return HeldLease(fd, token, ref)
         except (OSError, ValueError):

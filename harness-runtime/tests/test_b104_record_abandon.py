@@ -374,6 +374,59 @@ def test_a_live_lease_holder_is_retryable_contention_with_no_intent(placed: Plac
     assert _tombstones(placed, ref) == []
 
 
+@pytest.mark.skipif(not os.path.isdir("/proc/self/fd"), reason="fd cleanup is read from /proc")
+@pytest.mark.parametrize("kind", ["empty", "garbage", "noncanonical"])
+def test_a_live_holder_with_a_damaged_lease_and_no_token_claim_is_contention_not_a_tombstone(
+    placed: Placed, kind: str
+) -> None:
+    ref = _capture(placed.journal_dir)
+    store = placed.store()
+    paths = store.paths_for(ref)
+    with store.claim(ref):
+        paths.claim.write_bytes(b'{"version":1,"phase":"claimed","tok')  # a torn, tokenless claim
+        canonical = paths.lease.read_bytes()
+        paths.lease.write_bytes(
+            {"empty": b"", "garbage": b"not a lease\n", "noncanonical": canonical[:-1] + b"  \n"}[
+                kind
+            ]
+        )
+        before = _tree(placed.journal_dir)
+        fds_before = len(os.listdir("/proc/self/fd"))
+
+        result = _recovery(placed).recover(_record_abandon(ref))
+
+        assert result.outcome is RecoveryOutcome.RETRYABLE_CONTENTION
+        assert _audits(placed) == []  # zero INTENT / COMPLETE
+        assert _tombstones(placed, ref) == []
+        assert _tree(placed.journal_dir) == before
+        assert len(os.listdir("/proc/self/fd")) == fds_before
+
+    # The worker is gone: the same damaged lease is now free and invalid, and the record
+    # transition proceeds under the existing record-scope rule.
+    after = _recovery(placed).recover(_record_abandon(ref))
+
+    assert after.outcome is RecoveryOutcome.ABANDONED
+    assert len(_tombstones(placed, ref)) == 1
+    assert _audits(placed) == [("intent", "rec-1", "-"), ("complete", "rec-1", "record_tombstone")]
+    assert _record_entries(placed)[0].observation.kind == "claim_no_token"
+
+
+def test_a_live_holder_with_a_damaged_lease_is_contention_for_a_claim_scoped_abandon(
+    placed: Placed,
+) -> None:
+    ref = _capture(placed.journal_dir)
+    store = placed.store()
+    with store.claim(ref):
+        store.paths_for(ref).lease.write_bytes(b"not a lease\n")
+        before = _tree(placed.journal_dir)
+
+        result = _recovery(placed).recover(ClaimAbandon(ref, "abn-1", UID, REASON, _attestation()))
+
+        assert result.outcome is RecoveryOutcome.RETRYABLE_CONTENTION
+        assert _audits(placed) == []
+        assert _tree(placed.journal_dir) == before
+
+
 # --- idempotency and conflicts ---------------------------------------------------------------
 
 
