@@ -9,11 +9,13 @@ back_reference:
   - "evaluation/production-readiness-arch/evidence-external-state-root-design-opus-1/report.md (SHA256SUMS ce6a736fe922ac8677933680b68907b8f33b56c4ea4a84c76efea592d12b8040)"
   - "evaluation/production-readiness-arch/evidence-state-root-s2-operator-guard-review-opus-1/verdict.md; evidence-external-state-root-s2-review-codex-1"
   - "evaluation/production-readiness-arch/evidence-state-root-vm-preflight-1/report.md (candidate location only)"
-merge_commit: pending (this spec-only branch; local RC integration is Buford's)
+  - "independent Codex spec review evidence-state-root-runtime-spec-review-codex-1/report.md (SHA256SUMS sha256 1ae2c1b24294c3c37cd90de87bd5f232f1d964de79c2c5481ec0e243bf779432); P2 wording HOLD corrected in 8d31e91"
+  - "independent Codex changed-line recheck evidence-state-root-runtime-spec-delta-review-codex-1/report.md (SHA256SUMS sha256 6e4798953a71c2d46845844cfe306c3afd7100b688b57ed26772c6f3bdc4390c); GO for local RC composition"
+merge_commit: "local RC cfaefcecfa948dbe6231d09a6261e73f0469953f; product-main integration pending"
 reviewer_chain:
   - "Opus 5.5/high S2 operator-guard source review GO for cd858d1 (merged into local RC e104d9c)"
   - "independent Codex S1/S1-delta/S2 source reviews GO (evidence-external-state-root-*-review-*)"
-  - "out-of-family Codex review of THIS spec delta — PENDING; this marker is not independently final until it returns GO"
+  - "out-of-family Codex review of this spec delta — GO after changed-line recheck of 8d31e91; installed acceptance remains open"
 supersedes: spec-harness-runtime-v1-124-cleared-2026-09-24.md
 ---
 
