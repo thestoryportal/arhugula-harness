@@ -33,6 +33,10 @@ U-CP-87):
   live e2e (real IS writer; §6.3 hash chain re-verifies post-drain):
       → test_evaluator_optimizer_live_e2e_real_ledger_chain_valid
 
+First-release evaluator verdict contract (CP spec v1.121; `evaluator_verdict.py`):
+the accept signal is a strict `EvaluatorVerdict` read at all three decision points.
+      → test_evaluator_verdict_* / test_bound_evaluator_verdict_reader_*
+
 Non-hollow honesty: R-PM-1 §29 prompt SELECTION is composed at runtime stage-0,
 not in the CP driver — so this CP-unit suite proves distinct-step dispatch (a
 different `step_id` resolves a different binding), NOT live prompt selection. The
@@ -807,3 +811,308 @@ def test_b60_mid_generate_trip_stops_same_iteration_evaluate() -> None:
         DISPATCH_CANCEL_TOKEN_VAR.reset(reset)
     assert dispatcher.generate_calls == 1
     assert dispatcher.evaluate_calls == 0
+
+
+# ---------------------------------------------------------------------------
+# Evaluator verdict contract (CP spec v1.121): strict typed read at all 3 decision points
+# ---------------------------------------------------------------------------
+
+from harness_cp.evaluator_verdict import EvaluatorVerdict
+
+from . import test_workflow_driver_evaluator_optimizer_pause as _pause
+
+
+class _ScriptedEvaluator:
+    """Generate returns a draft; each evaluate returns the next scripted raw output."""
+
+    def __init__(self, evaluations: list[Any]) -> None:
+        self._evaluations = list(evaluations)
+        self.evaluate_calls = 0
+        self.generate_calls = 0
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        if str(step.step_id) == _EVALUATE:
+            self.evaluate_calls += 1
+            return self._evaluations.pop(0)
+        self.generate_calls += 1
+        return {"draft": self.generate_calls}
+
+
+_MALFORMED_VERDICTS = [
+    pytest.param({}, id="absent"),
+    pytest.param({"feedback": "no verdict"}, id="feedback-only"),
+    pytest.param({"accepted": "false"}, id="string-false"),
+    pytest.param({"accepted": "true"}, id="string-true"),
+    pytest.param({"accepted": 1}, id="int"),
+    pytest.param({"accepted": None}, id="none"),
+    pytest.param({"accepted": True, "extra": 1}, id="extra-key"),
+    pytest.param({"accepted": True, "feedback": 3}, id="non-string-feedback"),
+]
+
+
+@pytest.mark.parametrize("raw", _MALFORMED_VERDICTS)
+def test_a_malformed_live_verdict_fails_with_its_own_class_drains_and_never_retries_or_pauses(
+    raw: dict[str, Any],
+) -> None:
+    # TEAM_BINDING + a bound protocol is the tier where a dispatch failure would PAUSE; a
+    # malformed verdict must still be FAILED (the evaluate effect already landed).
+    ledger = _RecordingLedger()
+    dispatcher = _ScriptedEvaluator([raw])
+    ctx = cast(DriverContext, _pause._CtxP(ledger=ledger, emitter=_Emitter()))  # pyright: ignore[reportPrivateUsage]
+
+    result = execute_workflow(
+        _manifest(),
+        _loop_steps(),
+        run_id="run-1",
+        ctx=ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=_registry(cast(StepDispatcher, dispatcher)),
+    )
+
+    assert result.status is RunStatus.FAILED
+    assert result.pause_snapshot is None
+    assert result.fail_class is not None
+    assert result.fail_class.startswith("evaluator-optimizer-verdict-malformed at entry 1:")
+    assert "setup-or-bookkeeping" not in result.fail_class
+    assert dispatcher.evaluate_calls == 1  # no retry, no regeneration
+    assert len(ledger.appends) == 2  # generate + evaluate entries drained, not lost
+
+
+def test_a_string_false_is_no_longer_a_false_accept() -> None:
+    ledger = _RecordingLedger()
+
+    result = _run(
+        steps=_loop_steps(),
+        dispatcher=cast(StepDispatcher, _ScriptedEvaluator([{"accepted": "false"}])),
+        ledger=ledger,
+    )
+
+    assert result.status is RunStatus.FAILED  # was SUCCESS accepted=True via bool("false")
+
+
+def test_evaluator_verdict_true_on_iteration_one_accepts() -> None:
+    result = _run(
+        steps=_loop_steps(),
+        dispatcher=cast(
+            StepDispatcher, _ScriptedEvaluator([{"accepted": True, "feedback": "good"}])
+        ),
+        ledger=_RecordingLedger(),
+    )
+
+    assert result.status is RunStatus.SUCCESS
+    assert result.final_state is not None
+    assert result.final_state["accepted"] is True
+    assert result.final_state["iterations"] == 1
+    # The raw evaluation mapping is preserved verbatim (cursor/ledger/response surface).
+    assert result.final_state["evaluation"] == {"accepted": True, "feedback": "good"}
+
+
+def test_evaluator_verdict_false_then_true_accepts_on_iteration_two() -> None:
+    result = _run(
+        steps=_loop_steps(),
+        dispatcher=cast(
+            StepDispatcher,
+            _ScriptedEvaluator([{"accepted": False, "feedback": "again"}, {"accepted": True}]),
+        ),
+        ledger=_RecordingLedger(),
+    )
+
+    assert result.status is RunStatus.SUCCESS
+    assert result.final_state is not None
+    assert result.final_state["accepted"] is True
+    assert result.final_state["iterations"] == 2
+
+
+def test_explicit_rejects_run_to_the_cap_and_end_success_not_accepted() -> None:
+    from harness_cp import workflow_driver as wd
+
+    cap = wd._DEFAULT_EVALUATOR_OPTIMIZER_MAX_ITERATIONS  # pyright: ignore[reportPrivateUsage]
+    ledger = _RecordingLedger()
+
+    result = _run(
+        steps=_loop_steps(),
+        dispatcher=cast(
+            StepDispatcher,
+            _ScriptedEvaluator([{"accepted": False, "feedback": f"r{i}"} for i in range(cap)]),
+        ),
+        ledger=ledger,
+    )
+
+    assert result.status is RunStatus.SUCCESS
+    assert result.final_state is not None
+    assert result.final_state["accepted"] is False
+    assert result.final_state["iterations"] == cap
+    assert len(ledger.appends) == 2 * cap
+
+
+class _RawVerdictDispatcher:
+    """Evaluate emits a NON-CP shape (`verdict`), so only a bound reader can read it."""
+
+    def __init__(self, verdicts: list[str], *, fail_on_call: int | None = None) -> None:
+        self._verdicts = list(verdicts)
+        self._fail_on = fail_on_call
+        self.calls = 0
+        self.dispatched: list[str] = []
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        self.calls += 1
+        if self._fail_on is not None and self.calls == self._fail_on:
+            raise RuntimeError("simulated dispatch failure")
+        sid = str(step.step_id)
+        self.dispatched.append(sid)
+        if sid == _EVALUATE:
+            return {"verdict": self._verdicts.pop(0)}
+        return {"draft": self.calls}
+
+
+class _Reader:
+    """A bound `evaluator_verdict_reader`: converts the raw `verdict` shape."""
+
+    def __init__(self) -> None:
+        self.seen: list[dict[str, Any]] = []
+
+    def __call__(self, evaluation: Any) -> EvaluatorVerdict:
+        self.seen.append(dict(evaluation))
+        return EvaluatorVerdict(accepted=evaluation["verdict"] == "ok", feedback=None)
+
+
+def _ctx_with_reader(reader: Any) -> DriverContext:
+    ctx = _pause._CtxP(ledger=_RecordingLedger(), emitter=_Emitter())  # pyright: ignore[reportPrivateUsage]
+    ctx.evaluator_verdict_reader = reader  # type: ignore[attr-defined]
+    return cast(DriverContext, ctx)
+
+
+def _run_ctx(ctx: DriverContext, dispatcher: Any, snapshot: Any = None) -> Any:
+    return execute_workflow(
+        _manifest(),
+        _loop_steps(),
+        run_id="run-1",
+        ctx=ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=_registry(cast(StepDispatcher, dispatcher)),
+        pause_snapshot_input=snapshot,
+    )
+
+
+def test_bound_evaluator_verdict_reader_is_used_by_the_live_loop() -> None:
+    reader = _Reader()
+
+    result = _run_ctx(_ctx_with_reader(reader), _RawVerdictDispatcher(["no", "ok"]))
+
+    assert result.status is RunStatus.SUCCESS
+    assert result.final_state["accepted"] is True
+    assert result.final_state["iterations"] == 2
+    assert reader.seen == [{"verdict": "no"}, {"verdict": "ok"}]
+
+
+def test_without_a_bound_reader_a_non_cp_shape_is_malformed_never_accepted() -> None:
+    result = _run(
+        steps=_loop_steps(),
+        dispatcher=cast(StepDispatcher, _RawVerdictDispatcher(["ok"])),
+        ledger=_RecordingLedger(),
+    )
+
+    assert result.status is RunStatus.FAILED
+    assert result.fail_class is not None
+    assert "evaluator-optimizer-verdict-malformed" in result.fail_class
+
+
+def test_the_bound_reader_serves_resume_prefix_pending_evaluate_and_loop() -> None:
+    # Pause: eval0 ("no") lands in the prefix, then the evaluate at call 4 fails -> PAUSED.
+    pause_reader = _Reader()
+    paused = _run_ctx(
+        _ctx_with_reader(pause_reader),
+        _RawVerdictDispatcher(["no"], fail_on_call=4),
+    )
+    assert paused.status is RunStatus.PAUSED
+    snapshot = paused.pause_snapshot
+    assert snapshot is not None
+
+    # Resume: prefix coherence reads eval0; the pending evaluate ("no") is read; the loop then
+    # regenerates and reads the next evaluate ("ok"). Every one goes through the SAME reader.
+    reader = _Reader()
+    dispatcher = _RawVerdictDispatcher(["no", "ok"])
+    result = _run_ctx(_ctx_with_reader(reader), dispatcher, snapshot)
+
+    assert result.status is RunStatus.SUCCESS
+    assert result.final_state["accepted"] is True
+    assert reader.seen == [{"verdict": "no"}, {"verdict": "no"}, {"verdict": "ok"}]
+
+
+def test_a_malformed_pending_evaluate_verdict_fails_and_drains_on_resume() -> None:
+    paused = _pause_run_default(fail_on_call=4)
+    assert paused.status is RunStatus.PAUSED
+    ledger = _RecordingLedger()
+    ctx = cast(DriverContext, _pause._CtxP(ledger=ledger, emitter=_Emitter()))  # pyright: ignore[reportPrivateUsage]
+
+    result = execute_workflow(
+        _manifest(),
+        _loop_steps(),
+        run_id="run-1",
+        ctx=ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=_registry(
+            cast(StepDispatcher, _ScriptedEvaluator([{"accepted": "true"}]))
+        ),
+        pause_snapshot_input=paused.pause_snapshot,
+    )
+
+    assert result.status is RunStatus.FAILED
+    assert result.fail_class is not None
+    assert result.fail_class.startswith("evaluator-optimizer-verdict-malformed at entry 3:")
+    assert len(ledger.appends) == 1  # the evaluate entry that landed is drained, not lost
+
+
+def _pause_run_default(*, fail_on_call: int) -> Any:
+    ctx = cast(DriverContext, _pause._CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))  # pyright: ignore[reportPrivateUsage]
+    return _pause._run(  # pyright: ignore[reportPrivateUsage]
+        steps=_loop_steps(),
+        dispatcher=cast(
+            StepDispatcher,
+            _pause._EoDispatcher(fail_on_call=fail_on_call),  # pyright: ignore[reportPrivateUsage]
+        ),
+        ctx=ctx,
+    )
+
+
+def test_a_malformed_resume_prefix_verdict_is_a_mismatch_reason_not_an_escaping_exception() -> None:
+    from harness_cp.pause_resume_protocol_types import (
+        EvaluatorOptimizerResumeState,
+        EvaluatorOptimizerStepResumeState,
+    )
+
+    snapshot = _pause._captured_eo_snapshot(  # pyright: ignore[reportPrivateUsage]
+        EvaluatorOptimizerResumeState(
+            completed_steps=(
+                EvaluatorOptimizerStepResumeState(
+                    entry_index=0, declared_step_index=0, step_id=_GENERATE, output={"draft": 1}
+                ),
+                EvaluatorOptimizerStepResumeState(
+                    entry_index=1,
+                    declared_step_index=1,
+                    step_id=_EVALUATE,
+                    output={"accepted": "false"},  # smuggled non-bool in a recovered prefix
+                ),
+            ),
+        ),
+        step_index=0,
+    )
+    ctx = cast(DriverContext, _pause._CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))  # pyright: ignore[reportPrivateUsage]
+
+    result = execute_workflow(
+        _manifest(),
+        _loop_steps(),
+        run_id="run-1",
+        ctx=ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=_registry(cast(StepDispatcher, _ScriptedEvaluator([{"accepted": True}]))),
+        pause_snapshot_input=snapshot,
+    )
+
+    assert result.status is RunStatus.FAILED
+    assert result.fail_class is not None
+    assert "malformed-verdict-in-prefix at entry 1" in result.fail_class
