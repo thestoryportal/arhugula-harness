@@ -46,11 +46,14 @@ contract change here, because the value is written into a fail class (§0.3).
 `ChildResumeRefusedError(reason, detail="", *, audit_signing_failed=False)` states that a durable
 paused child was refused before any of its steps ran. It carries `reason` (a `ChildResumeRefusal`),
 `detail` (human text that never enters a fail class) and `audit_signing_failed`.
-`audit_signing_failed` is a plain boolean owned by the Control Plane: it is `True` only when Runtime
-also failed to sign the audit record for this refusal under fail-closed, and it exists so the
-terminal fail class can say so without the Control Plane importing the audit-signing error family.
-The error is defined in the Control Plane so the fan-out barrier catches it typed. A refused child is
-never retried, never re-dispatched as fresh work, and never re-captured as a pause. Every refusal
+`audit_signing_failed` is a plain boolean field defined by the Control Plane so the terminal fail
+class can render it without the Control Plane importing the audit-signing error family. Runtime sets
+it `True` when it also failed to sign the audit record for this refusal under fail-closed (Runtime
+v1.129); the Control Plane only renders it.
+The error is defined in the Control Plane so the fan-out barrier catches it typed. Within that run, a refused
+child is never retried, re-dispatched as fresh work, or re-captured as a pause. A later resume of the
+unchanged parent pause (§0.3 leaves it the latest durable record) presents the child again, and Runtime
+verifies and admits or refuses it anew (Runtime v1.129; Task 5). Every refusal
 raised inside a fan-out dispatch is caught at the dispatch boundary and recorded under its branch
 ordinal before the exception continues, so the terminal decision below reads the refusals recorded so
 far.
@@ -60,7 +63,8 @@ far.
 When the run's refusal record is non-empty at the run's terminal decision, the run returns
 `RunStatus.FAILED` with these observable properties: `pause_snapshot` is `None`; no pause capture is
 made and none is written to the durable journal, so the prior durable pause stays the only record;
-`final_state` is `None` (no partial output is salvaged); no refused child is dispatched again; and the
+`final_state` and `partial_state` are both `None` (no partial output is salvaged; the new tests
+assert `final_state`, and `partial_state` is source-traced); no refused child is dispatched again; and the
 ledger entries already buffered by the fan-out's branches are still written. The `fail_class` is
 
 `<family>-child-resume-refused (<reasons>[; audit-signing-failed])`
@@ -95,10 +99,13 @@ synthesis at the run's exit records it as `cancelled`. A sibling still in flight
 it has already recorded `timed_out` at its cancellation. A branch that never dispatched records
 `cancelled`. Where no sibling was cut, no `timed_out` is written.
 
-`cascade-cancel` and `pause` are not changed by this delta: at their exits a recorded refusal is
-likewise forced to `FAILED` with §0.3's fail class before any policy branching, without salvage. This
-delta records that behaviour for completeness; the reviewed source slice did not examine those two
-paths and no test in that slice covers them.
+**`cascade-cancel` and `pause`.** These are not changed by this delta. Source-traced by independent
+review: on both, after the fan-out barrier — including after a barrier deadline — a recorded refusal
+forces `FAILED` with §0.3's fail class and without salvage, before the effect-fence and cascade-policy
+branching, so a refusal takes precedence over the deadline there too and nothing re-pauses. Refusal
+tests on the `pause` tier exist in the refusal test file (the parent-fails-terminally case and the
+in-flight-cancellation case) but have no passing run, because that file stalled at base and head.
+`cascade-cancel` has no test. This behaviour is stated from the source trace, not from a passing test.
 
 ### §0.5 What "recorded" means, and what is not claimed
 
@@ -125,7 +132,7 @@ barrier; those remain the Task 5 gateway's.
 | v1.122 capture, depth, exact record ref and child-ref carrier terms | Preserved unchanged |
 | `RunStatus` values, contract numbers, pause-snapshot and hash bytes | Unchanged |
 | `proceed` deadline → `PARTIAL` when no refusal is recorded; stash-then-deadline → `PARTIAL` | Preserved |
-| `cascade-cancel` and `pause` exits | Not changed; not examined by the reviewed slice (§0.4) |
+| `cascade-cancel` and `pause` exits | Not changed; refusal precedence source-traced, `pause` tests have no passing run, `cascade-cancel` untested (§0.4) |
 | Task 5 claim, lease, `started`, worker handoff, installed acceptance | Outside this delta |
 
 ## §1 Acceptance for the paired implementation, and the evidence limits
@@ -146,6 +153,8 @@ no wider Control Plane suite was run. The ledger terminals in §0.4 and the dead
 outcome in §0.5 are stated from a source trace and are asserted by no test that ran. The tests refuse
 on a first dispatch, not on a Runtime resume of a real durable pause. Recording before the deadline
 relies on the 0.5 s margin, which can only fail spuriously on a slow machine, never pass falsely.
-`cascade-cancel` and `pause` were not examined. No result here is an installed, live-model or RC
+On `cascade-cancel` and `pause` the refusal outcome is source-traced only: the `pause`-tier
+refusal tests sit in the stalled file (no passing run) and `cascade-cancel` has no test. `partial_state`
+being `None` on a refusal is likewise source-traced; the new tests assert `final_state`. No result here is an installed, live-model or RC
 witness. Independent review of this delta and Runtime v1.129 clearance are required before local RC
 integration.
