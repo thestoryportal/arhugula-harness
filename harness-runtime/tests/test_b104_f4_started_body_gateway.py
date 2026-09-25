@@ -66,7 +66,11 @@ def _gateway() -> Any:
 
 
 class _Body:
-    """A zero-argument body that records how often it ran and what the disk showed inside."""
+    """A body that records how often it ran and what the disk showed inside.
+
+    It takes the started claim `run_started` hands its body, or nothing when a
+    `run_admitted` seam calls it.
+    """
 
     def __init__(self, store: ResumeClaimStore, ref: JournalRecordRef) -> None:
         self.store, self.ref = store, ref
@@ -74,7 +78,7 @@ class _Body:
         self.claim_phase: str | None = None
         self.lease_seen: type | None = None
 
-    def __call__(self) -> str:
+    def __call__(self, *_started: StartedClaim) -> str:
         self.calls += 1
         state = parse_claim(self.store.paths_for(self.ref).claim.read_bytes(), self.ref)
         self.claim_phase = state.phase if isinstance(state, StartedOrUnknown) else None
@@ -246,7 +250,7 @@ def test_the_lease_is_released_exactly_once_on_every_body_exit(
     store = placed.store()
     closes = _CloseCounter(monkeypatch)
 
-    def body() -> str:
+    def body(_started: StartedClaim) -> str:
         if exit_kind == "exception":
             raise RuntimeError("body failed")
         if exit_kind == "base-exception":

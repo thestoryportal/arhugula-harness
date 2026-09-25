@@ -1111,6 +1111,8 @@ class RuntimeSubAgentDispatcher:
                     # `descent_depth`; no second counter exists.
                     descent_depth=step_context.descent_depth + 1,
                     child_resume=step_context.child_resume,
+                    # B-104 Task 5b-1 — CP's opaque carrier, threaded beside `child_resume`.
+                    child_resume_authority=step_context.child_resume_authority,
                     child_run_id_seed=_child_run_id_seed,
                     # B-39 Slice B — the operator's resume payload, read off the SAME
                     # step_context the composer already receives (a CP driver-stamped

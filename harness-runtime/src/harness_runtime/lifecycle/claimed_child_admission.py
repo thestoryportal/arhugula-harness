@@ -13,7 +13,12 @@ mapping of the gateway's typed refusals to `ChildResumeRefusedError`, by (phase,
 Nothing is parsed from message text; `detail` carries the store's human text only. Any other
 fault (placement, journal-lock timeout, raw `OSError`, a body error) is not a refusal and
 propagates as itself. It is NOT bound anywhere: stage 5 still binds `RefuseDurableChildAdmission`,
-and the parent's `StartedClaim` it takes exists for tests until the Task 5b handoff.
+and no production entry can supply the parent's `StartedClaim` it takes.
+
+B-104 Task 5b-1: `run_with_child_authority` hands the body a FRESH `ClaimedChildAdmission` over the
+child's own `StartedClaim` (built after `started` is durable), so a grandchild is admitted through
+its child and never through the root. An authority holds its claim privately and has no `close`:
+the lease is released only by `run_started`, when the worker body returns.
 """
 
 from __future__ import annotations
@@ -66,13 +71,20 @@ class ClaimedChildAdmission:
         self._parent = parent
         self._deadline_seconds = deadline_seconds
 
-    def run_admitted[R](self, verified: VerifiedChildRecord, body: Callable[[], R]) -> R:
+    def run_with_child_authority[R](
+        self, verified: VerifiedChildRecord, body: Callable[[ClaimedChildAdmission], R]
+    ) -> R:
+        """Admit the child, then run `body` with the authority for the child's own children."""
         entered = False
 
-        def guarded() -> R:
+        def guarded(started: StartedClaim) -> R:
             nonlocal entered
             entered = True
-            return body()
+            # [LAW:no-ambient-temporal-coupling] Built only once `started` is durable, and bound
+            # to this child's claim, so its lease outlives every grandchild claim made through it.
+            return body(
+                ClaimedChildAdmission(self._store, started, deadline_seconds=self._deadline_seconds)
+            )
 
         try:
             return run_started(
@@ -89,3 +101,7 @@ class ClaimedChildAdmission:
             if entered or reason is None:
                 raise
             raise ChildResumeRefusedError(reason, str(refusal.cause)) from refusal
+
+    def run_admitted[R](self, verified: VerifiedChildRecord, body: Callable[[], R]) -> R:
+        """The `DurableChildAdmission` seam: this admission for a body needing no authority."""
+        return self.run_with_child_authority(verified, lambda _child: body())

@@ -121,6 +121,7 @@ class _MockChildWorkflowRunner:
         descent_depth: int,
         child_resume: Any = None,
         child_run_id_seed: str | None = None,
+        child_resume_authority: Any = None,
         resume_context: Any = None,
         hitl_uniform_fallback_eligible_run_id: str | None = None,
         effect_fence_uniform_fallback_eligible_key: str | None = None,

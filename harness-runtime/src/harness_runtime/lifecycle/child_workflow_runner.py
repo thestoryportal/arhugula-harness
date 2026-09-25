@@ -49,6 +49,7 @@ from harness_cp.sub_agent_gate_level_descent import SubAgentGateLevelDescent
 from harness_cp.workflow_driver import DriverContext as _CpDriverContext
 from harness_cp.workflow_driver import execute_workflow_at_depth
 from harness_cp.workflow_driver_types import (
+    ChildResumeAuthority,
     ChildResumeRefusal,
     ChildResumeRefusedError,
     RunResult,
@@ -56,6 +57,7 @@ from harness_cp.workflow_driver_types import (
 )
 from harness_cp.workflow_manifest_entry import WorkflowManifestEntry
 
+from harness_runtime.lifecycle.claimed_child_admission import ClaimedChildAdmission
 from harness_runtime.lifecycle.durable_child_admission import (
     DurableChildAdmission,
     verify_durable_child_resume,
@@ -99,6 +101,7 @@ class ChildWorkflowRunner(Protocol):
         hitl_uniform_fallback_eligible_run_id: str | None = None,
         effect_fence_uniform_fallback_eligible_key: str | None = None,
         effect_fence_tree_wide_abort_present: bool = False,
+        child_resume_authority: ChildResumeAuthority | None = None,
     ) -> RunResult:
         """Run the child sub-workflow and return its terminal `RunResult`.
 
@@ -168,6 +171,11 @@ class ChildWorkflowRunner(Protocol):
         recursion level. `False` on a first (non-resume) child dispatch →
         byte-identical to pre-arc. This is the SAME CP→Runtime→CP crossing its two
         siblings already use — no NEW seam is introduced.
+
+        B-104 Task 5b-1: `child_resume_authority` (additive, default `None`) — the
+        Runtime's permission to run a durable paused child, read off the CP step context beside
+        `child_resume`. It is used only when it is exactly a `ClaimedChildAdmission`; anything
+        else keeps the injected `durable_admission` binding.
         """
         ...
 
@@ -222,6 +230,7 @@ def compose_child_workflow_runner(
         hitl_uniform_fallback_eligible_run_id: str | None = None,
         effect_fence_uniform_fallback_eligible_key: str | None = None,
         effect_fence_tree_wide_abort_present: bool = False,
+        child_resume_authority: ChildResumeAuthority | None = None,
     ) -> RunResult:
         # B-HIERARCHICAL-PAUSE — on a RESUME (pause_snapshot_input non-None), FAIL CLOSED
         # if the snapshot's workflow_id does not match the child being invoked (Codex
@@ -242,7 +251,7 @@ def compose_child_workflow_runner(
                 "child workflow)",
             )
 
-        def _execute() -> RunResult:
+        def _execute(own_authority: ClaimedChildAdmission | None) -> RunResult:
             # Reuse the paused child's ORIGINAL run_id (not a fresh uuid) so the resumed
             # child's run/step idempotency keys + ledger/audit lineage stay coherent with
             # the original run — the same discipline the root resume path follows
@@ -313,6 +322,9 @@ def compose_child_workflow_runner(
                 descent_depth=descent_depth,
                 # [LAW:single-enforcer] CP clamps the child manifest to this recorded descent.
                 parent_gate_floor=descent.child_gate_level,
+                # B-104 Task 5b-1 — the child's OWN authority (never this dispatch's), so its
+                # grandchildren claim through the child's started claim, not the root's.
+                child_resume_authority=own_authority,
             )
 
         # B-104 Task 4c — under a DURABLE protocol a resumed paused child must be the exact
@@ -327,12 +339,14 @@ def compose_child_workflow_runner(
         ):
             # [LAW:no-ambient-temporal-coupling] The admission decides WHEN the body runs; a
             # gateway may put a claim and a durable `started` frame before it.
-            return durable_admission.run_admitted(
-                verify_durable_child_resume(
-                    ctx.pause_resume_protocol, child_resume, descent_depth=descent_depth
-                ),
-                _execute,
+            verified = verify_durable_child_resume(
+                ctx.pause_resume_protocol, child_resume, descent_depth=descent_depth
             )
-        return _execute()
+            # [LAW:single-enforcer] Only the exact Runtime type is honored; a fake or absent
+            # authority keeps the injected binding (stage 5's always-refusing one).
+            if type(child_resume_authority) is ClaimedChildAdmission:
+                return child_resume_authority.run_with_child_authority(verified, _execute)
+            return durable_admission.run_admitted(verified, lambda: _execute(None))
+        return _execute(None)
 
     return _runner

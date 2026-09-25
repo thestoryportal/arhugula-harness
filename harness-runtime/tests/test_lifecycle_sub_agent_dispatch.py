@@ -258,6 +258,7 @@ class _MockChildWorkflowRunner:
         descent_depth: int,
         child_resume: Any = None,
         child_run_id_seed: str | None = None,
+        child_resume_authority: Any = None,
         resume_context: Any = None,
         hitl_uniform_fallback_eligible_run_id: str | None = None,
         effect_fence_uniform_fallback_eligible_key: str | None = None,
@@ -278,6 +279,7 @@ class _MockChildWorkflowRunner:
                 # B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT — the deterministic child run_id
                 # seed (None when the child is non-recoverable / a non-fanout dispatch).
                 "child_run_id_seed": child_run_id_seed,
+                "child_resume_authority": child_resume_authority,
                 # B-39 Slice B — the operator's resume payload, forwarded verbatim.
                 "resume_context": resume_context,
                 # B-39 Slice B, codex round-2 [P1] fix — the property-4-safe uniform-
