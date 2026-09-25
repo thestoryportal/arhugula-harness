@@ -798,10 +798,10 @@ class JournalWorkflowPauseStore:
         is also what makes the torn-append self-heal above sound: it was
         single-writer-only reasoning before.
 
-        The lock is a LEAF (nothing inside the hold acquires another
-        cross-process lock), so it cannot participate in a lock-ordering cycle
-        with the IS ledger locks that guard the enclosing ``STATE_LEDGER``
-        directory, whatever order a caller composes them in.
+        Claim admission takes the lease lock before this journal lock. Lease
+        publication holds this journal lock alone; recovery may probe the lease
+        from journal only with a nonblocking attempt. Callers must preserve that
+        order so a waiting lock cannot form a cycle.
 
         ``is_new_file`` survives ONLY as the guard on ``needs_leading_newline``
         (a brand-new file must not receive a spurious leading newline, since
