@@ -7,9 +7,10 @@ calls it yet, and stage 5 still binds the always-refusing admission.
 
 [LAW:types-are-the-program] The gateway takes a store, a ref, a typed admission and a
 body. It never accepts a `HeldClaim` or `StartedClaim` from its caller: the only started claim in
-its scope is the one `mark_started` returns inside this call, and it goes to the body (which is
-how a child's own authority is built), so the body cannot be reached on a claim that was merely
-claimed or handed in.
+its scope is the one `mark_started` returns inside this call. The closable claim stays private
+to this unit; the body gets only a nonclosable `StartedProof` (how a child's own authority is
+built), so the body cannot be reached on a claim that was merely claimed or handed in, and it
+cannot release its own lease.
 """
 
 from __future__ import annotations
@@ -24,7 +25,7 @@ from harness_runtime.lifecycle.resume_claim_store import (
     ClaimBusyError,
     ClaimRefusedError,
     ResumeClaimStore,
-    StartedClaim,
+    StartedProof,
 )
 
 __all__ = ["GatewayPhase", "GatewayRefusal", "run_started"]
@@ -57,14 +58,14 @@ def run_started[R](
     store: ResumeClaimStore,
     ref: JournalRecordRef,
     admission: Admission,
-    body: Callable[[StartedClaim], R],
+    body: Callable[[StartedProof], R],
     *,
     deadline_seconds: float | None = None,
 ) -> R:
     """Claim `ref`, durably start it, run `body(started)`, and release the lease exactly once.
 
-    `started` is the claim this call durably started. It is the caller-visible proof the body
-    runs on a live started claim; the body must not close it (this call alone releases).
+    `started` is the nonclosable proof of the claim this call durably started: the body can read
+    its identity and admit children through it, but cannot release the lease (this call alone does).
 
     A refused or busy claim raises `GatewayRefusal(CLAIM, ...)`; a refused start (including a
     failed `started` write or fsync) raises `GatewayRefusal(START, ...)`. Any other fault and any
@@ -85,6 +86,6 @@ def run_started[R](
             started = store.mark_started(held, deadline_seconds=deadline_seconds)
         except ClaimRefusedError as exc:
             raise GatewayRefusal(GatewayPhase.START, exc) from exc
-        return body(started)
+        return body(started.proof())
     finally:
         held.close()

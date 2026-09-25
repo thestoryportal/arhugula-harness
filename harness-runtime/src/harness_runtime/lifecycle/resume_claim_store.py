@@ -57,6 +57,7 @@ __all__ = [
     "RootLatestAdmission",
     "StartedClaim",
     "StartedOrUnknown",
+    "StartedProof",
     "UnstartedProof",
     "parse_claim",
     "started_frame",
@@ -382,11 +383,62 @@ class StartedClaim:
     def close(self) -> None:
         self.claim.close()
 
+    def proof(self) -> StartedProof:
+        """The nonclosable view of this started claim, for a body that must not release it."""
+        return StartedProof(_MINT, self)
+
     def __enter__(self) -> StartedClaim:
         return self
 
     def __exit__(self, *_exc: object) -> None:
         self.close()
+
+
+class StartedProof:
+    """A started claim as a body may hold it: read-only identity, no way to release the lease.
+
+    [LAW:types-are-the-program] `StartedClaim` and `HeldClaim` can close the one lease, so the
+    gateway that owns the release keeps them private and hands its body only this. It exposes
+    `token`, `record_ref` and `closed`; it has no `close` and no public route to the claim or
+    lease. `ParentCarriedAdmission` consumes it in place of a `StartedClaim`, so a child is
+    admitted through the SAME lease with no second lease or registry. Minted only by
+    `StartedClaim.proof`; it cannot be subclassed, copied or pickled. As with `LeaseCapability`,
+    reaching this module's privates is outside the model.
+    """
+
+    __slots__ = ("_started",)
+    _started: StartedClaim
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        raise TypeError("a started proof cannot be subclassed")
+
+    def __new__(cls, mint: object, started: StartedClaim) -> StartedProof:
+        if mint is not _MINT:
+            raise TypeError("a started proof is issued only by StartedClaim.proof")
+        self = super().__new__(cls)
+        self._started = started
+        return self
+
+    def __copy__(self) -> StartedProof:
+        raise TypeError("a started proof cannot be copied")
+
+    def __deepcopy__(self, memo: object) -> StartedProof:
+        raise TypeError("a started proof cannot be copied")
+
+    def __reduce_ex__(self, protocol: object) -> Any:
+        raise TypeError("a started proof cannot be pickled")
+
+    @property
+    def token(self) -> str:
+        return self._started.token
+
+    @property
+    def record_ref(self) -> JournalRecordRef:
+        return self._started.record_ref
+
+    @property
+    def closed(self) -> bool:
+        return self._started.closed
 
 
 @dataclass(frozen=True)
@@ -400,10 +452,11 @@ class ParentCarriedAdmission:
 
     The child may be positional (not the journal latest) only because its parent's own
     hash-covered snapshot carries this exact child RECORD (its `child_record_ref`) exactly
-    once, with the journaled snapshot the carrier names.
+    once, with the journaled snapshot the carrier names. The parent is a `StartedClaim` or
+    the nonclosable `StartedProof` a gateway body holds; both borrow the one parent lease.
     """
 
-    parent: StartedClaim
+    parent: StartedClaim | StartedProof
 
 
 Admission = RootLatestAdmission | ParentCarriedAdmission
@@ -725,7 +778,8 @@ class ResumeClaimStore:
         match admission:
             case RootLatestAdmission():
                 yield lambda: self._require_current_exact(ref)
-            case ParentCarriedAdmission(parent):
+            case ParentCarriedAdmission(carried):
+                parent = carried._started if isinstance(carried, StartedProof) else carried  # pyright: ignore[reportPrivateUsage]
                 with _borrowed(parent.claim.lease) as parent_fd:
                     yield lambda: self._require_parent_carried(ref, parent, parent_fd)
             case _ as unreachable:

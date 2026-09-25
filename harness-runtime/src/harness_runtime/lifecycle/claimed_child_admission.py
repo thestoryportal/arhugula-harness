@@ -16,7 +16,7 @@ propagates as itself. It is NOT bound anywhere: stage 5 still binds `RefuseDurab
 and no production entry can supply the parent's `StartedClaim` it takes.
 
 B-104 Task 5b-1: `run_with_child_authority` hands the body a FRESH `ClaimedChildAdmission` over the
-child's own `StartedClaim` (built after `started` is durable), so a grandchild is admitted through
+child's own `StartedProof` (built after `started` is durable), so a grandchild is admitted through
 its child and never through the root. An authority holds its claim privately and has no `close`:
 the lease is released only by `run_started`, when the worker body returns.
 """
@@ -34,6 +34,7 @@ from harness_runtime.lifecycle.resume_claim_store import (
     ParentCarriedAdmission,
     ResumeClaimStore,
     StartedClaim,
+    StartedProof,
 )
 from harness_runtime.lifecycle.started_body_gateway import (
     GatewayPhase,
@@ -63,7 +64,7 @@ class ClaimedChildAdmission:
     def __init__(
         self,
         store: ResumeClaimStore,
-        parent: StartedClaim,
+        parent: StartedClaim | StartedProof,
         *,
         deadline_seconds: float | None = None,
     ) -> None:
@@ -77,7 +78,7 @@ class ClaimedChildAdmission:
         """Admit the child, then run `body` with the authority for the child's own children."""
         entered = False
 
-        def guarded(started: StartedClaim) -> R:
+        def guarded(started: StartedProof) -> R:
             nonlocal entered
             entered = True
             # [LAW:no-ambient-temporal-coupling] Built only once `started` is durable, and bound
