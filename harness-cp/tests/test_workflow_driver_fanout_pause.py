@@ -51,6 +51,7 @@ from harness_cp.pause_resume_protocol_types import (
     FanOutResumeState,
     OrchestratorEffectFencePausedResumeState,
     PausedChildBranchResumeState,
+    PausedChildCapture,
     PauseSnapshot,
     ResumeContext,
     WorkflowPauseReason,
@@ -915,7 +916,11 @@ class _FaithfulSubAgentDispatcher:
         if child_result.status is RunStatus.PAUSED:
             assert child_result.pause_snapshot is not None
             raise SubAgentChildPausedError(
-                child_workflow_id="wf-child", child_snapshot=child_result.pause_snapshot
+                capture=PausedChildCapture(
+                    child_workflow_id="wf-child",
+                    child_snapshot=child_result.pause_snapshot,
+                    child_record_ref=None,
+                )
             )
         # SUCCESS / PARTIAL / DRAINED → success-equivalent (mirrors the dispatcher's
         # non-FAILED, non-PAUSED handling): return the child's state as the worker output.
@@ -1118,7 +1123,11 @@ class _OrderedPausingSubAgentDispatcher:
             # branch's pause drains in-flight under the shield → CancelledError path.
             assert self._gate.wait(timeout=10.0)
         raise SubAgentChildPausedError(
-            child_workflow_id=f"wf-child-{sid}", child_snapshot=child_result.pause_snapshot
+            capture=PausedChildCapture(
+                child_workflow_id=f"wf-child-{sid}",
+                child_snapshot=child_result.pause_snapshot,
+                child_record_ref=None,
+            )
         )
 
 
@@ -1208,8 +1217,11 @@ class _SingleWorkerHITLPausingSubAgentDispatcher:
         self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
     ) -> dict[str, Any]:
         raise SubAgentChildPausedError(
-            child_workflow_id="wf-child-worker-0",
-            child_snapshot=_hitl_pending_child_pause_snapshot("wf-child-worker-0"),
+            capture=PausedChildCapture(
+                child_workflow_id="wf-child-worker-0",
+                child_snapshot=_hitl_pending_child_pause_snapshot("wf-child-worker-0"),
+                child_record_ref=None,
+            )
         )
 
 
@@ -1561,7 +1573,11 @@ class _SynthChildSubAgentDispatcher:
         if child_result.status is RunStatus.PAUSED:
             assert child_result.pause_snapshot is not None
             raise SubAgentChildPausedError(
-                child_workflow_id="wf-child", child_snapshot=child_result.pause_snapshot
+                capture=PausedChildCapture(
+                    child_workflow_id="wf-child",
+                    child_snapshot=child_result.pause_snapshot,
+                    child_record_ref=None,
+                )
             )
         return dict(child_result.final_state or child_result.partial_state or {})
 
@@ -3350,8 +3366,11 @@ class _B60PausingThenTrippingSubAgent:
         if child_resume is None:
             self.first_run_calls.append(step_id)
             raise SubAgentChildPausedError(
-                child_workflow_id=f"wf-child-{step_id}",
-                child_snapshot=_b60_linear_child_snapshot(),
+                capture=PausedChildCapture(
+                    child_workflow_id=f"wf-child-{step_id}",
+                    child_snapshot=_b60_linear_child_snapshot(),
+                    child_record_ref=None,
+                )
             )
         self.resume_calls.append(step_id)
         raise DispatchFenceTrippedSignal
@@ -4257,7 +4276,11 @@ class _RoundTwoResolveOnePausedChildFireOtherDispatcherOW:
             )
             assert child_result.pause_snapshot is not None
             raise SubAgentChildPausedError(
-                child_workflow_id="wf-child-0", child_snapshot=child_result.pause_snapshot
+                capture=PausedChildCapture(
+                    child_workflow_id="wf-child-0",
+                    child_snapshot=child_result.pause_snapshot,
+                    child_record_ref=None,
+                )
             )
         raise HITLPauseRequestedSignal()
 

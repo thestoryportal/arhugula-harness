@@ -44,6 +44,7 @@ from harness_cp.hitl_placement import HITLPlacement
 from harness_cp.pause_resume_protocol_types import (
     EffectFenceResolutionDirective,
     HITLDeliveryCell,
+    PausedChildCapture,
     PauseSnapshot,
     ResumeContext,
     require_ref_binds_snapshot,
@@ -188,13 +189,20 @@ class SubAgentChildPausedError(Exception):
     needs a CP-importable type.
     """
 
-    def __init__(self, *, child_workflow_id: str, child_snapshot: PauseSnapshot) -> None:
-        self.child_workflow_id = child_workflow_id
-        self.child_snapshot = child_snapshot
+    def __init__(self, *, capture: PausedChildCapture) -> None:
+        self.capture = capture
         super().__init__(
-            f"child sub-workflow {child_workflow_id!r} returned RunStatus.PAUSED "
-            f"(step_index={child_snapshot.step_index}); captured for resume re-entry"
+            f"child sub-workflow {capture.child_workflow_id!r} returned RunStatus.PAUSED "
+            f"(step_index={capture.child_snapshot.step_index}); captured for resume re-entry"
         )
+
+    @property
+    def child_workflow_id(self) -> str:
+        return self.capture.child_workflow_id
+
+    @property
+    def child_snapshot(self) -> PauseSnapshot:
+        return self.capture.child_snapshot
 
 
 class StepExecutionContext(BaseModel):

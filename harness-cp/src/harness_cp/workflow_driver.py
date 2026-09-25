@@ -114,6 +114,7 @@ from harness_cp.pause_resume_protocol_types import (
     MaterialDiffPolicy,
     OrchestratorEffectFencePausedResumeState,
     PausedChildBranchResumeState,
+    PausedChildCapture,
     PauseSnapshot,
     PeerFanOutResumeState,
     PreDispatchGateOwningBranchResumeState,
@@ -8861,7 +8862,7 @@ def _execute_parallelization(
     # `terminal_dispositions` (the two sets are disjoint). B-31 adds `child_workflow_id`
     # (previously discarded) so the resume guard can validate the re-supplied branch still
     # targets the same child workflow.
-    paused_child_dispositions: dict[int, tuple[str, PauseSnapshot]] = {}
+    paused_child_dispositions: dict[int, PausedChildCapture] = {}
     # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE — branch_index -> the held reserve's idempotency_key
     # for each peer branch whose OWN dispatch raised the effect fence (the PARALLELIZATION
     # analogue). DISJOINT from `terminal_dispositions` (caught at a different except site); read
@@ -9609,10 +9610,7 @@ def _execute_parallelization(
                 # terminal branch) + re-raise so the gather marks the branch; the
                 # post-barrier guard FAILS the run HONESTLY (a paused child cannot be
                 # carried under proceed). No silent loss.
-                paused_child_dispositions[branch_index] = (
-                    _paused.child_workflow_id,
-                    _paused.child_snapshot,
-                )
+                paused_child_dispositions[branch_index] = _paused.capture
                 raise
             except SubAgentDispatchCapacityError:
                 # codex round-4 [P2] "avoid recording rejected branches as
@@ -10043,10 +10041,7 @@ def _execute_parallelization(
                     # it as a paused-child (NOT a terminal `completed` branch — else the snapshot
                     # records it terminal, resume skips it, and the child's PauseSnapshot is
                     # DROPPED): stash + re-raise, no step/terminal entry recorded.
-                    paused_child_dispositions[branch_index] = (
-                        _inflight_exc.child_workflow_id,
-                        _inflight_exc.child_snapshot,
-                    )
+                    paused_child_dispositions[branch_index] = _inflight_exc.capture
                     raise
                 if type(_inflight_exc).__name__ == "HITLPauseRequestedSignal":
                     # B-72 impl leg (CP spec v1.108 §1) — this branch was cancelled because a
@@ -10172,10 +10167,7 @@ def _execute_parallelization(
                 # Re-raise so the TaskGroup halts the fan-out at the pause boundary (siblings:
                 # in-flight finish / not-yet-dispatched left re-dispatchable — the §25.15.1
                 # pause semantic, driving the pause branch below).
-                paused_child_dispositions[branch_index] = (
-                    _paused.child_workflow_id,
-                    _paused.child_snapshot,
-                )
+                paused_child_dispositions[branch_index] = _paused.capture
                 raise
             except Exception as _exc:
                 # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE (R-FS-1) — this
@@ -10707,12 +10699,11 @@ def _execute_parallelization(
                 PausedChildBranchResumeState(
                     branch_index=_bi,
                     step_id=str(steps[_bi].step_id),
-                    child_workflow_id=_cwid,
-                    child_snapshot=_child_snap,
+                    child_workflow_id=_capture.child_workflow_id,
+                    child_snapshot=_capture.child_snapshot,
+                    child_record_ref=_capture.child_record_ref,
                 )
-                for _bi, (_cwid, _child_snap) in sorted(
-                    paused_child_dispositions.items(), key=lambda kv: kv[0]
-                )
+                for _bi, _capture in sorted(paused_child_dispositions.items(), key=lambda kv: kv[0])
             ),
             # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE — peers whose OWN dispatch raised the effect
             # fence this round. DISJOINT from `branches` (a fence-paused ordinal never entered
@@ -10829,8 +10820,8 @@ def _execute_parallelization(
         # gate-owning test — so an operator surface keying off the reason knows to supply a
         # `hitl_response` exactly as it would for a nested HITL-paused child).
         _any_nested_hitl_pending = any(
-            _child_snap.pause_reason is WorkflowPauseReason.HITL_PENDING
-            for _, _child_snap in paused_child_dispositions.values()
+            _capture.child_snapshot.pause_reason is WorkflowPauseReason.HITL_PENDING
+            for _capture in paused_child_dispositions.values()
         )
         _pause_reason = (
             WorkflowPauseReason.EFFECT_FENCE_AMBIGUOUS
@@ -13278,7 +13269,7 @@ def _execute_orchestrator_workers(
     # enters `terminal_dispositions` (the two sets are disjoint). B-31 adds
     # `child_workflow_id` (previously discarded) so the resume guard can validate the
     # re-supplied branch still targets the same child workflow.
-    paused_child_dispositions: dict[int, tuple[str, PauseSnapshot]] = {}
+    paused_child_dispositions: dict[int, PausedChildCapture] = {}
     # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE (R-FS-1) — branch_index -> the held effect-fence
     # reserve's idempotency_key for each TOOL_STEP worker whose OWN dispatch raised the
     # runtime fence's `EffectFenceAmbiguousUncommittedError` (C-RT-31 §14.22). Like a paused
@@ -14229,10 +14220,7 @@ def _execute_orchestrator_workers(
                 # Stash it (no terminal — not a terminal branch) + re-raise so the
                 # gather marks the branch; the post-barrier guard FAILS the run HONESTLY
                 # (a paused child cannot be carried under proceed). No silent loss.
-                paused_child_dispositions[branch_index] = (
-                    _paused.child_workflow_id,
-                    _paused.child_snapshot,
-                )
+                paused_child_dispositions[branch_index] = _paused.capture
                 raise
             except SubAgentDispatchCapacityError:
                 # codex round-4 [P2] — see `_proceed_branch`'s identical
@@ -14604,10 +14592,7 @@ def _execute_orchestrator_workers(
                     inflight.exception() if (inflight.done() and not inflight.cancelled()) else None
                 )
                 if isinstance(_inflight_exc, SubAgentChildPausedError):
-                    paused_child_dispositions[branch_index] = (
-                        _inflight_exc.child_workflow_id,
-                        _inflight_exc.child_snapshot,
-                    )
+                    paused_child_dispositions[branch_index] = _inflight_exc.capture
                     raise
                 if type(_inflight_exc).__name__ == "HITLPauseRequestedSignal":
                     # B-72 impl leg (CP spec v1.108 §1) — this worker was cancelled because a
@@ -14739,10 +14724,7 @@ def _execute_orchestrator_workers(
                 # already buffered stays). Re-raise so the TaskGroup halts the fan-out at the
                 # pause boundary (siblings: in-flight finish / not-yet-dispatched left
                 # re-dispatchable — the §25.15.1 pause semantic), driving the pause branch.
-                paused_child_dispositions[branch_index] = (
-                    _paused.child_workflow_id,
-                    _paused.child_snapshot,
-                )
+                paused_child_dispositions[branch_index] = _paused.capture
                 raise
             except Exception as _exc:
                 # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE (R-FS-1) — this TOOL_STEP worker's OWN
@@ -15230,12 +15212,11 @@ def _execute_orchestrator_workers(
                 PausedChildBranchResumeState(
                     branch_index=_bi,
                     step_id=str(worker_steps[_bi].step_id),
-                    child_workflow_id=_cwid,
-                    child_snapshot=_child_snap,
+                    child_workflow_id=_capture.child_workflow_id,
+                    child_snapshot=_capture.child_snapshot,
+                    child_record_ref=_capture.child_record_ref,
                 )
-                for _bi, (_cwid, _child_snap) in sorted(
-                    paused_child_dispositions.items(), key=lambda kv: kv[0]
-                )
+                for _bi, _capture in sorted(paused_child_dispositions.items(), key=lambda kv: kv[0])
             ),
             # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE — TOOL_STEP workers whose OWN dispatch
             # raised the runtime effect fence this round. DISJOINT from both `branches`
@@ -15337,8 +15318,8 @@ def _execute_orchestrator_workers(
         # B-72 impl leg — a worker that IS itself pre-dispatch gate-owning this round ALSO labels
         # the pause HITL_PENDING (the PARALLELIZATION analogue).
         _any_nested_hitl_pending = any(
-            _child_snap.pause_reason is WorkflowPauseReason.HITL_PENDING
-            for _, _child_snap in paused_child_dispositions.values()
+            _capture.child_snapshot.pause_reason is WorkflowPauseReason.HITL_PENDING
+            for _capture in paused_child_dispositions.values()
         )
         _pause_reason = (
             WorkflowPauseReason.EFFECT_FENCE_AMBIGUOUS

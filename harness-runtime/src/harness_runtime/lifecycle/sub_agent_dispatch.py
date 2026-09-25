@@ -122,6 +122,7 @@ from harness_cp.handoff_context import (
     RetryHistory,
     StateSummary,
 )
+from harness_cp.pause_resume_protocol_types import PausedChildCapture
 from harness_cp.sub_agent_brief import SubAgentBrief
 from harness_cp.topology_pattern import TopologyPattern
 from harness_cp.topology_subagent_namespace import (
@@ -1274,9 +1275,15 @@ class RuntimeSubAgentDispatcher:
                         f"RunStatus.PAUSED with no pause_snapshot (cannot resume; "
                         f"§25.2 contract violation)"
                     )
+                # B-104 Task 4b: the exact journal ref of this child's own capture (None only
+                # for an ephemeral protocol) travels with the snapshot so the parent
+                # carrier can hold it; nothing here re-reads the journal.
                 raise SubAgentChildPausedError(
-                    child_workflow_id=payload.child_workflow_id,
-                    child_snapshot=child_result.pause_snapshot,
+                    capture=PausedChildCapture(
+                        child_workflow_id=payload.child_workflow_id,
+                        child_snapshot=child_result.pause_snapshot,
+                        child_record_ref=child_result.pause_record_ref,
+                    )
                 )
             else:
                 # PARTIAL — reserved per C-CP-25 §25.2. v1.6 MVP treats as

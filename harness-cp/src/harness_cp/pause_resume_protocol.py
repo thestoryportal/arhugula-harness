@@ -704,6 +704,11 @@ def _strip_default_fanout_resume_fields(
             # drop-when-default discipline as `synthesis_step_id`).
             if pcb_dict.get("child_workflow_id") is None:
                 pcb_dict.pop("child_workflow_id", None)
+            # B-104 Task 4b: `child_record_ref` is likewise new and default-None (an
+            # ephemeral capture or a pre-4b snapshot); dropping it when None keeps those
+            # hashes byte-identical at every depth, while a real ref stays covered.
+            if pcb_dict.get("child_record_ref") is None:
+                pcb_dict.pop("child_record_ref", None)
             child_snapshot = pcb_dict.get("child_snapshot")
             if not isinstance(child_snapshot, dict):
                 continue

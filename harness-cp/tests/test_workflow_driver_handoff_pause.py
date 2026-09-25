@@ -41,6 +41,7 @@ from harness_cp.pause_resume_protocol import (
 from harness_cp.pause_resume_protocol_types import (
     HandoffResumeState,
     HandoffStageResumeState,
+    PausedChildCapture,
     PauseSnapshot,
     WorkflowPauseReason,
 )
@@ -863,7 +864,11 @@ def test_handoff_stage_child_pause_fails_closed_not_handoff_paused() -> None:
             step_id = str(step.step_id)
             if step_id == "s1":
                 raise SubAgentChildPausedError(
-                    child_workflow_id="child-wf", child_snapshot=child_snapshot
+                    capture=PausedChildCapture(
+                        child_workflow_id="child-wf",
+                        child_snapshot=child_snapshot,
+                        child_record_ref=None,
+                    )
                 )
             return {"role": step_id, "echoed": dict(step.step_payload)}
 

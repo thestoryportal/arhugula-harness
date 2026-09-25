@@ -45,6 +45,7 @@ from harness_cp.pause_resume_protocol import (
 from harness_cp.pause_resume_protocol_types import (
     EvaluatorOptimizerResumeState,
     EvaluatorOptimizerStepResumeState,
+    PausedChildCapture,
     PauseSnapshot,
     WorkflowPauseReason,
 )
@@ -862,7 +863,11 @@ def test_eo_child_pause_fails_closed_not_eo_paused() -> None:
         ) -> dict[str, Any]:
             if str(step.step_id) == _GENERATE:
                 raise SubAgentChildPausedError(
-                    child_workflow_id="child-wf", child_snapshot=child_snapshot
+                    capture=PausedChildCapture(
+                        child_workflow_id="child-wf",
+                        child_snapshot=child_snapshot,
+                        child_record_ref=None,
+                    )
                 )
             return {"accepted": False}
 

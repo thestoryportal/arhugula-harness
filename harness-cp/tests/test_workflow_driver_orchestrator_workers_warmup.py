@@ -90,6 +90,7 @@ from harness_cp.engine_class import EngineClass
 from harness_cp.handoff_context import StateSummary
 from harness_cp.pause_resume_protocol import PauseResumeProtocol
 from harness_cp.pause_resume_protocol_types import (
+    PausedChildCapture,
     PauseSnapshot,
     WorkflowPauseReason,
 )
@@ -529,7 +530,11 @@ class _CohortScriptedWorker:
         if action == "child":
             assert self._child_snapshot is not None
             raise SubAgentChildPausedError(
-                child_workflow_id="wf-child", child_snapshot=self._child_snapshot
+                capture=PausedChildCapture(
+                    child_workflow_id="wf-child",
+                    child_snapshot=self._child_snapshot,
+                    child_record_ref=None,
+                )
             )
         return {"index": idx}
 

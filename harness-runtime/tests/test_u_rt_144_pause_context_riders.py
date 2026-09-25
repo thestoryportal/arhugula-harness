@@ -98,6 +98,7 @@ async def test_real_sub_agent_child_paused_error_and_snapshot_cross_executor_fut
     dropping the snapshot across the future boundary fails). A synthetic
     signal or worker-set flag would exercise a path production never takes."""
     from harness_cp.pause_resume_protocol_types import (
+        PausedChildCapture,
         PauseSnapshot,
         StateSummary,
         WorkflowPauseReason,
@@ -125,7 +126,11 @@ async def test_real_sub_agent_child_paused_error_and_snapshot_cross_executor_fut
     class _PausingInner:
         def dispatch(self, binding: Any, step: Any, *, step_context: Any) -> Mapping[str, Any]:
             _ = (binding, step, step_context)
-            raise SubAgentChildPausedError(child_workflow_id="wf-child-7", child_snapshot=snapshot)
+            raise SubAgentChildPausedError(
+                capture=PausedChildCapture(
+                    child_workflow_id="wf-child-7", child_snapshot=snapshot, child_record_ref=None
+                )
+            )
 
     composer = _make_composer(inner=_PausingInner(), executor=executor)
     with pytest.raises(SubAgentChildPausedError) as excinfo:

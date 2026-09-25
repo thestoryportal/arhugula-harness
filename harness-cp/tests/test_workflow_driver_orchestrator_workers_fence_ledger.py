@@ -88,6 +88,7 @@ from harness_cp.handoff_context import StateSummary
 from harness_cp.pause_resume_protocol import PauseResumeProtocol
 from harness_cp.pause_resume_protocol_types import (
     EffectFenceResolution,
+    PausedChildCapture,
     PauseSnapshot,
     ResumeContext,
     WorkflowPauseReason,
@@ -473,7 +474,11 @@ class _ScriptedWorker:
         if action == "child":
             assert self._child_snapshot is not None
             raise SubAgentChildPausedError(
-                child_workflow_id="wf-child", child_snapshot=self._child_snapshot
+                capture=PausedChildCapture(
+                    child_workflow_id="wf-child",
+                    child_snapshot=self._child_snapshot,
+                    child_record_ref=None,
+                )
             )
         if action == "fail":
             raise RuntimeError(f"simulated plain worker-{idx} failure")
