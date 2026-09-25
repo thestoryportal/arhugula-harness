@@ -1,7 +1,7 @@
 ---
 artifact: design-substrate/Spec_Information_Substrate_v1.md
 version: v1.15
-cleared_at: 2026-09-24T18:14:25-06:00
+cleared_at: 2026-09-24T18:51:50-06:00
 clearance_status: cleared
 clearance_type: spec-writer-apply-pass
 back_reference:
@@ -10,6 +10,7 @@ back_reference:
   - "Task 2 Opus preimplementation review: evidence-b104-is-audit-task2-design-review-opus-1/SHA256SUMS SHA256 37a0d383a21cc5a52639c71ad207953ddc55a9e7de35e7a1f9ed0fe4e4510e90; LIT cmt-f829583a"
   - "Task 2 reviewed brief SHA256 69121665b72d5b8d3cd8d7d0748618173035ffc8df734d4fcc8fbca0d0d81df9; LIT cmt-a4fa6284-5c44-42dc-9f96-bed27e622d60"
   - "Task 2 independent source GO/P2: evaluation/production-readiness-arch/evidence-b104-is-audit-task2-delta-review-opus-1/SHA256SUMS SHA256 7b1bfe4227a6a75191c3f805ee7da01b8ff0f338c3874f595010dc1eb3dfac93; LIT cmt-473a089a-095b-4b1d-acdd-37da60ae2613"
+  - "Task 2 independent P2 closeout GO: evaluation/production-readiness-arch/evidence-b104-is-audit-task2-closeout-review-opus-1/SHA256SUMS SHA256 e28d17c196f258c5a00ca3c59026b6a5f748686c56af567a893b96f7ce8693fa; LIT cmt-b7f57030-591b-4556-84b5-4991e9cbaed0"
   - "Final v1.15 spec SHA256 229916df47247b5d68cfbec0e98c95adfc4b5c4093a530a66e90a68133f33901"
 merge_commit: pending
 reviewer_chain:
@@ -17,6 +18,7 @@ reviewer_chain:
   - "independent Task 1 changed-line GO"
   - "independent Task 2 preimplementation corrections incorporated into dispatch"
   - "independent Task 2 source GO with P2 spec-limit correction incorporated"
+  - "independent Task 2 P2 closeout changed-line GO"
 supersedes: spec-information-substrate-v1-14-cleared-2026-09-24.md
 ---
 
@@ -29,6 +31,6 @@ file/parent/grandparent sync order. Ordinary append refuses the audit sidecar
 and retains its earlier behavior. C-IS-06 §6.4 remains unchanged.
 
 This marker records the specification apply pass, the independent Task 2 source GO,
-and the P2 limit correction. Independent review of this closeout delta and integration
-remain pending. It does not attest to installed recovery, power-loss durability,
-or production acceptance.
+and the independently reviewed P2 limit correction. Integration remains pending.
+It does not attest to installed recovery, power-loss durability, or production
+acceptance.
