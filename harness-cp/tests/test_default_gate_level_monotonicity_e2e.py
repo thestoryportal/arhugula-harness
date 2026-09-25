@@ -18,7 +18,7 @@ Coverage:
   - resolve_parent_gate_level — explicit AUTO / ASK / DENY flow through
   - chain — manifest.default_gate_level → step_context.parent_gate_level
   - chain — step_context.parent_gate_level → SubAgentGateLevelDescent.child_gate_level
-  - monotonicity — assert_monotonic_descent rejects ascent above manifest seed
+  - monotonicity — assert_monotonic_descent rejects a child below the manifest seed
   - cross-deployment — two manifests differing only in default_gate_level
     produce distinct child gate levels at the sub-agent boundary
 """
@@ -148,13 +148,13 @@ def test_manifest_default_gate_level_chains_to_sub_agent_descent(
     assert descent.child_gate_level is expected
 
 
-def test_monotonic_descent_rejects_child_ascent_above_manifest_seed() -> None:
-    """C-CP-12 §12.2 monotonic-descent: a child cannot escalate to a stricter
-    gate level than the parent. When the manifest seeds AUTO, a sub-agent
-    cannot ascend to ASK or DENY — assert_monotonic_descent raises ValueError.
+def test_monotonic_descent_rejects_child_below_manifest_seed() -> None:
+    """C-CP-12 §12.3 monotonic-descent: a child cannot be less restrictive
+    than the parent. When the manifest seeds DENY, a sub-agent cannot relax
+    to ASK or AUTO — assert_monotonic_descent raises ValueError.
     Rank ordering at gate_level_rule.py: AUTO=0 < ASK=1 < DENY=2.
     """
-    entry = _manifest(default_gate_level=GateLevel.AUTO)
+    entry = _manifest(default_gate_level=GateLevel.DENY)
     parent_gate_level = resolve_parent_gate_level(entry)
 
     with pytest.raises(ValueError, match="monotonic-descent violated"):
@@ -165,22 +165,22 @@ def test_monotonic_descent_rejects_child_ascent_above_manifest_seed() -> None:
     with pytest.raises(ValueError, match="monotonic-descent violated"):
         assert_monotonic_descent(
             parent_gate_level=parent_gate_level,
-            child_gate_level=GateLevel.DENY,
+            child_gate_level=GateLevel.AUTO,
         )
 
 
-def test_monotonic_descent_admits_equality_and_strict_descent() -> None:
-    """Under a stricter manifest seed (DENY), a child MAY remain at DENY
-    (equality) or descend to ASK or AUTO (relaxation). The descent direction
-    is permitted; only ascent (child rank > parent rank) raises.
+def test_monotonic_descent_admits_equality_and_stricter_child() -> None:
+    """Under a permissive manifest seed (AUTO), a child MAY remain at AUTO
+    (equality) or escalate to ASK or DENY (§12.2 `max`). Only a less
+    restrictive child (child rank < parent rank) raises.
     """
-    entry = _manifest(default_gate_level=GateLevel.DENY)
+    entry = _manifest(default_gate_level=GateLevel.AUTO)
     parent_gate_level = resolve_parent_gate_level(entry)
 
-    # All three are <= DENY in rank — no raise.
-    assert_monotonic_descent(parent_gate_level=parent_gate_level, child_gate_level=GateLevel.DENY)
-    assert_monotonic_descent(parent_gate_level=parent_gate_level, child_gate_level=GateLevel.ASK)
+    # All three are >= AUTO in rank — no raise.
     assert_monotonic_descent(parent_gate_level=parent_gate_level, child_gate_level=GateLevel.AUTO)
+    assert_monotonic_descent(parent_gate_level=parent_gate_level, child_gate_level=GateLevel.ASK)
+    assert_monotonic_descent(parent_gate_level=parent_gate_level, child_gate_level=GateLevel.DENY)
 
 
 # --- §3 Cross-deployment monotonicity (two manifests, distinct outcomes) ----

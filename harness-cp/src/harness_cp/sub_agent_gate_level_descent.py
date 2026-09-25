@@ -7,8 +7,9 @@ Implements C-CP-12 §12.2 (sub-agent gate-level composition), §12.3
 Declares the `SubAgentGateLevelDescent` record, the `dispatch_sub_agent`
 selection function, and `emit_sub_agent_dispatch_audit` — the §12.5 audit
 entry composition. Two orthogonal monotonicity axes compose at the sub-agent
-boundary: `child_gate_level <= parent_gate_level` (gate level descends per
-§12.2) and `child_sandbox_tier >= parent_sandbox_tier` (sandbox tier ascends
+boundary: `child_gate_level >= parent_gate_level` (gate restrictiveness only
+escalates per §12.2 `max` / §12.3; "monotonic-descent" names privilege
+descending) and `child_sandbox_tier >= parent_sandbox_tier` (sandbox tier ascends
 per `Spec_Action_Surface_v1.md` C-AS-11).
 
 `GateOverride` — the `operator_override` parameter type — is specified as the
@@ -41,7 +42,10 @@ from harness_core import ActionID
 from pydantic import BaseModel, ConfigDict
 
 from harness_cp.default_downgrade_rule import compute_child_blast_radius_ceiling
-from harness_cp.gate_level_rule import GateLevel
+from harness_cp.gate_level_rule import (
+    _RANK,  # pyright: ignore[reportPrivateUsage]  # canonical escalation rank; no public accessor yet
+    GateLevel,
+)
 from harness_cp.handoff_context import LedgerEntryRef
 from harness_cp.per_step_override_evaluator import CPAuditLedgerEntry
 from harness_cp.sub_agent_brief import SubAgentBrief, compute_brief_summary_hash
@@ -54,12 +58,6 @@ type GateOverride = Mapping[str, Any]
 
 # --- Monotonic ascension/descent rank tables --------------------------------
 
-_GATE_RANK: dict[GateLevel, int] = {
-    GateLevel.AUTO: 0,
-    GateLevel.ASK: 1,
-    GateLevel.DENY: 2,
-}
-
 _SANDBOX_RANK: dict[SandboxTier, int] = {
     SandboxTier.TIER_1_PROCESS: 0,
     SandboxTier.TIER_2_CONTAINER: 1,
@@ -71,8 +69,8 @@ _SANDBOX_RANK: dict[SandboxTier, int] = {
 class SubAgentGateLevelDescent(BaseModel):
     """The resolved sub-agent gate-level descent record (C-CP-12 §12.2-§12.4).
 
-    Carries both monotonicity axes: `child_gate_level <= parent_gate_level`
-    (gate descends, §12.2) and `child_sandbox_tier >= parent_sandbox_tier`
+    Carries both monotonicity axes: `child_gate_level >= parent_gate_level`
+    (gate never relaxes, §12.2/§12.3) and `child_sandbox_tier >= parent_sandbox_tier`
     (sandbox ascends, C-AS-11) — orthogonal axes per §12.3.
     """
 
@@ -89,7 +87,7 @@ class SubAgentGateLevelDescent(BaseModel):
     """Monotonic ascent (>= parent) per `Spec_Action_Surface_v1.md` C-AS-11."""
 
     child_gate_level: GateLevel
-    """Monotonic descent (<= parent) per §12.2."""
+    """Monotonic floor (>= parent) per §12.2/§12.3."""
 
     override_applied: bool
     override_audit_ref: LedgerEntryRef | None
@@ -106,8 +104,9 @@ def dispatch_sub_agent(
     """Resolve the sub-agent gate-level descent at a dispatch site.
 
     Per §12.2-§12.4: the child blast-radius ceiling comes from the U-CP-26
-    default-downgrade rule; the child gate level descends monotonically
-    (<= parent) and the child sandbox tier ascends monotonically (>= parent).
+    default-downgrade rule; the child gate level is at least the parent's
+    (>= parent, §12.3) and the child sandbox tier ascends monotonically
+    (>= parent).
     `parent_gate_level` is consumed as resolved by U-CP-43 — this unit does
     NOT recompute it (acceptance #6).
 
@@ -147,15 +146,18 @@ def _blast_radius_of(tier: SandboxTier) -> BlastRadiusTier:
 
 
 def assert_monotonic_descent(parent_gate_level: GateLevel, child_gate_level: GateLevel) -> None:
-    """Enforce the §12.2 monotonic-descent invariant.
+    """Enforce the §12.2/§12.3 monotonic-descent invariant.
 
-    `child_gate_level <= parent_gate_level` — ascent is structurally
-    prohibited (§12.3 / ADD §5.3.2). A violation raises `ValueError`.
+    `child_gate_level >= parent_gate_level` by escalation rank — a child
+    less restrictive than its parent is structurally rejected (§12.3 / ADD
+    §5.3.2); equality and a stricter child are admitted. A violation raises
+    `ValueError`.
     """
-    if _GATE_RANK[child_gate_level] > _GATE_RANK[parent_gate_level]:
+    # [LAW:one-source-of-truth] rank comes from gate_level_rule, the canonical order.
+    if _RANK[child_gate_level] < _RANK[parent_gate_level]:
         raise ValueError(
-            f"sub-agent gate-level monotonic-descent violated (§12.2): "
-            f"child {child_gate_level.value} ascends parent "
+            f"sub-agent gate-level monotonic-descent violated (§12.3): "
+            f"child {child_gate_level.value} is less restrictive than parent "
             f"{parent_gate_level.value}"
         )
 

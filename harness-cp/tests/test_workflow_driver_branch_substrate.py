@@ -20,7 +20,7 @@ from __future__ import annotations
 import pytest
 from harness_as.sandbox_tier import SandboxTier
 from harness_cp.cp_shared_types import AgentRole
-from harness_cp.gate_level_rule import _RANK, GateLevel
+from harness_cp.gate_level_rule import GateLevel
 from harness_cp.topology_pattern import TopologyPattern
 from harness_cp.workflow_driver import (
     _DRIVER_STRATEGY_DISPATCH,
@@ -277,13 +277,15 @@ def test_compose_branch_child_resets_hitl_delivery_holder_never_shares_cell() ->
     assert child_b.hitl_delivery_holder is None
 
 
-def test_compose_branch_child_gate_level_descends_monotonically() -> None:
-    """The child gate-level descends monotonically (<= parent) per
-    C-CP-12 §12.2 — equality is the valid §12.2 default."""
+def test_compose_branch_child_inherits_parent_gate_level_unchanged() -> None:
+    """The child carrier copies the parent gate-level floor exactly, for every
+    level (C-CP-12 §12.2/§12.3: equality is the valid default). A later
+    effective child gate may be stricter than this floor, never weaker."""
     for parent_gate in (GateLevel.AUTO, GateLevel.ASK, GateLevel.DENY):
         parent = _linear_step_context(parent_gate_level=parent_gate)
         child = compose_branch_child_context(parent, branch_index=0, agent_role=AgentRole("worker"))
-        assert _RANK[child.parent_gate_level] <= _RANK[parent.parent_gate_level]
+        assert child.parent_gate_level is parent.parent_gate_level
+        assert child.parent_gate_level is parent_gate
 
 
 def test_compose_branch_child_rejects_negative_branch_index() -> None:

@@ -11,8 +11,8 @@ surface:
 - `harness_cp.sub_agent_brief` — `SubAgentBrief` 5-field schema (C-CP-13 §13.2)
   + `canonicalize_brief` + `compute_brief_summary_hash`.
 - `harness_cp.sub_agent_gate_level_descent` — C-CP-12 §12 dispatch protocol:
-  `dispatch_sub_agent`, `assert_monotonic_descent` (§12.2), `assert_monotonic_ascent`
-  (C-AS-11), `emit_sub_agent_dispatch_audit` (§12.5),
+  `dispatch_sub_agent`, `assert_monotonic_descent` (§12.2/§12.3, child >= parent),
+  `assert_monotonic_ascent` (C-AS-11), `emit_sub_agent_dispatch_audit` (§12.5),
   `sub_agent_dispatch_response_hash` (§12.5).
 - `harness_cp.brief_authoring_inheritance` — `BRIEF_AUTHORING_INHERITANCE`
   4-row table (C-CP-13 §13.3) + `inheritance_for(workload_class)`.
@@ -40,8 +40,8 @@ Per-component landing posture:
 - `RuntimeHandoffRegistry.dispatch(...)` — composes `dispatch_sub_agent`;
   returns `SubAgentGateLevelDescent`.
 - `RuntimeHandoffRegistry.assert_descent(...)` /
-  `RuntimeHandoffRegistry.assert_ascent(...)` — composes the C-CP-12 §12.2
-  monotonic-descent and C-AS-11 monotonic-ascent invariant enforcers.
+  `RuntimeHandoffRegistry.assert_ascent(...)` — composes the C-CP-12 §12.2/§12.3
+  monotonic-descent (child gate >= parent) and C-AS-11 monotonic-ascent invariant enforcers.
 - `RuntimeHandoffRegistry.inheritance_for(workload_class)` — composes
   `inheritance_for`; returns `BriefAuthoringInheritance`.
 - `RuntimeHandoffRegistry.compute_brief_summary_hash(brief)` — composes the
@@ -134,8 +134,8 @@ class RuntimeHandoffRegistry:
         """Resolve the sub-agent gate-level descent at a dispatch site.
 
         Per C-CP-12 §12.2-§12.4: child blast-radius ceiling from the
-        default-downgrade rule; child gate level descends monotonically
-        (≤ parent); child sandbox tier ascends monotonically (≥ parent).
+        default-downgrade rule; child gate level is at least the parent's
+        (≥ parent, §12.3); child sandbox tier ascends monotonically (≥ parent).
         Pure composition of `harness_cp.sub_agent_gate_level_descent.dispatch_sub_agent`.
 
         AC #1 surface (handoff registry queryable). The L8 orchestrator
@@ -156,9 +156,10 @@ class RuntimeHandoffRegistry:
         parent_gate_level: GateLevel,
         child_gate_level: GateLevel,
     ) -> None:
-        """Enforce the C-CP-12 §12.2 monotonic-descent invariant.
+        """Enforce the C-CP-12 §12.2/§12.3 monotonic-descent invariant.
 
-        `child_gate_level <= parent_gate_level`; ascent raises `ValueError`.
+        `child_gate_level >= parent_gate_level`; a less restrictive child
+        raises `ValueError`.
         Pure composition of `assert_monotonic_descent`."""
         assert_monotonic_descent(parent_gate_level, child_gate_level)
 

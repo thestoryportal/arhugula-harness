@@ -1,7 +1,8 @@
 """Tests for U-CP-27 — sub-agent gate-level monotonic descent (C-CP-12).
 
 Acceptance-criterion coverage:
-  #1 child gate-level <= parent  -> test_child_gate_level_monotonic_descent
+  #1 child gate-level >= parent  -> test_child_gate_level_monotonic_descent,
+                                    test_assert_monotonic_descent_matrix
   #2 child sandbox-tier >= parent -> test_child_sandbox_tier_monotonic_ascent
   #3 default-downgrade ceiling   -> test_default_downgrade_applied
   #3 override permitted          -> test_override_applied_flag
@@ -55,7 +56,8 @@ def _brief() -> SubAgentBrief:
 
 
 def test_child_gate_level_monotonic_descent() -> None:
-    """#1 — child_gate_level <= parent_gate_level; ascent prohibited."""
+    """#1 — child_gate_level >= parent_gate_level per §12.2/§12.3; the
+    dispatch default (child == parent) satisfies the invariant."""
     descent = dispatch_sub_agent(
         ActionID("p0"),
         GateLevel.ASK,
@@ -63,14 +65,28 @@ def test_child_gate_level_monotonic_descent() -> None:
         _brief(),
         None,
     )
-    rank = {GateLevel.AUTO: 0, GateLevel.ASK: 1, GateLevel.DENY: 2}
-    assert rank[descent.child_gate_level] <= rank[descent.parent_gate_level]
-    # Ascent raises.
-    with pytest.raises(ValueError, match="monotonic-descent"):
-        assert_monotonic_descent(GateLevel.AUTO, GateLevel.DENY)
-    # Equality and descent are admitted.
-    assert_monotonic_descent(GateLevel.DENY, GateLevel.AUTO)
-    assert_monotonic_descent(GateLevel.ASK, GateLevel.ASK)
+    assert descent.child_gate_level is descent.parent_gate_level
+    assert_monotonic_descent(descent.parent_gate_level, descent.child_gate_level)
+
+
+_ESCALATION_ORDER = (GateLevel.AUTO, GateLevel.ASK, GateLevel.DENY)
+
+
+@pytest.mark.parametrize("parent", _ESCALATION_ORDER)
+@pytest.mark.parametrize("child", _ESCALATION_ORDER)
+def test_assert_monotonic_descent_matrix(parent: GateLevel, child: GateLevel) -> None:
+    """All nine cells: child >= parent is admitted; a less restrictive child
+    is rejected with §12.3 text naming parent and child."""
+    if _ESCALATION_ORDER.index(child) >= _ESCALATION_ORDER.index(parent):
+        assert_monotonic_descent(parent, child)
+        return
+    with pytest.raises(ValueError, match="monotonic-descent violated") as excinfo:
+        assert_monotonic_descent(parent, child)
+    message = str(excinfo.value)
+    assert "§12.3" in message
+    assert "less restrictive" in message
+    assert f"child {child.value}" in message
+    assert f"parent {parent.value}" in message
 
 
 def test_child_sandbox_tier_monotonic_ascent() -> None:
