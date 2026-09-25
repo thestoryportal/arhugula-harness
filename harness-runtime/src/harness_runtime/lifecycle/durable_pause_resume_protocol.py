@@ -121,5 +121,6 @@ class DurablePauseResumeProtocol(PauseResumeProtocol):
             orchestrator_effect_fence_resume=orchestrator_effect_fence_resume,
             hitl_gate_config_hash=hitl_gate_config_hash,
         )
-        self._store.capture(snapshot)
+        # [LAW:types-are-the-program] Unknown ancestry stays explicit until Task 4 carries depth.
+        self._store.capture(snapshot, depth=None)
         return snapshot

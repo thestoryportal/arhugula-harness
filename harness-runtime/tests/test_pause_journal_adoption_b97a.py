@@ -550,10 +550,10 @@ def test_ac9d_ter_three_shapes_in_one_directory(tmp_path: Path) -> None:
     journal_dir = tmp_path / PAUSE_JOURNAL_SUBDIR
     _legacy(journal_dir, "wf-legacy")
     JournalWorkflowPauseStore(journal_dir=journal_dir, tenant_id=_TENANT).capture(
-        _snapshot("wf-current")
+        _snapshot("wf-current"), depth=None
     )
     JournalWorkflowPauseStore(journal_dir=journal_dir, tenant_id="other").capture(
-        _snapshot("wf-cotenant")
+        _snapshot("wf-cotenant"), depth=None
     )
     current_before = (journal_dir / pause_journal_filename(_TENANT, "wf-current")).read_bytes()
     cotenant_before = (journal_dir / pause_journal_filename("other", "wf-cotenant")).read_bytes()
@@ -699,7 +699,7 @@ def test_ac9e_every_journal_gets_exactly_one_durable_account_row(tmp_path: Path)
     journal_dir = tmp_path / PAUSE_JOURNAL_SUBDIR
     _legacy(journal_dir, "wf-legacy")
     JournalWorkflowPauseStore(journal_dir=journal_dir, tenant_id="other").capture(
-        _snapshot("wf-cotenant")
+        _snapshot("wf-cotenant"), depth=None
     )
     account = tmp_path / "account.jsonl"
 
@@ -874,7 +874,7 @@ def test_ac10_disposal_is_dry_run_by_default(
     explicit non-dry-run flag."""
     journal_dir = tmp_path / PAUSE_JOURNAL_SUBDIR
     JournalWorkflowPauseStore(journal_dir=journal_dir, tenant_id="other").capture(
-        _snapshot("wf-cotenant")
+        _snapshot("wf-cotenant"), depth=None
     )
     before = sorted(p.name for p in journal_dir.iterdir())
 
@@ -1087,10 +1087,10 @@ def test_disposal_never_removes_a_journal_it_cannot_prove_is_an_orphan(
     journal_dir = tmp_path / PAUSE_JOURNAL_SUBDIR
     legacy = _legacy(journal_dir, "wf-legacy")
     JournalWorkflowPauseStore(journal_dir=journal_dir, tenant_id=_TENANT).capture(
-        _snapshot("wf-current")
+        _snapshot("wf-current"), depth=None
     )
     JournalWorkflowPauseStore(journal_dir=journal_dir, tenant_id="other").capture(
-        _snapshot("wf-cotenant")
+        _snapshot("wf-cotenant"), depth=None
     )
     unreadable = journal_dir / pause_journal_filename(None, "wf-unreadable")
     unreadable.write_bytes(b"\xff\xfe\n")
@@ -1130,7 +1130,7 @@ def test_disposal_dry_run_names_the_retained_set_explicitly(
     it from silence."""
     journal_dir = tmp_path / PAUSE_JOURNAL_SUBDIR
     JournalWorkflowPauseStore(journal_dir=journal_dir, tenant_id=_TENANT).capture(
-        _snapshot("wf-current")
+        _snapshot("wf-current"), depth=None
     )
     assert disposal_main([str(journal_dir), "--tenant-id", _TENANT]) == 0
     out = capsys.readouterr().out
@@ -1591,7 +1591,7 @@ def test_a_current_format_journal_does_not_make_an_idempotent_rerun_exit_nonzero
     journal_dir = tmp_path / PAUSE_JOURNAL_SUBDIR
     # A HEALTHY deployment: this tenant's own CURRENT-FORMAT journal, nothing legacy.
     JournalWorkflowPauseStore(journal_dir=journal_dir, tenant_id=_TENANT).capture(
-        _snapshot("wf-current")
+        _snapshot("wf-current"), depth=None
     )
 
     exit_code = adoption_module.main(

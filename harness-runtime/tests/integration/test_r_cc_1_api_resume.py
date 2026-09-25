@@ -505,7 +505,7 @@ def test_durable_store_capture_read_round_trip(tmp_path: Path) -> None:
 
     store = JournalWorkflowPauseStore(journal_dir=tmp_path / "pj", tenant_id=None)
     snap = _snapshot_for(_WORKFLOW_ID)
-    store.capture(snap)
+    store.capture(snap, depth=None)
     assert store.read_latest(_WORKFLOW_ID) == snap
 
 
@@ -521,8 +521,8 @@ def test_durable_store_latest_record_wins(tmp_path: Path) -> None:
     second = _snapshot_for(_WORKFLOW_ID, step_index=0).model_copy(
         update={"run_id": "run-second", "created_at": 999}
     )
-    store.capture(first)
-    store.capture(second)
+    store.capture(first, depth=None)
+    store.capture(second, depth=None)
     latest = store.read_latest(_WORKFLOW_ID)
     assert latest is not None
     assert latest.run_id == "run-second"
@@ -548,7 +548,7 @@ def test_durable_store_corrupt_latest_fails_closed(tmp_path: Path) -> None:
     )
 
     store = JournalWorkflowPauseStore(journal_dir=tmp_path / "pj", tenant_id=None)
-    store.capture(_snapshot_for(_WORKFLOW_ID))
+    store.capture(_snapshot_for(_WORKFLOW_ID), depth=None)
     # Append a torn trailing line directly to the pair's journal file. The
     # filename derives from the TENANT-COMPOSITE key at `B-97` half (a) (Runtime
     # spec v1.108 §14.14.8) — the store's own derivation is used rather than a
@@ -572,7 +572,7 @@ def test_durable_store_recovers_from_torn_unterminated_append(tmp_path: Path) ->
     )
 
     store = JournalWorkflowPauseStore(journal_dir=tmp_path / "pj", tenant_id=None)
-    store.capture(_snapshot_for(_WORKFLOW_ID))
+    store.capture(_snapshot_for(_WORKFLOW_ID), depth=None)
     # Simulate a crash mid-append: a partial record with NO trailing newline.
     # The path comes from the store's OWN derivation (tenant-composite at `B-97`
     # half (a)). Re-deriving `sha256(workflow_id)` here would write the fragment
@@ -583,7 +583,7 @@ def test_durable_store_recovers_from_torn_unterminated_append(tmp_path: Path) ->
         handle.write('{"workflow_id": "wf", "pause_snapshot": {TORN-NO-NEWLINE')
     # A valid capture after the torn append must be cleanly recoverable.
     recovered = _snapshot_for(_WORKFLOW_ID).model_copy(update={"run_id": "run-after-torn"})
-    store.capture(recovered)
+    store.capture(recovered, depth=None)
     latest = store.read_latest(_WORKFLOW_ID)
     assert latest is not None, "torn append must not brick future resumes"
     assert latest.run_id == "run-after-torn"
@@ -599,8 +599,8 @@ def test_durable_store_per_workflow_isolation(tmp_path: Path) -> None:
     store = JournalWorkflowPauseStore(journal_dir=tmp_path / "pj", tenant_id=None)
     snap_a = _snapshot_for("wf-a")
     snap_b = _snapshot_for("wf-b")
-    store.capture(snap_a)
-    store.capture(snap_b)
+    store.capture(snap_a, depth=None)
+    store.capture(snap_b, depth=None)
     assert store.read_latest("wf-a") == snap_a
     assert store.read_latest("wf-b") == snap_b
 

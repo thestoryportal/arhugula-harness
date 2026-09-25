@@ -127,7 +127,9 @@ def test_ac7a_bis_lock_files_and_write_aside_artifacts_are_excluded(tmp_path: Pa
     journal_dir = tmp_path / PAUSE_JOURNAL_SUBDIR
     # A REAL capture, so the lock sibling is created by the shipped append path
     # rather than fabricated by the test.
-    JournalWorkflowPauseStore(journal_dir=journal_dir, tenant_id=None).capture(_snapshot("wf-1"))
+    JournalWorkflowPauseStore(journal_dir=journal_dir, tenant_id=None).capture(
+        _snapshot("wf-1"), depth=None
+    )
     journal = journal_dir / pause_journal_filename(None, "wf-1")
     lock = journal.with_name(journal.name + PAUSE_JOURNAL_LOCK_SUFFIX)
     if not lock.exists():  # Windows carve-out — the lock is a documented no-op.
@@ -178,8 +180,8 @@ def test_ac7c_reports_count_and_digest_agreeing_with_the_store(tmp_path: Path) -
     """
     journal_dir = tmp_path / PAUSE_JOURNAL_SUBDIR
     store = JournalWorkflowPauseStore(journal_dir=journal_dir, tenant_id=_TENANT)
-    store.capture(_snapshot("wf-1", run_id="run-1"))
-    store.capture(_snapshot("wf-1", run_id="run-2"))
+    store.capture(_snapshot("wf-1", run_id="run-1"), depth=None)
+    store.capture(_snapshot("wf-1", run_id="run-2"), depth=None)
 
     (row,) = enumerate_pause_journals(journal_dir, tenant_scope=_TENANT)
     from_store = store.read_latest_attributed("wf-1")
@@ -198,7 +200,7 @@ def test_ac7c_a_torn_journal_still_yields_a_computable_count(tmp_path: Path) -> 
     3-bis and the pre-flight requirement demand stay listable."""
     journal_dir = tmp_path / PAUSE_JOURNAL_SUBDIR
     store = JournalWorkflowPauseStore(journal_dir=journal_dir, tenant_id=None)
-    store.capture(_snapshot("wf-1"))
+    store.capture(_snapshot("wf-1"), depth=None)
     journal = journal_dir / pause_journal_filename(None, "wf-1")
     with journal.open("a", encoding="utf-8") as handle:
         handle.write('{"workflow_id": "wf-1", "pause_sn')
@@ -223,7 +225,9 @@ def test_ac7d_never_constructs_a_pause_snapshot(
     term 3-ter requires.
     """
     journal_dir = tmp_path / PAUSE_JOURNAL_SUBDIR
-    JournalWorkflowPauseStore(journal_dir=journal_dir, tenant_id=None).capture(_snapshot("wf-1"))
+    JournalWorkflowPauseStore(journal_dir=journal_dir, tenant_id=None).capture(
+        _snapshot("wf-1"), depth=None
+    )
     _legacy_journal(journal_dir, "wf-legacy")
 
     constructed: list[object] = []
@@ -261,10 +265,10 @@ def test_ac7c_bis_three_way_classification_over_one_directory(tmp_path: Path) ->
     journal_dir = tmp_path / PAUSE_JOURNAL_SUBDIR
     _legacy_journal(journal_dir, "wf-legacy")
     JournalWorkflowPauseStore(journal_dir=journal_dir, tenant_id=_TENANT).capture(
-        _snapshot("wf-current")
+        _snapshot("wf-current"), depth=None
     )
     JournalWorkflowPauseStore(journal_dir=journal_dir, tenant_id="other-tenant").capture(
-        _snapshot("wf-cotenant")
+        _snapshot("wf-cotenant"), depth=None
     )
 
     rows = {
@@ -595,7 +599,7 @@ def test_the_tenant_scope_comes_from_the_normal_config_precedence_chain(
     _write_n_entries(ledger, 1)
     journal_dir = tmp_path / PAUSE_JOURNAL_SUBDIR
     JournalWorkflowPauseStore(journal_dir=journal_dir, tenant_id=_TENANT).capture(
-        _snapshot("wf-current")
+        _snapshot("wf-current"), depth=None
     )
     config_file = tmp_path / "harness.toml"
     config_file.write_text(
@@ -663,7 +667,7 @@ def test_an_undeterminable_scope_is_reported_not_assumed_untenanted(
     _write_n_entries(ledger, 1)
     journal_dir = tmp_path / PAUSE_JOURNAL_SUBDIR
     JournalWorkflowPauseStore(journal_dir=journal_dir, tenant_id=_TENANT).capture(
-        _snapshot("wf-current")
+        _snapshot("wf-current"), depth=None
     )
 
     assert main(["--ledger-path", str(ledger)]) == 0
@@ -703,7 +707,7 @@ def test_round4_an_unknown_scope_does_not_classify_an_untenanted_journal_current
     journal_dir = tmp_path / PAUSE_JOURNAL_SUBDIR
     # An UNTENANTED-format journal — the shape `tenant_scope=None` re-derives.
     JournalWorkflowPauseStore(journal_dir=journal_dir, tenant_id=None).capture(
-        _snapshot("wf-untenanted")
+        _snapshot("wf-untenanted"), depth=None
     )
 
     (unknown,) = enumerate_pause_journals(journal_dir, tenant_scope=None, scope_known=False)
