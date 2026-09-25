@@ -279,6 +279,61 @@ def test_a_refusal_under_the_proceed_tier_is_terminal_not_a_degraded_run(family:
     assert run.result.pause_snapshot is None and run.captures == []
 
 
+class _DeadlineRefusalSubAgents(_SubAgents):
+    """Make a refusal and an in-flight sibling coexist before the barrier expires."""
+
+    def __init__(self, *, audit_signing_failed: bool) -> None:
+        super().__init__()
+        self.audit_signing_failed = audit_signing_failed
+        self.sibling_entered = threading.Event()
+        self.refusal_raised = threading.Event()
+        self.release = threading.Event()
+
+    def dispatch(
+        self, binding: Any, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        sid = str(step.step_id)
+        self.received[sid] = step_context.child_resume
+        if sid == "w-1":
+            self.sibling_entered.set()
+            self.release.wait(timeout=5.0)  # cleanup backstop; the test releases in finally
+            raise RuntimeError("sibling released without running a child")
+        self.refusal_raised.set()
+        raise ChildResumeRefusedError(
+            ChildResumeRefusal.UNREADABLE_RECORD,
+            sid,
+            audit_signing_failed=self.audit_signing_failed,
+        )
+
+
+@pytest.mark.parametrize("family", _FAMILIES)
+@pytest.mark.parametrize("audit_signing_failed", [False, True])
+def test_proceed_deadline_preserves_a_recorded_child_refusal(
+    family: str, audit_signing_failed: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The sibling is in flight before refusal; its deadline must not hide that refusal."""
+    from harness_cp import workflow_driver as wd
+
+    monkeypatch.setattr(wd, "_DEFAULT_FANOUT_BARRIER_DEADLINE_SECONDS", 0.5)
+    sub_agents = _DeadlineRefusalSubAgents(audit_signing_failed=audit_signing_failed)
+    try:
+        run = _execute(family, 2, sub_agents, persona_tier=PersonaTier.SOLO_DEVELOPER)
+    finally:
+        sub_agents.release.set()
+
+    assert sub_agents.sibling_entered.is_set() and sub_agents.refusal_raised.is_set()
+    assert set(sub_agents.received) == {"w-0", "w-1"}
+    assert run.result.status is RunStatus.FAILED
+    expected = (
+        f"{'orchestrator-workers' if family == 'fan_out' else 'parallelization'}"
+        "-child-resume-refused (unreadable-record"
+        f"{'; audit-signing-failed' if audit_signing_failed else ''})"
+    )
+    assert run.result.fail_class == expected
+    assert run.result.final_state is None
+    assert run.result.pause_snapshot is None and run.captures == []
+
+
 # --- one journal record can never stand for two children ---------------------------------
 
 

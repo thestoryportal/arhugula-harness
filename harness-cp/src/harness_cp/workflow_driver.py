@@ -9884,6 +9884,9 @@ def _execute_parallelization(
                     results_by_ordinal[plan[0]] = result
                 return [results_by_ordinal[plan[0]] for plan in branch_plan]
 
+        # [LAW:no-ambient-temporal-coupling] Keep the deadline as state until the
+        # already-recorded refusal has had its terminal decision.
+        deadline_struck = False
         try:
             results = _run_fanout_to_completion(
                 _proceed_fanout(), max_workers=max(1, len(branch_plan))
@@ -9891,8 +9894,9 @@ def _execute_parallelization(
         except (BranchBarrierDeadlineExceededError, TimeoutError):
             # The deadline struck (a stuck branch, or — under warm-up — Phase 1
             # consumed the budget before releasing the siblings); the completed
-            # branches buffered their entries → PARTIAL (degraded). proceed does
-            # not cancel; a stuck branch is abandoned per
+            # branches buffered their entries. A recorded child refusal stays FAILED;
+            # otherwise proceed returns PARTIAL. Proceed does not cancel; a stuck
+            # branch is abandoned per
             # `_run_fanout_to_completion`. Never-released branches record their
             # obligation-4 `cancelled` terminal (B-18-3C-PREWARM-TIMEOUT-LEDGER
             # M2 audit completeness — in-flight-cut branches already recorded
@@ -9908,8 +9912,7 @@ def _execute_parallelization(
             # named comment ("its stash-then-deadline interleaving exits HERE, before the
             # paused-child check below") — a deliberate, already-shipped trade-off this
             # port intentionally preserves, not a gap unique to PARALLELIZATION.
-            _synthesize_undispatched_terminals()
-            return _finish(RunStatus.PARTIAL, fail_class=None, salvage=True)
+            deadline_struck = True
         # B-104 Task 4c — a durable paused child refused before it ran is a terminal run
         # failure even under `proceed` (never degraded into PARTIAL/SUCCESS).
         if child_resume_refused_dispositions:
@@ -9921,6 +9924,9 @@ def _execute_parallelization(
                 ),
                 salvage=False,
             )
+        if deadline_struck:
+            _synthesize_undispatched_terminals()
+            return _finish(RunStatus.PARTIAL, fail_class=None, salvage=True)
         if paused_child_dispositions:
             # B-21 — a recursive child PAUSED under `proceed`. There is no resumable-pause
             # boundary here (proceed degrades, it does not pause), so the suspended child
@@ -14518,6 +14524,9 @@ def _execute_orchestrator_workers(
                     results_by_ordinal[plan[0]] = result
                 return [results_by_ordinal[plan[0]] for plan in branch_plan]
 
+        # [LAW:no-ambient-temporal-coupling] Keep the deadline as state until the
+        # already-recorded refusal has had its terminal decision.
+        deadline_struck = False
         try:
             results = _run_fanout_to_completion(
                 _proceed_fanout(), max_workers=max(1, len(branch_plan))
@@ -14525,8 +14534,9 @@ def _execute_orchestrator_workers(
         except (BranchBarrierDeadlineExceededError, TimeoutError):
             # A stuck worker hit the deadline (or — under warm-up — Phase 1 consumed
             # the budget before releasing the followers, B-18-PREWARM-OW); the
-            # completed workers buffered their entries → PARTIAL (degraded). (proceed
-            # does not cancel; the stuck worker is abandoned per
+            # completed workers buffered their entries. A recorded child refusal
+            # stays FAILED; otherwise proceed returns PARTIAL. (Proceed does not
+            # cancel; the stuck worker is abandoned per
             # `_run_fanout_to_completion`; handlers merged — the M2 parity shape.) A
             # TERMINAL exit nothing resumes → run the obligation-4 scan
             # (B-18-FENCE-LEDGER-FIDELITY-OW): a never-scheduled worker — incl. a
@@ -14535,8 +14545,7 @@ def _execute_orchestrator_workers(
             # the paused-child check below) records `completed` terminal-only —
             # in-flight-cut workers already recorded `timed_out` at their own
             # CancelledError handler.
-            _synthesize_undispatched_terminals()
-            return _finish(RunStatus.PARTIAL, fail_class=None, salvage=True)
+            deadline_struck = True
         # B-104 Task 4c — a durable paused child refused before it ran is a terminal run
         # failure even under `proceed` (never degraded into PARTIAL/SUCCESS).
         if child_resume_refused_dispositions:
@@ -14548,6 +14557,9 @@ def _execute_orchestrator_workers(
                 ),
                 salvage=False,
             )
+        if deadline_struck:
+            _synthesize_undispatched_terminals()
+            return _finish(RunStatus.PARTIAL, fail_class=None, salvage=True)
         if paused_child_dispositions:
             # B-HIERARCHICAL-PAUSE — a recursive child PAUSED under `proceed`. There is
             # no resumable-pause boundary here (proceed degrades, it does not pause), so
