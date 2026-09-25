@@ -1,0 +1,39 @@
+# Two-branch local parallelization workflow; run with examples/ollama.local.toml.example
+# copied as harness.toml PLUS the research path bindings in examples/README.md.
+# Each [[steps]] entry is a peer branch: the driver runs both concurrently, joins
+# them, then folds results in branch order. Only local Ollama is bound; the
+# fallback chain is empty, so no hosted provider can be reached.
+version = 1
+
+[workflow]
+workflow_id = "example-ollama-parallelization"
+workload_class = "research"
+persona_tier = "solo-developer"
+engine_class = "pure-pattern-no-engine"
+topology_pattern = "parallelization"
+layer_budgets = []
+hitl_placements = []
+per_step_overrides = {}
+fallback_chain = { primary = { provider = "ollama", model = "llama3.2:3b", family = "local_open_weight" }, same_family = [], cross_family = [] }
+
+[default_model_binding]
+provider = "ollama"
+model = "llama3.2:3b"
+
+[[steps]]
+step_id = "branch-overview"
+step_kind = "inference-step"
+
+[steps.step_payload]
+messages = [{ role = "user", content = "In one short sentence, what is a local language model?" }]
+tools = []
+params = { options = { num_predict = 32 } }
+
+[[steps]]
+step_id = "branch-risks"
+step_kind = "inference-step"
+
+[steps.step_payload]
+messages = [{ role = "user", content = "In one short sentence, name one risk of running a model locally." }]
+tools = []
+params = { options = { num_predict = 32 } }
