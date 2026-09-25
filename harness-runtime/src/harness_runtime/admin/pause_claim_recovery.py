@@ -1,4 +1,4 @@
-"""B-104 Task 6a: claim-scoped, audited recovery of one exact resume claim.
+"""B-104 Task 6: audited recovery of one exact resume claim (6a) or record (6b phase A).
 
 A released or abandoned claim is an operator decision about possibly-executed work, so
 every transition is bracketed by durable IS audit entries: a claim-scoped INTENT is
@@ -14,14 +14,21 @@ invents a phase from missing evidence.
   asserts refusal, never that earlier work did not run.
 - **COMPLETE/none**: a pending INTENT whose action is now moot, proved against a
   byte- and inode-identical live claim, the exact original lease and no transition.
+- **record abandon** (operator-attested quiescence; Task 6b phase A): for a record whose
+  claim is absent, has no parseable token, or is unreadable, pin that typed observation
+  in a record-scoped INTENT, write a deterministic record tombstone, then COMPLETE. The
+  claim and lease files are preserved; the tombstone bars every later claim of the exact
+  record, never a sibling or a later record. A released C1 archive with its completed
+  claim release is expected history; any other archive holds.
 
 Lock order: journal lock, then the exact lease by NONBLOCKING exclusive probe, then the IS
 ledger lock inside `append_recovery_audit_entry`. Placement is revalidated before the
 journal lock, by every lease probe, and before each filesystem mutation.
 
-Record-scoped recovery (claim absent, no token, unreadable claim, missing or invalid
-lease) is a separate later slice: this coordinator refuses those states as HELD without
-writing an audit, and its request type cannot express them.
+Claim-scoped requests refuse the three record-scoped states as HELD without audit, and a
+record abandon refuses a claim with a parseable token. A token claim whose lease is
+missing or invalid fits neither scope's typed observation and stays HELD (phase B).
+One open action per record spans both scopes.
 """
 
 from __future__ import annotations
@@ -40,11 +47,18 @@ from harness_is.jsonl_event_ledger_lifecycle import JsonlLedgerHandle
 from harness_is.state_ledger_entry_schema import (
     Actor,
     ActorClass,
+    ClaimAbsentObservation,
     ClaimCompleteAudit,
     ClaimIntentAudit,
+    ClaimNoTokenObservation,
     ClaimObservation,
+    ClaimUnreadableObservation,
     Identifier,
     QuiescenceAttestation,
+    RecordCompleteAudit,
+    RecordIntentAudit,
+    RecordObservation,
+    RecoveryAudit,
     RecoveryRecordIdentity,
 )
 from harness_is.state_ledger_write import (
@@ -69,6 +83,7 @@ from harness_runtime.lifecycle.resume_claim_store import (
     LeaseBusy,
     ResumeClaimStore,
     StartedOrUnknown,
+    UnstartedProof,
     parse_claim,
 )
 
@@ -77,9 +92,12 @@ __all__ = [
     "ClaimRecoveryRequest",
     "ClaimRelease",
     "PauseClaimRecovery",
+    "RecordAbandon",
     "RecoveryDisposition",
     "RecoveryOutcome",
+    "RecoveryRequest",
     "claim_subject_id",
+    "record_subject_id",
 ]
 
 _MAX_CLAIM_BYTES = 65536
@@ -87,6 +105,8 @@ _OPEN_FLAGS = os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC
 _CREATE_FLAGS = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC
 
 ClaimAudit = ClaimIntentAudit | ClaimCompleteAudit
+IntentAudit = ClaimIntentAudit | RecordIntentAudit
+CompleteAudit = ClaimCompleteAudit | RecordCompleteAudit
 
 
 class _ClaimPaths(Protocol):
@@ -143,9 +163,29 @@ class ClaimAbandon:
             raise TypeError("claim abandon requires a QuiescenceAttestation")
 
 
-# [LAW:types-are-the-program] Only claim-scoped actions exist here; record-scoped abandon
-# will be its own request type with its own audited path, not a variant of these.
+@dataclass(frozen=True)
+class RecordAbandon:
+    """Terminally abandon a record whose claim is absent, tokenless or unreadable."""
+
+    record_ref: JournalRecordRef
+    action_id: str
+    operator_uid: int
+    reason_digest: str
+    quiescence_attestation: QuiescenceAttestation
+
+    def __post_init__(self) -> None:
+        # [LAW:parse-dont-validate] The request is the boundary: an unattested or
+        # another operator's attestation never reaches the audit or a tombstone.
+        if not isinstance(self.quiescence_attestation, QuiescenceAttestation):  # pyright: ignore[reportUnnecessaryIsInstance]
+            raise TypeError("record abandon requires a QuiescenceAttestation")
+        if self.quiescence_attestation.operator_uid != self.operator_uid:
+            raise ValueError("quiescence attestation operator must match recovery operator")
+
+
+# [LAW:types-are-the-program] Each scope is its own request type with its own audited
+# path; a record abandon is never a relabelled claim abandon.
 ClaimRecoveryRequest = ClaimRelease | ClaimAbandon
+RecoveryRequest = ClaimRecoveryRequest | RecordAbandon
 
 
 class _DispositionError(Exception):
@@ -183,24 +223,48 @@ def claim_subject_id(ref: JournalRecordRef, claim_name: str, token: str) -> str:
     )
 
 
+def record_subject_id(ref: JournalRecordRef, claim_name: str) -> str:
+    """The audit subject of a record-scoped action: exact record and canonical claim name."""
+    return _digest(
+        "harness-runtime/resume-record-subject/v1", ref.model_dump(mode="json"), claim_name
+    )
+
+
 def _archive_path(prefix_of: Path, archive_prefix: str, audit: ClaimAudit) -> Path:
     suffix = _digest("harness-runtime/resume-claim-archive/v1", audit.subject_id, audit.action_id)
     return prefix_of.with_name(archive_prefix + suffix)
 
 
-def _tombstone_path(prefix_of: Path, tombstone_prefix: str, audit: ClaimAudit) -> Path:
-    suffix = _digest("harness-runtime/resume-claim-tombstone/v1", audit.subject_id, audit.action_id)
+def _tombstone_kind(
+    audit: RecoveryAudit,
+) -> Literal["claim_tombstone", "record_tombstone"]:
+    return "claim_tombstone" if audit.scope == "claim" else "record_tombstone"
+
+
+def _tombstone_path(prefix_of: Path, tombstone_prefix: str, audit: RecoveryAudit) -> Path:
+    # Under the claim store's per-record tombstone prefix, so admission of exactly this
+    # record refuses whichever scope wrote it.
+    suffix = _digest(
+        f"harness-runtime/resume-{audit.scope}-tombstone/v1", audit.subject_id, audit.action_id
+    )
     return prefix_of.with_name(tombstone_prefix + suffix)
 
 
-def _tombstone_bytes(audit: ClaimAudit) -> bytes:
+def _tombstone_bytes(audit: RecoveryAudit) -> bytes:
+    # A claim tombstone names the claim bytes it barred; a record tombstone names the
+    # whole typed observation, since there may be no claim bytes at all.
+    evidence = (
+        {"claim_bytes_digest": audit.observation.claim_bytes_digest}
+        if isinstance(audit.observation, ClaimObservation)
+        else {"observation": audit.observation.model_dump(mode="json")}
+    )
     body = {
         "version": 1,
-        "kind": "claim_tombstone",
+        "kind": _tombstone_kind(audit),
         "subject_id": audit.subject_id,
         "action_id": audit.action_id,
         "record_identity": audit.record_identity.model_dump(mode="json"),
-        "claim_bytes_digest": audit.observation.claim_bytes_digest,
+        **evidence,
     }
     return (json.dumps(body, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
 
@@ -215,9 +279,9 @@ def _release_digest(archive: Path, observation: ClaimObservation) -> str:
     )
 
 
-def _tombstone_digest(tombstone: Path, body: bytes) -> str:
+def _tombstone_digest(kind: str, tombstone: Path, body: bytes) -> str:
     return _digest(
-        "harness-runtime/resume-claim-transition/claim-tombstone/v1",
+        f"harness-runtime/resume-claim-transition/{kind.replace('_', '-')}/v1",
         tombstone.name,
         hashlib.sha256(body).hexdigest(),
     )
@@ -258,6 +322,20 @@ def _link_archive(live: Path, archive: Path) -> None:
     os.link(live, archive, follow_symlinks=False)
 
 
+def _write_new_file(path: Path, body: bytes) -> None:
+    """Exclusive create and full write; durability is the caller's file+directory sync."""
+    fd = os.open(path, _CREATE_FLAGS, 0o600)
+    try:
+        view = memoryview(body)
+        while view:
+            written = os.write(fd, view)
+            if written <= 0:
+                raise OSError("short tombstone write")
+            view = view[written:]
+    finally:
+        os.close(fd)
+
+
 @dataclass(frozen=True)
 class _LiveClaim:
     raw: bytes
@@ -292,6 +370,54 @@ def _matches(observation: ClaimObservation, path: Path, live: _LiveClaim | None)
     )
 
 
+def _observe_record(
+    claim: Path, ref: JournalRecordRef
+) -> RecordObservation | UnstartedProof | StartedOrUnknown:
+    """Classify the claim name as one typed record observation, or its parsed token claim.
+
+    [LAW:parse-dont-validate] A claim with a parseable token comes back as that parse,
+    so it cannot be mistaken for, or relabelled as, a record-scoped state.
+    """
+    parent = os.stat(claim.parent, follow_symlinks=False)
+    path, dev, ino = str(claim), parent.st_dev, parent.st_ino
+    try:
+        live = _read_live_claim(claim)
+    except OSError:
+        st = os.lstat(claim)
+        return ClaimUnreadableObservation(
+            kind="claim_unreadable",
+            canonical_claim_path=path,
+            parent_st_dev=dev,
+            parent_st_ino=ino,
+            claim_st_dev=st.st_dev,
+            claim_st_ino=st.st_ino,
+        )
+    if live is None:
+        return ClaimAbsentObservation(
+            kind="claim_absent", canonical_claim_path=path, parent_st_dev=dev, parent_st_ino=ino
+        )
+    parsed = parse_claim(live.raw, ref)
+    if isinstance(parsed, InvalidClaim):
+        return ClaimNoTokenObservation(
+            kind="claim_no_token",
+            canonical_claim_path=path,
+            parent_st_dev=dev,
+            parent_st_ino=ino,
+            claim_st_dev=live.st_dev,
+            claim_st_ino=live.st_ino,
+            raw_digest=hashlib.sha256(live.raw).hexdigest(),
+        )
+    return parsed
+
+
+def _pending(audits: list[RecoveryAudit], scope: Literal["claim", "record"]) -> set[str]:
+    """Action IDs of one scope with a durable INTENT and no COMPLETE."""
+    scoped = [a for a in audits if a.scope == scope]
+    return {a.action_id for a in scoped if a.phase == "intent"} - {
+        a.action_id for a in scoped if a.phase == "complete"
+    }
+
+
 def _lease_is_original(lease: HeldLease, observation: ClaimObservation) -> bool:
     st = os.fstat(lease.fd)
     return lease.token == observation.lease_generation and (st.st_dev, st.st_ino) == (
@@ -300,23 +426,26 @@ def _lease_is_original(lease: HeldLease, observation: ClaimObservation) -> bool:
     )
 
 
-def _completed(audit: ClaimCompleteAudit) -> RecoveryDisposition:
+def _completed(audit: CompleteAudit) -> RecoveryDisposition:
     outcome = {
         "release_archive": RecoveryOutcome.RELEASED,
         "claim_tombstone": RecoveryOutcome.ABANDONED,
+        "record_tombstone": RecoveryOutcome.ABANDONED,
         "none": RecoveryOutcome.COMPLETED_NONE,
     }[audit.transition_kind]
     return RecoveryDisposition(outcome, audit.transition_kind)
 
 
 def _requested(
-    request: ClaimRecoveryRequest,
-) -> tuple[Literal["release", "abandon"], QuiescenceAttestation | None]:
+    request: RecoveryRequest,
+) -> tuple[Literal["claim", "record"], Literal["release", "abandon"], QuiescenceAttestation | None]:
     match request:
         case ClaimRelease():
-            return "release", None
+            return "claim", "release", None
         case ClaimAbandon(quiescence_attestation=attestation):
-            return "abandon", attestation
+            return "claim", "abandon", attestation
+        case RecordAbandon(quiescence_attestation=attestation):
+            return "record", "abandon", attestation
 
 
 # --- the coordinator -----------------------------------------------------------------------
@@ -346,7 +475,7 @@ class PauseClaimRecovery:
         self._ledger = ledger
         self._deadline = deadline_seconds
 
-    def recover(self, request: ClaimRecoveryRequest) -> RecoveryDisposition:
+    def recover(self, request: RecoveryRequest) -> RecoveryDisposition:
         """Run or reconcile one action. Durability failures raise; they are not outcomes."""
         paths = self._claims.paths_for(request.record_ref)
         self._placement.revalidate()
@@ -358,11 +487,12 @@ class PauseClaimRecovery:
 
     # -- locked section ----------------------------------------------------------------
 
-    def _recover_locked(self, request: ClaimRecoveryRequest) -> RecoveryDisposition:
+    def _recover_locked(self, request: RecoveryRequest) -> RecoveryDisposition:
+        # Every audit of the record, both scopes: an action ID names one action per record.
         audits = self._record_audits(request.record_ref)
         mine = [a for a in audits if a.action_id == request.action_id]
-        completes = [a for a in mine if isinstance(a, ClaimCompleteAudit)]
-        intents = [a for a in mine if isinstance(a, ClaimIntentAudit)]
+        completes = [a for a in mine if isinstance(a, ClaimCompleteAudit | RecordCompleteAudit)]
+        intents = [a for a in mine if isinstance(a, ClaimIntentAudit | RecordIntentAudit)]
         if len(completes) > 1 or len(intents) > 1:
             raise _fault("ambiguous-action")
         if completes:
@@ -374,10 +504,18 @@ class PauseClaimRecovery:
             self._require_same_request(intents[0], request)
             # Re-sync an INTENT whose first sync may have failed before acting on it.
             self._append(intents[0])
-            return self._reconcile(intents[0], request)
-        return self._begin(request, audits)
+            match intents[0]:
+                case ClaimIntentAudit() as intent:
+                    return self._reconcile(intent, request.record_ref)
+                case RecordIntentAudit() as intent:
+                    return self._reconcile_record(intent, request.record_ref, audits)
+        match request:
+            case RecordAbandon():
+                return self._begin_record(request, audits)
+            case ClaimRelease() | ClaimAbandon():
+                return self._begin(request, audits)
 
-    def _record_audits(self, ref: JournalRecordRef) -> list[ClaimAudit]:
+    def _record_audits(self, ref: JournalRecordRef) -> list[RecoveryAudit]:
         identity = self._identity(ref)
         try:
             entries = read_ledger(self._ledger) if self._ledger.canonical_path.exists() else []
@@ -386,8 +524,7 @@ class PauseClaimRecovery:
         return [
             e.recovery_audit
             for e in entries
-            if isinstance(e.recovery_audit, ClaimIntentAudit | ClaimCompleteAudit)
-            and e.recovery_audit.record_identity == identity
+            if e.recovery_audit is not None and e.recovery_audit.record_identity == identity
         ]
 
     @staticmethod
@@ -401,15 +538,16 @@ class PauseClaimRecovery:
         )
 
     @staticmethod
-    def _require_same_request(audit: ClaimAudit, request: ClaimRecoveryRequest) -> None:
-        action, attestation = _requested(request)
+    def _require_same_request(audit: RecoveryAudit, request: RecoveryRequest) -> None:
+        scope, action, attestation = _requested(request)
         stable = (
+            audit.scope,
             audit.action,
             audit.operator_uid,
             audit.reason_digest,
             audit.quiescence_attestation,
         )
-        if stable != (action, request.operator_uid, request.reason_digest, attestation):
+        if stable != (scope, action, request.operator_uid, request.reason_digest, attestation):
             raise _fault("payload-conflict")
 
     def _tombstoned(self, ref: JournalRecordRef) -> bool:
@@ -439,12 +577,14 @@ class PauseClaimRecovery:
     # -- a new action -----------------------------------------------------------------
 
     def _begin(
-        self, request: ClaimRecoveryRequest, audits: list[ClaimAudit]
+        self, request: ClaimRecoveryRequest, audits: list[RecoveryAudit]
     ) -> RecoveryDisposition:
         ref = request.record_ref
         paths = self._claims.paths_for(ref)
         if self._tombstoned(ref):
             raise _held("record-tombstoned")
+        if _pending(audits, "record"):
+            raise _held("record-action-pending")
         try:
             lease = self._exact_lease(ref)
         except _DispositionError as disposed:
@@ -472,7 +612,7 @@ class PauseClaimRecovery:
                 if not self._is_current(ref):
                     raise _held("release-moot: record is not current")
             lease_st = os.fstat(lease.fd)
-            action, attestation = _requested(request)
+            _, action, attestation = _requested(request)
             intent = ClaimIntentAudit(
                 schema_version=1,
                 scope="claim",
@@ -502,7 +642,7 @@ class PauseClaimRecovery:
 
     @staticmethod
     def _require_no_other_action(
-        subject: str, request: ClaimRecoveryRequest, audits: list[ClaimAudit]
+        subject: str, request: ClaimRecoveryRequest, audits: list[RecoveryAudit]
     ) -> None:
         """One open action per claim; a closed action admits only an abandon after `none`."""
         others = [a for a in audits if a.subject_id == subject and a.action_id != request.action_id]
@@ -515,16 +655,14 @@ class PauseClaimRecovery:
 
     # -- reconcile a durable INTENT ---------------------------------------------------
 
-    def _reconcile(
-        self, intent: ClaimIntentAudit, request: ClaimRecoveryRequest
-    ) -> RecoveryDisposition:
-        paths = self._claims.paths_for(request.record_ref)
+    def _reconcile(self, intent: ClaimIntentAudit, ref: JournalRecordRef) -> RecoveryDisposition:
+        paths = self._claims.paths_for(ref)
         observation = intent.observation
         # Whatever transition persisted, completing this INTENT requires the exact original
         # lease: a missing, invalid or replaced lease is a permanent hold, never COMPLETE,
         # and a live holder (including a later claim C2's worker) is retryable contention.
         try:
-            lease = self._exact_lease(request.record_ref)
+            lease = self._exact_lease(ref)
         except _DispositionError as refused:
             if refused.disposition.outcome is RecoveryOutcome.HELD:
                 raise _held("evidence-lost: lease missing or invalid") from None
@@ -542,7 +680,7 @@ class PauseClaimRecovery:
                     return self._finish_abandon(intent, paths, tombstone)
             # No transition persisted. Every piece of pinned evidence must be exactly
             # intact, or the INTENT stays held: missing evidence never proves non-execution.
-            if self._tombstoned(request.record_ref):
+            if self._tombstoned(ref):
                 raise _held("evidence-changed: a tombstone appeared")
             # Read under the held lease: no claimant or worker can change the claim now.
             try:
@@ -551,15 +689,112 @@ class PauseClaimRecovery:
                 live = None
             if not _matches(observation, paths.claim, live):
                 raise _held("evidence-lost: claim changed or unreadable")
-            if self._journal.read_exact(request.record_ref) is None:
+            if self._journal.read_exact(ref) is None:
                 raise _held("evidence-lost: journal record")
-            if intent.action == "release" and not self._is_current(request.record_ref):
+            if intent.action == "release" and not self._is_current(ref):
                 # The intended release is moot; the locked comparison above proves nothing
                 # changed, so the action closes without a transition.
                 return self._complete(intent, "none", _none_digest(observation))
             return self._transition(intent, paths)
         finally:
             lease.close()
+
+    # -- record-scoped abandon --------------------------------------------------------
+
+    def _record_lease(self, ref: JournalRecordRef) -> HeldLease | None:
+        """The exact lease if valid and free; `None` if missing or invalid (record scope
+        tolerates both); a live holder is retryable contention."""
+        probe = self._claims.probe_lease(ref)
+        if isinstance(probe, LeaseBusy):
+            raise _DispositionError(
+                RecoveryDisposition(RecoveryOutcome.RETRYABLE_CONTENTION, "lease-holder-active")
+            )
+        return probe if isinstance(probe, HeldLease) else None
+
+    def _record_observation(
+        self, ref: JournalRecordRef, paths: _ClaimPaths, lease: HeldLease | None
+    ) -> RecordObservation:
+        observed = _observe_record(paths.claim, ref)
+        if isinstance(observed, UnstartedProof | StartedOrUnknown):
+            if lease is None:
+                # Phase B gap: no typed record observation pins a token claim together
+                # with its missing or invalid lease, so it is not relabelled as one.
+                raise _held("record-scope-gap: token claim with lease missing or invalid")
+            raise _held("claim-scope-required: claim has a token")
+        return observed
+
+    def _require_expected_archives(self, paths: _ClaimPaths, audits: list[RecoveryAudit]) -> None:
+        """Every archive of this record is a claim release that COMPLETEd; else hold."""
+        released = {
+            _archive_path(paths.journal, paths.archive_prefix, a).name
+            for a in audits
+            if isinstance(a, ClaimCompleteAudit) and a.transition_kind == "release_archive"
+        }
+        present = {
+            entry.name
+            for entry in os.scandir(paths.journal.parent)
+            if entry.name.startswith(paths.archive_prefix)
+        }
+        if present - released:
+            raise _held("unexpected-archive")
+
+    def _begin_record(
+        self, request: RecordAbandon, audits: list[RecoveryAudit]
+    ) -> RecoveryDisposition:
+        ref = request.record_ref
+        paths = self._claims.paths_for(ref)
+        if self._tombstoned(ref):
+            raise _held("record-tombstoned")
+        if _pending(audits, "claim") or _pending(audits, "record"):
+            raise _held("other-action-pending")
+        lease = self._record_lease(ref)
+        try:
+            observation = self._record_observation(ref, paths, lease)
+            self._require_expected_archives(paths, audits)
+            if self._journal.read_exact(ref) is None:
+                raise _held("record-evidence-lost: journal record does not match")
+            intent = RecordIntentAudit(
+                schema_version=1,
+                scope="record",
+                phase="intent",
+                action="abandon",
+                action_id=request.action_id,
+                record_identity=self._identity(ref),
+                subject_id=record_subject_id(ref, paths.claim.name),
+                operator_uid=request.operator_uid,
+                reason_digest=request.reason_digest,
+                quiescence_attestation=request.quiescence_attestation,
+                observation=observation,
+            )
+            self._placement.revalidate()
+            self._append(intent)
+            return self._tombstone(intent, paths)
+        finally:
+            if lease is not None:
+                lease.close()
+
+    def _reconcile_record(
+        self, intent: RecordIntentAudit, ref: JournalRecordRef, audits: list[RecoveryAudit]
+    ) -> RecoveryDisposition:
+        paths = self._claims.paths_for(ref)
+        lease = self._record_lease(ref)
+        try:
+            tombstone = _tombstone_path(paths.journal, paths.tombstone_prefix, intent)
+            if os.path.lexists(tombstone):
+                return self._finish_abandon(intent, paths, tombstone)
+            # No transition persisted: the pinned observation must hold exactly, or the
+            # INTENT stays held — changed evidence never becomes a tombstone.
+            if self._tombstoned(ref):
+                raise _held("evidence-changed: a tombstone appeared")
+            if _observe_record(paths.claim, ref) != intent.observation:
+                raise _held("evidence-lost: claim observation changed")
+            self._require_expected_archives(paths, audits)
+            if self._journal.read_exact(ref) is None:
+                raise _held("evidence-lost: journal record")
+            return self._tombstone(intent, paths)
+        finally:
+            if lease is not None:
+                lease.close()
 
     # -- transitions (lease held, INTENT durable) -----------------------------------
 
@@ -570,19 +805,12 @@ class PauseClaimRecovery:
             _link_archive(paths.claim, archive)
             _fsync_dir(paths.journal.parent)  # the link is durable before the unlink
             return self._finish_release(intent, paths, archive)
+        return self._tombstone(intent, paths)
+
+    def _tombstone(self, intent: IntentAudit, paths: _ClaimPaths) -> RecoveryDisposition:
         tombstone = _tombstone_path(paths.journal, paths.tombstone_prefix, intent)
-        body = _tombstone_bytes(intent)
         self._placement.revalidate()
-        fd = os.open(tombstone, _CREATE_FLAGS, 0o600)
-        try:
-            view = memoryview(body)
-            while view:
-                written = os.write(fd, view)
-                if written <= 0:
-                    raise OSError("short tombstone write")
-                view = view[written:]
-        finally:
-            os.close(fd)
+        _write_new_file(tombstone, _tombstone_bytes(intent))
         return self._finish_abandon(intent, paths, tombstone)
 
     # The finish steps run on the first pass AND on every retry. Each re-establishes the
@@ -615,7 +843,7 @@ class PauseClaimRecovery:
         return self._complete(intent, "release_archive", _release_digest(archive, observation))
 
     def _finish_abandon(
-        self, intent: ClaimIntentAudit, paths: _ClaimPaths, tombstone: Path
+        self, intent: IntentAudit, paths: _ClaimPaths, tombstone: Path
     ) -> RecoveryDisposition:
         body = _tombstone_bytes(intent)
         try:
@@ -629,15 +857,19 @@ class PauseClaimRecovery:
         finally:
             os.close(fd)
         _fsync_dir(paths.journal.parent)
-        return self._complete(intent, "claim_tombstone", _tombstone_digest(tombstone, body))
+        kind = _tombstone_kind(intent)
+        return self._complete(intent, kind, _tombstone_digest(kind, tombstone, body))
 
     def _complete(
         self,
-        intent: ClaimIntentAudit,
-        kind: Literal["release_archive", "claim_tombstone", "none"],
+        intent: IntentAudit,
+        kind: Literal["release_archive", "claim_tombstone", "record_tombstone", "none"],
         transition_digest: str,
     ) -> RecoveryDisposition:
-        complete = ClaimCompleteAudit.model_validate(
+        complete_type = (
+            ClaimCompleteAudit if isinstance(intent, ClaimIntentAudit) else RecordCompleteAudit
+        )
+        complete = complete_type.model_validate(
             {
                 **intent.model_dump(),
                 "phase": "complete",
@@ -650,7 +882,7 @@ class PauseClaimRecovery:
 
     # -- helpers ----------------------------------------------------------------------
 
-    def _append(self, audit: ClaimAudit) -> None:
+    def _append(self, audit: RecoveryAudit) -> None:
         key = recovery_audit_idempotency_key(audit)
         payload = RecoveryAuditPayload(
             action_id=Identifier(f"recovery:{audit.scope}:{audit.phase}:{audit.action_id}"),
