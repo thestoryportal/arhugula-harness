@@ -16,8 +16,7 @@ ACs per Phase 2 Session 3 Track A atomic decomposition §L5 U-RT-26:
      -> test_brief_summary_hash_matches_sha256_of_canonicalized_bytes
 
 Plus invariant + stage materialization tests:
-  -> test_assert_descent_at_or_below_parent_passes
-  -> test_assert_descent_above_parent_raises
+  -> test_assert_descent_matrix
   -> test_assert_ascent_at_or_above_parent_passes
   -> test_assert_ascent_below_parent_raises
   -> test_materialize_returns_stage_with_registry
@@ -277,20 +276,24 @@ def test_brief_summary_hash_matches_sha256_of_canonicalized_bytes(
 # ---------------------------------------------------------------------------
 
 
-def test_assert_descent_at_or_below_parent_passes(tmp_path: Path) -> None:
-    """child_gate_level <= parent_gate_level passes silently."""
-    registry = _registry(tmp_path)
-    # Equality permitted.
-    registry.assert_descent(GateLevel.DENY, GateLevel.DENY)
-    # Strict descent permitted.
-    registry.assert_descent(GateLevel.DENY, GateLevel.ASK)
+_ESCALATION_ORDER = (GateLevel.AUTO, GateLevel.ASK, GateLevel.DENY)
 
 
-def test_assert_descent_above_parent_raises(tmp_path: Path) -> None:
-    """child_gate_level > parent_gate_level raises (§12.2 ascent prohibited)."""
+@pytest.mark.parametrize("parent", _ESCALATION_ORDER)
+@pytest.mark.parametrize("child", _ESCALATION_ORDER)
+def test_assert_descent_matrix(tmp_path: Path, parent: GateLevel, child: GateLevel) -> None:
+    """All nine cells: child >= parent passes silently; a child less
+    restrictive than the parent raises with §12.3 text naming both values."""
     registry = _registry(tmp_path)
-    with pytest.raises(ValueError, match="monotonic-descent"):
-        registry.assert_descent(GateLevel.ASK, GateLevel.DENY)
+    if _ESCALATION_ORDER.index(child) >= _ESCALATION_ORDER.index(parent):
+        registry.assert_descent(parent, child)
+        return
+    with pytest.raises(ValueError, match="monotonic-descent violated") as excinfo:
+        registry.assert_descent(parent, child)
+    message = str(excinfo.value)
+    assert "§12.3" in message
+    assert f"child {child.value}" in message
+    assert f"parent {parent.value}" in message
 
 
 def test_assert_ascent_at_or_above_parent_passes(tmp_path: Path) -> None:

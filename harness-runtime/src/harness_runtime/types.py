@@ -1364,7 +1364,7 @@ class HandoffRegistry(Protocol):
         parent_gate_level: CPGateLevel,
         child_gate_level: CPGateLevel,
     ) -> None:
-        """Enforce C-CP-12 §12.2 monotonic-descent (child <= parent gate level)."""
+        """Enforce C-CP-12 §12.2/§12.3 monotonic-descent (child >= parent gate level)."""
         ...
 
     def assert_ascent(
