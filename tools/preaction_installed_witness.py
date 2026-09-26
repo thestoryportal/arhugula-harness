@@ -83,7 +83,10 @@ MAX_BODY_BYTES = 4096
 # gated steps are G's steps 1 (witness.a) and 2 (witness.c). Asserted only inside the `hitl:` space.
 KEY_A = f"hitl:workflow:{LEAF_ID}:step:1:pre-action"
 KEY_C = f"hitl:workflow:{LEAF_ID}:step:2:pre-action"
-# The leaf's own resume guard names this when the inherited gate configuration changed.
+# The public `RunResult.failure_cause` of a failed workflow: this runtime class, with the CP class
+# in `validator_fail_class`. The leaf's resume guard names REFUSAL_REASON when the inherited gate
+# configuration changed; it is checked in the structured field, never in the human `detail`.
+WORKFLOW_FAILURE_CLASS = "RT-FAIL-WORKFLOW"
 REFUSAL_REASON = "hitl-gate-config-changed"
 
 PHASES_P = ("run", "resume-1", "resume-2")
@@ -1018,7 +1021,9 @@ def _n1_first_resume_reasons(low: dict[str, Any], svc: dict[str, Any]) -> list[s
     if _d(low.get("ref")) != _d(low.get("before_ref")):
         reasons.append(f"{label}:root-record-advanced")
     cause = _d(low.get("failure_cause"))
-    if REFUSAL_REASON not in f"{cause.get('detail', '')} {cause.get('validator_fail_class') or ''}":
+    if cause.get("runtime_fail_class") != WORKFLOW_FAILURE_CLASS:
+        reasons.append(f"{label}:failure-not-a-workflow-failure")
+    if REFUSAL_REASON not in str(cause.get("validator_fail_class") or ""):
         reasons.append(f"{label}:child-refusal-reason-missing")
     if _d(low.get("before_claim")).get("phase") != "started":
         reasons.append(f"{label}:root-claim-not-admitted")

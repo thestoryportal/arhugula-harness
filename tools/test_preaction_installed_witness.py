@@ -119,9 +119,9 @@ def lowered_refusal() -> dict[str, Any]:
     return {
         **resume_observed("failed", [], REF),
         "failure_cause": {
-            "runtime_fail_class": "RT-FAIL-WORKFLOW-FAILED",
-            "detail": "linear-resume-hitl-gate-config-changed at step 1",
-            "validator_fail_class": None,
+            "runtime_fail_class": "RT-FAIL-WORKFLOW",
+            "detail": "workflow execution returned status='failed' with the CP fail class",
+            "validator_fail_class": "linear-resume-hitl-gate-config-changed at step 1",
         },
         "has_pause_snapshot": False,
         "levels": levels(),
@@ -378,8 +378,30 @@ BEHAVIOUR: list[tuple[str, Callable[[dict[str, Any]], None], str]] = [
     ),
     (
         "n1-refusal-reason-unrelated",
-        set_(f"{LOW}/failure_cause/detail", "some other failure"),
+        set_(f"{LOW}/failure_cause/validator_fail_class", "some other failure"),
         "n1:resume-lowered:child-refusal-reason-missing",
+    ),
+    (
+        "n1-reason-only-in-human-detail",
+        set_(
+            f"{LOW}/failure_cause",
+            {
+                "runtime_fail_class": "RT-FAIL-WORKFLOW",
+                "detail": "fail_class='linear-resume-hitl-gate-config-changed at step 1'",
+                "validator_fail_class": None,
+            },
+        ),
+        "n1:resume-lowered:child-refusal-reason-missing",
+    ),
+    (
+        "n1-arbitrary-failed-is-not-a-refusal",
+        set_(f"{LOW}/failure_cause/validator_fail_class", "step-body-raised"),
+        "n1:resume-lowered:child-refusal-reason-missing",
+    ),
+    (
+        "n1-failure-is-not-a-workflow-failure",
+        set_(f"{LOW}/failure_cause/runtime_fail_class", "RT-FAIL-DRAIN-TIMEOUT"),
+        "n1:resume-lowered:failure-not-a-workflow-failure",
     ),
     (
         "n1-a-ran",
@@ -744,7 +766,8 @@ def test_the_current_lost_refusal_shapes_fail_and_the_terminal_refusal_passes() 
     paused["n1"]["results"]["resume-lowered"] = _ok("resume-lowered", current_bad_paused_shape())
     proceeds = {**claim_refused_again(), "outcome": "returned", "status": "completed"}
     proceeds |= {"before_ref": REF2, "ref": REF2, "chain": CHAIN[:2]}
-    proceeds.pop("reason"), proceeds.pop("error_type")
+    proceeds.pop("reason")
+    proceeds.pop("error_type")
     paused["n1"]["results"]["resume-lowered-again"] = _ok("resume-lowered-again", proceeds)
     result = verdict(paused)
 
