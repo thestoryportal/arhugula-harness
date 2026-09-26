@@ -502,7 +502,8 @@ def test_a_held_record_at_or_above_the_prover_floor_passes(count: int) -> None:
 def test_the_floor_is_grounded_in_the_installed_prover() -> None:
     """The number of packages `installed_origins` imports is the number the floor rests on."""
     assert w.MIN_LOADED_HARNESS_MODULES == len(w.PACKAGES) == 7
-    source = Path(w.__file__).read_text()
+    # The prover now lives in the shared owner module, not in this witness.
+    source = w.SHARED_PROVER_PATH.read_text()
     assert "imported = importlib.import_module(package)" in source  # per wheel, all seven
     assert source.index("origins = installed_origins(") < source.index(
         '"installed_origins": origins'
