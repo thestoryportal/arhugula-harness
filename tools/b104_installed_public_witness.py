@@ -455,6 +455,10 @@ class Layout:
     def result(self, phase: str) -> Path:
         return self.results / f"{phase}.json"
 
+    def provenance_record(self, phase: str) -> Path:
+        """The child's pre-body provenance record, written before its phase body starts."""
+        return self.results / f"{phase}.provenance.json"
+
 
 MCP_SERVER_SOURCE = '''"""B-104 witness loopback MCP server: one tool that must never be called."""
 import sys
@@ -915,12 +919,28 @@ def run_phase(layout: Layout, phase: str, prove: Callable[[], dict[str, object]]
     """Prove this interpreter, run one phase, re-prove the loaded modules, record once."""
     try:
         evidence = prove()
-        observed = PHASE_BODIES[phase](layout)
         verified = {
             path
             for item in evidence.get("installed_origins", {}).values()
             for path in item["verified_files"]
         }
+        # [LAW:no-ambient-temporal-coupling] Written BEFORE the body, for every phase: the held
+        # `resume-a` never returns a result, so this record is its only installed-child proof.
+        # `loaded_harness_modules` is the count actually loaded at THIS point, which may be
+        # fewer than the post-body count in the result; it is never copied from later.
+        loaded_before = loaded_harness_origins(verified) if verified else {}
+        write_json_new(
+            layout.provenance_record(phase),
+            {
+                "phase": phase,
+                "stage": "pre-body",
+                "pid": os.getpid(),
+                "pgid": os.getpgid(0),
+                "provenance": evidence,
+                "loaded_harness_modules": len(loaded_before),
+            },
+        )
+        observed = PHASE_BODIES[phase](layout)
         loaded = loaded_harness_origins(verified) if verified else {}
         write_json_new(
             layout.result(phase),
@@ -1195,6 +1215,18 @@ def load_result(layout: Layout, phase: str) -> dict[str, object] | None:
     return json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
 
 
+def read_record(path: Path) -> dict[str, object] | None:
+    """A child-written record: absent is `None`; unreadable or not an object is marked, never
+    silently treated as absent, so the verdict rejects it instead of reading it as unstarted."""
+    if not path.exists():
+        return None
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {"unreadable": True}
+    return value if isinstance(value, dict) else {"unreadable": True}
+
+
 def scenario(
     layout: Layout, launch: Launcher, capture: LoopbackCapture, deadline: float
 ) -> dict[str, object]:
@@ -1221,281 +1253,489 @@ def scenario(
             "timeout": not entered and still_running,
             "kill": kill_group(a),
             "barrier_entered": entered,
+            # The marker's own pid/pgid, so the verdict can bind it to the launched A.
+            "marker": read_record(layout.markers / "a-body.json") if entered else None,
         }
         results["resume-a"] = load_result(layout, "resume-a")
         write_json_new(layout.result("a-kill"), runs["resume-a"]["kill"])
         if observed and complete("resume-b") and complete("recover"):
             complete("resume-after-abandon")
         runs["webhooks_after_capture"] = webhooks_after_capture
-    return {"runs": runs, "results": results}
+    return {
+        "runs": runs,
+        "results": results,
+        # A's pre-body provenance: the only installed-child proof of the held, killed A.
+        "held_provenance": read_record(layout.provenance_record("resume-a")),
+    }
+
+
+# --- the verdict: typed per-phase outcomes, a sequence grammar, then behaviour -------------
+#
+# [LAW:parse-dont-validate] Each phase's raw run record, result and (for the held A) pre-body
+# provenance record are parsed ONCE into a typed outcome. A completed phase is only ever
+# `Completed` if its exit, output bound, phase, observed record and installed-child provenance
+# all parse; a timed-out phase is only `TimedOut` if its cleanup is proven and it left no
+# result. Everything else is `Broken` with named reasons, so no later timeout can excuse a
+# missing or malformed proof and no failure becomes an empty valid state.
+
+_HEX = frozenset("0123456789abcdef")
+
+
+def _is_sha256(value: object) -> bool:
+    return isinstance(value, str) and len(value) == 64 and all(c in _HEX for c in value)
+
+
+def _exact_int(value: object) -> int | None:
+    """An int that is not a bool: `True == 1` must never satisfy a numeric proof."""
+    return value if type(value) is int else None
 
 
 def _dict(value: object) -> dict[str, Any]:
-    """A record as a mapping; a missing or malformed record reads as empty and fails its checks."""
+    """A mapping as itself; anything else reads as empty ONLY inside a behaviour check,
+    which then fails, never as a proof (proofs are parsed by the functions below)."""
     return value if isinstance(value, dict) else {}  # pyright: ignore[reportUnknownVariableType]
 
 
-def _observed(results: dict[str, object], phase: str) -> dict[str, Any]:
-    item = _dict(results.get(phase))
-    return _dict(item.get("observed")) if item.get("ok") is True else {}
+@dataclass(frozen=True)
+class Completed:
+    """A phase whose exit, output, result, observed record and provenance are all proved."""
+
+    phase: str
+    observed: dict[str, Any]
 
 
-def _result(*phases: str) -> frozenset[str]:
-    """A check that reads these phases' results (outcome, observed data or clean exit)."""
-    return frozenset(f"result:{phase}" for phase in phases)
+@dataclass(frozen=True)
+class TimedOut:
+    """A phase killed at its cap with its group proven gone and no result left behind."""
+
+    phase: str
 
 
-def _record(phase: str) -> frozenset[str]:
-    """A check that reads only this phase's own run record (streams, kill)."""
-    return frozenset({f"record:{phase}"})
+@dataclass(frozen=True)
+class Unstarted:
+    """A phase with neither a run record nor a result."""
+
+    phase: str
 
 
-INDEPENDENT: frozenset[str] = frozenset()
-"""A check no timeout can excuse: cleanup, output caps, replay and receipt facts."""
+@dataclass(frozen=True)
+class Broken:
+    """A phase whose record is missing, malformed or contradicts its own proof."""
+
+    phase: str
+    reasons: tuple[str, ...]
 
 
-def excused_by_timeout(depends: frozenset[str], timed_out: str) -> bool:
-    """Whether a timeout of `timed_out` alone explains this check's failure.
+PhaseState = Completed | TimedOut | Unstarted | Broken
 
-    The scenario stops at the first phase that cannot continue, so the timed-out phase has
-    no result and no later phase runs. A check reading the timed-out phase's result, or
-    anything of a later phase, cannot be judged; a check on the timed-out phase's own run
-    record (its streams and kill proof) or on any earlier phase can, and still counts.
+
+def provenance_reasons(provenance: object, expected_receipt: str) -> tuple[str, ...]:
+    """Why a child provenance record is not proof of an installed, isolated child."""
+    if not isinstance(provenance, dict):
+        return ("provenance-missing",)
+    data = _dict(provenance)
+    reasons: list[str] = []
+    receipt = data.get("installation_receipt_sha256")
+    if receipt is None:
+        reasons.append("receipt-missing")
+    elif not _is_sha256(receipt):
+        reasons.append("receipt-malformed")
+    elif receipt != expected_receipt:
+        reasons.append("receipt-mismatch")
+    interpreter = data.get("interpreter")
+    if not isinstance(interpreter, dict):
+        reasons.append("interpreter-missing")
+    else:
+        flags = _dict(interpreter)
+        if _exact_int(flags.get("isolated")) != 1:
+            reasons.append("not-isolated")
+        if _exact_int(flags.get("no_user_site")) != 1:
+            reasons.append("not-no-user-site")
+    origins = data.get("installed_origins")
+    if not isinstance(origins, dict) or set(_dict(origins)) != PACKAGES:
+        reasons.append("origins-incomplete")
+    return tuple(reasons)
+
+
+def kill_reasons(kill: object, *, sigkill: bool) -> tuple[str, ...]:
+    """Why a kill record does not prove the owned group gone (and, if `sigkill`, killed)."""
+    if not isinstance(kill, dict):
+        return ("kill-missing",)
+    data = _dict(kill)
+    reasons: list[str] = []
+    if data.get("group_gone") is not True:
+        reasons.append("group-not-gone")
+    if sigkill and (
+        data.get("signal") != "SIGKILL" or _exact_int(data.get("returncode")) != -signal.SIGKILL
+    ):
+        reasons.append("not-killed-by-sigkill")
+    return tuple(reasons)
+
+
+def _result_reasons(phase: str, result: object, expected_receipt: str) -> tuple[str, ...]:
+    if not isinstance(result, dict):
+        return ("result-missing",)
+    data = _dict(result)
+    reasons: list[str] = []
+    if data.get("phase") != phase:
+        reasons.append("result-phase-mismatch")
+    if data.get("ok") is not True:
+        reasons.append("result-not-ok")
+    if not isinstance(data.get("observed"), dict):
+        reasons.append("observed-missing")
+    reasons.extend(provenance_reasons(data.get("provenance"), expected_receipt))
+    loaded = _exact_int(data.get("loaded_harness_modules"))
+    if loaded is None or loaded < 1:
+        reasons.append("loaded-modules-invalid")
+    return tuple(reasons)
+
+
+def parse_waited_phase(
+    phase: str, run: object, result: object, expected_receipt: str
+) -> PhaseState:
+    """A phase the parent waits on to exit by itself."""
+    if run is None and result is None:
+        return Unstarted(phase)
+    if not isinstance(run, dict):
+        return Broken(phase, ("run-missing" if run is None else "run-malformed",))
+    record = _dict(run)
+    timeout = record.get("timeout")
+    if type(timeout) is not bool:
+        return Broken(phase, ("timeout-malformed",))
+    reasons: list[str] = []
+    if record.get("output_ok") is not True:
+        reasons.append("output-capped")
+    if timeout:
+        # A cap race may leave any return code; only the group-gone proof matters.
+        reasons.extend(kill_reasons(record.get("kill"), sigkill=False))
+        if result is not None:
+            reasons.append("timed-out-left-result")
+        return Broken(phase, tuple(reasons)) if reasons else TimedOut(phase)
+    if _exact_int(record.get("exit")) != 0:
+        reasons.append("exit-nonzero")
+    if record.get("kill") is not None:
+        reasons.append("unexpected-kill")
+    reasons.extend(_result_reasons(phase, result, expected_receipt))
+    if reasons:
+        return Broken(phase, tuple(reasons))
+    return Completed(phase, _dict(_dict(result).get("observed")))
+
+
+def _held_reasons(held: object, run: dict[str, Any], expected_receipt: str) -> tuple[str, ...]:
+    """Why A's pre-body provenance record is not proof of A's own installed interpreter."""
+    if not isinstance(held, dict):
+        return ("held-provenance-missing",)
+    data = _dict(held)
+    reasons = [f"held-{r}" for r in provenance_reasons(data.get("provenance"), expected_receipt)]
+    if data.get("phase") != "resume-a" or data.get("stage") != "pre-body":
+        reasons.append("held-record-misplaced")
+    loaded = _exact_int(data.get("loaded_harness_modules"))
+    if loaded is None or loaded < 0:
+        reasons.append("held-modules-invalid")
+    for field in ("pid", "pgid"):
+        mine, launched = _exact_int(data.get(field)), _exact_int(run.get(field))
+        if mine is None or launched is None or mine != launched:
+            reasons.append(f"held-{field}-mismatch")
+    return tuple(reasons)
+
+
+def _marker_reasons(run: dict[str, Any]) -> tuple[str, ...]:
+    """Bind the in-body marker's pid and pgid to the launched A when the marker was read."""
+    marker = run.get("marker")
+    if not isinstance(marker, dict):
+        return ("marker-malformed",)
+    data = _dict(marker)
+    reasons: list[str] = []
+    for field in ("pid", "pgid"):
+        seen, launched = _exact_int(data.get(field)), _exact_int(run.get(field))
+        if seen is None or launched is None or seen != launched:
+            reasons.append(f"marker-{field}-mismatch")
+    return tuple(reasons)
+
+
+def parse_held_phase(
+    run: object, result: object, held: object, expected_receipt: str
+) -> PhaseState:
+    """`resume-a`: held in its body and killed by the parent, so it never leaves a result.
+
+    Its provenance is the pre-body record the child wrote before entering the body; A is
+    never provenance-exempt. A record that is present is judged even when A timed out.
     """
-    later = PHASES[PHASES.index(timed_out) + 1 :]
-    return f"result:{timed_out}" in depends or any(
-        f"{kind}:{phase}" in depends for phase in later for kind in ("result", "record")
-    )
+    phase = "resume-a"
+    if run is None and result is None and held is None:
+        return Unstarted(phase)
+    if not isinstance(run, dict):
+        return Broken(phase, ("run-missing" if run is None else "run-malformed",))
+    record = _dict(run)
+    entered, timeout = record.get("barrier_entered"), record.get("timeout")
+    if type(entered) is not bool or type(timeout) is not bool:
+        return Broken(phase, ("barrier-malformed",))
+    reasons: list[str] = []
+    if record.get("output_ok") is not True:
+        reasons.append("output-capped")
+    if result is not None:
+        reasons.append("a-left-result")
+    # A is deliberately killed by the parent, so a SIGKILL return code is required.
+    reasons.extend(kill_reasons(record.get("kill"), sigkill=True))
+    if held is not None:
+        reasons.extend(_held_reasons(held, record, expected_receipt))
+    if timeout:
+        if entered:
+            reasons.append("timed-out-after-barrier")
+        return Broken(phase, tuple(reasons)) if reasons else TimedOut(phase)
+    if not entered:
+        reasons.append("exited-before-barrier")
+    if held is None:
+        reasons.append("held-provenance-missing")
+    if "marker" in record:
+        reasons.extend(_marker_reasons(record))
+    return Broken(phase, tuple(reasons)) if reasons else Completed(phase, {})
 
 
-def evaluate(evidence: dict[str, object]) -> dict[str, object]:
-    """Pure per-case predicates over the recorded evidence; PASS needs every check.
+def sequence_failures(states: list[PhaseState]) -> list[str]:
+    """The grammar `Completed* (TimedOut Unstarted* | nothing)` over the phases in order."""
+    failures: list[str] = []
+    stopped = False
+    for state in states:
+        if isinstance(state, TimedOut):
+            if stopped:
+                failures.append(f"{state.phase}:second-timeout")
+            stopped = True
+        elif isinstance(state, Completed) and stopped:
+            failures.append(f"{state.phase}:completed-after-stop")
+        elif isinstance(state, Unstarted) and not stopped:
+            failures.append(f"{state.phase}:unstarted-without-timeout")
+    return failures
 
-    Each check declares the phase facts it reads. Verdict: any independent failure FAILs
-    (cleanup, capped output, malformed or replay facts, earlier phases, and a second or
-    unreadable timeout); only then is one timeout, whose own group is proven gone,
-    INCONCLUSIVE; otherwise PASS only if every check holds.
+
+def global_failures(evidence: dict[str, Any]) -> list[str]:
+    """Facts no timeout can excuse: the owned tool server, webhook errors, replay, tool calls."""
+    tool_server = _dict(evidence.get("tool_server"))
+    failures = [f"tool-server:{r}" for r in kill_reasons(tool_server.get("kill"), sigkill=False)]
+    if tool_server.get("output_ok") is not True:
+        failures.append("tool-server:output-capped")
+    if tool_server.get("ready") is not True:
+        failures.append("tool-server:not-ready")
+    if evidence.get("webhook_errors") != []:
+        failures.append("webhook-errors")
+    if _exact_int(evidence.get("tool_calls")) != 0:
+        failures.append("tool-called")
+    webhooks = evidence.get("webhook_requests")
+    if not isinstance(webhooks, list):
+        failures.append("webhooks-malformed")
+    elif len(webhooks) > 1:  # pyright: ignore[reportUnknownArgumentType]
+        failures.append("webhook-replay")
+    return failures
+
+
+def _state_view(state: PhaseState) -> dict[str, object]:
+    match state:
+        case Completed():
+            return {"state": "completed", "reasons": []}
+        case TimedOut():
+            return {"state": "timed-out", "reasons": []}
+        case Unstarted():
+            return {"state": "unstarted", "reasons": []}
+        case Broken(reasons=reasons):
+            return {"state": "broken", "reasons": list(reasons)}
+
+
+def evaluate(evidence: dict[str, object], *, expected_receipt_sha256: str) -> dict[str, object]:
+    """Fail-closed verdict over the recorded evidence.
+
+    `expected_receipt_sha256` is the digest the PARENT computed from the installation receipt
+    it verified; every proved child record must carry exactly it. FAIL if any phase is
+    `Broken`, the phase sequence is invalid, a global fact fails, or a judged behaviour check
+    fails. INCONCLUSIVE only if exactly one phase timed out, everything before it is proved
+    and complete, cleanup is proved, nothing failed independently and no later phase ran.
+    PASS needs all six phases proved, every behaviour true and exactly one webhook.
     """
+    if not _is_sha256(expected_receipt_sha256):
+        raise ValueError("expected receipt digest must be 64 lowercase hex characters")
     runs = _dict(evidence.get("runs"))
     results = _dict(evidence.get("results"))
-    webhooks = evidence.get("webhook_requests")
-    tool_server = _dict(evidence.get("tool_server"))
-    tool_calls = evidence.get("tool_calls")
-    capture = _observed(results, "capture")
-    held = _observed(results, "observe-held")
-    b = _observed(results, "resume-b")
-    recover = _observed(results, "recover")
-    d = _observed(results, "resume-after-abandon")
+    states: dict[str, PhaseState] = {}
+    for phase in PHASES:
+        if phase == "resume-a":
+            states[phase] = parse_held_phase(
+                runs.get(phase),
+                results.get(phase),
+                evidence.get("held_provenance"),
+                expected_receipt_sha256,
+            )
+        else:
+            states[phase] = parse_waited_phase(
+                phase, runs.get(phase), results.get(phase), expected_receipt_sha256
+            )
+    ordered = [states[p] for p in PHASES]
+
+    def observed(phase: str) -> dict[str, Any]:
+        state = states[phase]
+        return state.observed if isinstance(state, Completed) else {}
+
+    capture, held = observed("capture"), observed("observe-held")
+    b, recover, d = observed("resume-b"), observed("recover"), observed("resume-after-abandon")
     ref = capture.get("ref")
-    run_a = _dict(runs.get("resume-a"))
-    kill = _dict(run_a.get("kill"))
-    # A result without its provenance counts as uninstalled, never as a crash of the verdict.
-    provenance = [
-        _dict(item.get("provenance"))
-        for item in map(_dict, results.values())
-        if item.get("ok") is True
-    ]
-    receipt_hashes = {p.get("installation_receipt_sha256") for p in provenance}
+    webhooks = evidence.get("webhook_requests")
     raw_audits = recover.get("audits")
     audits = [_dict(a) for a in raw_audits] if isinstance(raw_audits, list) else []
     abandon_audits = [a for a in audits if a.get("action_id") == "b104w-abandon-1"]
     release = _dict(recover.get("release"))
-    timed_out = sorted(p for p, r in runs.items() if _dict(r).get("timeout") is True)
-    waited = [p for p in PHASES if p != "resume-a"]
-    everyone = _result(*waited)
 
+    # Each behaviour check names the phases whose proved records it reads; it is judged only
+    # when every one of them is `Completed`, and is otherwise recorded as unjudged. The grammar
+    # guarantees such phases are only the timed-out phase and the unstarted ones after it.
     def refused_without_replay(
         outcome: dict[str, Any], phase: str
-    ) -> dict[str, tuple[bool, frozenset[str]]]:
+    ) -> dict[str, tuple[bool, tuple[str, ...]]]:
         return {
             "typed_refusal": (
                 outcome.get("outcome") == "refused"
                 and outcome.get("error_type")
                 == "harness_runtime.lifecycle.root_resume_admission.ResumeClaimRefusedError"
                 and outcome.get("reason") == "claim-refused",
-                _result(phase),
+                (phase,),
             ),
-            "no_body": (outcome.get("body_marker_present") is False, _result(phase)),
-            "same_record": (outcome.get("ref") == ref, _result(phase, "capture")),
+            "no_body": (outcome.get("body_marker_present") is False, (phase,)),
+            "same_record": (outcome.get("ref") == ref, (phase, "capture")),
             "claim_still_started": (
                 _dict(outcome.get("claim")).get("phase") == "started",
-                _result(phase),
+                (phase,),
             ),
         }
 
-    # [LAW:no-silent-failure] Every owned group must be proven gone: the tool server,
-    # resume-a once launched (it is always killed at its barrier), every timed-out phase
-    # (a missing kill record is no proof) and any other recorded kill.
-    must_be_gone = {"tool-server": tool_server.get("kill")} | {
-        phase: _dict(runs.get(phase)).get("kill")
-        for phase in PHASES
-        if (phase == "resume-a" and phase in runs)
-        or phase in timed_out
-        or _dict(runs.get(phase)).get("kill") is not None
-    }
-    checks: dict[str, dict[str, tuple[bool, frozenset[str]]]] = {
-        "cleanup": {
-            f"{phase}-group-gone": (_dict(k).get("group_gone") is True, INDEPENDENT)
-            for phase, k in must_be_gone.items()
-        },
-        "processes": {
-            f"{phase}-exited-0": (
-                _dict(runs.get(phase)).get("exit") == 0
-                and _dict(runs.get(phase)).get("timeout") is False,
-                _result(phase),
-            )
-            for phase in waited
-        }
-        | {
-            f"{phase}-output-bounded": (
-                _dict(runs.get(phase)).get("output_ok") is True,
-                _record(phase),
-            )
-            for phase in PHASES
-        }
-        | {
-            "tool-server-output-bounded": (tool_server.get("output_ok") is True, INDEPENDENT),
-            # The scenario stops at its first timeout; two are not a run it can produce.
-            "at-most-one-timeout": (len(timed_out) <= 1, INDEPENDENT),
-        },
-        "provenance": {
-            "every_phase_recorded": (
-                all(isinstance(results.get(p), dict) for p in waited),
-                everyone,
-            ),
-            "every_child_installed": (
-                len(provenance) == len(waited)
-                and all(_dict(p.get("interpreter")).get("isolated") for p in provenance),
-                everyone,
-            ),
-            "one_receipt": (len(receipt_hashes) <= 1, INDEPENDENT),
-        },
+    checks: dict[str, dict[str, tuple[bool, tuple[str, ...]]]] = {
         "capture": {
-            "paused": (capture.get("status") == "paused", _result("capture")),
-            "root_record": (capture.get("depth") == 0 and ref is not None, _result("capture")),
+            "paused": (capture.get("status") == "paused", ("capture",)),
+            "root_record": (capture.get("depth") == 0 and ref is not None, ("capture",)),
             "snapshot_is_record": (
                 capture.get("snapshot_hash") == _dict(ref).get("snapshot_hash"),
-                _result("capture"),
+                ("capture",),
             ),
             "no_claim_yet": (
                 _dict(capture.get("claim")).get("phase") == "absent",
-                _result("capture"),
+                ("capture",),
             ),
-            "one_webhook": (runs.get("webhooks_after_capture") == 1, _result("capture")),
+            "one_webhook": (
+                _exact_int(runs.get("webhooks_after_capture")) == 1,
+                ("capture",),
+            ),
         },
         "resume-a-started": {
-            "barrier_entered": (run_a.get("barrier_entered") is True, _result("resume-a")),
             "started_before_kill": (
                 _dict(held.get("claim")).get("phase") == "started",
-                _result("observe-held"),
+                ("observe-held",),
             ),
             "lease_held_by_a": (
                 _dict(held.get("claim")).get("lease") == "busy",
-                _result("observe-held"),
+                ("observe-held",),
             ),
-            "same_record": (held.get("ref") == ref, _result("observe-held", "capture")),
-            "killed_by_parent": (
-                kill.get("signal") == "SIGKILL"
-                and kill.get("returncode") == -signal.SIGKILL
-                and kill.get("group_gone") is True,
-                _record("resume-a"),
-            ),
-            "no_result_from_a": (results.get("resume-a") is None, INDEPENDENT),
+            "same_record": (held.get("ref") == ref, ("observe-held", "capture")),
         },
         "resume-b-refused": {
             **refused_without_replay(b, "resume-b"),
             "lease_released_by_kill": (
                 _dict(b.get("claim")).get("lease") == "free",
-                _result("resume-b"),
+                ("resume-b",),
             ),
             "claim_bytes_unchanged": (
                 _dict(b.get("claim")).get("claim_sha256")
                 == _dict(held.get("claim")).get("claim_sha256"),
-                _result("resume-b", "observe-held"),
+                ("resume-b", "observe-held"),
             ),
         },
         "release-held": {
             "held": (
                 release.get("outcome") == "held"
                 and str(release.get("reason", "")).startswith("release-forbidden"),
-                _result("recover"),
+                ("recover",),
             ),
             "no_mutation": (
                 recover.get("inventory_before") is not None
                 and recover.get("inventory_before") == recover.get("inventory_after_release"),
-                _result("recover"),
+                ("recover",),
             ),
             "no_release_audit": (
                 isinstance(raw_audits, list)
                 and not any(a.get("action") == "release" for a in audits),
-                _result("recover"),
+                ("recover",),
             ),
         },
         "abandon-audited": {
             "abandoned": (
                 _dict(recover.get("abandon")).get("outcome") == "abandoned",
-                _result("recover"),
+                ("recover",),
             ),
             "exact_record": (
                 recover.get("claim_frame_names_record") is True and recover.get("ref") == ref,
-                _result("recover", "capture"),
+                ("recover", "capture"),
             ),
             "intent_and_complete": (
                 sorted(str(a.get("phase")) for a in abandon_audits) == ["complete", "intent"],
-                _result("recover"),
+                ("recover",),
             ),
             "attested_by_kill_record": (
                 all(
                     a.get("stopped_services_digest") == recover.get("kill_record_sha256")
                     for a in abandon_audits
                 ),
-                _result("recover"),
+                ("recover",),
             ),
             "tombstoned": (
                 isinstance(recover.get("tombstones"), list) and len(recover["tombstones"]) == 1,
-                _result("recover"),
+                ("recover",),
             ),
             "claim_bytes_kept": (
                 _dict(recover.get("claim_after")).get("claim_sha256")
                 == _dict(held.get("claim")).get("claim_sha256"),
-                _result("recover", "observe-held"),
+                ("recover", "observe-held"),
             ),
         },
         "resume-after-abandon-refused": refused_without_replay(d, "resume-after-abandon"),
         "no-replay": {
-            "tool_server_ready": (tool_server.get("ready") is True, INDEPENDENT),
+            # Zero or one webhook is fine for an unfinished capture; PASS needs exactly one.
             "webhooks_total": (
-                isinstance(webhooks, list) and len(webhooks) == 1,
-                _result("capture"),
+                isinstance(webhooks, list) and len(webhooks) == 1,  # pyright: ignore[reportUnknownArgumentType]
+                ("capture",),
             ),
-            "no_webhook_errors": (evidence.get("webhook_errors") == [], INDEPENDENT),
-            "tool_never_called": (tool_calls == 0, INDEPENDENT),
         },
     }
-    failed = {
-        f"{case}.{name}": depends
+    judged = {
+        (case, name): all(isinstance(states[p], Completed) for p in reads)
         for case, items in checks.items()
-        for name, (ok, depends) in items.items()
-        if not ok
+        for name, (_ok, reads) in items.items()
     }
-    # Exactly one timeout may excuse what it made unjudgeable; nothing else is excused.
-    only = timed_out[0] if len(timed_out) == 1 else None
-    excused = sorted(
-        name for name, depends in failed.items() if only and excused_by_timeout(depends, only)
+    failed = sorted(
+        f"{case}.{name}"
+        for case, items in checks.items()
+        for name, (ok, _reads) in items.items()
+        if judged[(case, name)] and not ok
     )
-    independent = sorted(set(failed) - set(excused))
-    if independent:
+    unjudged = sorted(f"{case}.{name}" for (case, name), was in judged.items() if not was)
+    phase_failures = sorted(
+        f"{s.phase}:{r}" for s in ordered if isinstance(s, Broken) for r in s.reasons
+    )
+    grammar = sequence_failures(ordered)
+    global_facts = global_failures(evidence)
+    timed_out = [s.phase for s in ordered if isinstance(s, TimedOut)]
+    if phase_failures or grammar or global_facts or failed:
         status = "FAIL"
-    elif only is not None:
+    elif timed_out:
         status = "INCONCLUSIVE"
     else:
         status = "PASS"
     return {
         "status": status,
-        "cases": {case: {n: ok for n, (ok, _) in items.items()} for case, items in checks.items()},
-        "failed_checks": sorted(failed),
-        "independent_failures": independent,
-        "excused_by_timeout": excused,
+        "phase_states": {p: _state_view(states[p]) for p in PHASES},
+        "global_failures": global_facts,
+        "grammar_failures": grammar,
+        "failed_checks": failed,
+        "unjudged_checks": unjudged,
+        "failure_reasons": sorted({*phase_failures, *grammar, *global_facts, *failed}),
+        "cases": {
+            case: {name: (ok if judged[(case, name)] else None) for name, (ok, _r) in items.items()}
+            for case, items in checks.items()
+        },
         "timed_out_phases": timed_out,
     }
 
@@ -1593,7 +1833,8 @@ def run(
     report["config_sha256"] = sha256(layout.config)
     report["evidence"] = evidence
     report["artifacts"] = retain_artifacts(layout, output.with_suffix(".artifacts"))
-    report.update(evaluate(evidence))
+    # [LAW:one-source-of-truth] The digest of the receipt THIS parent verified binds evaluate.
+    report.update(evaluate(evidence, expected_receipt_sha256=sha256(receipt)))
     write_new(output, json.dumps(report, sort_keys=True, indent=2, default=str) + "\n", 0o644)
     return report
 
@@ -1631,7 +1872,7 @@ def main() -> int:
         args.scenario,
         args.output,
     )
-    print(json.dumps({"status": report["status"], "failed_checks": report["failed_checks"]}))
+    print(json.dumps({"status": report["status"], "failure_reasons": report["failure_reasons"]}))
     return 0 if report["status"] == "PASS" else 1
 
 

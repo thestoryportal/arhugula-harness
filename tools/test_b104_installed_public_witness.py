@@ -42,10 +42,24 @@ REFUSED = {
     "claim": {**CLAIM, "lease": "free"},
 }
 KILL_DIGEST = "d" * 64
+# The digest the PARENT computed from the receipt it verified; every proved record binds it.
+RECEIPT = "e" * 64
+WRONG_RECEIPT = "1" * 64
+A_PID = 4242
 EXITED = {"exit": 0, "timeout": False, "output_ok": True, "kill": None}
 KILLED = {"signal": "SIGKILL", "returncode": -signal.SIGKILL, "group_gone": True}
 # Every phase the parent waits on to exit by itself (A is killed at its barrier).
 EXITING_PHASES = [p for p in w.PHASES if p != "resume-a"]
+ORIGINS = {name: {"verified_files": []} for name in sorted(w.PACKAGES)}
+
+
+def _provenance(receipt: str = RECEIPT) -> dict[str, Any]:
+    """What an installed, isolated child records; `sys.flags` values are the int 1, not True."""
+    return {
+        "interpreter": {"isolated": 1, "no_user_site": 1},
+        "installation_receipt_sha256": receipt,
+        "installed_origins": copy.deepcopy(ORIGINS),
+    }
 
 
 def _ok(phase: str, observed: dict[str, Any]) -> dict[str, Any]:
@@ -53,8 +67,13 @@ def _ok(phase: str, observed: dict[str, Any]) -> dict[str, Any]:
         "phase": phase,
         "ok": True,
         "observed": observed,
-        "provenance": {"installation_receipt_sha256": "e" * 64, "interpreter": {"isolated": 1}},
+        "provenance": _provenance(),
+        "loaded_harness_modules": 12,
     }
+
+
+def evaluate(evidence: dict[str, Any], receipt: str = RECEIPT) -> dict[str, Any]:
+    return w.evaluate(evidence, expected_receipt_sha256=receipt)  # type: ignore[return-value]
 
 
 def passing_evidence() -> dict[str, Any]:
@@ -69,11 +88,14 @@ def passing_evidence() -> dict[str, Any]:
         "runs": {
             "capture": dict(EXITED),
             "resume-a": {
+                "pid": A_PID,
+                "pgid": A_PID,
                 "exit": None,
                 "timeout": False,
                 "output_ok": True,
                 "barrier_entered": True,
                 "kill": dict(KILLED),
+                "marker": {"pid": A_PID, "pgid": A_PID, "step_id": "step-0"},
             },
             "observe-held": dict(EXITED),
             "resume-b": dict(EXITED),
@@ -115,6 +137,15 @@ def passing_evidence() -> dict[str, Any]:
             ),
             "resume-after-abandon": _ok("resume-after-abandon", copy.deepcopy(REFUSED)),
         },
+        # A never returns a result; this pre-body record is its only installed-child proof.
+        "held_provenance": {
+            "phase": "resume-a",
+            "stage": "pre-body",
+            "pid": A_PID,
+            "pgid": A_PID,
+            "provenance": _provenance(),
+            "loaded_harness_modules": 0,
+        },
         "webhook_requests": [{"path": "/hook"}],
         "webhook_errors": [],
         "tool_calls": 0,
@@ -135,11 +166,32 @@ def _set(path: str, value: object) -> Callable[[dict[str, Any]], None]:
     return mutate
 
 
-def test_a_complete_correct_run_passes() -> None:
-    verdict = w.evaluate(passing_evidence())
+def _drop(path: str) -> Callable[[dict[str, Any]], None]:
+    """A mutation that removes one dotted path from the evidence."""
 
-    assert verdict["status"] == "PASS", verdict["failed_checks"]
-    assert verdict["failed_checks"] == []
+    def mutate(evidence: dict[str, Any]) -> None:
+        *parents, last = path.split(".")
+        node = evidence
+        for key in parents:
+            node = node[key]
+        del node[last]
+
+    return mutate
+
+
+def test_a_complete_correct_run_passes() -> None:
+    verdict = evaluate(passing_evidence())
+
+    assert verdict["status"] == "PASS", verdict["failure_reasons"]
+    assert verdict["failed_checks"] == [] and verdict["unjudged_checks"] == []
+    assert verdict["grammar_failures"] == [] and verdict["global_failures"] == []
+    assert {v["state"] for v in verdict["phase_states"].values()} == {"completed"}
+
+
+def test_the_expected_receipt_must_be_a_lowercase_sha256() -> None:
+    for bad in ("", "E" * 64, "e" * 63, "g" * 64):
+        with pytest.raises(ValueError, match="64 lowercase hex"):
+            w.evaluate(passing_evidence(), expected_receipt_sha256=bad)
 
 
 @pytest.mark.parametrize(
@@ -172,8 +224,6 @@ def test_a_complete_correct_run_passes() -> None:
             _set("results.observe-held.observed.claim", {**CLAIM, "lease": "free"}),
             "resume-a-started.lease_held_by_a",
         ),
-        (_set("runs.resume-a.kill.group_gone", False), "resume-a-started.killed_by_parent"),
-        (_set("results.resume-a", {"ok": True}), "resume-a-started.no_result_from_a"),
         # Manual disposition: never release a started claim; abandon must be audited.
         (
             _set(
@@ -192,57 +242,461 @@ def test_a_complete_correct_run_passes() -> None:
             "abandon-audited.attested_by_kill_record",
         ),
         (_set("results.recover.observed.tombstones", []), "abandon-audited.tombstoned"),
-        # No replay of the gate or the tool.
+        # No replay of the gate: PASS needs exactly one webhook in total.
         (
             _set("webhook_requests", [{"path": "/hook"}, {"path": "/hook"}]),
             "no-replay.webhooks_total",
         ),
-        (_set("tool_calls", 1), "no-replay.tool_never_called"),
-        (_set("tool_server", {"ready": False}), "no-replay.tool_server_ready"),
-        # Provenance: every child installed, one receipt.
-        (
-            _set("results.recover.provenance.installation_receipt_sha256", "1" * 64),
-            "provenance.one_receipt",
-        ),
-        (
-            _set("results.resume-b.provenance.interpreter", {"isolated": 0}),
-            "provenance.every_child_installed",
-        ),
-        (_set("results.recover", None), "provenance.every_phase_recorded"),
+        (_set("webhook_requests", []), "no-replay.webhooks_total"),
+        (_set("runs.webhooks_after_capture", 2), "capture.one_webhook"),
+        (_set("runs.webhooks_after_capture", True), "capture.one_webhook"),  # bool impostor
     ],
 )
-def test_each_broken_fact_fails_its_named_check(
+def test_each_broken_behaviour_fails_its_named_check(
     mutation: Callable[[dict[str, Any]], None], failed: str
 ) -> None:
     evidence = passing_evidence()
     mutation(evidence)
 
-    verdict = w.evaluate(evidence)
+    verdict = evaluate(evidence)
 
     assert verdict["status"] == "FAIL"
     assert failed in verdict["failed_checks"]
 
 
-def test_a_genuine_timeout_with_its_group_reaped_is_inconclusive_not_pass_or_fail() -> None:
+@pytest.mark.parametrize(
+    ("mutation", "reason"),
+    [
+        # Named proof failures of a COMPLETED phase (each is `Broken`, never a failed check).
+        (_set("runs.resume-a.kill.group_gone", False), "resume-a:group-not-gone"),
+        (_set("runs.resume-a.kill.returncode", 0), "resume-a:not-killed-by-sigkill"),
+        (_set("runs.resume-a.kill.signal", "SIGTERM"), "resume-a:not-killed-by-sigkill"),
+        (_set("runs.resume-a.barrier_entered", False), "resume-a:exited-before-barrier"),
+        (_set("results.resume-a", {"ok": True}), "resume-a:a-left-result"),
+        (
+            _set("results.recover.provenance.installation_receipt_sha256", WRONG_RECEIPT),
+            "recover:receipt-mismatch",
+        ),
+        (
+            _set("results.recover.provenance.installation_receipt_sha256", "not-hex"),
+            "recover:receipt-malformed",
+        ),
+        (
+            _set("results.resume-b.provenance.interpreter", {"isolated": 0, "no_user_site": 1}),
+            "resume-b:not-isolated",
+        ),
+        (_set("results.recover", None), "recover:result-missing"),
+        (_set("results.capture.ok", False), "capture:result-not-ok"),
+        (_set("results.capture.phase", "recover"), "capture:result-phase-mismatch"),
+        (_drop("results.capture.observed"), "capture:observed-missing"),
+        (_drop("results.capture.provenance"), "capture:provenance-missing"),
+        (_drop("results.capture.provenance.installed_origins"), "capture:origins-incomplete"),
+        (_drop("results.capture.loaded_harness_modules"), "capture:loaded-modules-invalid"),
+        (_set("results.capture.loaded_harness_modules", 0), "capture:loaded-modules-invalid"),
+    ],
+)
+def test_each_broken_proof_fails_with_a_named_reason(
+    mutation: Callable[[dict[str, Any]], None], reason: str
+) -> None:
     evidence = passing_evidence()
-    evidence["runs"]["resume-b"].update(timeout=True, exit=-signal.SIGKILL, kill=dict(KILLED))
+    mutation(evidence)
 
-    verdict = w.evaluate(evidence)
-
-    assert verdict["status"] == "INCONCLUSIVE"
-    assert verdict["timed_out_phases"] == ["resume-b"]
-
-
-def test_a_timeout_whose_owned_group_survived_fails_rather_than_inconclusive() -> None:
-    evidence = passing_evidence()
-    evidence["runs"]["resume-b"].update(
-        timeout=True, exit=-signal.SIGKILL, kill={**KILLED, "group_gone": False}
-    )
-
-    verdict = w.evaluate(evidence)
+    verdict = evaluate(evidence)
 
     assert verdict["status"] == "FAIL"
-    assert "cleanup.resume-b-group-gone" in verdict["failed_checks"]
+    assert reason in verdict["failure_reasons"]
+
+
+# --- both Codex counterexamples, and the receipt as a bound proof ------------------------
+
+
+def test_a_missing_receipt_in_every_child_record_is_a_fail_not_a_pass() -> None:
+    """Codex counterexample 1: with no digest anywhere, `{None}` used to look consistent."""
+    evidence = passing_evidence()
+    for phase in EXITING_PHASES:
+        del evidence["results"][phase]["provenance"]["installation_receipt_sha256"]
+    del evidence["held_provenance"]["provenance"]["installation_receipt_sha256"]
+
+    verdict = evaluate(evidence)
+
+    assert verdict["status"] == "FAIL"
+    for phase in EXITING_PHASES:
+        assert f"{phase}:receipt-missing" in verdict["failure_reasons"]
+    assert "resume-a:held-receipt-missing" in verdict["failure_reasons"]
+
+
+def test_one_consistent_but_wrong_receipt_everywhere_is_a_fail() -> None:
+    """Consistency is not proof: every record must carry the digest the PARENT verified."""
+    evidence = passing_evidence()
+    for phase in EXITING_PHASES:
+        evidence["results"][phase]["provenance"]["installation_receipt_sha256"] = WRONG_RECEIPT
+    evidence["held_provenance"]["provenance"]["installation_receipt_sha256"] = WRONG_RECEIPT
+
+    verdict = evaluate(evidence)
+
+    assert verdict["status"] == "FAIL"
+    for phase in EXITING_PHASES:
+        assert f"{phase}:receipt-mismatch" in verdict["failure_reasons"]
+    assert "resume-a:held-receipt-mismatch" in verdict["failure_reasons"]
+
+
+def test_the_same_run_passes_only_against_its_own_receipt() -> None:
+    assert evaluate(passing_evidence(), RECEIPT)["status"] == "PASS"
+    assert evaluate(passing_evidence(), WRONG_RECEIPT)["status"] == "FAIL"
+
+
+def test_a_missing_earlier_provenance_is_not_excused_by_a_later_timeout() -> None:
+    """Codex counterexample 2: resume-b times out cleanly, capture's provenance is gone."""
+    evidence = stopped_at("resume-b")
+    del evidence["results"]["capture"]["provenance"]
+
+    verdict = evaluate(evidence)
+
+    assert verdict["status"] == "FAIL"
+    assert "capture:provenance-missing" in verdict["failure_reasons"]
+    assert verdict["phase_states"]["resume-b"]["state"] == "timed-out"
+
+
+@pytest.mark.parametrize("phase", ["capture", "resume-a", "observe-held"])
+def test_a_broken_earlier_proof_stays_a_failure_under_any_later_timeout(phase: str) -> None:
+    evidence = stopped_at("resume-b")
+    if phase == "resume-a":
+        evidence["runs"][phase]["kill"]["group_gone"] = False
+    else:
+        evidence["results"][phase]["provenance"]["interpreter"] = {"isolated": 0}
+
+    verdict = evaluate(evidence)
+
+    assert verdict["status"] == "FAIL"
+    assert any(r.startswith(f"{phase}:") for r in verdict["failure_reasons"])
+
+
+# --- exact types: a bool is not a number -----------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("mutation", "reason"),
+    [
+        (_set("results.capture.provenance.interpreter.isolated", True), "capture:not-isolated"),
+        (
+            _set("results.capture.provenance.interpreter.no_user_site", True),
+            "capture:not-no-user-site",
+        ),
+        (_set("results.capture.provenance.interpreter.isolated", 1.0), "capture:not-isolated"),
+        (_set("results.capture.loaded_harness_modules", True), "capture:loaded-modules-invalid"),
+        (_set("runs.capture.exit", False), "capture:exit-nonzero"),  # False == 0
+        (_set("runs.resume-a.pid", True), "resume-a:held-pid-mismatch"),
+        (_set("held_provenance.loaded_harness_modules", True), "resume-a:held-modules-invalid"),
+        (_set("held_provenance.loaded_harness_modules", -1), "resume-a:held-modules-invalid"),
+        (
+            _set("held_provenance.provenance.interpreter.isolated", True),
+            "resume-a:held-not-isolated",
+        ),
+        (_set("tool_calls", False), "tool-called"),  # False == 0
+        (_set("tool_calls", 0.0), "tool-called"),
+    ],
+)
+def test_a_bool_or_float_impostor_never_satisfies_a_numeric_proof(
+    mutation: Callable[[dict[str, Any]], None], reason: str
+) -> None:
+    evidence = passing_evidence()
+    mutation(evidence)
+
+    verdict = evaluate(evidence)
+
+    assert verdict["status"] == "FAIL"
+    assert reason in verdict["failure_reasons"]
+
+
+# --- the held resume-a: never provenance-exempt ------------------------------------------
+
+
+def test_the_held_a_needs_its_pre_body_provenance_record() -> None:
+    evidence = passing_evidence()
+    evidence["held_provenance"] = None
+
+    verdict = evaluate(evidence)
+
+    assert verdict["status"] == "FAIL"
+    assert "resume-a:held-provenance-missing" in verdict["failure_reasons"]
+
+
+@pytest.mark.parametrize(
+    ("mutation", "reason"),
+    [
+        (_set("held_provenance", "garbage"), "resume-a:held-provenance-missing"),
+        (_set("held_provenance", {"unreadable": True}), "resume-a:held-provenance-missing"),
+        (_drop("held_provenance.provenance"), "resume-a:held-provenance-missing"),
+        (_set("held_provenance.stage", "post-body"), "resume-a:held-record-misplaced"),
+        (_set("held_provenance.phase", "recover"), "resume-a:held-record-misplaced"),
+        (_set("held_provenance.pid", A_PID + 1), "resume-a:held-pid-mismatch"),
+        (_set("held_provenance.pgid", A_PID + 1), "resume-a:held-pgid-mismatch"),
+        (_drop("held_provenance.pid"), "resume-a:held-pid-mismatch"),
+        (
+            _set("held_provenance.provenance.installation_receipt_sha256", WRONG_RECEIPT),
+            "resume-a:held-receipt-mismatch",
+        ),
+        (
+            _drop("held_provenance.provenance.installed_origins"),
+            "resume-a:held-origins-incomplete",
+        ),
+        (_drop("held_provenance.loaded_harness_modules"), "resume-a:held-modules-invalid"),
+    ],
+)
+def test_a_missing_or_malformed_held_proof_fails(
+    mutation: Callable[[dict[str, Any]], None], reason: str
+) -> None:
+    evidence = passing_evidence()
+    mutation(evidence)
+
+    verdict = evaluate(evidence)
+
+    assert verdict["status"] == "FAIL"
+    assert reason in verdict["failure_reasons"]
+
+
+def test_the_held_proof_reflects_the_modules_actually_loaded_before_the_body() -> None:
+    """A pre-body record may honestly report fewer modules than the post-body results do."""
+    evidence = passing_evidence()
+    evidence["held_provenance"]["loaded_harness_modules"] = 0
+
+    assert evaluate(evidence)["status"] == "PASS"
+    evidence["held_provenance"]["loaded_harness_modules"] = 7
+    assert evaluate(evidence)["status"] == "PASS"
+
+
+@pytest.mark.parametrize(
+    ("mutation", "reason"),
+    [
+        (_set("runs.resume-a.marker.pid", A_PID + 1), "resume-a:marker-pid-mismatch"),
+        (_set("runs.resume-a.marker.pgid", A_PID + 1), "resume-a:marker-pgid-mismatch"),
+        (_set("runs.resume-a.marker", {"unreadable": True}), "resume-a:marker-pid-mismatch"),
+        (_set("runs.resume-a.marker", None), "resume-a:marker-malformed"),
+    ],
+)
+def test_the_marker_is_bound_to_the_launched_a(
+    mutation: Callable[[dict[str, Any]], None], reason: str
+) -> None:
+    evidence = passing_evidence()
+    mutation(evidence)
+
+    verdict = evaluate(evidence)
+
+    assert verdict["status"] == "FAIL"
+    assert reason in verdict["failure_reasons"]
+
+
+def test_a_run_without_marker_evidence_is_not_judged_on_the_marker() -> None:
+    evidence = passing_evidence()
+    del evidence["runs"]["resume-a"]["marker"]
+
+    assert evaluate(evidence)["status"] == "PASS"
+
+
+def test_a_deliberately_killed_a_still_needs_a_sigkill_return_code() -> None:
+    evidence = passing_evidence()
+    evidence["runs"]["resume-a"]["kill"] = {**KILLED, "returncode": -signal.SIGTERM}
+
+    verdict = evaluate(evidence)
+
+    assert verdict["status"] == "FAIL"
+    assert "resume-a:not-killed-by-sigkill" in verdict["failure_reasons"]
+
+
+def test_a_waited_phase_cap_race_needs_only_the_group_gone_proof() -> None:
+    """A phase exiting at the cap may report any return code; its group must still be gone."""
+    evidence = stopped_at("resume-b")
+    evidence["runs"]["resume-b"]["kill"] = {**KILLED, "returncode": 0}
+
+    assert evaluate(evidence)["status"] == "INCONCLUSIVE"
+    evidence["runs"]["resume-b"]["kill"]["group_gone"] = False
+    verdict = evaluate(evidence)
+    assert verdict["status"] == "FAIL" and "resume-b:group-not-gone" in verdict["failure_reasons"]
+
+
+# --- timeouts: INCONCLUSIVE only for a clean prefix, cleanup and nothing later ------------
+
+
+def stopped_at(phase: str) -> dict[str, Any]:
+    """What the scenario records when `phase` times out: its group killed and reaped, no
+    result from it, and no later phase launched (the scenario stops at its first timeout)."""
+    evidence = passing_evidence()
+    later = w.PHASES[w.PHASES.index(phase) + 1 :]
+    run = evidence["runs"][phase]
+    if phase == "resume-a":
+        run.update(timeout=True, barrier_entered=False, marker=None)
+    else:
+        run.update(exit=-signal.SIGKILL, timeout=True, kill=dict(KILLED))
+        evidence["results"][phase] = None
+    for gone in later:
+        evidence["runs"].pop(gone)
+        evidence["results"].pop(gone)
+    if phase == "capture":
+        evidence["runs"].pop("webhooks_after_capture")
+        evidence["webhook_requests"] = []
+        evidence["held_provenance"] = None
+    return evidence
+
+
+@pytest.mark.parametrize("phase", w.PHASES)
+def test_a_clean_prefix_and_proven_cleanup_make_one_timeout_inconclusive(phase: str) -> None:
+    verdict = evaluate(stopped_at(phase))
+
+    assert verdict["failure_reasons"] == []
+    assert verdict["status"] == "INCONCLUSIVE"
+    assert verdict["timed_out_phases"] == [phase]
+    assert verdict["unjudged_checks"]  # what could not be judged is named, not dropped
+    later = w.PHASES[w.PHASES.index(phase) + 1 :]
+    assert all(verdict["phase_states"][p]["state"] == "unstarted" for p in later)
+
+
+def test_the_unjudged_checks_are_exactly_those_reading_the_stopped_phases() -> None:
+    verdict = evaluate(stopped_at("resume-b"))
+
+    unjudged = set(verdict["unjudged_checks"])
+    assert "resume-b-refused.typed_refusal" in unjudged
+    assert "abandon-audited.abandoned" in unjudged
+    assert "resume-after-abandon-refused.no_body" in unjudged
+    assert not any(name.startswith(("capture.", "resume-a-started.")) for name in unjudged)
+    assert all(
+        v is None or isinstance(v, bool)
+        for case in verdict["cases"].values()
+        for v in case.values()
+    )
+
+
+@pytest.mark.parametrize("phase", EXITING_PHASES)
+def test_a_timeout_without_a_kill_record_fails(phase: str) -> None:
+    evidence = stopped_at(phase)
+    evidence["runs"][phase].pop("kill")
+
+    verdict = evaluate(evidence)
+
+    assert verdict["status"] == "FAIL"
+    assert f"{phase}:kill-missing" in verdict["failure_reasons"]
+
+
+@pytest.mark.parametrize("phase", w.PHASES)
+@pytest.mark.parametrize("gone", [False, None, "yes"])
+def test_a_timeout_whose_kill_does_not_prove_the_group_gone_fails(phase: str, gone: object) -> None:
+    evidence = stopped_at(phase)
+    evidence["runs"][phase]["kill"] = {**KILLED, "group_gone": gone}
+
+    verdict = evaluate(evidence)
+
+    assert verdict["status"] == "FAIL"
+    assert f"{phase}:group-not-gone" in verdict["failure_reasons"]
+
+
+@pytest.mark.parametrize("phase", EXITING_PHASES)
+@pytest.mark.parametrize("left", [{"ok": True}, {"ok": False, "error": "x"}], ids=["ok", "crashed"])
+def test_a_timed_out_phase_that_left_any_result_fails(phase: str, left: dict[str, Any]) -> None:
+    """Even a finished-then-hung phase (ok true) or a crash is a failure, never INCONCLUSIVE."""
+    evidence = stopped_at(phase)
+    evidence["results"][phase] = {"phase": phase, **left}
+
+    verdict = evaluate(evidence)
+
+    assert verdict["status"] == "FAIL"
+    assert f"{phase}:timed-out-left-result" in verdict["failure_reasons"]
+
+
+@pytest.mark.parametrize("later", ["recover", "resume-after-abandon"])
+def test_a_phase_that_ran_after_the_stop_is_forbidden(later: str) -> None:
+    evidence = stopped_at("resume-b")
+    evidence["runs"][later] = dict(EXITED)
+    evidence["results"][later] = _ok(later, {})
+
+    verdict = evaluate(evidence)
+
+    assert verdict["status"] == "FAIL"
+    assert f"{later}:completed-after-stop" in verdict["grammar_failures"]
+
+
+def test_a_phase_that_left_only_a_result_after_the_stop_is_forbidden() -> None:
+    evidence = stopped_at("resume-b")
+    evidence["results"]["recover"] = _ok("recover", {})
+
+    verdict = evaluate(evidence)
+
+    assert verdict["status"] == "FAIL"
+    assert "recover:run-missing" in verdict["failure_reasons"]
+
+
+def test_two_timeouts_are_not_a_run_the_scenario_can_produce() -> None:
+    evidence = stopped_at("resume-b")
+    evidence["runs"]["observe-held"].update(exit=-signal.SIGKILL, timeout=True, kill=dict(KILLED))
+    evidence["results"]["observe-held"] = None
+
+    verdict = evaluate(evidence)
+
+    assert verdict["status"] == "FAIL"
+    assert "resume-b:second-timeout" in verdict["grammar_failures"]
+
+
+@pytest.mark.parametrize("phase", EXITING_PHASES[1:])
+def test_unstarted_phases_without_any_timeout_fail(phase: str) -> None:
+    evidence = passing_evidence()
+    evidence["runs"].pop(phase)
+    evidence["results"].pop(phase)
+
+    verdict = evaluate(evidence)
+
+    assert verdict["status"] == "FAIL"
+    assert f"{phase}:unstarted-without-timeout" in verdict["grammar_failures"]
+
+
+def test_a_stopped_scenario_with_no_later_phases_fails_closed() -> None:
+    evidence = passing_evidence()
+    for phase in ("resume-b", "recover", "resume-after-abandon"):
+        evidence["runs"].pop(phase)
+        evidence["results"].pop(phase)
+
+    verdict = evaluate(evidence)
+
+    assert verdict["status"] == "FAIL"
+    assert {
+        "resume-b:unstarted-without-timeout",
+        "recover:unstarted-without-timeout",
+        "resume-after-abandon:unstarted-without-timeout",
+    } <= set(verdict["grammar_failures"])
+
+
+def test_an_unstarted_scenario_with_no_timeout_is_a_fail_not_inconclusive() -> None:
+    verdict = evaluate({"runs": {}, "results": {}, "tool_server": {"ready": False}})
+
+    assert verdict["status"] == "FAIL"
+    assert "tool-server:not-ready" in verdict["global_failures"]
+
+
+# --- zero or one webhook ------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("hooks", [0, 1])
+def test_a_capture_timeout_may_have_delivered_zero_or_one_webhook(hooks: int) -> None:
+    evidence = stopped_at("capture")
+    evidence["webhook_requests"] = [{"path": "/hook"}] * hooks
+
+    assert evaluate(evidence)["status"] == "INCONCLUSIVE"
+
+
+def test_two_webhooks_are_a_replay_even_when_a_phase_timed_out() -> None:
+    evidence = stopped_at("capture")
+    evidence["webhook_requests"] = [{"path": "/hook"}] * 2
+
+    verdict = evaluate(evidence)
+
+    assert verdict["status"] == "FAIL" and "webhook-replay" in verdict["global_failures"]
+
+
+@pytest.mark.parametrize("bad", [None, "one", {"n": 1}])
+def test_malformed_webhook_evidence_fails(bad: object) -> None:
+    evidence = passing_evidence()
+    evidence["webhook_requests"] = bad
+
+    verdict = evaluate(evidence)
+
+    assert verdict["status"] == "FAIL" and "webhooks-malformed" in verdict["global_failures"]
 
 
 # --- owned process groups and bounded phase records (Codex HOLD on 7619e06) --------------
@@ -254,22 +708,23 @@ def test_a_surviving_owned_group_fails_even_when_every_other_fact_passes(owner: 
     record = evidence["tool_server"] if owner == "tool_server" else evidence["runs"][owner]
     record["kill"] = {**KILLED, "group_gone": False}
 
-    verdict = w.evaluate(evidence)
+    verdict = evaluate(evidence)
 
     assert verdict["status"] == "FAIL"
-    assert f"cleanup.{owner.replace('_', '-')}-group-gone" in verdict["failed_checks"]
+    assert any("group-not-gone" in r for r in verdict["failure_reasons"])
+    assert any(r.startswith(owner.replace("_", "-") + ":") for r in verdict["failure_reasons"])
 
 
 @pytest.mark.parametrize("phase", EXITING_PHASES)
-@pytest.mark.parametrize("exit_code", [1, -signal.SIGKILL, None])
-def test_a_phase_that_did_not_exit_zero_fails(phase: str, exit_code: int | None) -> None:
+@pytest.mark.parametrize("exit_code", [1, -signal.SIGKILL, None, False, "0"])
+def test_a_phase_that_did_not_exit_zero_fails(phase: str, exit_code: object) -> None:
     evidence = passing_evidence()
     evidence["runs"][phase]["exit"] = exit_code
 
-    verdict = w.evaluate(evidence)
+    verdict = evaluate(evidence)
 
     assert verdict["status"] == "FAIL"
-    assert f"processes.{phase}-exited-0" in verdict["failed_checks"]
+    assert f"{phase}:exit-nonzero" in verdict["failure_reasons"]
 
 
 @pytest.mark.parametrize("phase", [*w.PHASES, "tool-server"])
@@ -278,10 +733,29 @@ def test_a_phase_whose_output_hit_the_cap_fails(phase: str) -> None:
     record = evidence["tool_server"] if phase == "tool-server" else evidence["runs"][phase]
     record["output_ok"] = False
 
-    verdict = w.evaluate(evidence)
+    verdict = evaluate(evidence)
 
     assert verdict["status"] == "FAIL"
-    assert f"processes.{phase}-output-bounded" in verdict["failed_checks"]
+    assert f"{phase}:output-capped" in verdict["failure_reasons"]
+
+
+@pytest.mark.parametrize(
+    ("capped", "reason"),
+    [
+        ("resume-b", "resume-b:output-capped"),  # the timed-out phase itself
+        ("capture", "capture:output-capped"),  # an earlier phase
+        ("tool-server", "tool-server:output-capped"),
+    ],
+)
+def test_capped_output_stays_a_failure_when_a_phase_timed_out(capped: str, reason: str) -> None:
+    evidence = stopped_at("resume-b")
+    record = evidence["tool_server"] if capped == "tool-server" else evidence["runs"][capped]
+    record["output_ok"] = False
+
+    verdict = evaluate(evidence)
+
+    assert verdict["status"] == "FAIL"
+    assert reason in verdict["failure_reasons"]
 
 
 @pytest.mark.parametrize(
@@ -299,10 +773,10 @@ def test_the_final_phase_must_itself_complete(final: dict[str, object] | None) -
     else:
         evidence["runs"]["resume-after-abandon"] = final
 
-    verdict = w.evaluate(evidence)
+    verdict = evaluate(evidence)
 
     assert verdict["status"] == "FAIL"
-    assert "processes.resume-after-abandon-exited-0" in verdict["failed_checks"]
+    assert any(r.startswith("resume-after-abandon:") for r in verdict["failure_reasons"])
 
 
 @pytest.mark.parametrize(
@@ -327,6 +801,10 @@ def test_the_final_phase_must_itself_complete(final: dict[str, object] | None) -
             lambda e: e["results"].__setitem__("capture", {"ok": "yes"}), id="ok-not-bool"
         ),
         pytest.param(lambda e: e.__setitem__("webhook_requests", None), id="webhooks-missing"),
+        pytest.param(lambda e: e["runs"]["observe-held"].pop("timeout"), id="timeout-unrecorded"),
+        pytest.param(
+            lambda e: e["results"].__setitem__("observe-held", "garbage"), id="result-str"
+        ),
     ],
 )
 def test_a_missing_or_malformed_record_fails_instead_of_passing_or_crashing(
@@ -335,24 +813,10 @@ def test_a_missing_or_malformed_record_fails_instead_of_passing_or_crashing(
     evidence = passing_evidence()
     mutation(evidence)
 
-    verdict = w.evaluate(evidence)
+    verdict = evaluate(evidence)
 
     assert verdict["status"] == "FAIL"
-    assert verdict["failed_checks"]
-
-
-def test_a_stopped_scenario_with_no_later_phases_fails_closed() -> None:
-    evidence = passing_evidence()
-    for phase in ("resume-b", "recover", "resume-after-abandon"):
-        evidence["runs"].pop(phase)
-        evidence["results"].pop(phase)
-
-    verdict = w.evaluate(evidence)
-
-    assert verdict["status"] == "FAIL"
-    assert {"provenance.every_phase_recorded", "resume-b-refused.typed_refusal"} <= set(
-        verdict["failed_checks"]
-    )
+    assert verdict["failure_reasons"]
 
 
 # --- the scenario root ------------------------------------------------------------------
@@ -535,110 +999,82 @@ def test_records_are_written_once(tmp_path: Path) -> None:
         w.write_json_new(tmp_path / "r.json", {"a": 2})
 
 
-# --- a timeout excuses only what it made unjudgeable (Codex delta HOLD on 924528e) -------
+# --- the recording seam: A's provenance exists before its held body ----------------------
 
 
-def stopped_at(phase: str) -> dict[str, Any]:
-    """What the scenario records when `phase` times out: its group killed and reaped, no
-    result from it, and no later phase launched (the scenario stops at its first timeout)."""
-    evidence = passing_evidence()
-    later = w.PHASES[w.PHASES.index(phase) + 1 :]
-    run = evidence["runs"][phase]
-    if phase == "resume-a":
-        run.update(timeout=True, barrier_entered=False)
-    else:
-        run.update(exit=-signal.SIGKILL, timeout=True, kill=dict(KILLED))
-        evidence["results"][phase] = None
-    for gone in later:
-        evidence["runs"].pop(gone)
-        evidence["results"].pop(gone)
-    if phase == "capture":
-        evidence["runs"].pop("webhooks_after_capture")
-        evidence["webhook_requests"] = []
-    return evidence
-
-
-@pytest.mark.parametrize("phase", w.PHASES)
-def test_an_isolated_timeout_with_proven_cleanup_is_inconclusive(phase: str) -> None:
-    verdict = w.evaluate(stopped_at(phase))
-
-    assert verdict["independent_failures"] == []
-    assert verdict["status"] == "INCONCLUSIVE"
-    assert verdict["timed_out_phases"] == [phase]
-    assert verdict["excused_by_timeout"]  # the unjudgeable checks are named, not dropped
-
-
-@pytest.mark.parametrize("phase", EXITING_PHASES)
-def test_a_timeout_without_a_kill_record_fails(phase: str) -> None:
-    evidence = stopped_at(phase)
-    evidence["runs"][phase].pop("kill")
-
-    verdict = w.evaluate(evidence)
-
-    assert verdict["status"] == "FAIL"
-    assert f"cleanup.{phase}-group-gone" in verdict["independent_failures"]
-
-
-@pytest.mark.parametrize("phase", w.PHASES)
-@pytest.mark.parametrize("gone", [False, None, "yes"])
-def test_a_timeout_whose_kill_does_not_prove_the_group_gone_fails(phase: str, gone: object) -> None:
-    evidence = stopped_at(phase)
-    evidence["runs"][phase]["kill"] = {**KILLED, "group_gone": gone}
-
-    verdict = w.evaluate(evidence)
-
-    assert verdict["status"] == "FAIL"
-    assert f"cleanup.{phase}-group-gone" in verdict["independent_failures"]
-
-
-@pytest.mark.parametrize(
-    ("capped", "check"),
-    [
-        ("resume-b", "processes.resume-b-output-bounded"),  # the timed-out phase itself
-        ("capture", "processes.capture-output-bounded"),  # an earlier phase
-        ("tool-server", "processes.tool-server-output-bounded"),
-    ],
-)
-def test_capped_output_stays_a_failure_when_a_phase_timed_out(capped: str, check: str) -> None:
-    evidence = stopped_at("resume-b")
-    record = evidence["tool_server"] if capped == "tool-server" else evidence["runs"][capped]
-    record["output_ok"] = False
-
-    verdict = w.evaluate(evidence)
-
-    assert verdict["status"] == "FAIL"
-    assert check in verdict["independent_failures"]
-
-
-@pytest.mark.parametrize(
-    ("mutation", "check"),
-    [
-        (_set("results.capture", "garbage"), "capture.paused"),
-        (_set("runs.observe-held", "garbage"), "processes.observe-held-exited-0"),
-        (_set("tool_server.kill", "garbage"), "cleanup.tool-server-group-gone"),
-        (_set("webhook_errors", None), "no-replay.no_webhook_errors"),
-        (_set("tool_calls", 1), "no-replay.tool_never_called"),
-        (_set("results.resume-a", {"ok": True}), "resume-a-started.no_result_from_a"),
-    ],
-)
-def test_a_malformed_or_failed_earlier_fact_stays_a_failure_when_a_phase_timed_out(
-    mutation: Callable[[dict[str, Any]], None], check: str
+def test_run_phase_writes_the_provenance_record_before_the_body_and_the_result_after(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    evidence = stopped_at("resume-b")
-    mutation(evidence)
+    layout = w.Layout(tmp_path)
+    layout.results.mkdir()
+    seen: dict[str, Any] = {}
 
-    verdict = w.evaluate(evidence)
+    def body(_layout: w.Layout) -> dict[str, object]:
+        # The parent kills the held A here, so nothing after this line is guaranteed to run.
+        seen["record_existed"] = layout.provenance_record("resume-a").exists()
+        seen["result_existed"] = layout.result("resume-a").exists()
+        return {"body": "ran"}
 
-    assert verdict["status"] == "FAIL"
-    assert check in verdict["independent_failures"]
+    monkeypatch.setitem(w.PHASE_BODIES, "resume-a", body)
+
+    code = w.run_phase(layout, "resume-a", lambda: {"installed_origins": {}, "marker": "p"})
+
+    assert code == 0
+    assert seen == {"record_existed": True, "result_existed": False}
+    record = json.loads(layout.provenance_record("resume-a").read_text())
+    assert record["phase"] == "resume-a" and record["stage"] == "pre-body"
+    assert (record["pid"], record["pgid"]) == (os.getpid(), os.getpgid(0))
+    assert type(record["loaded_harness_modules"]) is int
+    assert record["provenance"] == {"installed_origins": {}, "marker": "p"}
+    result = json.loads(layout.result("resume-a").read_text())
+    assert result["ok"] is True and result["observed"] == {"body": "ran"}
 
 
-def test_two_timeouts_are_not_a_run_the_scenario_can_produce() -> None:
-    evidence = stopped_at("resume-b")
-    evidence["runs"]["observe-held"].update(timeout=True, kill=dict(KILLED))
+def test_a_killed_held_a_leaves_its_provenance_record_and_no_result(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    layout = w.Layout(tmp_path)
+    layout.results.mkdir()
 
-    verdict = w.evaluate(evidence)
+    class Killed(BaseException):
+        """Stands in for SIGKILL: nothing after the body's start is recorded."""
 
-    assert verdict["status"] == "FAIL"
-    assert "processes.at-most-one-timeout" in verdict["independent_failures"]
-    assert verdict["excused_by_timeout"] == []
+    def body(_layout: w.Layout) -> dict[str, object]:
+        raise Killed
+
+    monkeypatch.setitem(w.PHASE_BODIES, "resume-a", body)
+
+    with pytest.raises(Killed):
+        w.run_phase(layout, "resume-a", lambda: {"installed_origins": {}})
+
+    assert layout.provenance_record("resume-a").exists()
+    crashed = json.loads(layout.result("resume-a").read_text())
+    assert crashed["ok"] is False  # a crash is recorded evidence, never a pass
+
+
+def test_a_child_that_cannot_prove_itself_leaves_no_provenance_record(
+    tmp_path: Path,
+) -> None:
+    layout = w.Layout(tmp_path)
+    layout.results.mkdir()
+
+    def prove() -> dict[str, object]:
+        raise ValueError("not an isolated installed interpreter")
+
+    with pytest.raises(ValueError):
+        w.run_phase(layout, "resume-a", prove)
+
+    assert not layout.provenance_record("resume-a").exists()
+
+
+def test_read_record_marks_unreadable_records_instead_of_treating_them_as_absent(
+    tmp_path: Path,
+) -> None:
+    assert w.read_record(tmp_path / "absent.json") is None
+    (tmp_path / "garbage.json").write_text("{not json")
+    (tmp_path / "list.json").write_text("[1]")
+    (tmp_path / "ok.json").write_text('{"pid": 1}')
+
+    assert w.read_record(tmp_path / "garbage.json") == {"unreadable": True}
+    assert w.read_record(tmp_path / "list.json") == {"unreadable": True}
+    assert w.read_record(tmp_path / "ok.json") == {"pid": 1}
