@@ -1280,6 +1280,12 @@ def scenario(
 
 _HEX = frozenset("0123456789abcdef")
 
+# [LAW:one-source-of-truth] The floor comes from the real prover: `installed_origins` imports
+# every one of the seven harness packages, so any child that has proved itself has at least
+# this many `harness_*` modules in `sys.modules` BEFORE its phase body starts (a package
+# is itself a loaded module). An empty or tiny count contradicts the installed path.
+MIN_LOADED_HARNESS_MODULES = len(PACKAGES)
+
 
 def _is_sha256(value: object) -> bool:
     return isinstance(value, str) and len(value) == 64 and all(c in _HEX for c in value)
@@ -1329,6 +1335,62 @@ class Broken:
 PhaseState = Completed | TimedOut | Unstarted | Broken
 
 
+def _under(path: str, root: str) -> bool:
+    """Whether `path` lies under `root`, as written or with symlinks resolved."""
+    candidates = {root, os.path.realpath(root)}
+    return any(Path(path).is_relative_to(candidate) for candidate in candidates)
+
+
+def origin_reasons(origins: object, prefix: object) -> tuple[str, ...]:
+    """Parse each emitted package origin as a proving value, not just a package name.
+
+    Mirrors what `installed_origins` emits and checked before returning: the installed
+    RECORD path and digest, the count of Python files it checked, and the sorted verified
+    file inventory, all inside the interpreter's own venv `site-packages`.
+    """
+    if not isinstance(origins, dict) or set(_dict(origins)) != PACKAGES:
+        return ("origins-incomplete",)
+    reasons: set[str] = set()
+    root = prefix if isinstance(prefix, str) and Path(prefix).is_absolute() else None
+    for package, item in sorted(_dict(origins).items()):
+        if not isinstance(item, dict):
+            reasons.add("origin-malformed")
+            continue
+        entry = _dict(item)
+        record_path = entry.get("record_path")
+        if not (
+            isinstance(record_path, str)
+            and Path(record_path).is_absolute()
+            and Path(record_path).name == "RECORD"
+            and Path(record_path).parent.name.endswith(".dist-info")
+            and "site-packages" in Path(record_path).parts
+            and (root is None or _under(record_path, root))
+        ):
+            reasons.add("origin-record-path-invalid")
+        if not _is_sha256(entry.get("record_sha256")):
+            reasons.add("origin-record-digest-invalid")
+        files = entry.get("verified_files")
+        checked = _exact_int(entry.get("python_files_checked"))
+        if not (
+            isinstance(files, list)
+            and files
+            and all(
+                isinstance(f, str)
+                and Path(f).is_absolute()
+                and Path(f).suffix == ".py"
+                and "site-packages" in Path(f).parts
+                and package in Path(f).parts
+                and (root is None or _under(f, root))
+                for f in files  # pyright: ignore[reportUnknownVariableType]
+            )
+            and files == sorted(set(files))  # pyright: ignore[reportUnknownArgumentType]
+        ):
+            reasons.add("origin-files-invalid")
+        elif checked is None or checked < 1 or checked != len(files):  # pyright: ignore[reportUnknownArgumentType]
+            reasons.add("origin-count-invalid")
+    return tuple(sorted(reasons))
+
+
 def provenance_reasons(provenance: object, expected_receipt: str) -> tuple[str, ...]:
     """Why a child provenance record is not proof of an installed, isolated child."""
     if not isinstance(provenance, dict):
@@ -1343,6 +1405,7 @@ def provenance_reasons(provenance: object, expected_receipt: str) -> tuple[str, 
     elif receipt != expected_receipt:
         reasons.append("receipt-mismatch")
     interpreter = data.get("interpreter")
+    prefix: object = None
     if not isinstance(interpreter, dict):
         reasons.append("interpreter-missing")
     else:
@@ -1351,9 +1414,10 @@ def provenance_reasons(provenance: object, expected_receipt: str) -> tuple[str, 
             reasons.append("not-isolated")
         if _exact_int(flags.get("no_user_site")) != 1:
             reasons.append("not-no-user-site")
-    origins = data.get("installed_origins")
-    if not isinstance(origins, dict) or set(_dict(origins)) != PACKAGES:
-        reasons.append("origins-incomplete")
+        prefix = flags.get("prefix")
+        if not (isinstance(prefix, str) and Path(prefix).is_absolute()):
+            reasons.append("interpreter-prefix-invalid")
+    reasons.extend(origin_reasons(data.get("installed_origins"), prefix))
     return tuple(reasons)
 
 
@@ -1385,7 +1449,7 @@ def _result_reasons(phase: str, result: object, expected_receipt: str) -> tuple[
         reasons.append("observed-missing")
     reasons.extend(provenance_reasons(data.get("provenance"), expected_receipt))
     loaded = _exact_int(data.get("loaded_harness_modules"))
-    if loaded is None or loaded < 1:
+    if loaded is None or loaded < MIN_LOADED_HARNESS_MODULES:
         reasons.append("loaded-modules-invalid")
     return tuple(reasons)
 
@@ -1430,7 +1494,7 @@ def _held_reasons(held: object, run: dict[str, Any], expected_receipt: str) -> t
     if data.get("phase") != "resume-a" or data.get("stage") != "pre-body":
         reasons.append("held-record-misplaced")
     loaded = _exact_int(data.get("loaded_harness_modules"))
-    if loaded is None or loaded < 0:
+    if loaded is None or loaded < MIN_LOADED_HARNESS_MODULES:
         reasons.append("held-modules-invalid")
     for field in ("pid", "pgid"):
         mine, launched = _exact_int(data.get(field)), _exact_int(run.get(field))
@@ -1440,8 +1504,10 @@ def _held_reasons(held: object, run: dict[str, Any], expected_receipt: str) -> t
 
 
 def _marker_reasons(run: dict[str, Any]) -> tuple[str, ...]:
-    """Bind the in-body marker's pid and pgid to the launched A when the marker was read."""
+    """Bind the in-body marker's pid and pgid to the launched A; a missing marker is no proof."""
     marker = run.get("marker")
+    if marker is None:
+        return ("marker-missing",)
     if not isinstance(marker, dict):
         return ("marker-malformed",)
     data = _dict(marker)
@@ -1487,8 +1553,9 @@ def parse_held_phase(
         reasons.append("exited-before-barrier")
     if held is None:
         reasons.append("held-provenance-missing")
-    if "marker" in record:
-        reasons.extend(_marker_reasons(record))
+    # A completed A entered its body, so its marker exists: absence is missing proof, never a
+    # weaker variant. Only a genuine no-barrier timeout (above) may lack one.
+    reasons.extend(_marker_reasons(record))
     return Broken(phase, tuple(reasons)) if reasons else Completed(phase, {})
 
 
@@ -1717,6 +1784,27 @@ def evaluate(evidence: dict[str, object], *, expected_receipt_sha256: str) -> di
     )
     grammar = sequence_failures(ordered)
     global_facts = global_failures(evidence)
+    # [LAW:one-source-of-truth] One venv, one prover: every PROVED record must report the same
+    # installed origins and interpreter prefix. Derived only from records that parsed as proof.
+    proved = [
+        _dict(_dict(results.get(p)).get("provenance"))
+        for p in PHASES
+        if p != "resume-a" and isinstance(states[p], Completed)
+    ]
+    if isinstance(states["resume-a"], Completed | TimedOut) and isinstance(
+        evidence.get("held_provenance"), dict
+    ):
+        proved.append(_dict(_dict(evidence.get("held_provenance")).get("provenance")))
+    for field, name in (("installed_origins", "origins"), ("interpreter", "interpreter")):
+        seen = {
+            json.dumps(
+                p.get(field) if field == "installed_origins" else _dict(p.get(field)).get("prefix"),
+                sort_keys=True,
+            )
+            for p in proved
+        }
+        if len(seen) > 1:
+            global_facts.append(f"{name}-inconsistent")
     timed_out = [s.phase for s in ordered if isinstance(s, TimedOut)]
     if phase_failures or grammar or global_facts or failed:
         status = "FAIL"

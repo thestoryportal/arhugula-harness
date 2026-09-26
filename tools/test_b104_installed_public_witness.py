@@ -50,15 +50,38 @@ EXITED = {"exit": 0, "timeout": False, "output_ok": True, "kill": None}
 KILLED = {"signal": "SIGKILL", "returncode": -signal.SIGKILL, "group_gone": True}
 # Every phase the parent waits on to exit by itself (A is killed at its barrier).
 EXITING_PHASES = [p for p in w.PHASES if p != "resume-a"]
-ORIGINS = {name: {"verified_files": []} for name in sorted(w.PACKAGES)}
+VENV = "/venv"
+SITE = f"{VENV}/lib/python3.12/site-packages"
+# What the real prover emits: every entry is the shape `installed_origins` returns.
+LOADED_BEFORE_BODY = w.MIN_LOADED_HARNESS_MODULES  # `installed_origins` imports every package
+LOADED_AFTER_BODY = 12
+
+
+def real_shape_origins() -> dict[str, dict[str, Any]]:
+    """Per-package origin records shaped exactly like `installed_origins`' output."""
+    origins: dict[str, dict[str, Any]] = {}
+    for package in sorted(w.PACKAGES):
+        files = [f"{SITE}/{package}/__init__.py", f"{SITE}/{package}/lifecycle.py"]
+        origins[package] = {
+            "record_path": f"{SITE}/{package}-0.0.0.dist-info/RECORD",
+            "record_sha256": __import__("hashlib").sha256(package.encode()).hexdigest(),
+            "python_files_checked": len(files),
+            "verified_files": sorted(files),
+        }
+    return origins
 
 
 def _provenance(receipt: str = RECEIPT) -> dict[str, Any]:
     """What an installed, isolated child records; `sys.flags` values are the int 1, not True."""
     return {
-        "interpreter": {"isolated": 1, "no_user_site": 1},
+        "interpreter": {
+            "isolated": 1,
+            "no_user_site": 1,
+            "prefix": VENV,
+            "executable": f"{VENV}/bin/python",
+        },
         "installation_receipt_sha256": receipt,
-        "installed_origins": copy.deepcopy(ORIGINS),
+        "installed_origins": real_shape_origins(),
     }
 
 
@@ -68,7 +91,7 @@ def _ok(phase: str, observed: dict[str, Any]) -> dict[str, Any]:
         "ok": True,
         "observed": observed,
         "provenance": _provenance(),
-        "loaded_harness_modules": 12,
+        "loaded_harness_modules": LOADED_AFTER_BODY,
     }
 
 
@@ -144,7 +167,7 @@ def passing_evidence() -> dict[str, Any]:
             "pid": A_PID,
             "pgid": A_PID,
             "provenance": _provenance(),
-            "loaded_harness_modules": 0,
+            "loaded_harness_modules": LOADED_BEFORE_BODY,
         },
         "webhook_requests": [{"path": "/hook"}],
         "webhook_errors": [],
@@ -455,14 +478,71 @@ def test_a_missing_or_malformed_held_proof_fails(
     assert reason in verdict["failure_reasons"]
 
 
-def test_the_held_proof_reflects_the_modules_actually_loaded_before_the_body() -> None:
-    """A pre-body record may honestly report fewer modules than the post-body results do."""
+@pytest.mark.parametrize("count", [0, 1, w.MIN_LOADED_HARNESS_MODULES - 1])
+def test_a_held_record_below_the_prover_floor_fails(count: int) -> None:
+    """`installed_origins` imports every package before the pre-body record, so a real held
+    record reports at least one module per package; zero contradicts the installed path."""
     evidence = passing_evidence()
-    evidence["held_provenance"]["loaded_harness_modules"] = 0
+    evidence["held_provenance"]["loaded_harness_modules"] = count
+
+    verdict = evaluate(evidence)
+
+    assert verdict["status"] == "FAIL"
+    assert "resume-a:held-modules-invalid" in verdict["failure_reasons"]
+
+
+@pytest.mark.parametrize("count", [w.MIN_LOADED_HARNESS_MODULES, LOADED_AFTER_BODY, 400])
+def test_a_held_record_at_or_above_the_prover_floor_passes(count: int) -> None:
+    evidence = passing_evidence()
+    evidence["held_provenance"]["loaded_harness_modules"] = count
 
     assert evaluate(evidence)["status"] == "PASS"
-    evidence["held_provenance"]["loaded_harness_modules"] = 7
-    assert evaluate(evidence)["status"] == "PASS"
+
+
+def test_the_floor_is_grounded_in_the_installed_prover() -> None:
+    """The number of packages `installed_origins` imports is the number the floor rests on."""
+    assert w.MIN_LOADED_HARNESS_MODULES == len(w.PACKAGES) == 7
+    source = Path(w.__file__).read_text()
+    assert "imported = importlib.import_module(package)" in source  # per wheel, all seven
+    assert source.index("origins = installed_origins(") < source.index(
+        '"installed_origins": origins'
+    )
+
+
+def test_a_present_zero_or_malformed_held_record_fails_even_under_a_valid_later_timeout() -> None:
+    for record_mutation in (
+        _set("held_provenance.loaded_harness_modules", 0),
+        _set("held_provenance.provenance.installed_origins", {p: None for p in w.PACKAGES}),
+    ):
+        evidence = stopped_at("resume-b")
+        record_mutation(evidence)
+
+        verdict = evaluate(evidence)
+
+        assert verdict["status"] == "FAIL"
+        assert any(r.startswith("resume-a:held-") for r in verdict["failure_reasons"])
+
+
+def test_a_genuine_before_proof_timeout_may_lack_the_held_record() -> None:
+    evidence = stopped_at("resume-a")
+    evidence["held_provenance"] = None
+
+    verdict = evaluate(evidence)
+
+    assert verdict["status"] == "INCONCLUSIVE" and verdict["failure_reasons"] == []
+
+
+@pytest.mark.parametrize(
+    "record", [{"unreadable": True}, {"phase": "resume-a", "stage": "pre-body"}]
+)
+def test_a_timed_out_a_with_a_present_but_malformed_proof_fails(record: dict[str, Any]) -> None:
+    evidence = stopped_at("resume-a")
+    evidence["held_provenance"] = record
+
+    verdict = evaluate(evidence)
+
+    assert verdict["status"] == "FAIL"
+    assert any(r.startswith("resume-a:held-") for r in verdict["failure_reasons"])
 
 
 @pytest.mark.parametrize(
@@ -471,7 +551,9 @@ def test_the_held_proof_reflects_the_modules_actually_loaded_before_the_body() -
         (_set("runs.resume-a.marker.pid", A_PID + 1), "resume-a:marker-pid-mismatch"),
         (_set("runs.resume-a.marker.pgid", A_PID + 1), "resume-a:marker-pgid-mismatch"),
         (_set("runs.resume-a.marker", {"unreadable": True}), "resume-a:marker-pid-mismatch"),
-        (_set("runs.resume-a.marker", None), "resume-a:marker-malformed"),
+        (_set("runs.resume-a.marker", None), "resume-a:marker-missing"),
+        (_set("runs.resume-a.marker", "garbage"), "resume-a:marker-malformed"),
+        (_drop("runs.resume-a.marker"), "resume-a:marker-missing"),
     ],
 )
 def test_the_marker_is_bound_to_the_launched_a(
@@ -486,11 +568,38 @@ def test_the_marker_is_bound_to_the_launched_a(
     assert reason in verdict["failure_reasons"]
 
 
-def test_a_run_without_marker_evidence_is_not_judged_on_the_marker() -> None:
+@pytest.mark.parametrize("how", ["absent", "none"])
+def test_a_completed_a_without_its_marker_never_completes(how: str) -> None:
+    """The real scenario always supplies the marker of an entered A; absence is missing proof."""
     evidence = passing_evidence()
+    if how == "absent":
+        del evidence["runs"]["resume-a"]["marker"]
+    else:
+        evidence["runs"]["resume-a"]["marker"] = None
+
+    verdict = evaluate(evidence)
+
+    assert verdict["status"] == "FAIL"
+    assert "resume-a:marker-missing" in verdict["failure_reasons"]
+    assert verdict["phase_states"]["resume-a"]["state"] == "broken"
+
+
+@pytest.mark.parametrize("later", ["observe-held", "resume-b", "recover", "resume-after-abandon"])
+def test_a_missing_marker_is_not_excused_by_a_valid_later_timeout(later: str) -> None:
+    evidence = stopped_at(later)
     del evidence["runs"]["resume-a"]["marker"]
 
-    assert evaluate(evidence)["status"] == "PASS"
+    verdict = evaluate(evidence)
+
+    assert verdict["status"] == "FAIL"
+    assert "resume-a:marker-missing" in verdict["failure_reasons"]
+
+
+def test_a_no_barrier_timeout_of_a_may_lack_a_marker() -> None:
+    evidence = stopped_at("resume-a")
+    evidence["runs"]["resume-a"].pop("marker")
+
+    assert evaluate(evidence)["status"] == "INCONCLUSIVE"
 
 
 def test_a_deliberately_killed_a_still_needs_a_sigkill_return_code() -> None:
@@ -997,6 +1106,246 @@ def test_records_are_written_once(tmp_path: Path) -> None:
 
     with pytest.raises(FileExistsError):
         w.write_json_new(tmp_path / "r.json", {"a": 2})
+
+
+# --- origin proof: each emitted package origin is a proving value, not a name ------------
+
+
+def _origin(evidence: dict[str, Any], target: str) -> dict[str, Any]:
+    """The `installed_origins` mapping of a completed result or of the held record."""
+    if target == "held":
+        return evidence["held_provenance"]["provenance"]["installed_origins"]
+    return evidence["results"][target]["provenance"]["installed_origins"]
+
+
+ORIGIN_TARGETS = ["capture", "resume-b", "recover", "held"]
+PKG = "harness_runtime"
+
+
+def _bad_origins() -> list[tuple[str, Callable[[dict[str, Any]], None], str]]:
+    def entry(mutate: Callable[[dict[str, Any]], None]) -> Callable[[dict[str, Any]], None]:
+        def apply(origins: dict[str, Any]) -> None:
+            mutate(origins[PKG])
+
+        return apply
+
+    def replace(value: object) -> Callable[[dict[str, Any]], None]:
+        def apply(origins: dict[str, Any]) -> None:
+            origins[PKG] = value
+
+        return apply
+
+    return [
+        ("entry-none", replace(None), "origin-malformed"),
+        ("entry-empty-dict", replace({}), "origin-record-path-invalid"),
+        ("entry-list", replace([]), "origin-malformed"),
+        ("empty-inventory", entry(lambda o: o.update(verified_files=[])), "origin-files-invalid"),
+        ("inventory-none", entry(lambda o: o.update(verified_files=None)), "origin-files-invalid"),
+        ("count-zero", entry(lambda o: o.update(python_files_checked=0)), "origin-count-invalid"),
+        ("count-missing", entry(lambda o: o.pop("python_files_checked")), "origin-count-invalid"),
+        (
+            "count-bool",
+            entry(lambda o: o.update(python_files_checked=True)),
+            "origin-count-invalid",
+        ),
+        (
+            "count-disagrees",
+            entry(lambda o: o.update(python_files_checked=5)),
+            "origin-count-invalid",
+        ),
+        (
+            "count-float",
+            entry(lambda o: o.update(python_files_checked=2.0)),
+            "origin-count-invalid",
+        ),
+        ("digest-missing", entry(lambda o: o.pop("record_sha256")), "origin-record-digest-invalid"),
+        (
+            "digest-short",
+            entry(lambda o: o.update(record_sha256="ab")),
+            "origin-record-digest-invalid",
+        ),
+        (
+            "digest-upper",
+            entry(lambda o: o.update(record_sha256="A" * 64)),
+            "origin-record-digest-invalid",
+        ),
+        (
+            "record-path-missing",
+            entry(lambda o: o.pop("record_path")),
+            "origin-record-path-invalid",
+        ),
+        (
+            "record-path-relative",
+            entry(lambda o: o.update(record_path="RECORD")),
+            "origin-record-path-invalid",
+        ),
+        (
+            "record-path-not-a-record",
+            entry(lambda o: o.update(record_path=f"{SITE}/{PKG}-0.0.0.dist-info/METADATA")),
+            "origin-record-path-invalid",
+        ),
+        (
+            "record-path-outside-site-packages",
+            entry(lambda o: o.update(record_path=f"/elsewhere/{PKG}-0.0.0.dist-info/RECORD")),
+            "origin-record-path-invalid",
+        ),
+        (
+            "record-path-outside-the-interpreter-prefix",
+            entry(
+                lambda o: o.update(record_path=f"/other/site-packages/{PKG}-0.0.0.dist-info/RECORD")
+            ),
+            "origin-record-path-invalid",
+        ),
+        (
+            "file-outside-site-packages",
+            entry(
+                lambda o: o.update(
+                    verified_files=["/candidate/harness-runtime/src/x.py"], python_files_checked=1
+                )
+            ),
+            "origin-files-invalid",
+        ),
+        (
+            "file-under-the-prefix-but-not-in-site-packages",
+            entry(
+                lambda o: o.update(
+                    verified_files=[f"{VENV}/checkout/{PKG}/x.py"], python_files_checked=1
+                )
+            ),
+            "origin-files-invalid",
+        ),
+        (
+            "file-not-python",
+            entry(
+                lambda o: o.update(
+                    verified_files=[f"{SITE}/{PKG}/data.json"], python_files_checked=1
+                )
+            ),
+            "origin-files-invalid",
+        ),
+        (
+            "file-of-another-package",
+            entry(
+                lambda o: o.update(
+                    verified_files=[f"{SITE}/harness_core/x.py"], python_files_checked=1
+                )
+            ),
+            "origin-files-invalid",
+        ),
+        (
+            "file-duplicated",
+            entry(
+                lambda o: o.update(
+                    verified_files=[f"{SITE}/{PKG}/a.py"] * 2, python_files_checked=2
+                )
+            ),
+            "origin-files-invalid",
+        ),
+        (
+            "files-unsorted",
+            entry(lambda o: o.update(verified_files=[f"{SITE}/{PKG}/b.py", f"{SITE}/{PKG}/a.py"])),
+            "origin-files-invalid",
+        ),
+        (
+            "files-not-strings",
+            entry(lambda o: o.update(verified_files=[1, 2])),
+            "origin-files-invalid",
+        ),
+    ]
+
+
+@pytest.mark.parametrize("target", ORIGIN_TARGETS)
+@pytest.mark.parametrize(
+    ("name", "mutate", "reason"), _bad_origins(), ids=lambda v: v if isinstance(v, str) else ""
+)
+def test_a_bad_origin_entry_fails_an_otherwise_passing_run(
+    target: str, name: str, mutate: Callable[[dict[str, Any]], None], reason: str
+) -> None:
+    evidence = passing_evidence()
+    mutate(_origin(evidence, target))
+
+    verdict = evaluate(evidence)
+
+    assert verdict["status"] == "FAIL", name
+    prefix = "resume-a:held-" if target == "held" else f"{target}:"
+    assert prefix + reason in verdict["failure_reasons"], name
+
+
+@pytest.mark.parametrize("target", ["capture", "observe-held", "held"])
+@pytest.mark.parametrize(
+    ("name", "mutate", "reason"), _bad_origins(), ids=lambda v: v if isinstance(v, str) else ""
+)
+def test_a_bad_origin_entry_is_not_excused_by_a_valid_later_timeout(
+    target: str, name: str, mutate: Callable[[dict[str, Any]], None], reason: str
+) -> None:
+    evidence = stopped_at("resume-b")
+    mutate(_origin(evidence, target))
+
+    verdict = evaluate(evidence)
+
+    assert verdict["status"] == "FAIL", name
+    assert verdict["phase_states"]["resume-b"]["state"] == "timed-out"
+
+
+def test_the_bad_example_names_alone_are_not_origin_proof() -> None:
+    """{package: None} and verified_files=[] with a correct digest and flags must not PASS."""
+    none_entries = passing_evidence()
+    none_entries["results"]["capture"]["provenance"]["installed_origins"] = {
+        p: None for p in w.PACKAGES
+    }
+    empty_inventory = passing_evidence()
+    for package in w.PACKAGES:
+        _origin(empty_inventory, "capture")[package]["verified_files"] = []
+
+    assert evaluate(none_entries)["status"] == "FAIL"
+    assert evaluate(empty_inventory)["status"] == "FAIL"
+
+
+def test_the_real_shape_origin_fixture_passes() -> None:
+    assert evaluate(passing_evidence())["status"] == "PASS"
+    assert set(real_shape_origins()["harness_core"]) == {
+        "record_path",
+        "record_sha256",
+        "python_files_checked",
+        "verified_files",
+    }
+
+
+def test_origins_and_prefix_must_agree_across_all_proved_records() -> None:
+    other = passing_evidence()
+    _origin(other, "recover")[PKG]["record_sha256"] = "9" * 64
+    prefix = passing_evidence()
+    prefix["results"]["recover"]["provenance"]["interpreter"]["prefix"] = "/venv2"
+    for pkg in w.PACKAGES:  # keep its paths consistent with its own (wrong) prefix
+        entry = _origin(prefix, "recover")[pkg]
+        entry["record_path"] = entry["record_path"].replace("/venv/", "/venv2/")
+        entry["verified_files"] = [f.replace("/venv/", "/venv2/") for f in entry["verified_files"]]
+
+    assert "origins-inconsistent" in evaluate(other)["global_failures"]
+    assert evaluate(other)["status"] == "FAIL"
+    assert "interpreter-inconsistent" in evaluate(prefix)["global_failures"]
+    assert evaluate(prefix)["status"] == "FAIL"
+
+
+def test_a_missing_interpreter_prefix_is_not_proof() -> None:
+    evidence = passing_evidence()
+    del evidence["results"]["capture"]["provenance"]["interpreter"]["prefix"]
+
+    verdict = evaluate(evidence)
+
+    assert verdict["status"] == "FAIL"
+    assert "capture:interpreter-prefix-invalid" in verdict["failure_reasons"]
+
+
+@pytest.mark.parametrize("count", [0, 1, w.MIN_LOADED_HARNESS_MODULES - 1])
+def test_a_completed_result_below_the_prover_floor_fails(count: int) -> None:
+    evidence = passing_evidence()
+    evidence["results"]["recover"]["loaded_harness_modules"] = count
+
+    verdict = evaluate(evidence)
+
+    assert verdict["status"] == "FAIL"
+    assert "recover:loaded-modules-invalid" in verdict["failure_reasons"]
 
 
 # --- the recording seam: A's provenance exists before its held body ----------------------
