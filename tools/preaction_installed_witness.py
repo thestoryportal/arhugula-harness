@@ -490,9 +490,9 @@ def _branch_rows(snapshot: Any) -> list[dict[str, object]]:
 def level_view(snapshot: Any) -> list[dict[str, object]]:
     """Each carried level's pause_reason and its terminal fan-out branch rows, root first."""
     levels: list[dict[str, object]] = []
-    current = snapshot
+    current: Any = snapshot
     while True:
-        reason = current.pause_reason
+        reason: Any = current.pause_reason
         levels.append(
             {
                 "workflow_id": current.workflow_id,
@@ -500,7 +500,7 @@ def level_view(snapshot: Any) -> list[dict[str, object]]:
                 "branches": _branch_rows(current),
             }
         )
-        carriers = []
+        carriers: list[Any] = []
         for holder in (current.fan_out_resume, current.peer_fan_out_resume):
             if holder is not None:
                 carriers.extend(holder.paused_child_branches)
@@ -1079,7 +1079,7 @@ def behaviour_failures(
         low, again = observed["resume-lowered"], observed["resume-lowered-again"]
         reasons += _n1_first_resume_reasons(low, svc["resume-lowered"])
         reasons += _n1_second_resume_reasons(low, again, svc["resume-lowered-again"])
-        mid_declared = _d(low.get("declared_placements")).get(MID_ID) or []
+        mid_declared: list[Any] = _d(low.get("declared_placements")).get(MID_ID) or []
         if ["witness.a"] not in mid_declared:
             reasons.append("n1:fixture:mid-lost-own-a-placement")
     elif name == "n2":
