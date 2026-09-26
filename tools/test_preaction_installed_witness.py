@@ -98,6 +98,65 @@ def resume_observed(status: str, keys: list[str], ref: dict[str, Any]) -> dict[s
     }
 
 
+CLAIM_REFUSED = "harness_runtime.lifecycle.root_resume_admission.ResumeClaimRefusedError"
+DECLARED = {
+    pw.ROOT_ID: [],
+    pw.MID_ID: [["witness.a"], ["witness.c"]],
+    pw.LEAF_ID: [["witness.z"]],
+}
+
+
+def levels() -> list[dict[str, Any]]:
+    return [
+        {"workflow_id": pw.ROOT_ID, "pause_reason": "hitl_pending", "branches": []},
+        {"workflow_id": pw.MID_ID, "pause_reason": "hitl_pending", "branches": []},
+        {"workflow_id": pw.LEAF_ID, "pause_reason": "hitl_pending", "branches": []},
+    ]
+
+
+def lowered_refusal() -> dict[str, Any]:
+    """The required shape: a terminal FAILED carrying the child's refusal, no new root record."""
+    return {
+        **resume_observed("failed", [], REF),
+        "failure_cause": {
+            "runtime_fail_class": "RT-FAIL-WORKFLOW-FAILED",
+            "detail": "linear-resume-hitl-gate-config-changed at step 1",
+            "validator_fail_class": None,
+        },
+        "has_pause_snapshot": False,
+        "levels": levels(),
+        "declared_placements": copy.deepcopy(DECLARED),
+    }
+
+
+def claim_refused_again() -> dict[str, Any]:
+    return {
+        "outcome": "raised",
+        "error_type": CLAIM_REFUSED,
+        "reason": "claim-refused",
+        "addressed_run_id": CHAIN[-1]["run_id"],
+        "before_ref": REF,
+        "ref": REF,
+        "before_claim": {"phase": "started"},
+        "chain": copy.deepcopy(CHAIN),
+        "audits": audits([]),
+        "levels": levels(),
+        "declared_placements": copy.deepcopy(DECLARED),
+    }
+
+
+def current_bad_paused_shape() -> dict[str, Any]:
+    """What b4b14049 does: the refusal is lost, a NEW root record is captured, root pauses."""
+    bad = {**resume_observed("paused", [], REF2), "chain": CHAIN[:2]}
+    return {
+        **bad,
+        "failure_cause": None,
+        "has_pause_snapshot": True,
+        "levels": levels()[:2],
+        "declared_placements": copy.deepcopy(DECLARED),
+    }
+
+
 def _ok(phase: str, observed: dict[str, Any]) -> dict[str, Any]:
     record = {"phase": phase, "ok": True, "observed": observed, "provenance": provenance()}
     return {**record, "loaded_harness_modules": 12}
@@ -122,12 +181,15 @@ def scenario(name: str) -> dict[str, Any]:
             ),
         }
     elif name == "n1":
-        lowered = resume_observed("paused", [], REF2)
-        lowered["chain"] = CHAIN[:2]
-        results = {"run": run_observed(), "resume-lowered": lowered}
+        results = {
+            "run": run_observed(),
+            "resume-lowered": lowered_refusal(),
+            "resume-lowered-again": claim_refused_again(),
+        }
         services = {
             "run": svc([pw.KEY_A], **{"witness.b": 3}),
             "resume-lowered": svc([pw.KEY_A], **{"witness.b": 3}),
+            "resume-lowered-again": svc([pw.KEY_A], **{"witness.b": 3}),
         }
     else:
         direct = {
@@ -207,6 +269,7 @@ P_R1 = "p/results/resume-1/observed"
 P_R2 = "p/results/resume-2/observed"
 S = "p/services"
 LOW = "n1/results/resume-lowered/observed"
+AGAIN = "n1/results/resume-lowered-again/observed"
 DIRECT = "n2/results/resume-child-handle/observed"
 GATE_A = "witness.a"
 BEHAVIOUR: list[tuple[str, Callable[[dict[str, Any]], None], str]] = [
@@ -287,11 +350,36 @@ BEHAVIOUR: list[tuple[str, Callable[[dict[str, Any]], None], str]] = [
     ("record-not-advanced", set_(f"{P_R1}/ref", REF), "record-not-advanced"),
     ("resume-2-not-completed", set_(f"{P_R2}/status", "paused"), "p:resume-2:not-completed"),
     ("resume-raised", set_(f"{P_R1}/outcome", "raised"), "p:resume-1:not-returned"),
-    # N1: the parent's placement was lowered
+    # N1: the parent's placement was lowered; the first resume must end as a terminal refusal
     (
         "n1-completed-without-child",
         set_(f"{LOW}/status", "completed"),
         "n1:resume-lowered:completed-without-the-child",
+    ),
+    (
+        "n1-paused-instead-of-refused",
+        set_(f"{LOW}/status", "paused"),
+        "n1:resume-lowered:paused-instead-of-refused",
+    ),
+    (
+        "n1-new-pause-snapshot",
+        set_(f"{LOW}/has_pause_snapshot", True),
+        "n1:resume-lowered:new-pause-snapshot",
+    ),
+    (
+        "n1-root-record-advanced",
+        set_(f"{LOW}/ref", REF2),
+        "n1:resume-lowered:root-record-advanced",
+    ),
+    (
+        "n1-refusal-reason-missing",
+        set_(f"{LOW}/failure_cause", None),
+        "n1:resume-lowered:child-refusal-reason-missing",
+    ),
+    (
+        "n1-refusal-reason-unrelated",
+        set_(f"{LOW}/failure_cause/detail", "some other failure"),
+        "n1:resume-lowered:child-refusal-reason-missing",
     ),
     (
         "n1-a-ran",
@@ -304,9 +392,39 @@ BEHAVIOUR: list[tuple[str, Callable[[dict[str, Any]], None], str]] = [
         "n1:resume-lowered:f2:unexpected",
     ),
     (
+        "n1-new-webhook",
+        set_("n1/services/resume-lowered/webhook_keys", [pw.KEY_A, pw.KEY_C]),
+        "n1:resume-lowered:webhook:unexpected",
+    ),
+    (
         "n1-claim-not-admitted",
         set_(f"{LOW}/before_claim/phase", "absent"),
         "root-claim-not-admitted",
+    ),
+    (
+        "n1-second-resume-not-refused",
+        set_(f"{AGAIN}/outcome", "returned"),
+        "n1:resume-lowered-again:not-claim-refused",
+    ),
+    (
+        "n1-second-resume-wrong-refusal",
+        set_(f"{AGAIN}/reason", "placement"),
+        "n1:resume-lowered-again:not-claim-refused",
+    ),
+    (
+        "n1-second-resume-other-record",
+        set_(f"{AGAIN}/before_ref", REF2),
+        "n1:resume-lowered-again:different-record",
+    ),
+    (
+        "n1-second-resume-effect",
+        set_("n1/services/resume-lowered-again/tool_counts/witness.d", 1),
+        "n1:resume-lowered-again:inheritance-missing:witness.d",
+    ),
+    (
+        "n1-mid-lost-its-own-a-placement",
+        set_(f"{LOW}/declared_placements/{pw.MID_ID}", [["witness.c"]]),
+        "n1:fixture:mid-lost-own-a-placement",
     ),
     # N2: a direct child handle
     ("n2-not-refused", set_(f"{DIRECT}/outcome", "returned"), "n2:direct-child-handle-not-refused"),
@@ -617,3 +735,43 @@ def test_g1_the_public_api_carries_the_nested_pause_and_refusals_through_real_pr
 
     assert done.returncode == 0, (done.stdout, done.stderr)
     assert json.loads(done.stdout)["status"] == "REHEARSAL-PASS"
+
+
+def test_the_current_lost_refusal_shapes_fail_and_the_terminal_refusal_passes() -> None:
+    assert verdict(honest())["status"] == "PASS"
+
+    paused = honest()
+    paused["n1"]["results"]["resume-lowered"] = _ok("resume-lowered", current_bad_paused_shape())
+    proceeds = {**claim_refused_again(), "outcome": "returned", "status": "completed"}
+    proceeds |= {"before_ref": REF2, "ref": REF2, "chain": CHAIN[:2]}
+    proceeds.pop("reason"), proceeds.pop("error_type")
+    paused["n1"]["results"]["resume-lowered-again"] = _ok("resume-lowered-again", proceeds)
+    result = verdict(paused)
+
+    assert result["status"] == "FAIL"
+    for reason in (
+        "n1:resume-lowered:paused-instead-of-refused",
+        "n1:resume-lowered:new-pause-snapshot",
+        "n1:resume-lowered:root-record-advanced",
+        "n1:resume-lowered:child-refusal-reason-missing",
+        "n1:resume-lowered-again:not-claim-refused",
+        "n1:resume-lowered-again:different-record",
+    ):
+        assert reason in result["failure_reasons"], reason
+
+    silent = honest()
+    silent["n1"]["results"]["resume-lowered"] = _ok(
+        "resume-lowered", {**current_bad_paused_shape(), "status": "completed"}
+    )
+    assert "n1:resume-lowered:completed-without-the-child" in verdict(silent)["failure_reasons"]
+
+
+def test_absence_of_effects_alone_is_never_a_pass_for_n1() -> None:
+    """No a/c/d effect, no audit and no new webhook are necessary, not sufficient."""
+    evidence = honest()
+    evidence["n1"]["results"]["resume-lowered"] = _ok("resume-lowered", current_bad_paused_shape())
+
+    result = verdict(evidence)
+
+    assert result["status"] == "FAIL"
+    assert not any("inheritance-missing" in r or "webhook" in r for r in result["failure_reasons"])

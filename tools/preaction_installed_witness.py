@@ -16,9 +16,11 @@ the ROOT handle with a response keyed by G's actual `run_id`, runs `witness.a` o
 at `witness.c` (declared only by C); `resume-2` approves that and finishes with `witness.d`. The
 verdict is per-phase typed outcomes (the reviewed B-104 states and sequence grammar) then behaviour.
 
-Negatives, each on its own state root: N1 resumes after R's placement was lowered (`witness.a` must
-never run and the run must not complete without the child); N2 resumes a depth>0 handle
-directly (typed refusal, no claim); N3 is a receipt/head/startup/wheel mismatch refused by the
+Negatives, each on its own state root: N1 resumes after R's placement was lowered. The first
+resume must end as a terminal FAILED carrying the child's refusal (no new root record, no
+`witness.a`, `c` or `d`, no audit or webhook) and a second resume of the same record must be
+claim-refused. N2 resumes a depth>0 handle directly (typed refusal, no claim); N3 is a
+receipt/head/startup/wheel mismatch refused by the
 SHARED prover before any child.
 
 Provenance is the reviewed shared owner `installed_witness_provenance` (loaded by explicit path, as
@@ -81,9 +83,11 @@ MAX_BODY_BYTES = 4096
 # gated steps are G's steps 1 (witness.a) and 2 (witness.c). Asserted only inside the `hitl:` space.
 KEY_A = f"hitl:workflow:{LEAF_ID}:step:1:pre-action"
 KEY_C = f"hitl:workflow:{LEAF_ID}:step:2:pre-action"
+# The leaf's own resume guard names this when the inherited gate configuration changed.
+REFUSAL_REASON = "hitl-gate-config-changed"
 
 PHASES_P = ("run", "resume-1", "resume-2")
-PHASES_N1 = ("run", "resume-lowered")
+PHASES_N1 = ("run", "resume-lowered", "resume-lowered-again")
 PHASES_N2 = ("run", "resume-child-handle")
 SCENARIOS: dict[str, tuple[str, ...]] = {"p": PHASES_P, "n1": PHASES_N1, "n2": PHASES_N2}
 
@@ -464,6 +468,62 @@ def nested_chain(snapshot: Any) -> list[dict[str, object]]:
         chain.append({"workflow_id": current.workflow_id, "run_id": current.run_id})
 
 
+def _branch_rows(snapshot: Any) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for holder in (snapshot.fan_out_resume, snapshot.peer_fan_out_resume):
+        if holder is not None:
+            rows.extend(
+                {
+                    "branch_index": row.branch_index,
+                    "step_id": row.step_id,
+                    "terminal_status": row.terminal_status,
+                    "output": json.loads(json.dumps(row.output, default=str)),
+                }
+                for row in holder.branches
+            )
+    return rows
+
+
+def level_view(snapshot: Any) -> list[dict[str, object]]:
+    """Each carried level's pause_reason and its terminal fan-out branch rows, root first."""
+    levels: list[dict[str, object]] = []
+    current = snapshot
+    while True:
+        reason = current.pause_reason
+        levels.append(
+            {
+                "workflow_id": current.workflow_id,
+                "pause_reason": getattr(reason, "value", str(reason)),
+                "branches": _branch_rows(current),
+            }
+        )
+        carriers = []
+        for holder in (current.fan_out_resume, current.peer_fan_out_resume):
+            if holder is not None:
+                carriers.extend(holder.paused_child_branches)
+        if len(carriers) != 1:
+            return levels
+        current = carriers[0].child_snapshot
+
+
+def declared_placements(workflow: Any) -> dict[str, list[list[str]]]:
+    """Each level's own declared PRE_ACTION tool filters, read from the workflow itself."""
+    from harness_cp.workflow_driver_types import StepKind
+    from harness_runtime.lifecycle.sub_agent_dispatch import SubAgentDispatchPayload
+
+    found: dict[str, list[list[str]]] = {}
+
+    def walk(entry: Any, steps: Any) -> None:
+        found[str(entry.workflow_id)] = [list(p.tool_filter) for p in entry.hitl_placements]
+        for step in steps:
+            if step.step_kind == StepKind.SUB_AGENT_DISPATCH:
+                payload = SubAgentDispatchPayload.model_validate(step.step_payload)
+                walk(payload.child_manifest_entry, payload.child_steps)
+
+    walk(workflow.manifest_entry, workflow.steps)
+    return found
+
+
 def _claim_view(layout: Layout, config: Any, ref: Any) -> dict[str, object]:
     from harness_runtime.config.state_placement import place_state_dir, probe_declared_state_root
     from harness_runtime.lifecycle.journal_workflow_pause_store import pause_journal_dir_for
@@ -537,6 +597,10 @@ def hitl_audit_view(layout: Layout) -> dict[str, object]:
     return {
         "entry_count": len(entries),
         "od_entries": od_entries,
+        "all_entries": [
+            {"key": str(entry.idempotency_key), "action_id": str(entry.action_id)}
+            for entry in entries[:200]
+        ],
         "entries": [
             {"key": str(entry.idempotency_key), "action_id": str(entry.action_id)}
             for entry in entries
@@ -551,6 +615,7 @@ def _observe_common(layout: Layout, config: Any) -> dict[str, object]:
         "ref": latest["ref"].model_dump(mode="json"),
         "depth": latest["depth"],
         "chain": nested_chain(latest["snapshot"]),
+        "levels": level_view(latest["snapshot"]),
         "audits": hitl_audit_view(layout),
     }
 
@@ -561,12 +626,11 @@ def phase_run(layout: Layout, *, root_has_placement: bool = True) -> dict[str, o
     from harness_runtime import api
 
     config = _config(layout)
-    result = asyncio.run(
-        api.run(build_workflow(root_has_placement=root_has_placement), config=config)
-    )
+    workflow = build_workflow(root_has_placement=root_has_placement)
+    result = asyncio.run(api.run(workflow, config=config))
     observed = _observe_common(layout, config)
     observed["status"] = result.status
-    observed["fail_class"] = getattr(result, "fail_class", None)
+    observed["declared_placements"] = declared_placements(workflow)
     return observed
 
 
@@ -601,10 +665,12 @@ def phase_resume(layout: Layout, *, root_has_placement: bool = True) -> dict[str
         "addressed_run_id": leaf_run_id,
         "before_ref": before["ref"].model_dump(mode="json"),
     }
+    workflow = build_workflow(root_has_placement=root_has_placement)
+    outcome["declared_placements"] = declared_placements(workflow)
     try:
         result = asyncio.run(
             api.resume(
-                build_workflow(root_has_placement=root_has_placement),
+                workflow,
                 resume_handle=ROOT_ID,
                 resume_context=_approval(leaf_run_id),
                 config=config,
@@ -619,10 +685,16 @@ def phase_resume(layout: Layout, *, root_has_placement: bool = True) -> dict[str
             "message": str(exc)[:400],
         }
     else:
+        cause = result.failure_cause
+        snapshot = result.pause_snapshot
         outcome |= {
             "outcome": "returned",
             "status": result.status,
-            "fail_class": getattr(result, "fail_class", None),
+            "failure_cause": None if cause is None else cause.model_dump(mode="json"),
+            "has_pause_snapshot": snapshot is not None,
+            "returned_pause_reason": None
+            if snapshot is None
+            else getattr(snapshot.pause_reason, "value", str(snapshot.pause_reason)),
         }
     after = _observe_common(layout, config)
     outcome |= after
@@ -662,6 +734,7 @@ PHASE_BODIES: dict[str, Callable[[Layout], dict[str, object]]] = {
     "resume-1": phase_resume,
     "resume-2": phase_resume,
     "resume-lowered": lambda layout: phase_resume(layout, root_has_placement=False),
+    "resume-lowered-again": lambda layout: phase_resume(layout, root_has_placement=False),
     "resume-child-handle": phase_resume_child_handle,
 }
 
@@ -929,6 +1002,47 @@ def _phase_reasons(
     return reasons + _audit_reasons(observed, audits, label)
 
 
+def _n1_first_resume_reasons(low: dict[str, Any], svc: dict[str, Any]) -> list[str]:
+    """The lowered resume must be a terminal refusal: FAILED, the child's reason, no new record."""
+    label = "n1:resume-lowered"
+    status = low.get("status") if low.get("outcome") == "returned" else None
+    reasons: list[str] = []
+    if status == "completed":
+        reasons.append(f"{label}:completed-without-the-child")
+    elif status == "paused":
+        reasons.append(f"{label}:paused-instead-of-refused")
+    elif status != "failed":
+        reasons.append(f"{label}:not-failed")
+    if low.get("has_pause_snapshot") is not False:
+        reasons.append(f"{label}:new-pause-snapshot")
+    if _d(low.get("ref")) != _d(low.get("before_ref")):
+        reasons.append(f"{label}:root-record-advanced")
+    cause = _d(low.get("failure_cause"))
+    if REFUSAL_REASON not in f"{cause.get('detail', '')} {cause.get('validator_fail_class') or ''}":
+        reasons.append(f"{label}:child-refusal-reason-missing")
+    if _d(low.get("before_claim")).get("phase") != "started":
+        reasons.append(f"{label}:root-claim-not-admitted")
+    return reasons + _phase_reasons(label, low, svc, {"witness.b": 3}, [KEY_A], [])
+
+
+def _n1_second_resume_reasons(
+    low: dict[str, Any], again: dict[str, Any], svc: dict[str, Any]
+) -> list[str]:
+    """A second resume of the SAME root record must be claim-refused, with no effect."""
+    label = "n1:resume-lowered-again"
+    error = str(again.get("error_type", ""))
+    reasons: list[str] = []
+    if (
+        again.get("outcome") != "raised"
+        or not error.endswith(".ResumeClaimRefusedError")
+        or again.get("reason") != "claim-refused"
+    ):
+        reasons.append(f"{label}:not-claim-refused")
+    if _d(again.get("before_ref")) != _d(low.get("before_ref")):
+        reasons.append(f"{label}:different-record")
+    return reasons + _phase_reasons(label, again, svc, {"witness.b": 3}, [KEY_A], [])
+
+
 def behaviour_failures(
     name: str, observed: dict[str, dict[str, Any]], services: dict[str, Any]
 ) -> list[str]:
@@ -957,15 +1071,12 @@ def behaviour_failures(
         last = {"witness.a": 1, "witness.b": 3, "witness.c": 1, "witness.d": 1}
         reasons += _phase_reasons("p:resume-2", r2, svc["resume-2"], last, keys, keys)
     elif name == "n1":
-        low = observed["resume-lowered"]
-        if low.get("outcome") == "returned" and low.get("status") == "completed":
-            reasons.append("n1:resume-lowered:completed-without-the-child")
-        if _d(low.get("before_claim")).get("phase") != "started":
-            reasons.append("n1:resume-lowered:root-claim-not-admitted")
-        unchanged = {"witness.b": 3}
-        reasons += _phase_reasons(
-            "n1:resume-lowered", low, svc["resume-lowered"], unchanged, [KEY_A], []
-        )
+        low, again = observed["resume-lowered"], observed["resume-lowered-again"]
+        reasons += _n1_first_resume_reasons(low, svc["resume-lowered"])
+        reasons += _n1_second_resume_reasons(low, again, svc["resume-lowered-again"])
+        mid_declared = _d(low.get("declared_placements")).get(MID_ID) or []
+        if ["witness.a"] not in mid_declared:
+            reasons.append("n1:fixture:mid-lost-own-a-placement")
     elif name == "n2":
         direct = observed["resume-child-handle"]
         error = str(direct.get("error_type", ""))
