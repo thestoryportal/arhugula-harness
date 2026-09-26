@@ -1348,6 +1348,265 @@ def test_a_completed_result_below_the_prover_floor_fails(count: int) -> None:
     assert "recover:loaded-modules-invalid" in verdict["failure_reasons"]
 
 
+# --- origin path containment and package layout (one parser, canonical paths) -------------
+
+SHAPES = {
+    "all-completed": passing_evidence,
+    "proved-prefix-then-valid-timeout": lambda: stopped_at("resume-b"),
+}
+PACKAGE_LIST = sorted(w.PACKAGES)
+
+
+def _provenances(evidence: dict[str, Any]) -> list[dict[str, Any]]:
+    """Every proved record's provenance: completed results and the held A record."""
+    records = [r["provenance"] for r in evidence["results"].values() if isinstance(r, dict)]
+    held = evidence.get("held_provenance")
+    return [*records, held["provenance"]] if isinstance(held, dict) else records
+
+
+def _mutate_everywhere(
+    evidence: dict[str, Any], mutate: Callable[[str, dict[str, Any]], None]
+) -> None:
+    """Apply one origin mutation to EVERY package of EVERY proved record, consistently, so that
+    cross-record disagreement cannot be what rejects it."""
+    for provenance in _provenances(evidence):
+        for package, entry in provenance["installed_origins"].items():
+            mutate(package, entry)
+
+
+def _relocate(evidence: dict[str, Any], venv: str) -> None:
+    """Move the whole synthetic venv (prefix and every origin path) to a real temp location."""
+    for provenance in _provenances(evidence):
+        text = (
+            json.dumps(provenance).replace('"/venv/', f'"{venv}/').replace('"/venv"', f'"{venv}"')
+        )
+        provenance.clear()
+        provenance.update(json.loads(text))
+
+
+def _files(package: str, *names: str) -> dict[str, Any]:
+    return {"verified_files": sorted(names), "python_files_checked": len(names)}
+
+
+LAYOUT_MUTATIONS: dict[str, Callable[[str, dict[str, Any]], None]] = {
+    "traversal-out-of-the-prefix": lambda pkg, e: e.update(
+        _files(pkg, f"{SITE}/{pkg}/../../../../../outside.py")
+    ),
+    "traversal-inside-the-prefix-to-another-package": lambda pkg, e: e.update(
+        _files(pkg, f"{SITE}/{pkg}/../harness_core/__init__.py")
+    ),
+    "traversal-in-the-record-path": lambda pkg, e: e.update(
+        record_path=f"{SITE}/../site-packages/{pkg}-0.0.0.dist-info/RECORD"
+    ),
+    "dot-segment": lambda pkg, e: e.update(_files(pkg, f"{SITE}/{pkg}/./__init__.py")),
+    "repeated-separator": lambda pkg, e: e.update(_files(pkg, f"{SITE}//{pkg}/__init__.py")),
+    "wrong-package-record": lambda pkg, e: e.update(
+        record_path=(
+            f"{SITE}/{PACKAGE_LIST[(PACKAGE_LIST.index(pkg) + 1) % 7]}-0.0.0.dist-info/RECORD"
+        )
+    ),
+    "wrong-version-record": lambda pkg, e: e.update(
+        record_path=f"{SITE}/{pkg}-9.9.9.dist-info/RECORD"
+    ),
+    "hyphenated-distribution-name": lambda pkg, e: e.update(
+        record_path=f"{SITE}/{pkg.replace('_', '-')}-0.0.0.dist-info/RECORD"
+    ),
+    "record-not-in-a-dist-info-directory": lambda pkg, e: e.update(
+        record_path=f"{SITE}/{pkg}-0.0.0/RECORD"
+    ),
+    "package-name-in-the-wrong-ancestor": lambda pkg, e: e.update(
+        _files(pkg, f"{VENV}/{pkg}/site-packages/other/__init__.py")
+    ),
+    "package-directory-not-immediately-under-site-packages": lambda pkg, e: e.update(
+        _files(pkg, f"{SITE}/other/{pkg}/__init__.py")
+    ),
+    "file-of-another-package": lambda pkg, e: e.update(
+        _files(pkg, f"{SITE}/{PACKAGE_LIST[(PACKAGE_LIST.index(pkg) + 1) % 7]}/__init__.py")
+    ),
+    "package-prefix-lookalike-directory": lambda pkg, e: e.update(
+        _files(pkg, f"{SITE}/{pkg}_evil/__init__.py")
+    ),
+    "consistent-tree-under-a-differently-named-site-directory": lambda pkg, e: e.update(
+        record_path=f"{VENV}/lib/python3.12/dist-packages/{pkg}-0.0.0.dist-info/RECORD",
+        **_files(pkg, f"{VENV}/lib/python3.12/dist-packages/{pkg}/__init__.py"),
+    ),
+    "site-packages-only-as-a-lookalike": lambda pkg, e: e.update(
+        record_path=f"{VENV}/lib/python3.12/site-packages-evil/{pkg}-0.0.0.dist-info/RECORD"
+    ),
+    "site-root-differs-per-package": lambda pkg, e: e.update(
+        record_path=f"{VENV}/{pkg}/site-packages/{pkg}-0.0.0.dist-info/RECORD",
+        **_files(pkg, f"{VENV}/{pkg}/site-packages/{pkg}/__init__.py"),
+    ),
+}
+
+
+@pytest.mark.parametrize("shape", sorted(SHAPES))
+@pytest.mark.parametrize("name", sorted(LAYOUT_MUTATIONS))
+def test_a_counterfeit_path_layout_fails_the_first_proved_phase(shape: str, name: str) -> None:
+    """Applied to every proved record, so agreement across records cannot be what rejects it;
+    the FIRST phase's own parse must fail, on all-completed evidence and before a valid timeout."""
+    evidence = SHAPES[shape]()
+    _mutate_everywhere(evidence, LAYOUT_MUTATIONS[name])
+
+    verdict = evaluate(evidence)
+
+    assert verdict["status"] == "FAIL", name
+    assert any(r.startswith("capture:origin-") for r in verdict["failure_reasons"]), name
+    assert any(r.startswith("resume-a:held-origin-") for r in verdict["failure_reasons"]), name
+
+
+def test_a_consistent_counterfeit_is_not_saved_by_cross_record_agreement() -> None:
+    evidence = passing_evidence()
+    _mutate_everywhere(evidence, LAYOUT_MUTATIONS["traversal-out-of-the-prefix"])
+
+    verdict = evaluate(evidence)
+
+    assert verdict["global_failures"] == []  # every record agrees with every other one
+    assert verdict["status"] == "FAIL"
+
+
+def test_the_evaluator_reads_no_installed_bytes() -> None:
+    """The child prover is the byte authority; evaluate only parses recorded paths, so an
+    evaluation over paths that do not exist on this host still passes."""
+    evidence = passing_evidence()
+    assert not os.path.lexists(SITE)
+
+    assert evaluate(evidence)["status"] == "PASS"
+
+
+# --- real filesystem cases: symlinks and prefix aliases (disposable temp trees only) -----
+
+
+def _layout(root: Path) -> Path:
+    """A disposable venv-shaped tree; returns its site-packages directory."""
+    site = root / "venv" / "lib" / "python3.12" / "site-packages"
+    for package in w.PACKAGES:
+        (site / package).mkdir(parents=True)
+        (site / f"{package}-0.0.0.dist-info").mkdir()
+    return site
+
+
+def _canonical_evidence(shape: str, venv: Path, prefix: str | None = None) -> dict[str, Any]:
+    evidence = SHAPES[shape]()
+    _relocate(evidence, str(venv))
+    if prefix is not None:
+        for provenance in _provenances(evidence):
+            provenance["interpreter"]["prefix"] = prefix
+    return evidence
+
+
+@pytest.mark.parametrize("shape", sorted(SHAPES))
+def test_a_real_canonical_tree_passes(tmp_path: Path, shape: str) -> None:
+    root = tmp_path.resolve()
+    _layout(root)
+
+    assert evaluate(_canonical_evidence(shape, root / "venv"))["status"] in {"PASS", "INCONCLUSIVE"}
+    assert evaluate(_canonical_evidence(shape, root / "venv"))["failure_reasons"] == []
+
+
+@pytest.mark.parametrize("shape", sorted(SHAPES))
+def test_a_symlinked_prefix_alias_is_valid_when_every_path_is_canonical(
+    tmp_path: Path, shape: str
+) -> None:
+    """Both sides are resolved: the recorded prefix may be an alias of the real venv."""
+    root = tmp_path.resolve()
+    _layout(root)
+    (root / "alias").symlink_to(root / "venv")
+
+    evidence = _canonical_evidence(shape, root / "venv", prefix=str(root / "alias"))
+
+    assert evaluate(evidence)["failure_reasons"] == []
+
+
+@pytest.mark.parametrize("shape", sorted(SHAPES))
+def test_paths_spelled_through_the_alias_are_not_canonical_and_fail(
+    tmp_path: Path, shape: str
+) -> None:
+    root = tmp_path.resolve()
+    _layout(root)
+    (root / "alias").symlink_to(root / "venv")
+
+    evidence = _canonical_evidence(shape, root / "alias")
+
+    verdict = evaluate(evidence)
+    assert verdict["status"] == "FAIL"
+    assert any(r.startswith("capture:origin-") for r in verdict["failure_reasons"])
+
+
+@pytest.mark.parametrize("shape", sorted(SHAPES))
+def test_a_prefix_alias_of_a_different_venv_does_not_contain_the_paths(
+    tmp_path: Path, shape: str
+) -> None:
+    root = tmp_path.resolve()
+    _layout(root)
+    (root / "other").mkdir()
+    (root / "alias").symlink_to(root / "other")
+
+    evidence = _canonical_evidence(shape, root / "venv", prefix=str(root / "alias"))
+
+    verdict = evaluate(evidence)
+    assert verdict["status"] == "FAIL"
+    assert any(r.startswith("capture:origin-") for r in verdict["failure_reasons"])
+
+
+SYMLINKS = [
+    "file-symlink-out-of-the-prefix",
+    "package-directory-symlink",
+    "record-directory-symlink",
+]
+
+
+@pytest.mark.parametrize("shape", sorted(SHAPES))
+@pytest.mark.parametrize("kind", SYMLINKS)
+def test_a_symlink_that_leaves_the_prefix_fails_the_first_proved_phase(
+    tmp_path: Path, shape: str, kind: str
+) -> None:
+    root = tmp_path.resolve()
+    site = _layout(root)
+    outside = root / "outside"
+    outside.mkdir()
+    for package in w.PACKAGES:
+        if kind == "file-symlink-out-of-the-prefix":
+            (outside / "x.py").write_text("")
+            (site / package / "escape.py").symlink_to(outside / "x.py")
+        elif kind == "package-directory-symlink":
+            (outside / package).mkdir()
+            (site / package).rmdir()
+            (site / package).symlink_to(outside / package)
+        else:
+            (outside / f"{package}-0.0.0.dist-info").mkdir()
+            (site / f"{package}-0.0.0.dist-info").rmdir()
+            (site / f"{package}-0.0.0.dist-info").symlink_to(outside / f"{package}-0.0.0.dist-info")
+    evidence = _canonical_evidence(shape, root / "venv")
+
+    def spell(package: str, entry: dict[str, Any]) -> None:
+        if kind == "file-symlink-out-of-the-prefix":
+            entry.update(_files(package, f"{site}/{package}/escape.py"))
+
+    _mutate_everywhere(evidence, spell)
+
+    verdict = evaluate(evidence)
+
+    assert verdict["status"] == "FAIL", kind
+    assert any(r.startswith("capture:origin-") for r in verdict["failure_reasons"]), kind
+
+
+# --- the layout rule is grounded in the workspace, not invented ---------------------------
+
+
+def test_the_expected_distribution_version_is_the_workspace_version() -> None:
+    """One source of truth: every workspace project's own version is the pinned constant, and
+    its normalised project name is the package `installed_origins` reports."""
+    root = Path(__file__).resolve().parent.parent
+    projects = {}
+    for path in sorted(root.glob("harness-*/pyproject.toml")):
+        project = tomllib.loads(path.read_text())["project"]
+        projects[project["name"].replace("-", "_")] = project["version"]
+
+    assert set(projects) == w.PACKAGES
+    assert set(projects.values()) == {w.WORKSPACE_DIST_VERSION}
+
+
 # --- the recording seam: A's provenance exists before its held body ----------------------
 
 

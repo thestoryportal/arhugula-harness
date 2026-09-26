@@ -1335,59 +1335,100 @@ class Broken:
 PhaseState = Completed | TimedOut | Unstarted | Broken
 
 
-def _under(path: str, root: str) -> bool:
-    """Whether `path` lies under `root`, as written or with symlinks resolved."""
-    candidates = {root, os.path.realpath(root)}
-    return any(Path(path).is_relative_to(candidate) for candidate in candidates)
+WORKSPACE_DIST_VERSION = "0.0.0"
+"""The version of every workspace wheel, hence of every installed `<package>-<version>.dist-info`.
+
+Grounded in the seven `harness-*/pyproject.toml` versions and the RECORD layout `installed_origins`
+reads (`dist.files` of the installed distribution); a pure test pins it to those files."""
+
+
+def _canonical(value: object) -> Path | None:
+    """`value` as a path only if it is an absolute, already canonical spelling.
+
+    `installed_origins` emits `Path(...).resolve(strict=True)`: no `..`, no symlink component, no
+    repeated separator. A recorded path that differs from its own resolution therefore is not
+    something the prover emitted (a traversal, or a symlink that may lead outside), and lexical
+    containment of such a spelling would prove nothing about where the file effectively is.
+    """
+    if not isinstance(value, str) or not os.path.isabs(value):
+        return None
+    return Path(value) if os.path.realpath(value) == value else None
+
+
+def _package_origin(
+    package: str, entry: dict[str, Any], root: Path | None
+) -> tuple[Path | None, set[str]]:
+    """Parse ONE package's emitted origin into its site-packages root, or the reasons it is not.
+
+    [LAW:parse-dont-validate] The single owner of path normalisation and layout. Layout rule, from
+    `installed_origins`: RECORD is `<site-packages>/<package>-<version>.dist-info/RECORD` and every
+    verified file is a `.py` under `<site-packages>/<package>/`, all inside the interpreter's
+    (resolved) prefix and all in canonical spelling.
+    """
+    reasons: set[str] = set()
+    site: Path | None = None
+    record = _canonical(entry.get("record_path"))
+    if record is not None:
+        candidate = record.parent.parent
+        expected = candidate / f"{package}-{WORKSPACE_DIST_VERSION}.dist-info" / "RECORD"
+        if (
+            candidate.name == "site-packages"
+            and record == expected
+            and (root is None or candidate.is_relative_to(root))
+        ):
+            site = candidate
+    if site is None:
+        reasons.add("origin-record-path-invalid")
+    if not _is_sha256(entry.get("record_sha256")):
+        reasons.add("origin-record-digest-invalid")
+    files = entry.get("verified_files")
+    checked = _exact_int(entry.get("python_files_checked"))
+    files_ok = (
+        site is not None
+        and isinstance(files, list)
+        and bool(files)
+        and all(isinstance(f, str) for f in files)  # pyright: ignore[reportUnknownVariableType]
+        and files == sorted(set(files))  # pyright: ignore[reportUnknownArgumentType]
+        and all(
+            (path := _canonical(f)) is not None
+            and path.suffix == ".py"
+            and path.is_relative_to(site / package)
+            for f in files  # pyright: ignore[reportUnknownVariableType]
+        )
+    )
+    if not files_ok:
+        reasons.add("origin-files-invalid")
+    elif checked is None or checked < 1 or checked != len(files):  # pyright: ignore[reportUnknownArgumentType]
+        reasons.add("origin-count-invalid")
+    return site, reasons
 
 
 def origin_reasons(origins: object, prefix: object) -> tuple[str, ...]:
-    """Parse each emitted package origin as a proving value, not just a package name.
+    """Parse every emitted package origin as a proving value, not just a package name.
 
-    Mirrors what `installed_origins` emits and checked before returning: the installed
-    RECORD path and digest, the count of Python files it checked, and the sorted verified
-    file inventory, all inside the interpreter's own venv `site-packages`.
+    All seven packages must parse and share ONE site-packages root under the interpreter's
+    prefix. The prefix is resolved before comparison, so a genuine symlinked prefix alias is
+    accepted while a recorded path that is itself a non-canonical spelling is not.
     """
     if not isinstance(origins, dict) or set(_dict(origins)) != PACKAGES:
         return ("origins-incomplete",)
+    root = (
+        Path(os.path.realpath(prefix))
+        if isinstance(prefix, str) and os.path.isabs(prefix)
+        else None
+    )
     reasons: set[str] = set()
-    root = prefix if isinstance(prefix, str) and Path(prefix).is_absolute() else None
+    sites: set[Path] = set()
     for package, item in sorted(_dict(origins).items()):
         if not isinstance(item, dict):
             reasons.add("origin-malformed")
             continue
-        entry = _dict(item)
-        record_path = entry.get("record_path")
-        if not (
-            isinstance(record_path, str)
-            and Path(record_path).is_absolute()
-            and Path(record_path).name == "RECORD"
-            and Path(record_path).parent.name.endswith(".dist-info")
-            and "site-packages" in Path(record_path).parts
-            and (root is None or _under(record_path, root))
-        ):
-            reasons.add("origin-record-path-invalid")
-        if not _is_sha256(entry.get("record_sha256")):
-            reasons.add("origin-record-digest-invalid")
-        files = entry.get("verified_files")
-        checked = _exact_int(entry.get("python_files_checked"))
-        if not (
-            isinstance(files, list)
-            and files
-            and all(
-                isinstance(f, str)
-                and Path(f).is_absolute()
-                and Path(f).suffix == ".py"
-                and "site-packages" in Path(f).parts
-                and package in Path(f).parts
-                and (root is None or _under(f, root))
-                for f in files  # pyright: ignore[reportUnknownVariableType]
-            )
-            and files == sorted(set(files))  # pyright: ignore[reportUnknownArgumentType]
-        ):
-            reasons.add("origin-files-invalid")
-        elif checked is None or checked < 1 or checked != len(files):  # pyright: ignore[reportUnknownArgumentType]
-            reasons.add("origin-count-invalid")
+        site, problems = _package_origin(package, _dict(item), root)
+        reasons |= problems
+        if site is not None:
+            sites.add(site)
+    if len(sites) > 1:
+        reasons.add("origin-site-root-inconsistent")
     return tuple(sorted(reasons))
 
 
