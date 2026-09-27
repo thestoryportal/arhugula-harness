@@ -26,9 +26,11 @@ origin of every loaded `harness_*` module before and after its phase.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import json
 import os
+import select
 import signal
 import socket
 import stat
@@ -790,15 +792,132 @@ class LoopbackCapture:
             raise RuntimeError("owned loopback listener did not stop")
 
 
+class GroupReleasedError(RuntimeError):
+    """The group was settled and its leader reaped: its number now carries no authority."""
+
+
+@dataclass(frozen=True)
+class Settlement:
+    """A settled group: every member other than the still-unreaped leader was proved gone."""
+
+    pgid: int
+    returncode: int
+    #: Live members other than the leader seen before the settling kill. A report, not an
+    #: absence proof: one scan can miss a member that forks and exits while it runs.
+    survivors: bool
+
+    def record(self) -> dict[str, object]:
+        return {
+            "pgid": self.pgid,
+            "signal": "SIGKILL",
+            "returncode": self.returncode,
+            "group_gone": True,
+        }
+
+
 @dataclass
 class Child:
-    """One started phase process in its own group, with its log paths."""
+    """One started phase process in its own group: the only owner of that group's lifetime.
+
+    [LAW:no-ambient-temporal-coupling] A group's number is reserved only while its leader is
+    unreaped: the zombie keeps the pid allocated, and only this group's own session can join it.
+    So this owner never reaps before settling, sends group signals only after the kernel confirms
+    the leader is still unreaped, proves every other member gone while the number is reserved,
+    and reaps exactly once. After that the number carries no authority and `settle` refuses.
+    """
 
     phase: str
     proc: subprocess.Popen[bytes]
     stdout: Path
     stderr: Path
     started: float
+    #: Observes the leader's exit without reaping it (`select` and `waitid(WNOWAIT)`).
+    pidfd: int
+    settlement: Settlement | None = None
+    released: bool = False
+
+    def wait_exit(self, timeout: float) -> bool:
+        """Whether the leader exits within `timeout` seconds; it is never reaped here."""
+        if self.released:
+            raise GroupReleasedError(f"{self.phase} group {self.proc.pid} was already released")
+        ready, _, _ = select.select([self.pidfd], [], [], max(timeout, 0.0))
+        return bool(ready)
+
+    def exited(self) -> bool:
+        return self.wait_exit(0.0)
+
+    def settle(self) -> Settlement:
+        """Kill what is left of the group, prove it gone, reap the leader: exactly once.
+
+        A failure before absence is proved leaves the group owned and reserved, so a later call
+        may kill again. Once absence is proved no further signal is sent; a later call only
+        finishes the release. After release every call raises `GroupReleasedError`.
+        """
+        if self.released:
+            raise GroupReleasedError(f"{self.phase} group {self.proc.pid} was already released")
+        if self.settlement is None:
+            self.settlement = self._prove_settled()
+        settlement = self.settlement
+        self._reap_leader()
+        self.proc.returncode = settlement.returncode
+        self.released = True
+        os.close(self.pidfd)
+        return settlement
+
+    def _prove_settled(self) -> Settlement:
+        pgid = self.proc.pid
+        self._require_reserved()
+        survivors = bool(self._live_members())
+        os.killpg(pgid, signal.SIGKILL)  # the one settling signal; the number is reserved
+        if not self.wait_exit(5.0):
+            raise RuntimeError(f"{self.phase} leader outlived SIGKILL; its group stays owned")
+        for _ in range(100):
+            if not self._live_members():
+                return Settlement(pgid, self._leader_returncode(), survivors)
+            time.sleep(0.05)
+        raise RuntimeError(f"{self.phase} group members outlived SIGKILL; it stays owned")
+
+    def _require_reserved(self) -> None:
+        try:
+            os.waitid(os.P_PIDFD, self.pidfd, os.WEXITED | os.WNOWAIT | os.WNOHANG)
+        except ChildProcessError as exc:
+            raise RuntimeError(
+                f"{self.phase} leader was reaped elsewhere; its group number lost its reservation"
+            ) from exc
+
+    def _live_members(self) -> list[int]:
+        """Live processes of this group other than its leader, read from /proc.
+
+        Authoritative only while the number is reserved: then nothing outside this group's own
+        session can hold it. Zombies are dead, so they are not live members.
+        """
+        pgid, live = self.proc.pid, list[int]()
+        for entry in os.listdir("/proc"):
+            if not entry.isdecimal() or int(entry) == pgid:
+                continue
+            try:
+                stat = Path(f"/proc/{entry}/stat").read_text()
+            except OSError:  # it exited while the directory was being read: not live
+                continue
+            state, _ppid, pgrp = stat[stat.rindex(")") + 2 :].split()[:3]
+            if int(pgrp) == pgid and state not in "ZX":
+                live.append(int(entry))
+        return live
+
+    def _leader_returncode(self) -> int:
+        status = os.waitid(os.P_PIDFD, self.pidfd, os.WEXITED | os.WNOWAIT)
+        if status is None:
+            raise RuntimeError(f"{self.phase} leader reported no exit status")
+        killed = status.si_code in (os.CLD_KILLED, os.CLD_DUMPED)
+        return -status.si_status if killed else status.si_status
+
+    def _reap_leader(self) -> None:
+        try:
+            os.waitid(os.P_PIDFD, self.pidfd, os.WEXITED)
+        except ChildProcessError:
+            # Only after absence was proved: an earlier call of this release was interrupted
+            # after its reap. The group is settled either way, so nothing is signalled.
+            pass
 
 
 Launcher = Callable[[str], Child]
@@ -833,45 +952,40 @@ def spawn(argv: list[str], env: dict[str, str], cwd: Path, logs: Path, phase: st
             stderr=err,
             start_new_session=True,
         )
-    return Child(phase, proc, stdout, stderr, time.monotonic())
+    try:
+        pidfd = os.pidfd_open(proc.pid)
+    except BaseException:
+        os.killpg(proc.pid, signal.SIGKILL)  # still unreaped, so the number is still reserved
+        proc.wait()
+        raise
+    return Child(phase, proc, stdout, stderr, time.monotonic(), pidfd)
 
 
 def kill_group(child: Child) -> dict[str, object]:
-    """SIGKILL only this child's own process group, reap it, and prove the group is gone."""
-    pgid = child.proc.pid
-    try:
-        os.killpg(pgid, signal.SIGKILL)
-    except ProcessLookupError:
-        pass
-    try:
-        code = child.proc.wait(timeout=5)
-    except subprocess.TimeoutExpired as exc:
-        raise RuntimeError(f"{child.phase} group did not reap after KILL") from exc
-    gone = False
-    for _ in range(100):
-        try:
-            os.killpg(pgid, 0)
-        except ProcessLookupError:
-            gone = True
-            break
-        time.sleep(0.05)
-    return {"pgid": pgid, "signal": "SIGKILL", "returncode": code, "group_gone": gone}
+    """Settle and release this child's own group (see `Child.settle`); the proof as a record."""
+    return child.settle().record()
 
 
-def finish(child: Child, deadline: float) -> dict[str, object]:
-    """Wait within the child and overall caps; a timeout kills the group and is recorded."""
+def finish(
+    child: Child,
+    deadline: float,
+    hold: Callable[[], contextlib.AbstractContextManager[None]] = contextlib.nullcontext,
+) -> dict[str, object]:
+    """Wait within the child and overall caps, then settle and release the group.
+
+    A timeout's settlement is recorded as its `kill`. `hold` brackets the settlement, so a caller
+    can keep an interruption out of it (the pre-action witness holds SIGTERM there).
+    """
     cap = min(CHILD_CAP_SECONDS - (time.monotonic() - child.started), deadline - time.monotonic())
-    timed_out = False
-    try:
-        child.proc.wait(timeout=max(cap, 0.0))
-    except subprocess.TimeoutExpired:
-        timed_out = True
-    kill = kill_group(child) if timed_out else None
+    timed_out = not child.wait_exit(cap)
+    with hold():
+        settlement = child.settle()
     return {
         **stream_record(child),
-        "exit": child.proc.returncode,
+        "exit": settlement.returncode,
         "timeout": timed_out,
-        "kill": kill,
+        "kill": settlement.record() if timed_out else None,
+        "group_survivors": settlement.survivors,
     }
 
 
@@ -896,7 +1010,7 @@ def wait_for_marker(child: Child, marker: Path, deadline: float) -> bool:
     while time.monotonic() < limit:
         if marker.exists():
             return True
-        if child.proc.poll() is not None:
+        if child.exited():
             return False
         time.sleep(0.05)
     return marker.exists()
@@ -911,7 +1025,7 @@ def free_loopback_port() -> int:
 def wait_listening(child: Child, port: int, deadline: float) -> bool:
     """Wait for the tool server's loopback port while it lives, within its caps."""
     limit = min(child.started + CHILD_CAP_SECONDS, deadline)
-    while time.monotonic() < limit and child.proc.poll() is None:
+    while time.monotonic() < limit and not child.exited():
         try:
             with socket.create_connection(("127.0.0.1", port), timeout=0.5):
                 return True
@@ -945,7 +1059,9 @@ def with_services(
         ready = wait_listening(server, tool_port, deadline)
         evidence = body(capture) if ready else {"runs": {}, "results": {}}
     finally:
-        tool_server = {**stream_record(server), "ready": ready, "kill": kill_group(server)}
+        # Settled before its record is read, so a failure reading the record cannot skip it.
+        kill = kill_group(server)
+        tool_server = {**stream_record(server), "ready": ready, "kill": kill}
         capture.close()
     evidence["tool_server"] = tool_server
     evidence["webhook_requests"] = capture.requests
@@ -992,7 +1108,7 @@ def scenario(
         observed = entered and complete("observe-held")
         # A genuine timeout is A still running without its marker; A exiting early without
         # one is a failure, not a timeout.
-        still_running = a.proc.poll() is None
+        still_running = not a.exited()
         runs["resume-a"] = {
             **stream_record(a),
             "exit": None,

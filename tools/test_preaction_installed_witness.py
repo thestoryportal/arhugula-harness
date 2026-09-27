@@ -26,6 +26,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import installed_witness_provenance as prover
 import preaction_installed_witness as pw
+from test_b104_installed_public_witness import Alias, leader_reaped, process_live
+from test_b104_installed_public_witness import alias as alias  # the shared alias fixture
 from test_installed_witness_provenance import Fixture
 
 TOOLS = Path(__file__).resolve().parent
@@ -793,39 +795,24 @@ def _starter(tmp_path: Path, argv: list[str]) -> Callable[[str], Any]:
     )
 
 
-def test_settle_kills_only_an_owned_unsettled_group_then_never_signals_it_again(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_the_fleet_settles_each_owned_child_once_and_never_signals_a_released_number(
+    tmp_path: Path, alias: Alias
 ) -> None:
+    """Settlement belongs to B104's owner; the fleet only reaches every child not yet released."""
     fleet = pw.Fleet()
     running = fleet.launch(_starter(tmp_path, ["sleep", "30"]), "running")
     exited = fleet.launch(_starter(tmp_path, ["true"]), "exited")
-    bystander = subprocess.Popen(["sleep", "30"], start_new_session=True)
-    try:
-        exited.proc.wait(timeout=5)
-        assert fleet.settle(exited.proc.pid) is False  # nothing outlived it
-        assert fleet.settle(running.proc.pid) is True  # a live member: reported and killed
-        assert not _alive(running.proc.pid)
+    alias.owned |= {running.proc.pid, exited.proc.pid}
+    os.waitid(os.P_PID, exited.proc.pid, os.WEXITED | os.WNOWAIT)  # exited, not reaped
 
-        signalled: list[int] = []
-        real_killpg = os.killpg
+    kills = fleet.settle_all()
 
-        def record(pgid: int, sig: int) -> None:
-            signalled.append(pgid)
-            real_killpg(pgid, sig)
-
-        monkeypatch.setattr(os, "killpg", record)
-        for pgid in (running.proc.pid, exited.proc.pid, bystander.pid):
-            with pytest.raises(ValueError, match="not an owned unsettled group"):
-                fleet.settle(pgid)
-        assert fleet.settle_all() == []
-        assert signalled == [], "a settled or unrelated group was signalled"
-        assert bystander.poll() is None
-    finally:
-        monkeypatch.undo()
-        for child in (running.proc, bystander):
-            if child.poll() is None:
-                os.killpg(child.pid, signal.SIGKILL)
-                child.wait(timeout=5)
+    assert {k["pgid"] for k in kills} == {running.proc.pid, exited.proc.pid}
+    assert all(k["group_gone"] is True for k in kills)
+    assert alias.to(running.proc.pid) == alias.to(exited.proc.pid) == [signal.SIGKILL]
+    assert leader_reaped(running.proc.pid) and leader_reaped(exited.proc.pid)
+    assert fleet.settle_all() == []  # released children carry no authority
+    assert alias.to(running.proc.pid) == alias.to(exited.proc.pid) == [signal.SIGKILL]
 
 
 def _term_blocked(native_id: int) -> bool:
@@ -849,34 +836,22 @@ def test_the_webhook_thread_blocks_term_even_when_started_by_an_unmasked_caller(
 
 
 def test_a_failed_group_kill_stays_owned_and_never_strands_the_other_groups(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, alias: Alias
 ) -> None:
     fleet = pw.Fleet()
     children = [fleet.launch(_starter(tmp_path, ["sleep", "30"]), f"c{i}") for i in range(2)]
-    real_killpg = os.killpg
-    refused: list[int] = []
+    alias.owned |= {c.proc.pid for c in children}
+    alias.refuse_next_kill = True
 
-    def refuse_the_first_kill(pgid: int, sig: int) -> None:
-        if sig and not refused:
-            refused.append(pgid)
-            raise PermissionError("injected kill failure")
-        real_killpg(pgid, sig)
+    with pytest.raises(PermissionError):
+        fleet.settle_all()
 
-    try:
-        monkeypatch.setattr(os, "killpg", refuse_the_first_kill)
-        with pytest.raises(PermissionError):
-            fleet.settle_all()
-        [other] = [c.proc.pid for c in children if c.proc.pid not in refused]
-        assert not _alive(other), "a later group was stranded by an earlier failure"
-        assert _alive(refused[0])
-        assert [kill["pgid"] for kill in fleet.settle_all()] == refused  # still owned
-        assert not _alive(refused[0])
-    finally:
-        monkeypatch.undo()
-        for child in children:
-            if child.proc.poll() is None:
-                os.killpg(child.proc.pid, signal.SIGKILL)
-                child.proc.wait(timeout=5)
+    [refused] = [c.proc.pid for c in children if not leader_reaped(c.proc.pid)]
+    [other] = [c.proc.pid for c in children if c.proc.pid != refused]
+    assert not process_live(other), "a later group was stranded by an earlier failure"
+    assert process_live(refused)  # still owned: unreaped, so its number is still reserved
+    assert [kill["pgid"] for kill in fleet.settle_all()] == [refused]
+    assert leader_reaped(refused) and not process_live(refused)
 
 
 # --- G1: the source rehearsal (opt-in; never installed acceptance) -------------------------------
@@ -1140,9 +1115,11 @@ def test_sigterm_mid_scenario_leaves_no_owned_process_group_alive(
 #
 # Each case runs the real `rehearse` in its own driver process with stub services. The fault or the
 # process-directed TERM is injected at an OS-facing seam (`HELPERS.spawn`, `HELPERS.finish`,
-# `os.killpg`, a removed log file), fired by the parent's own observable action, never by a sleep.
-# The driver records every group the helper started and what it saw at the injection point, then
-# exits without waiting for threads, so a leaked listener is reported instead of hanging the test.
+# `os.killpg`, `os.waitid`/`os.waitpid`, a removed log file), fired by an observable parent or
+# kernel event, never by a sleep. Every group signal also passes a deterministic numeric alias: a
+# signal to an owned number whose leader the kernel reports reaped is recorded and redirected to
+# the test's bystander group, as if that number had been reused. The driver exits without waiting
+# for threads, so a leaked listener is reported instead of hanging the test.
 
 _LIFECYCLE_DRIVER = r"""
 import json, os, signal, socket, sys, threading, time, traceback
@@ -1151,13 +1128,13 @@ from pathlib import Path
 sys.path.insert(0, sys.argv[1])
 import preaction_installed_witness as pw
 
-case, root = sys.argv[2], Path(sys.argv[3])
+case, root, bystander_pgid = sys.argv[2], Path(sys.argv[3]), int(sys.argv[4])
 work = root / "work"
 work.mkdir(parents=True)
-facts = {"owned_pgids": [], "webhook_ports": [], "boundary": {}}
+facts = {"owned_pgids": [], "webhook_ports": [], "boundary": {}, "unreserved": [], "kills": {}}
 original_handler = signal.getsignal(signal.SIGTERM)
 
-pw.MCP_SERVER_SOURCE = '''
+pw.MCP_SERVER_SOURCE = "" if case == "tool-server-exits-early" else '''
 import socket, sys
 listener = socket.socket()
 listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -1166,20 +1143,40 @@ listener.listen()
 while True:
     listener.accept()[0].close()
 '''
+if case == "timeout-finish":
+    pw.OVERALL_CAP_SECONDS = 2
 RUNNING_LEADER = "import time; time.sleep(600)"
 EXITING_LEADER = '''
 import subprocess, sys
 descendant = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(600)"])
 open(sys.argv[1], "w").write(str(descendant.pid))
 '''
-leader = EXITING_LEADER if case in {
-    "term-after-leader-exit",
-    "term-during-settle",
-    "kill-fails-during-settle",
-    "term-at-settle-gone-proof",
-} else RUNNING_LEADER
+LEADERS = {
+    "term-after-leader-exit": EXITING_LEADER,
+    "term-during-settle": EXITING_LEADER,
+    "kill-fails-during-settle": EXITING_LEADER,
+    "term-at-settle-gone-proof": EXITING_LEADER,
+    "normal-exit": "pass",
+    "finish-stream-fails": "import os, sys; os.unlink(sys.argv[2])",
+}
+leader = LEADERS.get(case, RUNNING_LEADER)
 descendant_marker = root / "descendant.pid"
-pw.child_argv_source = lambda *_: [sys.executable, "-c", leader, str(descendant_marker)]
+pw.child_argv_source = lambda python, helper, name, phase, fixed: [
+    sys.executable,
+    "-c",
+    leader,
+    str(descendant_marker),
+    str(work / name / f"{name}-{phase}.stdout"),
+]
+
+
+def leader_state(pid):
+    # Kernel truth without reaping: "running", "exited" (unreaped: number reserved) or "reaped".
+    try:
+        status = os.waitid(os.P_PID, pid, os.WEXITED | os.WNOWAIT | os.WNOHANG)
+    except ChildProcessError:
+        return "reaped"
+    return "running" if status is None else "exited"
 
 
 def term_blocked_in_every_thread():
@@ -1192,7 +1189,7 @@ def term_blocked_in_every_thread():
 
 def deliver_term():
     # A process-directed TERM, then wait for its observable fate: held pending (every thread blocks
-    # it) or handled (the handler raises here). Neither within the bound is itself a failure.
+    # it; this returns) or handled (the handler raises here). Neither within the bound is a failure.
     os.kill(os.getpid(), signal.SIGTERM)
     limit = time.monotonic() + 10
     while signal.SIGTERM not in signal.sigpending():
@@ -1210,8 +1207,18 @@ def descendant_alive():
 
 
 real_config, real_spawn, real_finish = pw.config_text, pw.HELPERS.spawn, pw.HELPERS.finish
-real_killpg = os.killpg
-waited = set()
+real_killpg, real_waitid, real_waitpid = os.killpg, os.waitid, os.waitpid
+real_pidfd_open = os.pidfd_open
+phase_pgids, pidfd_owner = set(), {}
+
+
+def alias_killpg(pgid, sig):
+    if pgid in facts["owned_pgids"] and leader_state(pgid) == "reaped":
+        facts["unreserved"].append([pgid, sig])
+        return real_killpg(bystander_pgid, sig)
+    real_killpg(pgid, sig)
+    if sig == signal.SIGKILL:
+        facts["kills"][str(pgid)] = facts["kills"].get(str(pgid), 0) + 1
 
 
 def config_text(layout, webhook_port, mcp_port):
@@ -1222,6 +1229,8 @@ def config_text(layout, webhook_port, mcp_port):
 def spawn(argv, env, cwd, logs, phase):
     child = real_spawn(argv, env, cwd, logs, phase)
     facts["owned_pgids"].append(child.proc.pid)
+    if phase != "tool-server":
+        phase_pgids.add(child.proc.pid)
     wanted = {"term-at-tool-server-spawn": "tool-server", "term-at-phase-spawn": "p-run"}
     if wanted.get(case) == phase:
         facts["boundary"] = {"fired": True, "term_blocked": term_blocked_in_every_thread()}
@@ -1229,51 +1238,71 @@ def spawn(argv, env, cwd, logs, phase):
     return child
 
 
-def finish(child, deadline):
+def finish(child, deadline, *hold):
+    pid = child.proc.pid
     if case == "term-during-cleanup":
-        facts["boundary"] = {"leader_running": child.proc.poll() is None}
+        facts["boundary"] = {"leader_state": leader_state(pid)}
         raise RuntimeError("injected body failure")
     if case == "cleanup-stream-fails":
         (work / "p" / "tool-server.stdout").unlink()
-        facts["boundary"] = {"fired": True, "leader_running": child.proc.poll() is None}
+        facts["boundary"] = {"fired": True, "leader_state": leader_state(pid)}
         deliver_term()
-    record = real_finish(child, deadline)
-    waited.add(child.proc.pid)
     if case == "term-after-leader-exit":
+        real_waitid(os.P_PID, pid, os.WEXITED | os.WNOWAIT)  # exited, not reaped, not settled
         facts["boundary"] = {
             "fired": True,
-            "leader_exited": child.proc.poll() is not None,
+            "leader_state": leader_state(pid),
             "descendant_alive": descendant_alive(),
         }
         deliver_term()
-    return record
+    return real_finish(child, deadline, *hold)
 
 
 def killpg(pgid, sig):
-    if case == "term-at-settle-gone-proof" and pgid in waited:
-        if facts["boundary"]:
-            facts["boundary"]["signals_after_gone"].append(sig)
-            return real_killpg(pgid, sig)
-        try:
-            return real_killpg(pgid, sig)
-        except ProcessLookupError:
-            if sig == 0:  # the settle has just proved the group gone
-                facts["boundary"] = {"fired": True, "signals_after_gone": []}
-                deliver_term()
-            raise
-    if case == "term-during-cleanup" and sig and "fired" not in facts["boundary"]:
-        facts["boundary"].update(fired=True, signal=sig)
-        deliver_term()
-    first = pgid in waited and not facts["boundary"]
-    if first and (case == "term-during-settle" or (case == "kill-fails-during-settle" and sig)):
-        facts["boundary"] = {"fired": True, "signal": sig, "descendant_alive": descendant_alive()}
+    settling = pgid in phase_pgids and sig == signal.SIGKILL and not facts["boundary"]
+    if settling and case in {"term-during-settle", "kill-fails-during-settle"}:
+        facts["boundary"] = {
+            "fired": True,
+            "leader_state": leader_state(pgid),
+            "descendant_alive": descendant_alive(),
+        }
         if case == "kill-fails-during-settle":
             raise PermissionError("injected kill failure during settle")
         deliver_term()
-    return real_killpg(pgid, sig)
+        facts["boundary"]["held"] = True
+    if case == "term-during-cleanup" and sig and "fired" not in facts["boundary"]:
+        facts["boundary"].update(fired=True, signal=sig)
+        deliver_term()
+    return alias_killpg(pgid, sig)
 
 
-pw.config_text, pw.HELPERS.spawn, pw.HELPERS.finish, os.killpg = config_text, spawn, finish, killpg
+def reaping(pid, flags):
+    # The leader's reap: settlement is proved by then, and the number is about to be released.
+    if case == "term-at-settle-gone-proof" and pid in phase_pgids and not flags & os.WNOWAIT:
+        if not facts["boundary"] and leader_state(pid) == "exited":
+            facts["boundary"] = {"fired": True}
+            deliver_term()
+            facts["boundary"]["held"] = True
+
+
+def pidfd_open(pid, *rest):
+    fd = real_pidfd_open(pid, *rest)
+    pidfd_owner[fd] = pid
+    return fd
+
+
+def waitid(idtype, ident, flags):
+    reaping(pidfd_owner.get(ident) if idtype == os.P_PIDFD else ident, flags)
+    return real_waitid(idtype, ident, flags)
+
+
+def waitpid(pid, flags):
+    reaping(pid, flags)
+    return real_waitpid(pid, flags)
+
+
+pw.config_text, pw.HELPERS.spawn, pw.HELPERS.finish = config_text, spawn, finish
+os.killpg, os.waitid, os.waitpid, os.pidfd_open = killpg, waitid, waitpid, pidfd_open
 python = root / "no-such-python" if case == "tool-server-spawn-fails" else Path(sys.executable)
 chain = []
 try:
@@ -1299,6 +1328,7 @@ facts.update(
     other_threads=[t.name for t in threading.enumerate() if t is not threading.main_thread()],
     handler_restored=signal.getsignal(signal.SIGTERM) == original_handler,
     term_still_blocked=signal.SIGTERM in signal.pthread_sigmask(signal.SIG_BLOCK, []),
+    unreaped=[p for p in facts["owned_pgids"] if leader_state(p) != "reaped"],
 )
 (root / "facts.json").write_text(json.dumps(facts))
 os._exit(0)
@@ -1309,24 +1339,31 @@ LIFECYCLE_CASES: dict[str, tuple[list[str], dict[str, object]]] = {
     "term-at-tool-server-spawn": (["InterruptedError"], {"fired": True}),
     "term-at-phase-spawn": (["InterruptedError"], {"fired": True}),
     "tool-server-spawn-fails": (["FileNotFoundError"], {}),
+    "normal-exit": ([], {}),
+    "timeout-finish": ([], {}),
+    "finish-stream-fails": (["FileNotFoundError"], {}),
+    "tool-server-exits-early": ([], {}),
     "term-after-leader-exit": (
         ["InterruptedError"],
-        {"fired": True, "leader_exited": True, "descendant_alive": True},
+        {"fired": True, "leader_state": "exited", "descendant_alive": True},
     ),
-    "term-during-settle": (["InterruptedError"], {"fired": True, "descendant_alive": True}),
+    "term-during-settle": (
+        ["InterruptedError"],
+        {"fired": True, "leader_state": "exited", "descendant_alive": True, "held": True},
+    ),
     "kill-fails-during-settle": (
         ["PermissionError"],
-        {"fired": True, "signal": signal.SIGKILL, "descendant_alive": True},
+        {"fired": True, "leader_state": "exited", "descendant_alive": True},
     ),
+    "term-at-settle-gone-proof": (["InterruptedError"], {"fired": True, "held": True}),
     "cleanup-stream-fails": (
         ["FileNotFoundError", "InterruptedError"],
-        {"fired": True, "leader_running": True},
+        {"fired": True, "leader_state": "running"},
     ),
     "term-during-cleanup": (
         ["InterruptedError", "RuntimeError"],
-        {"fired": True, "signal": signal.SIGKILL, "leader_running": True},
+        {"fired": True, "signal": signal.SIGKILL, "leader_state": "running"},
     ),
-    "term-at-settle-gone-proof": (["InterruptedError"], {"fired": True, "signals_after_gone": []}),
 }
 
 
@@ -1338,7 +1375,7 @@ def test_every_owned_resource_is_released_whatever_interrupts_its_lifecycle(
     root = tmp_path / "attempt"
     bystander = subprocess.Popen(["sleep", "600"], start_new_session=True)
     driver = subprocess.Popen(
-        [sys.executable, "-c", _LIFECYCLE_DRIVER, str(TOOLS), case, str(root)],
+        [sys.executable, "-c", _LIFECYCLE_DRIVER, str(TOOLS), case, str(root), str(bystander.pid)],
         start_new_session=True,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.PIPE,
@@ -1351,6 +1388,9 @@ def test_every_owned_resource_is_released_whatever_interrupts_its_lifecycle(
         assert {k: facts["boundary"].get(k) for k in boundary} == boundary, facts["boundary"]
         assert all(facts["boundary"].get("term_blocked", [True])), "a thread could take the TERM"
         assert facts["webhook_ports"], "the webhook was never acquired"
+        assert facts["unreserved"] == [], f"signals reached a reaped number: {facts['unreserved']}"
+        assert all(n == 1 for n in facts["kills"].values()), f"settled twice: {facts['kills']}"
+        assert facts["unreaped"] == [], f"owned leaders never released: {facts['unreaped']}"
         survivors = [p for p in facts["owned_pgids"] if _alive(p)]
         assert survivors == [], f"owned groups outlived the helper: {survivors}"
         assert facts["open_webhook_ports"] == [], "the owned webhook listener still accepts"

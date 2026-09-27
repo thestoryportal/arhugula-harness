@@ -6,6 +6,7 @@ scenario itself is only ever exercised by the separately approved installed `run
 
 from __future__ import annotations
 
+import contextlib
 import copy
 import json
 import os
@@ -13,8 +14,9 @@ import signal
 import subprocess
 import sys
 import tempfile
+import time
 import tomllib
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Generator, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -1100,6 +1102,224 @@ def test_kill_group_kills_only_its_own_group_and_proves_it_gone(tmp_path: Path) 
         "returncode": -signal.SIGKILL,
         "group_gone": True,
     }
+
+
+# --- the lifetime owner: a group number is signalled only while the kernel reserves it -----
+#
+# A pgid stays reserved while its leader is unreaped (the zombie keeps the pid allocated). The
+# `alias` fixture models the worst case of reuse deterministically: any group signal to an owned
+# number whose leader the KERNEL reports reaped is recorded and redirected to a live bystander
+# group, as if that number now belonged to it. A correct owner never produces such a signal.
+
+
+def leader_reaped(pid: int) -> bool:
+    """Kernel truth, without reaping: has this child's leader already been reaped?"""
+    try:
+        os.waitid(os.P_PID, pid, os.WEXITED | os.WNOWAIT | os.WNOHANG)
+    except ChildProcessError:
+        return True
+    return False
+
+
+def process_live(pid: int) -> bool:
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text()
+    except OSError:
+        return False
+    return stat[stat.rindex(")") + 2] not in "ZX"
+
+
+class Alias:
+    """Records every group signal; redirects one aimed at a reaped owned number to a bystander."""
+
+    def __init__(self, bystander: subprocess.Popen[bytes]) -> None:
+        self.bystander = bystander
+        self.owned: set[int] = set()
+        self.signals: list[tuple[int, int]] = []
+        self.unreserved: list[tuple[int, int]] = []
+        self.refuse_next_kill = False
+        self.real = os.killpg
+
+    def killpg(self, pgid: int, sig: int) -> None:
+        self.signals.append((pgid, sig))
+        if sig and self.refuse_next_kill:
+            self.refuse_next_kill = False
+            raise PermissionError("injected kill failure")
+        if pgid in self.owned and leader_reaped(pgid):
+            self.unreserved.append((pgid, sig))
+            self.real(self.bystander.pid, sig)
+            return
+        self.real(pgid, sig)
+
+    def spawn(self, argv: list[str], tmp_path: Path, phase: str) -> Any:
+        child = w.spawn(argv, {"PATH": "/usr/bin:/bin"}, tmp_path, tmp_path, phase)
+        self.owned.add(child.proc.pid)
+        return child
+
+    def to(self, pgid: int) -> list[int]:
+        return [sig for target, sig in self.signals if target == pgid]
+
+
+@pytest.fixture
+def alias(monkeypatch: pytest.MonkeyPatch) -> Iterator[Alias]:
+    bystander = subprocess.Popen(["sleep", "120"], start_new_session=True)
+    recorder = Alias(bystander)
+    monkeypatch.setattr(os, "killpg", recorder.killpg)
+    try:
+        yield recorder
+        assert recorder.unreserved == [], f"signals reached a reaped number: {recorder.unreserved}"
+        assert bystander.poll() is None, "the alias bystander was killed"
+    finally:
+        monkeypatch.undo()
+        bystander.kill()
+        bystander.wait()
+
+
+DESCENDANT = (
+    "import subprocess, sys\n"
+    "d = subprocess.Popen(['sleep', '120'])\n"
+    "open(sys.argv[1], 'w').write(str(d.pid))\n"
+)
+
+
+@pytest.fixture
+def descendant_marker(tmp_path: Path) -> Iterator[Path]:
+    """Where a stub leader records its descendant; a descendant left alive is killed afterwards."""
+    marker = tmp_path / "descendant.pid"
+    try:
+        yield marker
+    finally:
+        if marker.exists() and process_live(int(marker.read_text())):
+            os.kill(int(marker.read_text()), signal.SIGKILL)
+
+
+def test_a_normal_exit_is_settled_by_one_reserved_kill_and_released_exactly_once(
+    tmp_path: Path, alias: Alias
+) -> None:
+    child = alias.spawn(["true"], tmp_path, "solo")
+    pgid = child.proc.pid
+
+    record = w.finish(child, time.monotonic() + 10)
+
+    assert (record["exit"], record["timeout"], record["kill"]) == (0, False, None)
+    assert alias.to(pgid) == [signal.SIGKILL]  # one settling signal, sent while reserved
+    assert leader_reaped(pgid)  # released: the owner reaped the leader after settling
+    with pytest.raises(RuntimeError, match="released"):
+        w.kill_group(child)  # the number carries no authority after release
+    assert alias.to(pgid) == [signal.SIGKILL]
+
+
+def test_an_exited_leaders_live_descendant_is_killed_before_the_number_is_released(
+    tmp_path: Path, alias: Alias, descendant_marker: Path
+) -> None:
+    marker = descendant_marker
+    child = alias.spawn([sys.executable, "-c", DESCENDANT, str(marker)], tmp_path, "parent")
+
+    record = w.finish(child, time.monotonic() + 10)
+
+    descendant = int(marker.read_text())
+    assert record["exit"] == 0 and record["group_survivors"] is True
+    assert not process_live(descendant), "an owned descendant outlived the release"
+    assert leader_reaped(child.proc.pid)
+
+
+def test_a_timed_out_finish_settles_once_and_never_touches_the_reaped_number(
+    tmp_path: Path, alias: Alias
+) -> None:
+    child = alias.spawn(["sleep", "60"], tmp_path, "hung")
+    pgid = child.proc.pid
+
+    record = w.finish(child, time.monotonic() + 0.3)
+
+    assert record["timeout"] is True and record["exit"] == -signal.SIGKILL
+    assert record["kill"] == {
+        "pgid": pgid,
+        "signal": "SIGKILL",
+        "returncode": -signal.SIGKILL,
+        "group_gone": True,
+    }
+    assert alias.to(pgid) == [signal.SIGKILL]
+    assert leader_reaped(pgid)
+
+
+def test_a_stream_record_failure_inside_finish_comes_after_the_group_is_released(
+    tmp_path: Path, alias: Alias
+) -> None:
+    unlink_own_stdout = "import os, sys; os.unlink(sys.argv[1])"
+    child = alias.spawn(
+        [sys.executable, "-c", unlink_own_stdout, str(tmp_path / "gone.stdout")], tmp_path, "gone"
+    )
+
+    with pytest.raises(FileNotFoundError):
+        w.finish(child, time.monotonic() + 10)
+
+    assert leader_reaped(child.proc.pid)
+    with pytest.raises(RuntimeError, match="released"):
+        w.kill_group(child)
+    assert alias.to(child.proc.pid) == [signal.SIGKILL]
+
+
+def test_waiting_for_a_listener_never_reaps_an_early_exit(tmp_path: Path, alias: Alias) -> None:
+    child = alias.spawn(["true"], tmp_path, "early")
+
+    assert w.wait_listening(child, w.free_loopback_port(), time.monotonic() + 10) is False
+
+    assert not leader_reaped(child.proc.pid), "the reservation was dropped before settlement"
+    assert w.kill_group(child)["group_gone"] is True
+    assert leader_reaped(child.proc.pid)
+
+
+def test_a_leader_reaped_by_anyone_else_is_never_signalled(tmp_path: Path, alias: Alias) -> None:
+    child = alias.spawn(["true"], tmp_path, "stolen")
+    os.waitid(os.P_PID, child.proc.pid, os.WEXITED)  # a foreign reaper takes the reservation
+
+    with pytest.raises(RuntimeError, match="reservation"):
+        w.kill_group(child)
+
+    assert alias.to(child.proc.pid) == []
+
+
+def test_a_failed_kill_keeps_the_reservation_and_a_retry_settles_the_group(
+    tmp_path: Path, alias: Alias
+) -> None:
+    child = alias.spawn(["sleep", "60"], tmp_path, "stubborn")
+    alias.refuse_next_kill = True
+
+    with pytest.raises(PermissionError):
+        w.kill_group(child)
+    assert not leader_reaped(child.proc.pid) and process_live(child.proc.pid)
+
+    assert w.kill_group(child)["group_gone"] is True
+    assert leader_reaped(child.proc.pid)
+
+
+def test_the_settling_signal_and_the_release_happen_inside_the_callers_hold(
+    tmp_path: Path, alias: Alias, monkeypatch: pytest.MonkeyPatch, descendant_marker: Path
+) -> None:
+    marker = descendant_marker
+    child = alias.spawn([sys.executable, "-c", DESCENDANT, str(marker)], tmp_path, "held")
+    inside: list[bool] = []
+    seen: dict[str, bool] = {}
+
+    @contextlib.contextmanager
+    def hold() -> Generator[None]:
+        seen["reaped_on_entry"] = leader_reaped(child.proc.pid)
+        inside.append(True)
+        try:
+            yield
+        finally:
+            inside.pop()
+            seen["reaped_on_exit"] = leader_reaped(child.proc.pid)
+
+    def killpg(pgid: int, sig: int) -> None:
+        assert inside, "a settling signal was sent outside the caller's hold"
+        alias.killpg(pgid, sig)
+
+    monkeypatch.setattr(os, "killpg", killpg)
+    w.finish(child, time.monotonic() + 10, hold)
+
+    assert seen == {"reaped_on_entry": False, "reaped_on_exit": True}
+    assert alias.to(child.proc.pid) == [signal.SIGKILL]
 
 
 def test_records_are_written_once(tmp_path: Path) -> None:

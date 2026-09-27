@@ -921,63 +921,35 @@ class Owners(contextlib.ExitStack[None]):
             super().__exit__(typ, exc, tb)
 
 
-def _group_alive(pgid: int) -> bool:
-    try:
-        os.killpg(pgid, 0)
-    except ProcessLookupError:
-        return False
-    return True
-
-
 @dataclass
 class Fleet:
-    """Every phase child this attempt started, owned by process group until that group is gone.
+    """Every phase child this attempt started, so cleanup reaches each one not yet released.
 
-    [LAW:no-ambient-temporal-coupling] Ownership is state, not leader liveness: a group is
-    unsettled from the deferred-TERM region that creates its leader until it is proved empty, even
-    after the leader exits. Only unsettled groups (each from `start_new_session`) are signalled; a
-    released group is never signalled again, because its id may since belong to someone else.
+    [LAW:single-enforcer] Each child's group lifetime belongs to B104's `Child` alone: it signals
+    only while the kernel still reserves the group's number and releases that number exactly once.
+    The fleet holds no numbers and validates no groups; it only hands every unreleased child,
+    including the one in flight, to its owner's `settle` at cleanup.
     """
 
-    unsettled: dict[int, Any] = field(default_factory=dict[int, Any])
+    children: list[Any] = field(default_factory=list[Any])
 
     def launch(self, launch: Launcher, phase: str) -> Any:
         with term_deferred():
             child = launch(phase)
-            self.unsettled[child.proc.pid] = child
+            self.children.append(child)
         return child
 
-    def settle(self, pgid: int) -> bool:
-        """Kill whatever of an owned group outlived its leader, then release it; True if any did.
-
-        TERM is held for the whole step, so the group is released together with its proof of
-        absence; an exception leaves it owned for cleanup.
-        """
-        if pgid not in self.unsettled:
-            raise ValueError(f"{pgid} is not an owned unsettled group")
-        with term_deferred():
-            survivors = _group_alive(pgid)
-            self._release(pgid)
-        return survivors
-
     def settle_all(self) -> list[dict[str, object]]:
-        """Kill and release every owned unsettled group, each independently of the others."""
+        """Settle every unreleased child, each independently of the others' failures."""
         kills: list[dict[str, object]] = []
 
-        def release(pgid: int) -> None:
-            kills.append(self._release(pgid))
+        def release(child: Any) -> None:
+            kills.append(HELPERS.kill_group(child))
 
         with contextlib.ExitStack() as each:
-            for pgid in tuple(self.unsettled):
-                each.callback(release, pgid)
+            for child in [c for c in self.children if not c.released]:
+                each.callback(release, child)
         return kills
-
-    def _release(self, pgid: int) -> dict[str, object]:
-        kill: dict[str, object] = HELPERS.kill_group(self.unsettled[pgid])
-        if kill["group_gone"] is not True:  # [LAW:no-silent-failure] it stays owned and loud
-            raise RuntimeError(f"process group {pgid} outlived SIGKILL")
-        del self.unsettled[pgid]
-        return kill
 
 
 def with_services(
@@ -1036,8 +1008,9 @@ class PhaseRun:
 def parse_phase_run(record: dict[str, object]) -> PhaseRun:
     """A waited child's record as typed facts; a malformed record raises, it does not continue.
 
-    [LAW:parse-dont-validate] `Fleet.settle` signals a process group, so its id must be a real
-    int (a bool or a string is refused) before it reaches `killpg`.
+    [LAW:parse-dont-validate] The record's `pgid` is evidence, never signalling authority (only
+    the owned `Child` signals its group), but it must still be a real int: a bool or a string is
+    refused.
     """
     pgid, code = PROVER.exact_int(record.get("pgid")), PROVER.exact_int(record.get("exit"))
     timed_out = record.get("timeout")
@@ -1063,9 +1036,10 @@ def run_scenario(
     results: dict[str, object] = {}
     services: dict[str, object] = {}
     for phase in SCENARIOS[name]:
-        finished = HELPERS.finish(fleet.launch(launch, phase), deadline)
+        # The owner settles and releases the phase's group inside `finish`, with TERM held.
+        finished = HELPERS.finish(fleet.launch(launch, phase), deadline, term_deferred)
         run = parse_phase_run(finished)
-        runs[phase] = {**finished, "group_survivors": fleet.settle(run.pgid)}
+        runs[phase] = finished
         results[phase] = HELPERS.load_result(layout, phase)
         services[phase] = {
             "webhook_keys": [str(r["idempotency_key"]) for r in capture.requests],
