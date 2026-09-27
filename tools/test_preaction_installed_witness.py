@@ -121,7 +121,7 @@ def lowered_refusal() -> dict[str, Any]:
         "failure_cause": {
             "runtime_fail_class": "RT-FAIL-WORKFLOW",
             "detail": "workflow execution returned status='failed' with the CP fail class",
-            "validator_fail_class": "linear-resume-hitl-gate-config-changed at step 1",
+            "validator_fail_class": f"{pw.ROOT_FAMILY}-child-resume-refused ({pw.REFUSAL_REASON})",
         },
         "has_pause_snapshot": False,
         "levels": levels(),
@@ -377,9 +377,49 @@ BEHAVIOUR: list[tuple[str, Callable[[dict[str, Any]], None], str]] = [
         "n1:resume-lowered:child-refusal-reason-missing",
     ),
     (
+        "n1-raw-leaf-class-at-the-root",
+        set_(
+            f"{LOW}/failure_cause/validator_fail_class",
+            "linear-resume-hitl-gate-config-changed at step 1",
+        ),
+        "n1:resume-lowered:terminal-refusal-grammar",
+    ),
+    (
+        "n1-wrong-family",
+        set_(
+            f"{LOW}/failure_cause/validator_fail_class",
+            "parallelization-child-resume-refused (hitl-gate-config-changed)",
+        ),
+        "n1:resume-lowered:terminal-refusal-wrong-family",
+    ),
+    (
+        "n1-reason-embedded-in-another-token",
+        set_(
+            f"{LOW}/failure_cause/validator_fail_class",
+            "orchestrator-workers-child-resume-refused (xhitl-gate-config-changed-extra)",
+        ),
+        "n1:resume-lowered:child-refusal-reason-missing",
+    ),
+    (
+        "n1-grammar-quoted-inside-other-text",
+        set_(
+            f"{LOW}/failure_cause/validator_fail_class",
+            "note orchestrator-workers-child-resume-refused (hitl-gate-config-changed)",
+        ),
+        "n1:resume-lowered:terminal-refusal-grammar",
+    ),
+    (
+        "n1-text-after-the-terminal-grammar",
+        set_(
+            f"{LOW}/failure_cause/validator_fail_class",
+            "orchestrator-workers-child-resume-refused (hitl-gate-config-changed) at step 1",
+        ),
+        "n1:resume-lowered:terminal-refusal-grammar",
+    ),
+    (
         "n1-refusal-reason-unrelated",
         set_(f"{LOW}/failure_cause/validator_fail_class", "some other failure"),
-        "n1:resume-lowered:child-refusal-reason-missing",
+        "n1:resume-lowered:terminal-refusal-grammar",
     ),
     (
         "n1-reason-only-in-human-detail",
@@ -396,7 +436,7 @@ BEHAVIOUR: list[tuple[str, Callable[[dict[str, Any]], None], str]] = [
     (
         "n1-arbitrary-failed-is-not-a-refusal",
         set_(f"{LOW}/failure_cause/validator_fail_class", "step-body-raised"),
-        "n1:resume-lowered:child-refusal-reason-missing",
+        "n1:resume-lowered:terminal-refusal-grammar",
     ),
     (
         "n1-failure-is-not-a-workflow-failure",
@@ -798,3 +838,187 @@ def test_absence_of_effects_alone_is_never_a_pass_for_n1() -> None:
 
     assert result["status"] == "FAIL"
     assert not any("inheritance-missing" in r or "webhook" in r for r in result["failure_reasons"])
+
+
+REFUSED = f"{pw.ROOT_FAMILY}-child-resume-refused"
+
+
+@pytest.mark.parametrize(
+    ("text", "family", "reasons", "signing"),
+    [
+        (
+            f"{REFUSED} (hitl-gate-config-changed)",
+            "orchestrator-workers",
+            {"hitl-gate-config-changed"},
+            False,
+        ),
+        (
+            f"{REFUSED} (claim-refused; hitl-gate-config-changed)",
+            "orchestrator-workers",
+            {"claim-refused", "hitl-gate-config-changed"},
+            False,
+        ),
+        (
+            f"{REFUSED} (snapshot-mismatch; unreadable-record; audit-signing-failed)",
+            "orchestrator-workers",
+            {"snapshot-mismatch", "unreadable-record"},
+            True,
+        ),
+        (
+            "parallelization-child-resume-refused (claim-busy)",
+            "parallelization",
+            {"claim-busy"},
+            False,
+        ),
+    ],
+)
+def test_the_terminal_refusal_grammar_parses_into_typed_parts(
+    text: str, family: str, reasons: set[str], signing: bool
+) -> None:
+    parsed = pw.parse_terminal_refusal(text)
+
+    assert parsed == pw.TerminalRefusal(family, frozenset(reasons), signing)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        None,
+        "",
+        7,
+        "linear-resume-hitl-gate-config-changed at step 1",
+        f"prefix {REFUSED} (claim-refused)",
+        f"{REFUSED} (claim-refused) trailing",
+        f"{REFUSED} ()",
+        f"{REFUSED} (audit-signing-failed)",
+        f"{REFUSED} (hitl-gate-config-changed; claim-refused)",
+        f"{REFUSED} (claim-refused; claim-refused)",
+        f"{REFUSED} (audit-signing-failed; claim-refused)",
+        f"{REFUSED} (claim-refused;hitl-gate-config-changed)",
+        f"{REFUSED}  (claim-refused)",
+        f"{REFUSED} (Claim-Refused)",
+        f"{REFUSED} (claim-refused (nested))",
+    ],
+)
+def test_anything_outside_the_terminal_refusal_grammar_parses_to_nothing(text: object) -> None:
+    assert pw.parse_terminal_refusal(text) is None
+
+
+def test_the_signing_flag_is_retained_not_dropped() -> None:
+    parsed = pw.parse_terminal_refusal(
+        f"{REFUSED} (hitl-gate-config-changed; audit-signing-failed)"
+    )
+
+    assert parsed is not None and parsed.audit_signing_failed is True
+
+
+# --- an outside SIGTERM must run the helper's own cleanup: services and the in-flight phase ---
+
+_TERM_DRIVER = r"""
+import json, os, sys
+from pathlib import Path
+
+sys.path.insert(0, sys.argv[1])
+import preaction_installed_witness as pw
+
+mode, root = sys.argv[2], Path(sys.argv[3])
+STUB_SERVER = '''
+import os, socket, sys
+port = int(sys.argv[2])
+listener = socket.socket()
+listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+listener.bind(("127.0.0.1", port))
+listener.listen()
+open(sys.argv[1] + ".pgid", "w").write(str(os.getpgid(0)))
+while True:
+    listener.accept()[0].close()
+'''
+PHASE_CHILD = '''
+import os, sys, time
+open(sys.argv[1], "w").write(str(os.getpgid(0)))
+time.sleep(600)
+'''
+pw.MCP_SERVER_SOURCE = STUB_SERVER
+marker = root / "phase.pgid"
+root.mkdir(parents=True)
+
+
+def argv(python, helper, name, phase, fixed):
+    return [sys.executable, "-c", PHASE_CHILD, str(marker)]
+
+
+pw.child_argv_source = argv
+pw.child_argv_installed = argv
+if mode == "rehearse":
+    work = root / "work"
+    work.mkdir()
+    pw.rehearse(Path(sys.executable), [Path("unused")], work / "scenarios", work)
+else:
+    pw.PROVER.checked_candidate = lambda c, v, h: (root, root, Path(sys.executable))
+    pw.PROVER.checked_provenance = lambda r, c, i, h: {"wheels": []}
+    pw.HELPERS.checked_scenario_root = lambda r, m: {}
+    receipt = root / "receipt.json"
+    receipt.write_text("{}")
+    pw.run(root, root, "0" * 40, receipt, root / "scenario", root / "report.json")
+"""
+
+
+def _wait_for(path: Path, seconds: float = 20.0) -> int:
+    """Wait for a child-written pgid marker: an event the child emits, not a guess at timing."""
+    import time
+
+    end = time.monotonic() + seconds
+    while time.monotonic() < end:
+        if path.exists() and path.read_text().strip():
+            return int(path.read_text())
+        time.sleep(0.05)
+    raise AssertionError(f"{path} never appeared")
+
+
+def _alive(pgid: int) -> bool:
+    try:
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+@pytest.mark.parametrize("mode", ["rehearse", "run"])
+def test_sigterm_mid_scenario_leaves_no_owned_process_group_alive(
+    mode: str, tmp_path: Path
+) -> None:
+    root = tmp_path / "attempt"
+    bystander = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(600)"], start_new_session=True
+    )
+    driver = subprocess.Popen(
+        [sys.executable, "-c", _TERM_DRIVER, str(TOOLS), mode, str(root)],
+        start_new_session=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+    )
+    owned: list[int] = []
+    try:
+        phase_pgid = _wait_for(root / "phase.pgid")
+        owned.append(phase_pgid)
+        tool_markers = sorted(root.rglob("*.pgid"))
+        tool_pgids = [int(m.read_text()) for m in tool_markers if m.name != "phase.pgid"]
+        owned += tool_pgids
+        assert tool_pgids, "the stub tool server never announced its group"
+        assert all(_alive(p) for p in owned)
+
+        driver.send_signal(signal.SIGTERM)
+        driver.wait(timeout=30)
+
+        survivors = [p for p in owned if _alive(p)]
+        assert survivors == [], f"owned groups outlived the helper: {survivors}"
+        assert bystander.poll() is None and _alive(bystander.pid), "an unrelated process was killed"
+    finally:
+        for pgid in owned:
+            if _alive(pgid):
+                os.killpg(pgid, signal.SIGKILL)
+        if driver.poll() is None:
+            driver.kill()
+        driver.wait()
+        bystander.kill()
+        bystander.wait()

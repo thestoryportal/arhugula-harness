@@ -32,21 +32,23 @@ imported not copied. Source rehearsal proves seams in-process; it is never insta
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import importlib.util
 import json
 import os
+import re
 import signal
 import sys
 import threading
 import time
 import traceback
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
-from types import ModuleType
+from types import FrameType, ModuleType
 from typing import Any
 
 # --- sibling owners, loaded by explicit path (no sys.path entry; see module docstring) ----------
@@ -88,6 +90,10 @@ KEY_C = f"hitl:workflow:{LEAF_ID}:step:2:pre-action"
 # configuration changed; it is checked in the structured field, never in the human `detail`.
 WORKFLOW_FAILURE_CLASS = "RT-FAIL-WORKFLOW"
 REFUSAL_REASON = "hitl-gate-config-changed"
+# The root's topology family in CP v1.123 §0.3's terminal grammar
+# `<family>-child-resume-refused (<reasons>[; audit-signing-failed])`: ORCHESTRATOR_WORKERS.
+ROOT_FAMILY = "orchestrator-workers"
+AUDIT_SIGNING_FAILED = "audit-signing-failed"
 
 PHASES_P = ("run", "resume-1", "resume-2")
 PHASES_N1 = ("run", "resume-lowered", "resume-lowered-again")
@@ -792,11 +798,69 @@ def prepare_layout(layout: Layout) -> None:
         directory.mkdir(mode=0o700, parents=True)
 
 
+Launcher = Callable[[str], Any]
+
+
+@contextlib.contextmanager
+def term_as_interrupt() -> Iterator[None]:
+    """Turn an outside SIGTERM into an exception so the owners' `finally` cleanup runs.
+
+    Same mechanism as the B-104 witness's `run`; without it the default action ends this process
+    at once and every child, started in its own session, is orphaned. The previous handler is
+    restored on exit.
+    """
+    previous = signal.getsignal(signal.SIGTERM)
+
+    def stop(_signum: int, _frame: FrameType | None) -> None:
+        raise InterruptedError("witness interrupted by SIGTERM")
+
+    signal.signal(signal.SIGTERM, stop)
+    try:
+        yield
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+
+
+@contextlib.contextmanager
+def term_deferred() -> Iterator[None]:
+    """Hold SIGTERM delivery for one short region; a pending TERM is delivered on exit.
+
+    [LAW:no-ambient-temporal-coupling] A TERM must not land between a child being created and its
+    handle being owned, nor half-way through cleanup: both regions are bounded and use this.
+    """
+    blocked = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM})
+    try:
+        yield
+    finally:
+        signal.pthread_sigmask(signal.SIG_SETMASK, blocked)
+
+
+@dataclass
+class Fleet:
+    """Every phase child this attempt started, so cleanup reaches the one in flight.
+
+    The handle is owned in the same deferred-TERM region that creates it. Only groups this helper
+    started (`start_new_session`) are ever signalled, and only while their process still runs.
+    """
+
+    children: list[Any]
+
+    def launch(self, launch: Launcher, phase: str) -> Any:
+        with term_deferred():
+            child = launch(phase)
+            self.children.append(child)
+        return child
+
+    def kill_running(self) -> list[dict[str, object]]:
+        return [HELPERS.kill_group(child) for child in self.children if child.proc.poll() is None]
+
+
 def with_services(
     layout: Layout,
     python: Path,
     logs: Path,
     deadline: float,
+    fleet: Fleet,
     body: Callable[[WebhookCapture], dict[str, object]],
 ) -> dict[str, object]:
     """Own the webhook listener and the tool server for exactly one scenario's life."""
@@ -805,31 +869,32 @@ def with_services(
     HELPERS.write_new(layout.mcp_server, MCP_SERVER_SOURCE)
     HELPERS.write_new(layout.config, config_text(layout, capture.port, tool_port))
     capture.start()
-    server = HELPERS.spawn(
-        [str(python), "-I", str(layout.mcp_server), str(layout.tool_calls), str(tool_port)],
-        {"PATH": "/usr/bin:/bin", "HOME": str(layout.home), "TMPDIR": str(layout.tmp)},
-        layout.tmp,
-        logs,
-        "tool-server",
-    )
+    with term_deferred():
+        server = HELPERS.spawn(
+            [str(python), "-I", str(layout.mcp_server), str(layout.tool_calls), str(tool_port)],
+            {"PATH": "/usr/bin:/bin", "HOME": str(layout.home), "TMPDIR": str(layout.tmp)},
+            layout.tmp,
+            logs,
+            "tool-server",
+        )
     ready = False
     try:
         ready = HELPERS.wait_listening(server, tool_port, deadline)
         evidence = body(capture) if ready else {"runs": {}, "results": {}, "services": {}}
     finally:
-        tool_server = {
-            **HELPERS.stream_record(server),
-            "ready": ready,
-            "kill": HELPERS.kill_group(server),
-        }
-        capture.close()
+        with term_deferred():
+            phase_cleanup = fleet.kill_running()
+            tool_server = {
+                **HELPERS.stream_record(server),
+                "ready": ready,
+                "kill": HELPERS.kill_group(server),
+            }
+            capture.close()
+    evidence["phase_cleanup"] = phase_cleanup
     evidence["tool_server"] = tool_server
     evidence["webhook_requests"] = capture.requests
     evidence["webhook_errors"] = capture.errors
     return evidence
-
-
-Launcher = Callable[[str], Any]
 
 
 def settle_group(pgid: int) -> bool:
@@ -853,7 +918,12 @@ def settle_group(pgid: int) -> bool:
 
 
 def run_scenario(
-    name: str, layout: Layout, launch: Launcher, capture: WebhookCapture, deadline: float
+    name: str,
+    layout: Layout,
+    launch: Launcher,
+    fleet: Fleet,
+    capture: WebhookCapture,
+    deadline: float,
 ) -> dict[str, object]:
     """Run one scenario's phases in order, stopping at the first that cannot continue.
 
@@ -864,7 +934,7 @@ def run_scenario(
     results: dict[str, object] = {}
     services: dict[str, object] = {}
     for phase in SCENARIOS[name]:
-        runs[phase] = HELPERS.finish(launch(phase), deadline)
+        runs[phase] = HELPERS.finish(fleet.launch(launch, phase), deadline)
         runs[phase]["group_survivors"] = settle_group(int(runs[phase]["pgid"]))  # type: ignore[arg-type]
         results[phase] = HELPERS.load_result(layout, phase)
         services[phase] = {
@@ -902,6 +972,41 @@ def child_argv_installed(
 
 def _d(value: object) -> dict[str, Any]:
     return PROVER.dict_or_empty(value)
+
+
+_TOKEN = r"[a-z]+(?:-[a-z]+)*"
+_TERMINAL_REFUSAL = re.compile(
+    rf"(?P<family>{_TOKEN})-child-resume-refused \((?P<body>{_TOKEN}(?:; {_TOKEN})*)\)"
+)
+
+
+@dataclass(frozen=True)
+class TerminalRefusal:
+    """A parsed CP v1.123 §0.3 terminal fail class: the proof is the type, not a substring."""
+
+    family: str
+    reasons: frozenset[str]
+    audit_signing_failed: bool
+
+
+def parse_terminal_refusal(fail_class: object) -> TerminalRefusal | None:
+    """The whole string must be the grammar: sorted distinct reasons, then optionally the literal
+    `audit-signing-failed` last. Anything else (a raw child class, text around it, a lookalike) is
+    `None`, never a partial match.
+
+    [LAW:parse-dont-validate] One parser; the verdict consumes its typed result.
+    """
+    if not isinstance(fail_class, str):
+        return None
+    match = _TERMINAL_REFUSAL.fullmatch(fail_class)
+    if match is None:
+        return None
+    parts = match["body"].split("; ")
+    signing = parts[-1] == AUDIT_SIGNING_FAILED
+    reasons = parts[:-1] if signing else parts
+    if not reasons or reasons != sorted(set(reasons)) or AUDIT_SIGNING_FAILED in reasons:
+        return None
+    return TerminalRefusal(match["family"], frozenset(reasons), signing)
 
 
 def rehearsal_state(phase: str, run: object, result: object) -> Any:
@@ -1023,7 +1128,15 @@ def _n1_first_resume_reasons(low: dict[str, Any], svc: dict[str, Any]) -> list[s
     cause = _d(low.get("failure_cause"))
     if cause.get("runtime_fail_class") != WORKFLOW_FAILURE_CLASS:
         reasons.append(f"{label}:failure-not-a-workflow-failure")
-    if REFUSAL_REASON not in str(cause.get("validator_fail_class") or ""):
+    fail_class = cause.get("validator_fail_class")
+    refusal = parse_terminal_refusal(fail_class)
+    if fail_class is None:
+        reasons.append(f"{label}:child-refusal-reason-missing")
+    elif refusal is None:
+        reasons.append(f"{label}:terminal-refusal-grammar")
+    elif refusal.family != ROOT_FAMILY:
+        reasons.append(f"{label}:terminal-refusal-wrong-family")
+    elif REFUSAL_REASON not in refusal.reasons:
         reasons.append(f"{label}:child-refusal-reason-missing")
     if _d(low.get("before_claim")).get("phase") != "started":
         reasons.append(f"{label}:root-claim-not-admitted")
@@ -1156,39 +1269,42 @@ def rehearse(
     helper = Path(__file__).resolve(strict=True)
     deadline = time.monotonic() + OVERALL_CAP_SECONDS
     evidence: dict[str, dict[str, object]] = {}
-    for name in SCENARIOS:
-        layout = Layout(root / name)
-        prepare_layout(layout)
-        logs = logs_root / name
-        logs.mkdir(parents=True, mode=0o755)
-        env = {
-            **HELPERS.child_env(layout),
-            "PYTHONPATH": os.pathsep.join(str(p) for p in product_src),
-        }
-        fixed = ["--scenario", str(layout.root)]
+    fleet = Fleet([])
+    with term_as_interrupt():
+        for name in SCENARIOS:
+            layout = Layout(root / name)
+            prepare_layout(layout)
+            logs = logs_root / name
+            logs.mkdir(parents=True, mode=0o755)
+            env = {
+                **HELPERS.child_env(layout),
+                "PYTHONPATH": os.pathsep.join(str(p) for p in product_src),
+            }
+            fixed = ["--scenario", str(layout.root)]
 
-        def launch(
-            phase: str,
-            *,
-            name: str = name,
-            env: dict[str, str] = env,
-            layout: Layout = layout,
-            logs: Path = logs,
-            fixed: list[str] = fixed,
-        ) -> Any:
-            argv = child_argv_source(python, helper, name, phase, fixed)
-            return HELPERS.spawn(argv, env, layout.tmp, logs, f"{name}-{phase}")
+            def launch(
+                phase: str,
+                *,
+                name: str = name,
+                env: dict[str, str] = env,
+                layout: Layout = layout,
+                logs: Path = logs,
+                fixed: list[str] = fixed,
+            ) -> Any:
+                argv = child_argv_source(python, helper, name, phase, fixed)
+                return HELPERS.spawn(argv, env, layout.tmp, logs, f"{name}-{phase}")
 
-        evidence[name] = with_services(
-            layout,
-            python,
-            logs,
-            deadline,
-            lambda capture, name=name, layout=layout, launch=launch: run_scenario(
-                name, layout, launch, capture, deadline
-            ),
-        )
-        evidence[name]["ledger_dir"] = str(layout.ledger_dir)
+            evidence[name] = with_services(
+                layout,
+                python,
+                logs,
+                deadline,
+                fleet,
+                lambda capture, name=name, layout=layout, launch=launch: run_scenario(
+                    name, layout, launch, fleet, capture, deadline
+                ),
+            )
+            evidence[name]["ledger_dir"] = str(layout.ledger_dir)
     return evidence
 
 
@@ -1234,46 +1350,49 @@ def run(
         "status": "INCONCLUSIVE",
     }
     evidence: dict[str, dict[str, object]] = {}
-    for name in SCENARIOS:
-        layout = Layout(scenario_root / name)
-        prepare_layout(layout)
-        scenario_logs = logs / name
-        scenario_logs.mkdir(mode=0o755)
-        env = HELPERS.child_env(layout)
-        fixed = [
-            "--scenario-root",
-            str(layout.root),
-            "--candidate",
-            str(root),
-            "--venv",
-            str(installed),
-            "--provenance",
-            str(receipt.resolve(strict=True)),
-            "--expected-head",
-            expected_head,
-        ]
+    fleet = Fleet([])
+    with term_as_interrupt():
+        for name in SCENARIOS:
+            layout = Layout(scenario_root / name)
+            prepare_layout(layout)
+            scenario_logs = logs / name
+            scenario_logs.mkdir(mode=0o755)
+            env = HELPERS.child_env(layout)
+            fixed = [
+                "--scenario-root",
+                str(layout.root),
+                "--candidate",
+                str(root),
+                "--venv",
+                str(installed),
+                "--provenance",
+                str(receipt.resolve(strict=True)),
+                "--expected-head",
+                expected_head,
+            ]
 
-        def launch(
-            phase: str,
-            *,
-            name: str = name,
-            env: dict[str, str] = env,
-            layout: Layout = layout,
-            scenario_logs: Path = scenario_logs,
-            fixed: list[str] = fixed,
-        ) -> Any:
-            argv = child_argv_installed(python, helper, name, phase, fixed)
-            return HELPERS.spawn(argv, env, layout.tmp, scenario_logs, f"{name}-{phase}")
+            def launch(
+                phase: str,
+                *,
+                name: str = name,
+                env: dict[str, str] = env,
+                layout: Layout = layout,
+                scenario_logs: Path = scenario_logs,
+                fixed: list[str] = fixed,
+            ) -> Any:
+                argv = child_argv_installed(python, helper, name, phase, fixed)
+                return HELPERS.spawn(argv, env, layout.tmp, scenario_logs, f"{name}-{phase}")
 
-        evidence[name] = with_services(
-            layout,
-            python,
-            scenario_logs,
-            deadline,
-            lambda capture, name=name, layout=layout, launch=launch: run_scenario(
-                name, layout, launch, capture, deadline
-            ),
-        )
+            evidence[name] = with_services(
+                layout,
+                python,
+                scenario_logs,
+                deadline,
+                fleet,
+                lambda capture, name=name, layout=layout, launch=launch: run_scenario(
+                    name, layout, launch, fleet, capture, deadline
+                ),
+            )
     report["evidence"] = evidence
     report.update(evaluate(evidence, expected_receipt_sha256=PROVER.sha256(receipt)))
     HELPERS.write_new(
