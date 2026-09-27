@@ -44,18 +44,39 @@ import threading
 import time
 import traceback
 from collections import Counter
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Generator
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from types import FrameType, ModuleType
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:  # static types only: the product is never imported by the parent process
+    from collections.abc import Sequence
+
+    from b104_installed_public_witness import (
+        Broken,
+        Completed,
+        PhaseState,
+        TimedOut,
+        Unstarted,
+    )
+    from harness_core import JournalRecordRef
+    from harness_cp.pause_resume_protocol_types import PauseSnapshot
+    from harness_cp.workflow_driver_types import WorkflowStep
+    from harness_cp.workflow_manifest_entry import WorkflowManifestEntry
+    from harness_runtime.api import WorkflowObject
+    from harness_runtime.types import RuntimeConfig
 
 # --- sibling owners, loaded by explicit path (no sys.path entry; see module docstring) ----------
 
 
+def _sibling_path(name: str) -> Path:
+    return Path(__file__).resolve(strict=True).with_name(f"{name}.py")
+
+
 def _load_sibling(name: str) -> ModuleType:
-    path = Path(__file__).resolve(strict=True).with_name(f"{name}.py")
+    path = _sibling_path(name)
     existing = sys.modules.get(name)
     if existing is not None:
         if Path(getattr(existing, "__file__", "") or "").resolve() != path:
@@ -72,7 +93,15 @@ def _load_sibling(name: str) -> ModuleType:
 
 PROVER = _load_sibling("installed_witness_provenance")
 HELPERS = _load_sibling("b104_installed_public_witness")  # generic process-ownership helpers
-SHARED_PROVER_PATH = Path(PROVER.__file__).resolve(strict=True)
+if not TYPE_CHECKING:  # the typed views of the B-104 phase states are imported above
+    Broken, Completed, TimedOut, Unstarted = (
+        HELPERS.Broken,
+        HELPERS.Completed,
+        HELPERS.TimedOut,
+        HELPERS.Unstarted,
+    )
+SHARED_PROVER_PATH = _sibling_path("installed_witness_provenance")
+HELPERS_PATH = _sibling_path("b104_installed_public_witness")
 
 # --- the scenario's fixed facts -----------------------------------------------------------------
 
@@ -221,7 +250,7 @@ def config_text(layout: Layout, webhook_port: int, mcp_port: int) -> str:
 # --- the public WorkflowObject -----------------------------------------------------------------
 
 
-def build_workflow(*, root_has_placement: bool = True) -> object:
+def build_workflow(*, root_has_placement: bool = True) -> WorkflowObject:
     """R -> C -> G as ordinary manifests and steps; `root_has_placement=False` is negative N1."""
     from harness_core.identity import StepID
     from harness_core.persona_tier import PersonaTier
@@ -389,7 +418,7 @@ class WebhookCapture:
                 self.send_header("Content-Length", "0")
                 self.end_headers()
 
-            def log_message(self, _format: str, *_args: object) -> None:
+            def log_message(self, format: str, *args: object) -> None:
                 return
 
         self.server = HTTPServer(("127.0.0.1", 0), Handler)
@@ -423,14 +452,23 @@ def tool_counts(layout: Layout) -> dict[str, int]:
 # --- child phases (harness imports stay inside each function) -------------------------------------
 
 
-def _config(layout: Layout) -> Any:
+def _config(layout: Layout) -> RuntimeConfig:
     from harness_runtime.config_source import RuntimeConfigSource
 
     return RuntimeConfigSource.load(config_file=layout.config)
 
 
-def _latest_root(layout: Layout, config: Any, workflow_id: str = ROOT_ID) -> dict[str, object]:
-    """The journal's latest record for `workflow_id`: its exact ref, depth and full snapshot."""
+@dataclass(frozen=True)
+class LatestRecord:
+    """The journal's latest record for one workflow: exact ref, recorded depth, full snapshot."""
+
+    ref: JournalRecordRef
+    depth: int | None
+    snapshot: PauseSnapshot
+
+
+def _latest_root(layout: Layout, config: RuntimeConfig, workflow_id: str = ROOT_ID) -> LatestRecord:
+    """The journal's latest record for `workflow_id`, as a typed record (absent is an error)."""
     from harness_core import JournalRecordRef
     from harness_runtime.lifecycle.journal_workflow_pause_store import (
         JournalWorkflowPauseStore,
@@ -452,32 +490,34 @@ def _latest_root(layout: Layout, config: Any, workflow_id: str = ROOT_ID) -> dic
         latest_digest=read.latest_record_digest,
         snapshot_hash=read.snapshot.snapshot_hash,
     )
-    return {
-        "journal_dir": journal_dir,
-        "ref": ref,
-        "depth": read.depth,
-        "snapshot": read.snapshot,
-    }
+    return LatestRecord(ref=ref, depth=read.depth, snapshot=read.snapshot)
 
 
-def nested_chain(snapshot: Any) -> list[dict[str, object]]:
+def _paused_children(snapshot: PauseSnapshot) -> list[PauseSnapshot]:
+    """The child snapshots the level carries as paused fan-out branches."""
+    return [
+        branch.child_snapshot
+        for holder in (snapshot.fan_out_resume, snapshot.peer_fan_out_resume)
+        if holder is not None
+        for branch in holder.paused_child_branches
+    ]
+
+
+def nested_chain(snapshot: PauseSnapshot) -> list[dict[str, object]]:
     """Walk the carried paused children: [{workflow_id, run_id}] from the given snapshot down."""
     chain: list[dict[str, object]] = [
         {"workflow_id": snapshot.workflow_id, "run_id": snapshot.run_id}
     ]
     current = snapshot
     while True:
-        carriers = []
-        for holder in (current.fan_out_resume, current.peer_fan_out_resume):
-            if holder is not None:
-                carriers.extend(holder.paused_child_branches)
-        if len(carriers) != 1:
+        children = _paused_children(current)
+        if len(children) != 1:
             return chain
-        current = carriers[0].child_snapshot
+        current = children[0]
         chain.append({"workflow_id": current.workflow_id, "run_id": current.run_id})
 
 
-def _branch_rows(snapshot: Any) -> list[dict[str, object]]:
+def _branch_rows(snapshot: PauseSnapshot) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
     for holder in (snapshot.fan_out_resume, snapshot.peer_fan_out_resume):
         if holder is not None:
@@ -493,37 +533,33 @@ def _branch_rows(snapshot: Any) -> list[dict[str, object]]:
     return rows
 
 
-def level_view(snapshot: Any) -> list[dict[str, object]]:
+def level_view(snapshot: PauseSnapshot) -> list[dict[str, object]]:
     """Each carried level's pause_reason and its terminal fan-out branch rows, root first."""
     levels: list[dict[str, object]] = []
-    current: Any = snapshot
+    current = snapshot
     while True:
-        reason: Any = current.pause_reason
         levels.append(
             {
                 "workflow_id": current.workflow_id,
-                "pause_reason": getattr(reason, "value", str(reason)),
+                "pause_reason": current.pause_reason.value,
                 "branches": _branch_rows(current),
             }
         )
-        carriers: list[Any] = []
-        for holder in (current.fan_out_resume, current.peer_fan_out_resume):
-            if holder is not None:
-                carriers.extend(holder.paused_child_branches)
-        if len(carriers) != 1:
+        children = _paused_children(current)
+        if len(children) != 1:
             return levels
-        current = carriers[0].child_snapshot
+        current = children[0]
 
 
-def declared_placements(workflow: Any) -> dict[str, list[list[str]]]:
+def declared_placements(workflow: WorkflowObject) -> dict[str, list[list[str]]]:
     """Each level's own declared PRE_ACTION tool filters, read from the workflow itself."""
     from harness_cp.workflow_driver_types import StepKind
     from harness_runtime.lifecycle.sub_agent_dispatch import SubAgentDispatchPayload
 
     found: dict[str, list[list[str]]] = {}
 
-    def walk(entry: Any, steps: Any) -> None:
-        found[str(entry.workflow_id)] = [list(p.tool_filter) for p in entry.hitl_placements]
+    def walk(entry: WorkflowManifestEntry, steps: Sequence[WorkflowStep]) -> None:
+        found[str(entry.workflow_id)] = [list(p.tool_filter or ()) for p in entry.hitl_placements]
         for step in steps:
             if step.step_kind == StepKind.SUB_AGENT_DISPATCH:
                 payload = SubAgentDispatchPayload.model_validate(step.step_payload)
@@ -533,7 +569,7 @@ def declared_placements(workflow: Any) -> dict[str, list[list[str]]]:
     return found
 
 
-def _claim_view(layout: Layout, config: Any, ref: Any) -> dict[str, object]:
+def _claim_view(layout: Layout, config: RuntimeConfig, ref: JournalRecordRef) -> dict[str, object]:
     from harness_runtime.config.state_placement import place_state_dir, probe_declared_state_root
     from harness_runtime.lifecycle.journal_workflow_pause_store import pause_journal_dir_for
     from harness_runtime.lifecycle.resume_claim_store import (
@@ -618,13 +654,13 @@ def hitl_audit_view(layout: Layout) -> dict[str, object]:
     }
 
 
-def _observe_common(layout: Layout, config: Any) -> dict[str, object]:
+def _observe_common(layout: Layout, config: RuntimeConfig) -> dict[str, object]:
     latest = _latest_root(layout, config)
     return {
-        "ref": latest["ref"].model_dump(mode="json"),
-        "depth": latest["depth"],
-        "chain": nested_chain(latest["snapshot"]),
-        "levels": level_view(latest["snapshot"]),
+        "ref": latest.ref.model_dump(mode="json"),
+        "depth": latest.depth,
+        "chain": nested_chain(latest.snapshot),
+        "levels": level_view(latest.snapshot),
         "audits": hitl_audit_view(layout),
     }
 
@@ -669,10 +705,10 @@ def phase_resume(layout: Layout, *, root_has_placement: bool = True) -> dict[str
 
     config = _config(layout)
     before = _latest_root(layout, config)
-    leaf_run_id = str(nested_chain(before["snapshot"])[-1]["run_id"])
+    leaf_run_id = str(nested_chain(before.snapshot)[-1]["run_id"])
     outcome: dict[str, object] = {
         "addressed_run_id": leaf_run_id,
-        "before_ref": before["ref"].model_dump(mode="json"),
+        "before_ref": before.ref.model_dump(mode="json"),
     }
     workflow = build_workflow(root_has_placement=root_has_placement)
     outcome["declared_placements"] = declared_placements(workflow)
@@ -707,7 +743,7 @@ def phase_resume(layout: Layout, *, root_has_placement: bool = True) -> dict[str
         }
     after = _observe_common(layout, config)
     outcome |= after
-    outcome["before_claim"] = _claim_view(layout, config, before["ref"])
+    outcome["before_claim"] = _claim_view(layout, config, before.ref)
     return outcome
 
 
@@ -718,10 +754,13 @@ def phase_resume_child_handle(layout: Layout) -> dict[str, object]:
     from harness_runtime import api
 
     config = _config(layout)
+    root = _latest_root(layout, config)
     leaf = _latest_root(layout, config, LEAF_ID)
     outcome: dict[str, object] = {
-        "leaf_depth": leaf["depth"],
-        "leaf_ref": leaf["ref"].model_dump(mode="json"),
+        "leaf_depth": leaf.depth,
+        "leaf_ref": leaf.ref.model_dump(mode="json"),
+        "root_before_ref": root.ref.model_dump(mode="json"),
+        "root_before_claim": _claim_view(layout, config, root.ref),
     }
     try:
         asyncio.run(api.resume(build_workflow(), resume_handle=LEAF_ID, config=config))
@@ -733,7 +772,10 @@ def phase_resume_child_handle(layout: Layout) -> dict[str, object]:
         }
     else:
         outcome["outcome"] = "returned"
-    outcome["leaf_claim"] = _claim_view(layout, config, leaf["ref"])
+    outcome["leaf_claim"] = _claim_view(layout, config, leaf.ref)
+    root_after = _latest_root(layout, config)
+    outcome["root_ref"] = root_after.ref.model_dump(mode="json")
+    outcome["root_claim"] = _claim_view(layout, config, root.ref)
     outcome["audits"] = hitl_audit_view(layout)
     return outcome
 
@@ -748,6 +790,25 @@ PHASE_BODIES: dict[str, Callable[[Layout], dict[str, object]]] = {
 }
 
 
+def verified_paths(evidence: dict[str, object]) -> set[str]:
+    """Every installed file the prover verified, read only from a record its own parser accepts.
+
+    [LAW:parse-dont-validate] [LAW:single-enforcer] The shared prover owns the shape of its
+    evidence (`provenance_reasons`: interpreter flags and prefix, receipt digest, every package
+    origin). A record it rejects raises here and is never read as "no files", which would let the
+    loaded-module proof pass vacuously.
+    """
+    receipt = evidence.get("installation_receipt_sha256")
+    problems = PROVER.provenance_reasons(evidence, receipt if isinstance(receipt, str) else "")
+    if problems:
+        raise ValueError(f"prover evidence is not parseable provenance: {problems}")
+    return {
+        path
+        for entry in _d(evidence["installed_origins"]).values()
+        for path in _d(entry)["verified_files"]
+    }
+
+
 def run_phase(layout: Layout, phase: str, prove: Callable[[], dict[str, object]] | None) -> int:
     """Prove this interpreter (installed mode), run one phase body, re-prove modules, record once.
 
@@ -758,12 +819,8 @@ def run_phase(layout: Layout, phase: str, prove: Callable[[], dict[str, object]]
         evidence = None if prove is None else prove()
         verified: set[str] = set()
         if evidence is not None:
-            verified = {
-                path
-                for item in evidence.get("installed_origins", {}).values()  # type: ignore[union-attr]
-                for path in item["verified_files"]
-            }
-            loaded_before = PROVER.loaded_harness_origins(verified) if verified else {}
+            verified = verified_paths(evidence)
+            loaded_before = PROVER.loaded_harness_origins(verified)
             HELPERS.write_json_new(
                 layout.provenance_record(phase),
                 {
@@ -802,7 +859,7 @@ Launcher = Callable[[str], Any]
 
 
 @contextlib.contextmanager
-def term_as_interrupt() -> Iterator[None]:
+def term_as_interrupt() -> Generator[None]:
     """Turn an outside SIGTERM into an exception so the owners' `finally` cleanup runs.
 
     Same mechanism as the B-104 witness's `run`; without it the default action ends this process
@@ -821,8 +878,12 @@ def term_as_interrupt() -> Iterator[None]:
         signal.signal(signal.SIGTERM, previous)
 
 
+def _no_scenario_evidence() -> dict[str, object]:
+    return {"runs": {}, "results": {}, "services": {}}
+
+
 @contextlib.contextmanager
-def term_deferred() -> Iterator[None]:
+def term_deferred() -> Generator[None]:
     """Hold SIGTERM delivery for one short region; a pending TERM is delivered on exit.
 
     [LAW:no-ambient-temporal-coupling] A TERM must not land between a child being created and its
@@ -880,7 +941,7 @@ def with_services(
     ready = False
     try:
         ready = HELPERS.wait_listening(server, tool_port, deadline)
-        evidence = body(capture) if ready else {"runs": {}, "results": {}, "services": {}}
+        evidence = body(capture) if ready else _no_scenario_evidence()
     finally:
         with term_deferred():
             phase_cleanup = fleet.kill_running()
@@ -917,6 +978,28 @@ def settle_group(pgid: int) -> bool:
     return survivors
 
 
+@dataclass(frozen=True)
+class PhaseRun:
+    """The three facts the parent loop acts on, parsed from a waited child's run record."""
+
+    pgid: int
+    timed_out: bool
+    exit_code: int
+
+
+def parse_phase_run(record: dict[str, object]) -> PhaseRun:
+    """A waited child's record as typed facts; a malformed record raises, it does not continue.
+
+    [LAW:parse-dont-validate] `settle_group` signals a process group, so its id must be a real
+    int (a bool or a string is refused) before it reaches `killpg`.
+    """
+    pgid, code = PROVER.exact_int(record.get("pgid")), PROVER.exact_int(record.get("exit"))
+    timed_out = record.get("timeout")
+    if pgid is None or code is None or not isinstance(timed_out, bool):
+        raise ValueError(f"malformed phase run record: {sorted(record)}")
+    return PhaseRun(pgid=pgid, timed_out=timed_out, exit_code=code)
+
+
 def run_scenario(
     name: str,
     layout: Layout,
@@ -934,15 +1017,15 @@ def run_scenario(
     results: dict[str, object] = {}
     services: dict[str, object] = {}
     for phase in SCENARIOS[name]:
-        runs[phase] = HELPERS.finish(fleet.launch(launch, phase), deadline)
-        runs[phase]["group_survivors"] = settle_group(int(runs[phase]["pgid"]))  # type: ignore[arg-type]
+        finished = HELPERS.finish(fleet.launch(launch, phase), deadline)
+        run = parse_phase_run(finished)
+        runs[phase] = {**finished, "group_survivors": settle_group(run.pgid)}
         results[phase] = HELPERS.load_result(layout, phase)
         services[phase] = {
             "webhook_keys": [str(r["idempotency_key"]) for r in capture.requests],
             "tool_counts": tool_counts(layout),
         }
-        run = runs[phase]
-        if run["timeout"] or run["exit"] != 0:  # type: ignore[index]
+        if run.timed_out or run.exit_code != 0:
             break
     return {"runs": runs, "results": results, "services": services}
 
@@ -1009,10 +1092,10 @@ def parse_terminal_refusal(fail_class: object) -> TerminalRefusal | None:
     return TerminalRefusal(match["family"], frozenset(reasons), signing)
 
 
-def rehearsal_state(phase: str, run: object, result: object) -> Any:
+def rehearsal_state(phase: str, run: object, result: object) -> PhaseState:
     """A rehearsal phase: clean exit, bounded output, an ok result with an observed record."""
     if run is None and result is None:
-        return HELPERS.Unstarted(phase)
+        return Unstarted(phase)
     record, res = _d(run), _d(result)
     reasons: list[str] = []
     if record.get("timeout") is not False:
@@ -1024,12 +1107,14 @@ def rehearsal_state(phase: str, run: object, result: object) -> Any:
     if res.get("ok") is not True or not isinstance(res.get("observed"), dict):
         reasons.append("result-not-ok")
     if reasons:
-        return HELPERS.Broken(phase, tuple(reasons))
-    return HELPERS.Completed(phase, _d(res["observed"]))
+        return Broken(phase, tuple(reasons))
+    return Completed(phase, _d(res["observed"]))
 
 
-def scenario_states(name: str, ev: dict[str, Any], expected_receipt: str | None) -> list[Any]:
-    states = []
+def scenario_states(
+    name: str, ev: dict[str, Any], expected_receipt: str | None
+) -> list[PhaseState]:
+    states: list[PhaseState] = []
     for phase in SCENARIOS[name]:
         run, result = _d(ev.get("runs")).get(phase), _d(ev.get("results")).get(phase)
         if expected_receipt is None:
@@ -1110,6 +1195,14 @@ def _phase_reasons(
     return reasons + _audit_reasons(observed, audits, label)
 
 
+def _unchanged(before: object, after: object, label: str) -> list[str]:
+    """Two observed records must both exist and be equal; two absent ones are not "unchanged"."""
+    first, second = _d(before), _d(after)
+    if not first or not second:
+        return [f"{label}-unobserved"]
+    return [] if first == second else [f"{label}-changed"]
+
+
 def _n1_first_resume_reasons(low: dict[str, Any], svc: dict[str, Any]) -> list[str]:
     """The lowered resume must be a terminal refusal: FAILED, the child's reason, no new record."""
     label = "n1:resume-lowered"
@@ -1123,8 +1216,10 @@ def _n1_first_resume_reasons(low: dict[str, Any], svc: dict[str, Any]) -> list[s
         reasons.append(f"{label}:not-failed")
     if low.get("has_pause_snapshot") is not False:
         reasons.append(f"{label}:new-pause-snapshot")
-    if _d(low.get("ref")) != _d(low.get("before_ref")):
-        reasons.append(f"{label}:root-record-advanced")
+    reasons += [
+        r.replace("record-changed", "record-advanced")
+        for r in _unchanged(low.get("before_ref"), low.get("ref"), f"{label}:root-record")
+    ]
     cause = _d(low.get("failure_cause"))
     if cause.get("runtime_fail_class") != WORKFLOW_FAILURE_CLASS:
         reasons.append(f"{label}:failure-not-a-workflow-failure")
@@ -1156,8 +1251,10 @@ def _n1_second_resume_reasons(
         or again.get("reason") != "claim-refused"
     ):
         reasons.append(f"{label}:not-claim-refused")
-    if _d(again.get("before_ref")) != _d(low.get("before_ref")):
-        reasons.append(f"{label}:different-record")
+    reasons += [
+        r.replace("record-changed", "different-record")
+        for r in _unchanged(low.get("before_ref"), again.get("before_ref"), f"{label}:record")
+    ]
     return reasons + _phase_reasons(label, again, svc, {"witness.b": 3}, [KEY_A], [])
 
 
@@ -1167,7 +1264,8 @@ def behaviour_failures(
     """Judge one scenario's completed phases; every reason names the property that broke."""
     svc = {p: _d(services.get(p)) for p in observed}
     reasons = _run_reasons(name, observed["run"], svc["run"])
-    leaf_id = (observed["run"].get("chain") or [{}])[-1].get("run_id")
+    chain = observed["run"].get("chain")
+    leaf_id = _d(chain[-1]).get("run_id") if chain else None
     keys = [KEY_A, KEY_C]
     if name == "p":
         r1, r2 = observed["resume-1"], observed["resume-2"]
@@ -1205,6 +1303,12 @@ def behaviour_failures(
             reasons.append("n2:leaf-record-not-below-root")
         if _d(direct.get("leaf_claim")).get("phase") != "absent":
             reasons.append("n2:claim-created-for-refused-handle")
+        reasons += _unchanged(
+            direct.get("root_before_ref"), direct.get("root_ref"), "n2:root-record"
+        )
+        reasons += _unchanged(
+            direct.get("root_before_claim"), direct.get("root_claim"), "n2:root-claim"
+        )
         unchanged = {"witness.b": 3}
         reasons += _phase_reasons(
             "n2:resume", direct, svc["resume-child-handle"], unchanged, [KEY_A], []
@@ -1223,9 +1327,9 @@ def evaluate(
         ev = _d(evidence.get(name))
         states = scenario_states(name, ev, expected_receipt_sha256)
         for state in states:
-            if isinstance(state, HELPERS.Broken):
+            if isinstance(state, Broken):
                 failures.append(f"{name}:{state.phase}:{'+'.join(state.reasons)}")
-            elif isinstance(state, HELPERS.TimedOut):
+            elif isinstance(state, TimedOut):
                 timed_out.append(f"{name}:{state.phase}")
         failures += [f"{name}:{f}" for f in HELPERS.sequence_failures(states)]
         kill = _d(ev.get("tool_server")).get("kill")
@@ -1235,8 +1339,9 @@ def evaluate(
         for phase, run in _d(ev.get("runs")).items():
             if _d(run).get("group_survivors") is not False:
                 failures.append(f"{name}:{phase}:surviving-process-group")
-        if all(isinstance(s, HELPERS.Completed) for s in states):
-            observed = {s.phase: s.observed for s in states}
+        completed = [s for s in states if isinstance(s, Completed)]
+        if len(completed) == len(states):
+            observed = {s.phase: s.observed for s in completed}
             failures += behaviour_failures(name, observed, _d(ev.get("services")))
         per_scenario[name] = [type(s).__name__ for s in states]
     if failures:
@@ -1340,6 +1445,7 @@ def run(
         "plan": PLAN,
         "helper_sha256": PROVER.sha256(helper),
         "shared_prover_sha256": PROVER.sha256(SHARED_PROVER_PATH),
+        "b104_helpers_sha256": PROVER.sha256(HELPERS_PATH),
         "parent_interpreter": {"executable": sys.executable, "isolated": sys.flags.isolated},
         "candidate": str(root),
         "expected_head": expected_head,

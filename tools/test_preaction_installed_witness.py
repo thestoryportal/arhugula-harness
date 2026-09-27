@@ -50,7 +50,7 @@ GONE = {"pgid": 1, "signal": "SIGKILL", "returncode": -signal.SIGKILL, "group_go
 
 
 def origins() -> dict[str, dict[str, Any]]:
-    result = {}
+    result: dict[str, dict[str, Any]] = {}
     for package in sorted(prover.PACKAGES):
         files = [f"{SITE}/{package}/__init__.py", f"{SITE}/{package}/core.py"]
         result[package] = {
@@ -197,6 +197,10 @@ def scenario(name: str) -> dict[str, Any]:
             "error_type": "harness_runtime.api.ResumeDirectChildHandleError",
             "leaf_depth": 2,
             "leaf_claim": {"phase": "absent"},
+            "root_before_ref": REF,
+            "root_ref": REF,
+            "root_before_claim": {"phase": "absent", "claim_sha256": None},
+            "root_claim": {"phase": "absent", "claim_sha256": None},
             "audits": audits([]),
         }
         results = {"run": run_observed(), "resume-child-handle": direct}
@@ -218,7 +222,7 @@ def honest() -> dict[str, Any]:
 
 
 def verdict(evidence: dict[str, Any], receipt: str | None = RECEIPT) -> dict[str, Any]:
-    return pw.evaluate(evidence, expected_receipt_sha256=receipt)  # type: ignore[return-value]
+    return pw.evaluate(evidence, expected_receipt_sha256=receipt)
 
 
 def test_honest_installed_evidence_passes() -> None:
@@ -496,6 +500,24 @@ BEHAVIOUR: list[tuple[str, Callable[[dict[str, Any]], None], str]] = [
         "n2:direct-child-handle-not-refused",
     ),
     ("n2-root-depth", set_(f"{DIRECT}/leaf_depth", 0), "n2:leaf-record-not-below-root"),
+    ("n2-root-record-changed", set_(f"{DIRECT}/root_ref", REF2), "n2:root-record-changed"),
+    (
+        "n2-root-claim-created",
+        set_(f"{DIRECT}/root_claim", {"phase": "started", "claim_sha256": "c" * 64}),
+        "n2:root-claim-changed",
+    ),
+    ("n2-root-record-unobserved", drop(f"{DIRECT}/root_ref"), "n2:root-record-unobserved"),
+    ("n2-root-claim-unobserved", drop(f"{DIRECT}/root_before_claim"), "n2:root-claim-unobserved"),
+    (
+        "n1-root-record-unobserved",
+        drop(f"{LOW}/ref"),
+        "n1:resume-lowered:root-record-unobserved",
+    ),
+    (
+        "n1-second-resume-record-unobserved",
+        drop(f"{AGAIN}/before_ref"),
+        "n1:resume-lowered-again:different-record|n1:resume-lowered-again:record-unobserved",
+    ),
     (
         "n2-claim-created",
         set_(f"{DIRECT}/leaf_claim/phase", "claimed"),
@@ -658,15 +680,29 @@ def test_a_wrong_pin_is_refused_before_anything_starts(
     assert nothing_may_start == [] and not (tmp_path / "scenarios").exists()
 
 
+def _receipt_head(receipt: dict[str, Any]) -> None:
+    receipt.update(candidate_head="4" * 40)
+
+
+def _receipt_venv(receipt: dict[str, Any]) -> None:
+    receipt.update(venv="/other/venv")
+
+
+def _receipt_startup(receipt: dict[str, Any]) -> None:
+    receipt["startup_hooks"]["files"]["_virtualenv.py"] = "5" * 64
+
+
+def _receipt_wheel(receipt: dict[str, Any]) -> None:
+    receipt["wheels"][0]["sha256"] = "6" * 64
+
+
+def _receipt_records(receipt: dict[str, Any]) -> None:
+    receipt["installed_record_sha256"].pop("harness_cp")
+
+
 @pytest.mark.parametrize(
     "mutate",
-    [
-        lambda r: r.update(candidate_head="4" * 40),
-        lambda r: r.update(venv="/other/venv"),
-        lambda r: r["startup_hooks"]["files"].__setitem__("_virtualenv.py", "5" * 64),
-        lambda r: r["wheels"][0].update(sha256="6" * 64),
-        lambda r: r["installed_record_sha256"].pop("harness_cp"),
-    ],
+    [_receipt_head, _receipt_venv, _receipt_startup, _receipt_wheel, _receipt_records],
     ids=["receipt-head", "receipt-venv", "startup-pin", "wheel-pin", "record-hashes"],
 )
 def test_a_mismatched_receipt_is_refused_before_anything_starts(
@@ -1022,3 +1058,135 @@ def test_sigterm_mid_scenario_leaves_no_owned_process_group_alive(
         driver.wait()
         bystander.kill()
         bystander.wait()
+
+
+STUB_TOOL_SERVER = """
+import socket, sys
+listener = socket.socket()
+listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+listener.bind(("127.0.0.1", int(sys.argv[2])))
+listener.listen()
+while True:
+    listener.accept()[0].close()
+"""
+
+
+def test_the_installed_report_pins_every_owner_the_verdict_relies_on(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The verdict grammar, ownership and config come from the B-104 helper: its hash is pinned."""
+    monkeypatch.setattr(pw, "MCP_SERVER_SOURCE", STUB_TOOL_SERVER)
+
+    def exits_at_once(*_args: object) -> list[str]:
+        return [sys.executable, "-c", "raise SystemExit(0)"]
+
+    def candidate(*_args: object) -> tuple[Path, Path, Path]:
+        return tmp_path, tmp_path, Path(sys.executable)
+
+    def no_wheels(*_args: object) -> dict[str, list[str]]:
+        return {"wheels": []}
+
+    def no_placement(*_args: object) -> dict[str, str]:
+        return {}
+
+    monkeypatch.setattr(pw, "child_argv_installed", exits_at_once)
+    monkeypatch.setattr(pw.PROVER, "checked_candidate", candidate)
+    monkeypatch.setattr(pw.PROVER, "checked_provenance", no_wheels)
+    monkeypatch.setattr(pw.HELPERS, "checked_scenario_root", no_placement)
+    receipt = tmp_path / "receipt.json"
+    receipt.write_text("{}")
+
+    report = pw.run(
+        tmp_path, tmp_path, "0" * 40, receipt, tmp_path / "scenario", tmp_path / "report.json"
+    )
+
+    def digest(name: str) -> str:
+        return hashlib.sha256((TOOLS / name).read_bytes()).hexdigest()
+
+    assert report["helper_sha256"] == digest("preaction_installed_witness.py")
+    assert report["shared_prover_sha256"] == digest("installed_witness_provenance.py")
+    assert report["b104_helpers_sha256"] == digest("b104_installed_public_witness.py")
+    assert json.loads((tmp_path / "report.json").read_text())["b104_helpers_sha256"] == digest(
+        "b104_installed_public_witness.py"
+    )
+
+
+def test_a_phase_run_record_is_parsed_into_typed_facts_or_refused() -> None:
+    good: dict[str, object] = {"pgid": 4242, "timeout": False, "exit": 0}
+
+    assert pw.parse_phase_run(good) == pw.PhaseRun(pgid=4242, timed_out=False, exit_code=0)
+    bad_records: list[dict[str, object]] = [
+        {**good, "pgid": True},
+        {**good, "pgid": "4242"},
+        {**good, "pgid": None},
+        {**good, "timeout": 0},
+        {**good, "timeout": None},
+        {**good, "exit": None},
+        {**good, "exit": False},
+        {"timeout": False, "exit": 0},
+    ]
+    for bad in bad_records:
+        with pytest.raises(ValueError, match="malformed phase run record"):
+            pw.parse_phase_run(bad)
+
+
+class Child:
+    """Stands in for a started phase process that has already exited."""
+
+    class proc:  # the attribute shape of `subprocess.Popen`; only `poll` is read
+        @staticmethod
+        def poll() -> int:
+            return 0
+
+
+def test_a_malformed_child_record_stops_the_loop_before_any_group_is_signalled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`settle_group` signals a process group; a bool or string id must never reach it."""
+    signalled: list[int] = []
+
+    def record_signal(pgid: int) -> bool:
+        signalled.append(pgid)
+        return False
+
+    def finished_with_a_bool_group(*_args: object) -> dict[str, object]:
+        return {"pgid": True, "timeout": False, "exit": 0}
+
+    def launch_nothing(_phase: str) -> Child:
+        return Child()
+
+    monkeypatch.setattr(pw, "settle_group", record_signal)
+    monkeypatch.setattr(pw.HELPERS, "finish", finished_with_a_bool_group)
+    capture = pw.WebhookCapture()
+
+    try:
+        with pytest.raises(ValueError, match="malformed phase run record"):
+            pw.run_scenario("p", pw.Layout(tmp_path), launch_nothing, pw.Fleet([]), capture, 0.0)
+    finally:
+        capture.server.server_close()
+
+    assert signalled == []
+
+
+def test_verified_paths_come_only_from_a_record_the_prover_parses() -> None:
+    paths = pw.verified_paths(provenance())
+
+    assert paths == {f for entry in origins().values() for f in entry["verified_files"]}
+    files_not_a_list = provenance()
+    files_not_a_list["installed_origins"]["harness_cp"]["verified_files"] = "x.py"
+    no_interpreter = provenance()
+    del no_interpreter["interpreter"]
+    no_receipt = provenance()
+    del no_receipt["installation_receipt_sha256"]
+    broken_records: list[dict[str, Any]] = [
+        {},
+        {**provenance(), "installed_origins": {}},
+        {**provenance(), "installed_origins": "not-a-mapping"},
+        {**provenance(), "installed_origins": {**origins(), "harness_cp": 7}},
+        files_not_a_list,
+        no_interpreter,
+        no_receipt,
+    ]
+    for broken in broken_records:
+        with pytest.raises(ValueError, match="not parseable provenance"):
+            pw.verified_paths(broken)
