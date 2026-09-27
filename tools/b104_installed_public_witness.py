@@ -857,20 +857,29 @@ class UncertainMembershipError(RuntimeError):
 
 @dataclass(frozen=True)
 class ProcessView:
-    """A `/proc` proved to show this process every process of its pid namespace.
+    """A `/proc` proved to be this process's own pid namespace, hiding none of its processes.
 
     [LAW:parse-dont-validate] `process_view` is the only maker for the real `/proc`, and
-    `group_members` demands one, so no scan runs on a view that could hide a member.
+    `group_members` demands one: every number it reads there (a pgrp) is in the same namespace
+    as `Popen.pid`, and no scan runs on a view that could hide a member.
     """
 
     root: Path
 
 
-def process_view(self_link: str, pid: int, mountinfo: str) -> ProcessView:
-    """The proof that `/proc` hides no process from this one, or `UncertainMembershipError`."""
-    if self_link != str(pid):
+def process_view(status: str, pid: int, mountinfo: str) -> ProcessView:
+    """The proof that `/proc` is this process's own pid namespace and hides nothing from it.
+
+    `NSpid` lists this process's pid in each namespace from the procfs mount's own namespace down
+    to the process's (proc(5)). One entry, equal to `pid`, proves the two are the same namespace;
+    any deeper list is an ancestor's procfs, whatever its numbers, so it is refused. Otherwise
+    `UncertainMembershipError`.
+    """
+    nspid = [line.split()[1:] for line in status.splitlines() if line.startswith("NSpid:")]
+    if nspid != [[str(pid)]]:
         raise UncertainMembershipError(
-            f"/proc belongs to another pid namespace: /proc/self is {self_link!r}, not {pid}"
+            f"/proc does not prove this process's own pid namespace: NSpid is {nspid!r}, "
+            f"not [[{str(pid)!r}]]"
         )
     mounts = [line.split(" - ", 1) for line in mountinfo.splitlines() if " - " in line]
     on_proc = [after.split() for before, after in mounts if before.split()[4:5] == ["/proc"]]
@@ -889,7 +898,7 @@ def process_view(self_link: str, pid: int, mountinfo: str) -> ProcessView:
 
 def read_process_view() -> ProcessView:
     return process_view(
-        os.readlink("/proc/self"), os.getpid(), Path("/proc/self/mountinfo").read_text()
+        Path("/proc/self/status").read_text(), os.getpid(), Path("/proc/self/mountinfo").read_text()
     )
 
 
@@ -1374,6 +1383,7 @@ def with_services(
     logs: Path,
     deadline: float,
     fleet: Fleet,
+    servers: Fleet,
     body: Callable[[LoopbackCapture], dict[str, object]],
 ) -> dict[str, object]:
     """Own the webhook listener, the tool server and every phase group for the scenario's life.
@@ -1394,6 +1404,7 @@ def with_services(
         write_new(layout.config, config_text(layout, capture.port, tool_port))
 
         def own_server(server: Child) -> None:
+            servers.own(server)  # the caller's later finalizer retries it if this cleanup fails
             owners.callback(lambda: tool_server.update(kill=kill_group(server)))
 
         server = spawn(
@@ -1983,7 +1994,7 @@ def run(
         expected_head,
     ]
     env = child_env(layout)
-    fleet = Fleet()
+    fleet, servers = Fleet(), Fleet()
 
     def launch(phase: str) -> Child:
         argv = child_argv(python, helper, phase, fixed)
@@ -2009,8 +2020,9 @@ def run(
 
     signal.signal(signal.SIGTERM, stop)
     try:
-        # The later, independent finalizer: it retries any phase whose first cleanup failed.
+        # The later, independent finalizers: they retry any group whose first cleanup failed.
         with Owners() as outer:
+            outer.callback(servers.settle_all)
             outer.callback(fleet.settle_all)
             evidence = with_services(
                 layout,
@@ -2018,6 +2030,7 @@ def run(
                 logs,
                 deadline,
                 fleet,
+                servers,
                 lambda capture: scenario(layout, launch, capture, deadline),
             )
     finally:

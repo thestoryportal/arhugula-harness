@@ -1592,12 +1592,13 @@ def test_a_leader_that_outlives_its_cap_stays_owned_and_the_retry_never_kills_ag
         "27 32 0:25 / /tmp rw - tmpfs tmpfs rw",
         "27 32 0:25 / /proc rw - proc proc rw\n28 27 0:40 / /proc rw - tmpfs none rw",
     ],
+    ids=["hidepid-invisible", "hidepid-2", "no-proc", "tmpfs-over-proc"],
 )
 def test_spawn_refuses_before_starting_anything_when_membership_is_unprovable(
     tmp_path: Path, alias: Alias, monkeypatch: pytest.MonkeyPatch, mountinfo: str
 ) -> None:
     def view() -> Any:
-        return w.process_view(str(os.getpid()), os.getpid(), mountinfo)
+        return w.process_view(f"NSpid:\t{os.getpid()}\n", os.getpid(), mountinfo)
 
     monkeypatch.setattr(w, "read_process_view", view, raising=False)
 
@@ -1620,21 +1621,38 @@ def test_spawn_refuses_while_the_kernel_would_reap_children_by_itself(
     assert alias.children == []
 
 
+PROC = "27 32 0:25 / /proc rw - proc proc rw"
+
+
 @pytest.mark.parametrize(
-    ("self_link", "mountinfo", "refusal"),
+    ("status", "mountinfo", "refusal"),
     [
-        ("1", "27 32 0:25 / /proc rw - proc proc rw", "another pid namespace"),
-        (None, "", "no /proc mount"),
-        (None, "27 32 0:25 / /proc rw - proc proc rw,hidepid=1", "hidepid=1"),
-        (None, "27 32 0:25 / /proc rw - proc proc rw,hidepid=noaccess", "hidepid=noaccess"),
-        (None, "27 32 0:25 / /proc rw - sysfs sysfs rw", "not procfs"),
+        # An ancestor namespace's procfs: this process's numbers happen to be equal in both.
+        ("NSpid:\t4242\t4242\n", PROC, "own pid namespace"),
+        ("NSpid:\t17\t4242\n", PROC, "own pid namespace"),
+        ("NSpid:\t1\n", PROC, "own pid namespace"),
+        ("Name:\tpython\n", PROC, "NSpid"),  # no namespace evidence at all
+        ("NSpid:\t4242\n", "", "no /proc mount"),
+        ("NSpid:\t4242\n", PROC + ",hidepid=1", "hidepid=1"),
+        ("NSpid:\t4242\n", PROC + ",hidepid=noaccess", "hidepid=noaccess"),
+        ("NSpid:\t4242\n", "27 32 0:25 / /proc rw - sysfs sysfs rw", "not procfs"),
+    ],
+    ids=[
+        "ancestor-equal",
+        "ancestor",
+        "wrong-pid",
+        "no-nspid",
+        "no-mount",
+        "hidepid-1",
+        "hidepid-noaccess",
+        "sysfs",
     ],
 )
 def test_the_process_view_refuses_what_could_hide_a_member(
-    self_link: str | None, mountinfo: str, refusal: str
+    status: str, mountinfo: str, refusal: str
 ) -> None:
     with pytest.raises(RuntimeError, match=refusal):
-        w.process_view(self_link or "4242", 4242, mountinfo)
+        w.process_view(status, 4242, mountinfo)
 
 
 @pytest.mark.parametrize(
@@ -1642,7 +1660,53 @@ def test_the_process_view_refuses_what_could_hide_a_member(
 )
 def test_the_process_view_accepts_a_proc_that_shows_every_process(options: str) -> None:
     mountinfo = f"27 32 0:25 / /proc rw,nosuid shared:5 - proc proc {options}\n"
-    assert w.process_view("4242", 4242, mountinfo).root == Path("/proc")
+    assert w.process_view("Name:\tx\nNSpid:\t4242\n", 4242, mountinfo).root == Path("/proc")
+
+
+def test_this_hosts_native_proc_view_is_accepted() -> None:
+    """The supported view: this process's own pid namespace, where its pid has one number."""
+    assert w.read_process_view() == w.ProcessView(Path("/proc"))
+
+
+def _ancestor_view(monkeypatch: pytest.MonkeyPatch) -> None:
+    """/proc as an ancestor namespace's procfs would show it: /proc/self still names this pid
+    (its number is equal there), but NSpid gives this process one number per namespace."""
+    real = Path.read_text
+
+    def read_text(path: Path, *args: Any, **kwargs: Any) -> str:
+        text = real(path, *args, **kwargs)
+        if str(path) == "/proc/self/status":
+            return text.replace(
+                f"NSpid:\t{os.getpid()}\n", f"NSpid:\t{os.getpid()}\t{os.getpid()}\n"
+            )
+        return text
+
+    monkeypatch.setattr(Path, "read_text", read_text)
+
+
+def test_spawn_refuses_an_ancestor_proc_view_even_when_the_numbers_are_equal(
+    tmp_path: Path, alias: Alias, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with monkeypatch.context() as patch:
+        _ancestor_view(patch)
+        with pytest.raises(RuntimeError, match="own pid namespace"):
+            alias.spawn(["sleep", "60"], tmp_path, "ancestor")
+    assert alias.children == []
+
+
+def test_settlement_refuses_an_ancestor_proc_view_and_never_kills_twice(
+    tmp_path: Path, alias: Alias, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    child = alias.spawn(["sleep", "60"], tmp_path, "viewed")
+    with monkeypatch.context() as patch:
+        _ancestor_view(patch)
+        with pytest.raises(RuntimeError, match="own pid namespace"):
+            w.kill_group(child)
+    assert not leader_reaped(child.proc.pid), "settled without a proof in the ancestor view"
+
+    assert w.kill_group(child)["group_gone"] is True
+    assert alias.to(child.proc.pid) == [signal.SIGKILL]
+    assert leader_reaped(child.proc.pid)
 
 
 # --- H6: membership is whole-process liveness, and uncertainty is never absence -------------
@@ -1901,6 +1965,50 @@ def test_the_owner_refuses_to_act_while_an_unheld_python_handler_could_interrupt
         signal.signal(signal.SIGUSR1, previous)
 
     assert w.kill_group(child)["group_gone"] is True
+
+
+STUB_SERVER = """
+import socket, sys
+listener = socket.socket()
+listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+listener.bind(("127.0.0.1", int(sys.argv[2])))
+listener.listen()
+while True:
+    listener.accept()[0].close()
+"""
+
+
+def test_b104_run_retries_a_tool_server_whose_acquisition_and_first_cleanup_failed(
+    tmp_path: Path, alias: Alias, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R1: the server stays reachable by the later, independent finalizer of B104's own run."""
+    monkeypatch.setattr(w, "MCP_SERVER_SOURCE", STUB_SERVER)
+    monkeypatch.setattr(
+        w, "checked_candidate", lambda *_: (tmp_path, tmp_path, Path(sys.executable))
+    )
+    monkeypatch.setattr(w, "checked_provenance", lambda *_: {"wheels": []})
+    monkeypatch.setattr(w, "checked_scenario_root", lambda *_: {})
+    failures: list[int] = []
+
+    def no_descriptor_left(pid: int) -> None:
+        if not failures:
+            failures.append(pid)
+            raise OSError(errno.EMFILE, "injected: no descriptor left")
+
+    alias.before_pidfd_open = no_descriptor_left  # the server's acquisition fails once
+    alias.refuse_next_kill = True  # and so does its first cleanup kill
+    receipt, output = tmp_path / "receipt.json", tmp_path / "out" / "report.json"
+    receipt.write_text("{}")
+    output.parent.mkdir()
+
+    with pytest.raises(PermissionError) as raised:
+        w.run(tmp_path, tmp_path, "0" * 40, receipt, tmp_path / "scenario", output)
+
+    assert isinstance(raised.value.__context__, OSError)
+    assert raised.value.__context__.errno == errno.EMFILE
+    [server] = failures
+    assert alias.to(server) == [signal.SIGKILL, signal.SIGKILL]  # refused, then delivered once
+    assert leader_reaped(server), "the tool server outlived every finalizer"
 
 
 def test_every_finalizer_unwinds_with_interruptions_held_even_after_one_fails() -> None:

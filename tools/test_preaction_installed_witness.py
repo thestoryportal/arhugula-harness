@@ -1295,6 +1295,12 @@ def on_group_signal(target, sig):
     if settling and case == "phase-acquisition-and-cleanup-kill-fail":
         facts["boundary"] = {"fired": True}
         raise PermissionError("injected kill failure during cleanup")
+    server = target in facts["owned_pgids"] and target not in phase_pgids
+    if server and sig == signal.SIGKILL and case == "tool-server-acquisition-and-cleanup-kill-fail":
+        if "kill" not in injected:
+            injected.add("kill")
+            facts["boundary"] = {"fired": True}
+            raise PermissionError("injected server kill failure during cleanup")
     if case == "term-during-cleanup" and sig and "fired" not in facts["boundary"]:
         facts["boundary"].update(fired=True, signal=sig)
         deliver_term()
@@ -1328,6 +1334,7 @@ def pidfd_open(pid, *rest):
     fail_at = {
         "phase-acquisition-and-cleanup-kill-fail": "p-run",
         "tool-server-acquisition-fails": "tool-server",
+        "tool-server-acquisition-and-cleanup-kill-fail": "tool-server",
     }
     if fail_at.get(case) == phase and "acquisition" not in injected:
         injected.add("acquisition")
@@ -1408,6 +1415,10 @@ LIFECYCLE_CASES: dict[str, tuple[list[str], dict[str, object]]] = {
     "term-at-settle-gone-proof": (["InterruptedError"], {"fired": True, "held": True}),
     "phase-acquisition-and-cleanup-kill-fail": (["PermissionError", "OSError"], {"fired": True}),
     "tool-server-acquisition-fails": (["OSError"], {}),
+    "tool-server-acquisition-and-cleanup-kill-fail": (
+        ["PermissionError", "OSError"],
+        {"fired": True},
+    ),
     "phase-reservation-lost": (["ReservationLostError"], {}),
     "cleanup-stream-fails": (
         ["FileNotFoundError", "InterruptedError"],

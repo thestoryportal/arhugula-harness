@@ -899,6 +899,7 @@ def with_services(
     logs: Path,
     deadline: float,
     fleet: Fleet,
+    servers: Fleet,
     body: Callable[[WebhookCapture], dict[str, object]],
 ) -> dict[str, object]:
     """Own the webhook listener, the tool server and every phase group for one scenario's life.
@@ -919,6 +920,7 @@ def with_services(
         HELPERS.write_new(layout.config, config_text(layout, capture.port, tool_port))
 
         def own_server(server: Child) -> None:
+            servers.own(server)  # the caller's later finalizer retries it if this cleanup fails
             owners.callback(lambda: tool_server.update(kill=HELPERS.kill_group(server)))
 
         server = HELPERS.spawn(
@@ -1337,9 +1339,10 @@ def rehearse(
     helper = Path(__file__).resolve(strict=True)
     deadline = time.monotonic() + OVERALL_CAP_SECONDS
     evidence: dict[str, dict[str, object]] = {}
-    fleet = Fleet()
+    fleet, servers = Fleet(), Fleet()
     with term_as_interrupt(), Owners() as outer:
-        # The later, independent finalizer: it retries any phase whose first cleanup failed.
+        # The later, independent finalizers: they retry any group whose first cleanup failed.
+        outer.callback(servers.settle_all)
         outer.callback(fleet.settle_all)
         for name in SCENARIOS:
             layout = Layout(root / name)
@@ -1370,6 +1373,7 @@ def rehearse(
                 logs,
                 deadline,
                 fleet,
+                servers,
                 lambda capture, name=name, layout=layout, launch=launch: run_scenario(
                     name, layout, launch, capture, deadline
                 ),
@@ -1421,9 +1425,10 @@ def run(
         "status": "INCONCLUSIVE",
     }
     evidence: dict[str, dict[str, object]] = {}
-    fleet = Fleet()
+    fleet, servers = Fleet(), Fleet()
     with term_as_interrupt(), Owners() as outer:
-        # The later, independent finalizer: it retries any phase whose first cleanup failed.
+        # The later, independent finalizers: they retry any group whose first cleanup failed.
+        outer.callback(servers.settle_all)
         outer.callback(fleet.settle_all)
         for name in SCENARIOS:
             layout = Layout(scenario_root / name)
@@ -1464,6 +1469,7 @@ def run(
                 scenario_logs,
                 deadline,
                 fleet,
+                servers,
                 lambda capture, name=name, layout=layout, launch=launch: run_scenario(
                     name, layout, launch, capture, deadline
                 ),
