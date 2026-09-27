@@ -45,10 +45,10 @@ import time
 import traceback
 from collections import Counter
 from collections.abc import Callable, Generator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
-from types import FrameType, ModuleType
+from types import FrameType, ModuleType, TracebackType
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:  # static types only: the product is never imported by the parent process
@@ -431,11 +431,14 @@ class WebhookCapture:
         return int(self.server.server_address[1])
 
     def start(self) -> None:
-        self.thread.start()
+        # [LAW:no-ambient-temporal-coupling] A thread inherits its creator's signal mask, so this
+        # listener can never take a TERM; one the main thread holds stays pending for the process.
+        with term_deferred():
+            self.thread.start()
 
-    def close(self) -> None:
+    def stop(self) -> None:
+        """Stop the serving thread; the socket has its own owner (`server.server_close`)."""
         self.server.shutdown()
-        self.server.server_close()
         self.thread.join(timeout=3)
         if self.thread.is_alive():
             raise RuntimeError("owned loopback webhook listener did not stop")
@@ -884,10 +887,11 @@ def _no_scenario_evidence() -> dict[str, object]:
 
 @contextlib.contextmanager
 def term_deferred() -> Generator[None]:
-    """Hold SIGTERM delivery for one short region; a pending TERM is delivered on exit.
+    """Hold SIGTERM delivery for one bounded region; a pending TERM is delivered on exit.
 
-    [LAW:no-ambient-temporal-coupling] A TERM must not land between a child being created and its
-    handle being owned, nor half-way through cleanup: both regions are bounded and use this.
+    [LAW:no-ambient-temporal-coupling] A TERM must not land between a resource being created and
+    it being owned, nor half-way through settling or cleanup. Blocking this thread holds the TERM
+    for the whole process only because no other thread can take it (`WebhookCapture.start`).
     """
     blocked = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM})
     try:
@@ -896,24 +900,84 @@ def term_deferred() -> Generator[None]:
         signal.pthread_sigmask(signal.SIG_SETMASK, blocked)
 
 
-@dataclass
-class Fleet:
-    """Every phase child this attempt started, so cleanup reaches the one in flight.
+class Owners(contextlib.ExitStack[None]):
+    """A scope, entered before anything is acquired, whose finalizers all run with TERM held.
 
-    The handle is owned in the same deferred-TERM region that creates it. Only groups this helper
-    started (`start_new_session`) are ever signalled, and only while their process still runs.
+    [LAW:no-ambient-temporal-coupling] Acquire each resource and register its finalizer in one
+    `term_deferred` region inside this scope, so nothing lands between creation and ownership.
+    `ExitStack` runs every finalizer even when an earlier one raises: a failed close never strands
+    a later owner, and its failure is chained onto whatever ended the body. Its finalizers are
+    plain callbacks, so it never suppresses an exception.
     """
 
-    children: list[Any]
+    def __exit__(
+        self,
+        typ: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+        /,
+    ) -> None:
+        with term_deferred():
+            super().__exit__(typ, exc, tb)
+
+
+def _group_alive(pgid: int) -> bool:
+    try:
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+@dataclass
+class Fleet:
+    """Every phase child this attempt started, owned by process group until that group is gone.
+
+    [LAW:no-ambient-temporal-coupling] Ownership is state, not leader liveness: a group is
+    unsettled from the deferred-TERM region that creates its leader until it is proved empty, even
+    after the leader exits. Only unsettled groups (each from `start_new_session`) are signalled; a
+    released group is never signalled again, because its id may since belong to someone else.
+    """
+
+    unsettled: dict[int, Any] = field(default_factory=dict[int, Any])
 
     def launch(self, launch: Launcher, phase: str) -> Any:
         with term_deferred():
             child = launch(phase)
-            self.children.append(child)
+            self.unsettled[child.proc.pid] = child
         return child
 
-    def kill_running(self) -> list[dict[str, object]]:
-        return [HELPERS.kill_group(child) for child in self.children if child.proc.poll() is None]
+    def settle(self, pgid: int) -> bool:
+        """Kill whatever of an owned group outlived its leader, then release it; True if any did.
+
+        TERM is held for the whole step, so the group is released together with its proof of
+        absence; an exception leaves it owned for cleanup.
+        """
+        if pgid not in self.unsettled:
+            raise ValueError(f"{pgid} is not an owned unsettled group")
+        with term_deferred():
+            survivors = _group_alive(pgid)
+            self._release(pgid)
+        return survivors
+
+    def settle_all(self) -> list[dict[str, object]]:
+        """Kill and release every owned unsettled group, each independently of the others."""
+        kills: list[dict[str, object]] = []
+
+        def release(pgid: int) -> None:
+            kills.append(self._release(pgid))
+
+        with contextlib.ExitStack() as each:
+            for pgid in tuple(self.unsettled):
+                each.callback(release, pgid)
+        return kills
+
+    def _release(self, pgid: int) -> dict[str, object]:
+        kill: dict[str, object] = HELPERS.kill_group(self.unsettled[pgid])
+        if kill["group_gone"] is not True:  # [LAW:no-silent-failure] it stays owned and loud
+            raise RuntimeError(f"process group {pgid} outlived SIGKILL")
+        del self.unsettled[pgid]
+        return kill
 
 
 def with_services(
@@ -924,58 +988,40 @@ def with_services(
     fleet: Fleet,
     body: Callable[[WebhookCapture], dict[str, object]],
 ) -> dict[str, object]:
-    """Own the webhook listener and the tool server for exactly one scenario's life."""
-    capture = WebhookCapture()
-    tool_port = HELPERS.free_loopback_port()
-    HELPERS.write_new(layout.mcp_server, MCP_SERVER_SOURCE)
-    HELPERS.write_new(layout.config, config_text(layout, capture.port, tool_port))
-    capture.start()
-    with term_deferred():
-        server = HELPERS.spawn(
-            [str(python), "-I", str(layout.mcp_server), str(layout.tool_calls), str(tool_port)],
-            {"PATH": "/usr/bin:/bin", "HOME": str(layout.home), "TMPDIR": str(layout.tmp)},
-            layout.tmp,
-            logs,
-            "tool-server",
-        )
-    ready = False
-    try:
+    """Own the webhook listener, the tool server and every phase group for one scenario's life.
+
+    They close in reverse order of ownership: phase groups, the tool server's record then its
+    group, the webhook's thread, then its socket.
+    """
+    tool_server: dict[str, object] = {}
+    phase_cleanup: list[dict[str, object]] = []
+    with Owners() as owners:
+        with term_deferred():
+            capture = WebhookCapture()
+            owners.callback(capture.server.server_close)
+            capture.start()
+            owners.callback(capture.stop)
+        tool_port = HELPERS.free_loopback_port()
+        HELPERS.write_new(layout.mcp_server, MCP_SERVER_SOURCE)
+        HELPERS.write_new(layout.config, config_text(layout, capture.port, tool_port))
+        with term_deferred():
+            server = HELPERS.spawn(
+                [str(python), "-I", str(layout.mcp_server), str(layout.tool_calls), str(tool_port)],
+                {"PATH": "/usr/bin:/bin", "HOME": str(layout.home), "TMPDIR": str(layout.tmp)},
+                layout.tmp,
+                logs,
+                "tool-server",
+            )
+            owners.callback(lambda: tool_server.update(kill=HELPERS.kill_group(server)))
+        owners.callback(lambda: tool_server.update(HELPERS.stream_record(server)))
+        owners.callback(lambda: phase_cleanup.extend(fleet.settle_all()))
         ready = HELPERS.wait_listening(server, tool_port, deadline)
         evidence = body(capture) if ready else _no_scenario_evidence()
-    finally:
-        with term_deferred():
-            phase_cleanup = fleet.kill_running()
-            tool_server = {
-                **HELPERS.stream_record(server),
-                "ready": ready,
-                "kill": HELPERS.kill_group(server),
-            }
-            capture.close()
     evidence["phase_cleanup"] = phase_cleanup
-    evidence["tool_server"] = tool_server
+    evidence["tool_server"] = {**tool_server, "ready": ready}
     evidence["webhook_requests"] = capture.requests
     evidence["webhook_errors"] = capture.errors
     return evidence
-
-
-def settle_group(pgid: int) -> bool:
-    """True if any process of the child's OWN group outlived it; those survivors are then killed.
-
-    The parent only ever signals the group it started (`start_new_session`), never a pid it found.
-    """
-    survivors = False
-    for _ in range(20):
-        try:
-            os.killpg(pgid, 0)
-        except ProcessLookupError:
-            return survivors
-        survivors = True
-        try:
-            os.killpg(pgid, signal.SIGKILL)
-        except ProcessLookupError:
-            return survivors
-        time.sleep(0.05)
-    return survivors
 
 
 @dataclass(frozen=True)
@@ -990,7 +1036,7 @@ class PhaseRun:
 def parse_phase_run(record: dict[str, object]) -> PhaseRun:
     """A waited child's record as typed facts; a malformed record raises, it does not continue.
 
-    [LAW:parse-dont-validate] `settle_group` signals a process group, so its id must be a real
+    [LAW:parse-dont-validate] `Fleet.settle` signals a process group, so its id must be a real
     int (a bool or a string is refused) before it reaches `killpg`.
     """
     pgid, code = PROVER.exact_int(record.get("pgid")), PROVER.exact_int(record.get("exit"))
@@ -1019,7 +1065,7 @@ def run_scenario(
     for phase in SCENARIOS[name]:
         finished = HELPERS.finish(fleet.launch(launch, phase), deadline)
         run = parse_phase_run(finished)
-        runs[phase] = {**finished, "group_survivors": settle_group(run.pgid)}
+        runs[phase] = {**finished, "group_survivors": fleet.settle(run.pgid)}
         results[phase] = HELPERS.load_result(layout, phase)
         services[phase] = {
             "webhook_keys": [str(r["idempotency_key"]) for r in capture.requests],
@@ -1374,7 +1420,7 @@ def rehearse(
     helper = Path(__file__).resolve(strict=True)
     deadline = time.monotonic() + OVERALL_CAP_SECONDS
     evidence: dict[str, dict[str, object]] = {}
-    fleet = Fleet([])
+    fleet = Fleet()
     with term_as_interrupt():
         for name in SCENARIOS:
             layout = Layout(root / name)
@@ -1456,7 +1502,7 @@ def run(
         "status": "INCONCLUSIVE",
     }
     evidence: dict[str, dict[str, object]] = {}
-    fleet = Fleet([])
+    fleet = Fleet()
     with term_as_interrupt():
         for name in SCENARIOS:
             layout = Layout(scenario_root / name)
