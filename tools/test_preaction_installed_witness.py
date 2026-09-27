@@ -17,6 +17,7 @@ import subprocess
 import sys
 from collections.abc import Callable
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -1130,15 +1131,6 @@ def test_a_phase_run_record_is_parsed_into_typed_facts_or_refused() -> None:
             pw.parse_phase_run(bad)
 
 
-class Child:
-    """Stands in for a started phase process that has already exited."""
-
-    class proc:  # the attribute shape of `subprocess.Popen`; only `poll` is read
-        @staticmethod
-        def poll() -> int:
-            return 0
-
-
 def test_a_malformed_child_record_stops_the_loop_before_any_group_is_signalled(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1152,8 +1144,9 @@ def test_a_malformed_child_record_stops_the_loop_before_any_group_is_signalled(
     def finished_with_a_bool_group(*_args: object) -> dict[str, object]:
         return {"pgid": True, "timeout": False, "exit": 0}
 
-    def launch_nothing(_phase: str) -> Child:
-        return Child()
+    def launch_nothing(_phase: str) -> SimpleNamespace:
+        """A started phase process that has already exited (only `proc.poll` is read)."""
+        return SimpleNamespace(proc=SimpleNamespace(poll=lambda: 0))
 
     monkeypatch.setattr(pw, "settle_group", record_signal)
     monkeypatch.setattr(pw.HELPERS, "finish", finished_with_a_bool_group)
