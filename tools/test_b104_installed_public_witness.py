@@ -1982,12 +1982,20 @@ def test_b104_run_retries_a_tool_server_whose_acquisition_and_first_cleanup_fail
     tmp_path: Path, alias: Alias, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """R1: the server stays reachable by the later, independent finalizer of B104's own run."""
+
+    def candidate(*_args: object) -> tuple[Path, Path, Path]:
+        return tmp_path, tmp_path, Path(sys.executable)
+
+    def no_wheels(*_args: object) -> dict[str, list[str]]:
+        return {"wheels": []}
+
+    def no_placement(*_args: object) -> dict[str, str]:
+        return {}
+
     monkeypatch.setattr(w, "MCP_SERVER_SOURCE", STUB_SERVER)
-    monkeypatch.setattr(
-        w, "checked_candidate", lambda *_: (tmp_path, tmp_path, Path(sys.executable))
-    )
-    monkeypatch.setattr(w, "checked_provenance", lambda *_: {"wheels": []})
-    monkeypatch.setattr(w, "checked_scenario_root", lambda *_: {})
+    monkeypatch.setattr(w, "checked_candidate", candidate)
+    monkeypatch.setattr(w, "checked_provenance", no_wheels)
+    monkeypatch.setattr(w, "checked_scenario_root", no_placement)
     failures: list[int] = []
 
     def no_descriptor_left(pid: int) -> None:
