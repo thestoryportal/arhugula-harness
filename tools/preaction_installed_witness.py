@@ -45,10 +45,10 @@ import time
 import traceback
 from collections import Counter
 from collections.abc import Callable, Generator
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
-from types import FrameType, ModuleType, TracebackType
+from types import FrameType, ModuleType
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:  # static types only: the product is never imported by the parent process
@@ -56,10 +56,14 @@ if TYPE_CHECKING:  # static types only: the product is never imported by the par
 
     from b104_installed_public_witness import (
         Broken,
+        Child,
         Completed,
+        Fleet,
+        Owners,
         PhaseState,
         TimedOut,
         Unstarted,
+        interruptions_held,
     )
     from harness_core import JournalRecordRef
     from harness_cp.pause_resume_protocol_types import PauseSnapshot
@@ -93,12 +97,16 @@ def _load_sibling(name: str) -> ModuleType:
 
 PROVER = _load_sibling("installed_witness_provenance")
 HELPERS = _load_sibling("b104_installed_public_witness")  # generic process-ownership helpers
-if not TYPE_CHECKING:  # the typed views of the B-104 phase states are imported above
-    Broken, Completed, TimedOut, Unstarted = (
+if not TYPE_CHECKING:  # the typed views of the shared B-104 owners are imported above
+    Broken, Child, Completed, Fleet, Owners, TimedOut, Unstarted, interruptions_held = (
         HELPERS.Broken,
+        HELPERS.Child,
         HELPERS.Completed,
+        HELPERS.Fleet,
+        HELPERS.Owners,
         HELPERS.TimedOut,
         HELPERS.Unstarted,
+        HELPERS.interruptions_held,
     )
 SHARED_PROVER_PATH = _sibling_path("installed_witness_provenance")
 HELPERS_PATH = _sibling_path("b104_installed_public_witness")
@@ -432,8 +440,8 @@ class WebhookCapture:
 
     def start(self) -> None:
         # [LAW:no-ambient-temporal-coupling] A thread inherits its creator's signal mask, so this
-        # listener can never take a TERM; one the main thread holds stays pending for the process.
-        with term_deferred():
+        # listener never takes an interruption; one the main thread holds stays pending for all.
+        with interruptions_held():
             self.thread.start()
 
     def stop(self) -> None:
@@ -858,7 +866,7 @@ def prepare_layout(layout: Layout) -> None:
         directory.mkdir(mode=0o700, parents=True)
 
 
-Launcher = Callable[[str], Any]
+Launcher = Callable[[str], Child]
 
 
 @contextlib.contextmanager
@@ -885,73 +893,6 @@ def _no_scenario_evidence() -> dict[str, object]:
     return {"runs": {}, "results": {}, "services": {}}
 
 
-@contextlib.contextmanager
-def term_deferred() -> Generator[None]:
-    """Hold SIGTERM delivery for one bounded region; a pending TERM is delivered on exit.
-
-    [LAW:no-ambient-temporal-coupling] A TERM must not land between a resource being created and
-    it being owned, nor half-way through settling or cleanup. Blocking this thread holds the TERM
-    for the whole process only because no other thread can take it (`WebhookCapture.start`).
-    """
-    blocked = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM})
-    try:
-        yield
-    finally:
-        signal.pthread_sigmask(signal.SIG_SETMASK, blocked)
-
-
-class Owners(contextlib.ExitStack[None]):
-    """A scope, entered before anything is acquired, whose finalizers all run with TERM held.
-
-    [LAW:no-ambient-temporal-coupling] Acquire each resource and register its finalizer in one
-    `term_deferred` region inside this scope, so nothing lands between creation and ownership.
-    `ExitStack` runs every finalizer even when an earlier one raises: a failed close never strands
-    a later owner, and its failure is chained onto whatever ended the body. Its finalizers are
-    plain callbacks, so it never suppresses an exception.
-    """
-
-    def __exit__(
-        self,
-        typ: type[BaseException] | None,
-        exc: BaseException | None,
-        tb: TracebackType | None,
-        /,
-    ) -> None:
-        with term_deferred():
-            super().__exit__(typ, exc, tb)
-
-
-@dataclass
-class Fleet:
-    """Every phase child this attempt started, so cleanup reaches each one not yet released.
-
-    [LAW:single-enforcer] Each child's group lifetime belongs to B104's `Child` alone: it signals
-    only while the kernel still reserves the group's number and releases that number exactly once.
-    The fleet holds no numbers and validates no groups; it only hands every unreleased child,
-    including the one in flight, to its owner's `settle` at cleanup.
-    """
-
-    children: list[Any] = field(default_factory=list[Any])
-
-    def launch(self, launch: Launcher, phase: str) -> Any:
-        with term_deferred():
-            child = launch(phase)
-            self.children.append(child)
-        return child
-
-    def settle_all(self) -> list[dict[str, object]]:
-        """Settle every unreleased child, each independently of the others' failures."""
-        kills: list[dict[str, object]] = []
-
-        def release(child: Any) -> None:
-            kills.append(HELPERS.kill_group(child))
-
-        with contextlib.ExitStack() as each:
-            for child in [c for c in self.children if not c.released]:
-                each.callback(release, child)
-        return kills
-
-
 def with_services(
     layout: Layout,
     python: Path,
@@ -968,7 +909,7 @@ def with_services(
     tool_server: dict[str, object] = {}
     phase_cleanup: list[dict[str, object]] = []
     with Owners() as owners:
-        with term_deferred():
+        with interruptions_held():
             capture = WebhookCapture()
             owners.callback(capture.server.server_close)
             capture.start()
@@ -976,15 +917,18 @@ def with_services(
         tool_port = HELPERS.free_loopback_port()
         HELPERS.write_new(layout.mcp_server, MCP_SERVER_SOURCE)
         HELPERS.write_new(layout.config, config_text(layout, capture.port, tool_port))
-        with term_deferred():
-            server = HELPERS.spawn(
-                [str(python), "-I", str(layout.mcp_server), str(layout.tool_calls), str(tool_port)],
-                {"PATH": "/usr/bin:/bin", "HOME": str(layout.home), "TMPDIR": str(layout.tmp)},
-                layout.tmp,
-                logs,
-                "tool-server",
-            )
+
+        def own_server(server: Child) -> None:
             owners.callback(lambda: tool_server.update(kill=HELPERS.kill_group(server)))
+
+        server = HELPERS.spawn(
+            [str(python), "-I", str(layout.mcp_server), str(layout.tool_calls), str(tool_port)],
+            {"PATH": "/usr/bin:/bin", "HOME": str(layout.home), "TMPDIR": str(layout.tmp)},
+            layout.tmp,
+            logs,
+            "tool-server",
+            own_server,
+        )
         owners.callback(lambda: tool_server.update(HELPERS.stream_record(server)))
         owners.callback(lambda: phase_cleanup.extend(fleet.settle_all()))
         ready = HELPERS.wait_listening(server, tool_port, deadline)
@@ -1023,7 +967,6 @@ def run_scenario(
     name: str,
     layout: Layout,
     launch: Launcher,
-    fleet: Fleet,
     capture: WebhookCapture,
     deadline: float,
 ) -> dict[str, object]:
@@ -1036,8 +979,8 @@ def run_scenario(
     results: dict[str, object] = {}
     services: dict[str, object] = {}
     for phase in SCENARIOS[name]:
-        # The owner settles and releases the phase's group inside `finish`, with TERM held.
-        finished = HELPERS.finish(fleet.launch(launch, phase), deadline, term_deferred)
+        # The owner settles and releases the phase's group inside `finish`, holding interruptions.
+        finished = HELPERS.finish(launch(phase), deadline)
         run = parse_phase_run(finished)
         runs[phase] = finished
         results[phase] = HELPERS.load_result(layout, phase)
@@ -1395,7 +1338,9 @@ def rehearse(
     deadline = time.monotonic() + OVERALL_CAP_SECONDS
     evidence: dict[str, dict[str, object]] = {}
     fleet = Fleet()
-    with term_as_interrupt():
+    with term_as_interrupt(), Owners() as outer:
+        # The later, independent finalizer: it retries any phase whose first cleanup failed.
+        outer.callback(fleet.settle_all)
         for name in SCENARIOS:
             layout = Layout(root / name)
             prepare_layout(layout)
@@ -1415,9 +1360,9 @@ def rehearse(
                 layout: Layout = layout,
                 logs: Path = logs,
                 fixed: list[str] = fixed,
-            ) -> Any:
+            ) -> Child:
                 argv = child_argv_source(python, helper, name, phase, fixed)
-                return HELPERS.spawn(argv, env, layout.tmp, logs, f"{name}-{phase}")
+                return HELPERS.spawn(argv, env, layout.tmp, logs, f"{name}-{phase}", fleet.own)
 
             evidence[name] = with_services(
                 layout,
@@ -1426,7 +1371,7 @@ def rehearse(
                 deadline,
                 fleet,
                 lambda capture, name=name, layout=layout, launch=launch: run_scenario(
-                    name, layout, launch, fleet, capture, deadline
+                    name, layout, launch, capture, deadline
                 ),
             )
             evidence[name]["ledger_dir"] = str(layout.ledger_dir)
@@ -1477,7 +1422,9 @@ def run(
     }
     evidence: dict[str, dict[str, object]] = {}
     fleet = Fleet()
-    with term_as_interrupt():
+    with term_as_interrupt(), Owners() as outer:
+        # The later, independent finalizer: it retries any phase whose first cleanup failed.
+        outer.callback(fleet.settle_all)
         for name in SCENARIOS:
             layout = Layout(scenario_root / name)
             prepare_layout(layout)
@@ -1505,9 +1452,11 @@ def run(
                 layout: Layout = layout,
                 scenario_logs: Path = scenario_logs,
                 fixed: list[str] = fixed,
-            ) -> Any:
+            ) -> Child:
                 argv = child_argv_installed(python, helper, name, phase, fixed)
-                return HELPERS.spawn(argv, env, layout.tmp, scenario_logs, f"{name}-{phase}")
+                return HELPERS.spawn(
+                    argv, env, layout.tmp, scenario_logs, f"{name}-{phase}", fleet.own
+                )
 
             evidence[name] = with_services(
                 layout,
@@ -1516,7 +1465,7 @@ def run(
                 deadline,
                 fleet,
                 lambda capture, name=name, layout=layout, launch=launch: run_scenario(
-                    name, layout, launch, fleet, capture, deadline
+                    name, layout, launch, capture, deadline
                 ),
             )
     report["evidence"] = evidence

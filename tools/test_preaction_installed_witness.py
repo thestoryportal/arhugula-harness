@@ -17,7 +17,6 @@ import subprocess
 import sys
 from collections.abc import Callable
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -26,8 +25,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import installed_witness_provenance as prover
 import preaction_installed_witness as pw
-from test_b104_installed_public_witness import Alias, leader_reaped, process_live
+from test_b104_installed_public_witness import Alias, kernel_state, leader_reaped, settle_children
 from test_b104_installed_public_witness import alias as alias  # the shared alias fixture
+from test_b104_installed_public_witness import orphans as orphans  # every test settles its orphans
 from test_installed_witness_provenance import Fixture
 
 TOOLS = Path(__file__).resolve().parent
@@ -789,10 +789,9 @@ def test_the_scenario_plan_matches_the_reviewed_design() -> None:
     assert pw.KEY_A.endswith(":step:1:pre-action") and pw.KEY_C.endswith(":step:2:pre-action")
 
 
-def _starter(tmp_path: Path, argv: list[str]) -> Callable[[str], Any]:
-    return lambda phase: pw.HELPERS.spawn(
-        argv, {"PATH": "/usr/bin:/bin"}, tmp_path, tmp_path, phase
-    )
+def _start(fleet: Any, tmp_path: Path, argv: list[str], phase: str) -> Any:
+    env = {"PATH": "/usr/bin:/bin"}
+    return pw.HELPERS.spawn(argv, env, tmp_path, tmp_path, phase, fleet.own)
 
 
 def test_the_fleet_settles_each_owned_child_once_and_never_signals_a_released_number(
@@ -800,9 +799,8 @@ def test_the_fleet_settles_each_owned_child_once_and_never_signals_a_released_nu
 ) -> None:
     """Settlement belongs to B104's owner; the fleet only reaches every child not yet released."""
     fleet = pw.Fleet()
-    running = fleet.launch(_starter(tmp_path, ["sleep", "30"]), "running")
-    exited = fleet.launch(_starter(tmp_path, ["true"]), "exited")
-    alias.owned |= {running.proc.pid, exited.proc.pid}
+    running = _start(fleet, tmp_path, ["sleep", "30"], "running")
+    exited = _start(fleet, tmp_path, ["true"], "exited")
     os.waitid(os.P_PID, exited.proc.pid, os.WEXITED | os.WNOWAIT)  # exited, not reaped
 
     kills = fleet.settle_all()
@@ -815,21 +813,21 @@ def test_the_fleet_settles_each_owned_child_once_and_never_signals_a_released_nu
     assert alias.to(running.proc.pid) == alias.to(exited.proc.pid) == [signal.SIGKILL]
 
 
-def _term_blocked(native_id: int) -> bool:
+def _blocked(native_id: int, sig: signal.Signals) -> bool:
     status = Path(f"/proc/self/task/{native_id}/status").read_text()
     [mask] = [line.split()[1] for line in status.splitlines() if line.startswith("SigBlk:")]
-    return bool(int(mask, 16) >> (signal.SIGTERM - 1) & 1)
+    return bool(int(mask, 16) >> (sig - 1) & 1)
 
 
-def test_the_webhook_thread_blocks_term_even_when_started_by_an_unmasked_caller() -> None:
-    """Started from an unmasked caller, the listener still blocks TERM for its whole life."""
+def test_the_webhook_thread_blocks_interruptions_even_when_started_by_an_unmasked_caller() -> None:
+    """Started from an unmasked caller, the listener still blocks TERM and INT for its life."""
     assert signal.SIGTERM not in signal.pthread_sigmask(signal.SIG_BLOCK, [])
     capture = pw.WebhookCapture()
     capture.start()
     try:
         native_id = capture.thread.native_id
         assert native_id is not None
-        assert _term_blocked(native_id)
+        assert _blocked(native_id, signal.SIGTERM) and _blocked(native_id, signal.SIGINT)
     finally:  # the server's own API, so a broken capture can never leave its thread running
         capture.server.shutdown()
         capture.server.server_close()
@@ -839,8 +837,7 @@ def test_a_failed_group_kill_stays_owned_and_never_strands_the_other_groups(
     tmp_path: Path, alias: Alias
 ) -> None:
     fleet = pw.Fleet()
-    children = [fleet.launch(_starter(tmp_path, ["sleep", "30"]), f"c{i}") for i in range(2)]
-    alias.owned |= {c.proc.pid for c in children}
+    children = [_start(fleet, tmp_path, ["sleep", "30"], f"c{i}") for i in range(2)]
     alias.refuse_next_kill = True
 
     with pytest.raises(PermissionError):
@@ -848,10 +845,10 @@ def test_a_failed_group_kill_stays_owned_and_never_strands_the_other_groups(
 
     [refused] = [c.proc.pid for c in children if not leader_reaped(c.proc.pid)]
     [other] = [c.proc.pid for c in children if c.proc.pid != refused]
-    assert not process_live(other), "a later group was stranded by an earlier failure"
-    assert process_live(refused)  # still owned: unreaped, so its number is still reserved
+    assert leader_reaped(other), "a later group was stranded by an earlier failure"
+    assert kernel_state(refused) == "running"  # still owned: unreaped, its number reserved
     assert [kill["pgid"] for kill in fleet.settle_all()] == [refused]
-    assert leader_reaped(refused) and not process_live(refused)
+    assert leader_reaped(refused)
 
 
 # --- G1: the source rehearsal (opt-in; never installed acceptance) -------------------------------
@@ -1062,12 +1059,17 @@ def _wait_for(path: Path, seconds: float = 20.0) -> int:
     raise AssertionError(f"{path} never appeared")
 
 
-def _alive(pgid: int) -> bool:
-    try:
-        os.killpg(pgid, 0)
-    except ProcessLookupError:
-        return False
-    return True
+def _outlived(driver: subprocess.Popen[bytes], bystander: subprocess.Popen[bytes]) -> list[Any]:
+    """Every process the driver left alive, found and settled by identity after it exited.
+
+    The driver's descendants return to this subreaper test process once their parents are gone,
+    in any group or session, so they are exactly this process's remaining children.
+    """
+    driver.wait()
+    assert kernel_state(bystander.pid) == "running", "an unrelated process was killed"
+    bystander.kill()
+    bystander.wait()
+    return [record for record in settle_children() if record["live"]]
 
 
 @pytest.mark.parametrize("mode", ["rehearse", "run"])
@@ -1084,27 +1086,18 @@ def test_sigterm_mid_scenario_leaves_no_owned_process_group_alive(
         stdout=subprocess.DEVNULL,
         stderr=subprocess.PIPE,
     )
-    owned: list[int] = []
     try:
-        phase_pgid = _wait_for(root / "phase.pgid")
-        owned.append(phase_pgid)
-        tool_markers = sorted(root.rglob("*.pgid"))
-        tool_pgids = [int(m.read_text()) for m in tool_markers if m.name != "phase.pgid"]
-        owned += tool_pgids
-        assert tool_pgids, "the stub tool server never announced its group"
-        assert all(_alive(p) for p in owned)
+        _wait_for(root / "phase.pgid")  # the phase stub announces its own group while it runs
+        tool_markers = [m for m in root.rglob("*.pgid") if m.name != "phase.pgid"]
+        assert tool_markers, "the stub tool server never announced its group"
 
         driver.send_signal(signal.SIGTERM)
         driver.wait(timeout=30)
 
-        survivors = [p for p in owned if _alive(p)]
-        assert survivors == [], f"owned groups outlived the helper: {survivors}"
-        assert bystander.poll() is None and _alive(bystander.pid), "an unrelated process was killed"
+        outlived = _outlived(driver, bystander)
+        assert outlived == [], f"owned processes outlived the helper: {outlived}"
     finally:
-        for pgid in owned:
-            if _alive(pgid):
-                os.killpg(pgid, signal.SIGKILL)
-        if driver.poll() is None:
+        if driver.poll() is None:  # our own unreaped child; its descendants come back here
             driver.kill()
         driver.wait()
         bystander.kill()
@@ -1114,15 +1107,18 @@ def test_sigterm_mid_scenario_leaves_no_owned_process_group_alive(
 # --- lifecycle boundaries: acquisition, registration, settlement and cleanup under TERM/faults ---
 #
 # Each case runs the real `rehearse` in its own driver process with stub services. The fault or the
-# process-directed TERM is injected at an OS-facing seam (`HELPERS.spawn`, `HELPERS.finish`,
-# `os.killpg`, `os.waitid`/`os.waitpid`, a removed log file), fired by an observable parent or
-# kernel event, never by a sleep. Every group signal also passes a deterministic numeric alias: a
-# signal to an owned number whose leader the kernel reports reaped is recorded and redirected to
-# the test's bystander group, as if that number had been reused. The driver exits without waiting
-# for threads, so a leaked listener is reported instead of hanging the test.
+# process-directed TERM is injected at an OS-facing seam (`HELPERS.spawn` and its `own`,
+# `HELPERS.finish`, `os.pidfd_open`, `os.killpg`/`signal.pidfd_send_signal`, `os.waitid` and
+# `os.waitpid`, a removed log file), fired by an observable parent or kernel event, never by a
+# sleep. Every group
+# signal passes a deterministic alias: a numeric signal to an owned number whose leader the kernel
+# reports reaped is redirected to the test's bystander group, as if the number had been reused, and
+# nothing is ever delivered outside the owned processes. The driver exits without waiting for
+# threads, so a leaked listener is reported instead of hanging the test; every process it leaves
+# comes back to this subreaper test and is settled by identity.
 
 _LIFECYCLE_DRIVER = r"""
-import json, os, signal, socket, sys, threading, time, traceback
+import errno, json, os, signal, socket, sys, threading, time, traceback
 from pathlib import Path
 
 sys.path.insert(0, sys.argv[1])
@@ -1131,7 +1127,10 @@ import preaction_installed_witness as pw
 case, root, bystander_pgid = sys.argv[2], Path(sys.argv[3]), int(sys.argv[4])
 work = root / "work"
 work.mkdir(parents=True)
-facts = {"owned_pgids": [], "webhook_ports": [], "boundary": {}, "unreserved": [], "kills": {}}
+facts = {
+    "owned_pgids": [], "webhook_ports": [], "boundary": {}, "unreserved": [], "foreign": [],
+    "kills": {},
+}
 original_handler = signal.getsignal(signal.SIGTERM)
 
 pw.MCP_SERVER_SOURCE = "" if case == "tool-server-exits-early" else '''
@@ -1157,6 +1156,7 @@ LEADERS = {
     "kill-fails-during-settle": EXITING_LEADER,
     "term-at-settle-gone-proof": EXITING_LEADER,
     "normal-exit": "pass",
+    "phase-reservation-lost": "pass",
     "finish-stream-fails": "import os, sys; os.unlink(sys.argv[2])",
 }
 leader = LEADERS.get(case, RUNNING_LEADER)
@@ -1208,17 +1208,33 @@ def descendant_alive():
 
 real_config, real_spawn, real_finish = pw.config_text, pw.HELPERS.spawn, pw.HELPERS.finish
 real_killpg, real_waitid, real_waitpid = os.killpg, os.waitid, os.waitpid
-real_pidfd_open = os.pidfd_open
-phase_pgids, pidfd_owner = set(), {}
+real_pidfd_open, real_send = os.pidfd_open, signal.pidfd_send_signal
+phase_pgids, pidfd_owner, spawning, injected = set(), {}, [None], set()
+
+
+def count_kill(target, sig):
+    if sig == signal.SIGKILL:
+        facts["kills"][str(target)] = facts["kills"].get(str(target), 0) + 1
 
 
 def alias_killpg(pgid, sig):
-    if pgid in facts["owned_pgids"] and leader_state(pgid) == "reaped":
+    if pgid not in facts["owned_pgids"]:
+        facts["foreign"].append([pgid, sig])
+    elif leader_state(pgid) == "reaped":
         facts["unreserved"].append([pgid, sig])
-        return real_killpg(bystander_pgid, sig)
-    real_killpg(pgid, sig)
-    if sig == signal.SIGKILL:
-        facts["kills"][str(pgid)] = facts["kills"].get(str(pgid), 0) + 1
+        real_killpg(bystander_pgid, sig)
+    else:
+        real_killpg(pgid, sig)
+        count_kill(pgid, sig)
+
+
+def alias_send(pidfd, sig, siginfo, flags):
+    target = pidfd_owner.get(pidfd, -1)
+    if target not in facts["owned_pgids"]:
+        facts["foreign"].append([target, sig])
+        return
+    real_send(pidfd, sig, siginfo, flags)
+    count_kill(target, sig)
 
 
 def config_text(layout, webhook_port, mcp_port):
@@ -1226,19 +1242,24 @@ def config_text(layout, webhook_port, mcp_port):
     return real_config(layout, webhook_port, mcp_port)
 
 
-def spawn(argv, env, cwd, logs, phase):
-    child = real_spawn(argv, env, cwd, logs, phase)
-    facts["owned_pgids"].append(child.proc.pid)
-    if phase != "tool-server":
-        phase_pgids.add(child.proc.pid)
+def spawn(argv, env, cwd, logs, phase, own):
     wanted = {"term-at-tool-server-spawn": "tool-server", "term-at-phase-spawn": "p-run"}
-    if wanted.get(case) == phase:
-        facts["boundary"] = {"fired": True, "term_blocked": term_blocked_in_every_thread()}
-        deliver_term()
-    return child
+
+    def owning(child):
+        # The TERM lands between the group's creation and its registration.
+        if wanted.get(case) == phase:
+            facts["boundary"] = {"fired": True, "term_blocked": term_blocked_in_every_thread()}
+            deliver_term()
+        own(child)
+
+    spawning[0] = phase
+    try:
+        return real_spawn(argv, env, cwd, logs, phase, owning)
+    finally:
+        spawning[0] = None
 
 
-def finish(child, deadline, *hold):
+def finish(child, deadline):
     pid = child.proc.pid
     if case == "term-during-cleanup":
         facts["boundary"] = {"leader_state": leader_state(pid)}
@@ -1255,25 +1276,38 @@ def finish(child, deadline, *hold):
             "descendant_alive": descendant_alive(),
         }
         deliver_term()
-    return real_finish(child, deadline, *hold)
+    return real_finish(child, deadline)
 
 
-def killpg(pgid, sig):
-    settling = pgid in phase_pgids and sig == signal.SIGKILL and not facts["boundary"]
+def on_group_signal(target, sig):
+    # Boundary injections at a group signal, whichever way the owner sends it.
+    settling = target in phase_pgids and sig == signal.SIGKILL and not facts["boundary"]
     if settling and case in {"term-during-settle", "kill-fails-during-settle"}:
         facts["boundary"] = {
             "fired": True,
-            "leader_state": leader_state(pgid),
+            "leader_state": leader_state(target),
             "descendant_alive": descendant_alive(),
         }
         if case == "kill-fails-during-settle":
             raise PermissionError("injected kill failure during settle")
         deliver_term()
         facts["boundary"]["held"] = True
+    if settling and case == "phase-acquisition-and-cleanup-kill-fail":
+        facts["boundary"] = {"fired": True}
+        raise PermissionError("injected kill failure during cleanup")
     if case == "term-during-cleanup" and sig and "fired" not in facts["boundary"]:
         facts["boundary"].update(fired=True, signal=sig)
         deliver_term()
-    return alias_killpg(pgid, sig)
+
+
+def killpg(pgid, sig):
+    on_group_signal(pgid, sig)
+    alias_killpg(pgid, sig)
+
+
+def pidfd_send_signal(pidfd, sig, siginfo=None, flags=0):
+    on_group_signal(pidfd_owner.get(pidfd, -1), sig)
+    alias_send(pidfd, sig, siginfo, flags)
 
 
 def reaping(pid, flags):
@@ -1286,6 +1320,21 @@ def reaping(pid, flags):
 
 
 def pidfd_open(pid, *rest):
+    phase = spawning[0]
+    if pid not in facts["owned_pgids"]:  # only an owner opens a pidfd, for the leader it started
+        facts["owned_pgids"].append(pid)
+        if phase != "tool-server":
+            phase_pgids.add(pid)
+    fail_at = {
+        "phase-acquisition-and-cleanup-kill-fail": "p-run",
+        "tool-server-acquisition-fails": "tool-server",
+    }
+    if fail_at.get(case) == phase and "acquisition" not in injected:
+        injected.add("acquisition")
+        raise OSError(errno.EMFILE, "injected: no descriptor left")
+    if case == "phase-reservation-lost" and phase == "p-run" and "reaped" not in injected:
+        injected.add("reaped")
+        real_waitid(os.P_PID, pid, os.WEXITED)  # a foreign reaper takes the exited leader first
     fd = real_pidfd_open(pid, *rest)
     pidfd_owner[fd] = pid
     return fd
@@ -1303,6 +1352,7 @@ def waitpid(pid, flags):
 
 pw.config_text, pw.HELPERS.spawn, pw.HELPERS.finish = config_text, spawn, finish
 os.killpg, os.waitid, os.waitpid, os.pidfd_open = killpg, waitid, waitpid, pidfd_open
+signal.pidfd_send_signal = pidfd_send_signal
 python = root / "no-such-python" if case == "tool-server-spawn-fails" else Path(sys.executable)
 chain = []
 try:
@@ -1356,6 +1406,9 @@ LIFECYCLE_CASES: dict[str, tuple[list[str], dict[str, object]]] = {
         {"fired": True, "leader_state": "exited", "descendant_alive": True},
     ),
     "term-at-settle-gone-proof": (["InterruptedError"], {"fired": True, "held": True}),
+    "phase-acquisition-and-cleanup-kill-fail": (["PermissionError", "OSError"], {"fired": True}),
+    "tool-server-acquisition-fails": (["OSError"], {}),
+    "phase-reservation-lost": (["ReservationLostError"], {}),
     "cleanup-stream-fails": (
         ["FileNotFoundError", "InterruptedError"],
         {"fired": True, "leader_state": "running"},
@@ -1389,22 +1442,19 @@ def test_every_owned_resource_is_released_whatever_interrupts_its_lifecycle(
         assert all(facts["boundary"].get("term_blocked", [True])), "a thread could take the TERM"
         assert facts["webhook_ports"], "the webhook was never acquired"
         assert facts["unreserved"] == [], f"signals reached a reaped number: {facts['unreserved']}"
+        assert facts["foreign"] == [], f"signals aimed outside the owned groups: {facts['foreign']}"
         assert all(n == 1 for n in facts["kills"].values()), f"settled twice: {facts['kills']}"
         assert facts["unreaped"] == [], f"owned leaders never released: {facts['unreaped']}"
-        survivors = [p for p in facts["owned_pgids"] if _alive(p)]
-        assert survivors == [], f"owned groups outlived the helper: {survivors}"
         assert facts["open_webhook_ports"] == [], "the owned webhook listener still accepts"
         assert facts["other_threads"] == [], (
             f"threads outlived the helper: {facts['other_threads']}"
         )
         assert facts["handler_restored"] and not facts["term_still_blocked"]
-        assert bystander.poll() is None and _alive(bystander.pid), "an unrelated process was killed"
+        outlived = _outlived(driver, bystander)
+        assert outlived == [], f"owned processes outlived the helper: {outlived}"
     finally:
-        for pgid in facts.get("owned_pgids", []):
-            if _alive(pgid):
-                os.killpg(pgid, signal.SIGKILL)
-        if driver.poll() is None:
-            os.killpg(driver.pid, signal.SIGKILL)
+        if driver.poll() is None:  # our own unreaped child; its descendants come back here
+            driver.kill()
         driver.wait()
         bystander.kill()
         bystander.wait()
@@ -1483,30 +1533,35 @@ def test_a_phase_run_record_is_parsed_into_typed_facts_or_refused() -> None:
 def test_a_malformed_child_record_stops_the_loop_before_any_group_is_signalled(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Settling signals a process group; a bool or string id must never reach `killpg`."""
-    signalled: list[int] = []
+    """Settling signals a process group; a malformed record must stop the loop before any signal."""
+    signalled: list[tuple[int, int]] = []
 
-    def record_signal(pgid: int, _sig: int) -> None:
-        signalled.append(pgid)
+    def record_signal(target: int, sig: int, *_args: object) -> None:
+        signalled.append((target, sig))
 
     def finished_with_a_bool_group(*_args: object) -> dict[str, object]:
         return {"pgid": True, "timeout": False, "exit": 0}
 
-    def launch_nothing(_phase: str) -> SimpleNamespace:
-        """A started phase process that has already exited."""
-        return SimpleNamespace(proc=SimpleNamespace(poll=lambda: 0, pid=4242))
+    fleet = pw.Fleet()
+
+    def launch_exited(phase: str) -> Any:
+        """A real started phase process that exits at once; its owner settles it afterwards."""
+        return _start(fleet, tmp_path, ["true"], phase)
 
     monkeypatch.setattr(os, "killpg", record_signal)
+    monkeypatch.setattr(signal, "pidfd_send_signal", record_signal)
     monkeypatch.setattr(pw.HELPERS, "finish", finished_with_a_bool_group)
     capture = pw.WebhookCapture()
 
     try:
         with pytest.raises(ValueError, match="malformed phase run record"):
-            pw.run_scenario("p", pw.Layout(tmp_path), launch_nothing, pw.Fleet(), capture, 0.0)
+            pw.run_scenario("p", pw.Layout(tmp_path), launch_exited, capture, 0.0)
     finally:
         capture.server.server_close()
 
-    assert signalled == []
+    assert [s for s in signalled if s[1]] == []  # nothing but the acquisition's signal-0 probe
+    monkeypatch.undo()
+    assert [kill["signal"] for kill in fleet.settle_all()] == ["SIGKILL"]
 
 
 def test_verified_paths_come_only_from_a_record_the_prover_parses() -> None:

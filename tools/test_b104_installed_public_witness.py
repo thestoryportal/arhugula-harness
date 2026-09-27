@@ -8,15 +8,19 @@ from __future__ import annotations
 
 import contextlib
 import copy
+import ctypes
+import errno
 import json
 import os
+import select
 import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import tomllib
-from collections.abc import Callable, Generator, Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -1087,11 +1091,252 @@ def test_a_receipt_for_another_candidate_head_or_venv_is_refused(
         w.checked_provenance(path, Path("/c"), Path("/v"), "0" * 40)
 
 
-# --- process ownership and write-once records --------------------------------------------
+# --- process hygiene: every process a test starts is settled through its own identity --------
+#
+# While a test runs, this process is a child subreaper: every process the test starts, at any depth
+# and in any group, becomes this process's child once its own parent is gone, and keeps its number
+# until this process reaps it. Teardown settles each one through a pidfd of this process's own
+# unreaped child, which cannot name anything else, and fails the test if one was still alive. No
+# test signals or probes a number it does not hold, and none finds a process by its name.
+
+PR_SET_CHILD_SUBREAPER = 36
 
 
-def test_kill_group_kills_only_its_own_group_and_proves_it_gone(tmp_path: Path) -> None:
-    child = w.spawn(["sleep", "30"], {"PATH": "/usr/bin:/bin"}, tmp_path, tmp_path, "sleeper")
+def _subreaper(on: bool) -> None:
+    libc = ctypes.CDLL(None, use_errno=True)
+    if libc.prctl(PR_SET_CHILD_SUBREAPER, int(on), 0, 0, 0) != 0:
+        raise OSError(ctypes.get_errno(), "prctl(PR_SET_CHILD_SUBREAPER)")
+
+
+def kernel_state(pid: int) -> str:
+    """The kernel's answer for a child of THIS process, without reaping it.
+
+    "running" until its whole thread group has exited (a zombie main thread with a live worker is
+    still running), "exited" while its zombie keeps the number, "reaped" once it is not our child.
+    """
+    try:
+        status = os.waitid(os.P_PID, pid, os.WEXITED | os.WNOWAIT | os.WNOHANG)
+    except ChildProcessError:
+        return "reaped"
+    return "running" if status is None else "exited"
+
+
+def leader_reaped(pid: int) -> bool:
+    return kernel_state(pid) == "reaped"
+
+
+def _children() -> list[int]:
+    mine: list[int] = []
+    for entry in os.listdir("/proc"):
+        if not entry.isdecimal():
+            continue
+        try:
+            fields = Path(f"/proc/{entry}/stat").read_text().rsplit(")", 1)[1].split()
+        except (FileNotFoundError, ProcessLookupError):
+            continue  # gone while listed, so it was nobody's child to settle
+        if int(fields[1]) == os.getpid():
+            mine.append(int(entry))
+    return mine
+
+
+def settle_children() -> list[dict[str, object]]:
+    """Kill (when alive) and reap every child of this process, each through its own pidfd."""
+    settled: list[dict[str, object]] = []
+    limit = time.monotonic() + 30
+    while pending := _children():
+        assert time.monotonic() < limit, f"children never settled: {pending}"
+        for pid in pending:
+            pidfd = os.pidfd_open(pid)
+            try:
+                # waitid accepts only this process's own child, so the pidfd names that child.
+                live = os.waitid(os.P_PIDFD, pidfd, os.WEXITED | os.WNOWAIT | os.WNOHANG) is None
+                argv = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")[:3]
+                if live:
+                    signal.pidfd_send_signal(pidfd, signal.SIGKILL)
+                os.waitid(os.P_PIDFD, pidfd, os.WEXITED)
+            finally:
+                os.close(pidfd)
+            settled.append({"pid": pid, "live": live, "argv": argv})
+    return settled
+
+
+@pytest.fixture(autouse=True)
+def orphans() -> Iterator[None]:
+    _subreaper(True)
+    try:
+        yield
+        leaked = [record for record in settle_children() if record["live"]]
+    finally:
+        _subreaper(False)
+    assert leaked == [], f"processes outlived the test: {leaked}"
+
+
+# --- the lifetime owner: group signals carry the group's identity, never a number ------------
+#
+# The `alias` fixture records every group signal an owner sends, whether by number (`killpg`) or by
+# identity (a pidfd). It models number reuse deterministically: a numeric signal to an owned number
+# whose leader the kernel reports reaped is redirected to a live bystander group, as if the number
+# now belonged to it. It never delivers a signal outside the processes the test owns.
+
+
+class Alias:
+    """Every group signal a test's owner sends; deliveries only ever reach owned processes."""
+
+    def __init__(self, bystander: subprocess.Popen[bytes]) -> None:
+        self.bystander = bystander
+        self.owned: set[int] = set()
+        self.children: list[Any] = []
+        self.pidfds: dict[int, int] = {}
+        self.signals: list[tuple[int, int]] = []
+        self.unreserved: list[tuple[int, int]] = []
+        self.foreign: list[tuple[int, int]] = []
+        self.refuse_next_kill = False
+        self.substitute: int | None = None  # the next pidfd names this process instead (reuse)
+        self.before_pidfd_open: Callable[[int], None] = lambda _pid: None
+        self.after_kill: Callable[[int], None] = lambda _pid: None
+        self.real_killpg, self.real_open = os.killpg, os.pidfd_open
+        self.real_send = signal.pidfd_send_signal
+
+    def own(self, child: Any) -> None:
+        self.children.append(child)
+
+    def pidfd_open(self, pid: int, flags: int = 0) -> int:
+        self.owned.add(pid)  # only an owner opens a pidfd, and only for the leader it started
+        self.before_pidfd_open(pid)
+        named, self.substitute = pid if self.substitute is None else self.substitute, None
+        pidfd = self.real_open(named, flags)
+        self.pidfds[pidfd] = named
+        return pidfd
+
+    def _signal(self, target: int, sig: int, deliver: Callable[[], None]) -> None:
+        self.signals.append((target, sig))
+        if sig and self.refuse_next_kill:
+            self.refuse_next_kill = False
+            raise PermissionError("injected kill failure")
+        deliver()
+        if sig:
+            self.after_kill(target)
+
+    def killpg(self, pgid: int, sig: int) -> None:
+        def deliver() -> None:
+            if pgid not in self.owned:
+                self.foreign.append((pgid, sig))
+            elif leader_reaped(pgid):
+                self.unreserved.append((pgid, sig))
+                self.real_killpg(self.bystander.pid, sig)
+            else:
+                self.real_killpg(pgid, sig)
+
+        self._signal(pgid, sig, deliver)
+
+    def pidfd_send_signal(self, pidfd: int, sig: int, siginfo: None = None, flags: int = 0) -> None:
+        target = self.pidfds.get(pidfd, -1)
+
+        def deliver() -> None:
+            if target in self.owned:
+                self.real_send(pidfd, sig, siginfo, flags)
+            else:
+                self.foreign.append((target, sig))
+
+        self._signal(target, sig, deliver)
+
+    def spawn(self, argv: list[str], tmp_path: Path, phase: str) -> Any:
+        return w.spawn(argv, {"PATH": "/usr/bin:/bin"}, tmp_path, tmp_path, phase, self.own)
+
+    def to(self, pid: int) -> list[int]:
+        """The non-zero signals aimed at this owned group, by number or by identity."""
+        return [sig for target, sig in self.signals if target == pid and sig]
+
+
+@pytest.fixture
+def alias(monkeypatch: pytest.MonkeyPatch) -> Iterator[Alias]:
+    bystander = subprocess.Popen(["sleep", "120"], start_new_session=True)
+    recorder = Alias(bystander)
+    monkeypatch.setattr(os, "killpg", recorder.killpg)
+    monkeypatch.setattr(os, "pidfd_open", recorder.pidfd_open)
+    monkeypatch.setattr(signal, "pidfd_send_signal", recorder.pidfd_send_signal)
+    try:
+        yield recorder
+        assert recorder.unreserved == [], f"signals reached a reaped number: {recorder.unreserved}"
+        assert recorder.foreign == [], f"signals aimed outside the owned groups: {recorder.foreign}"
+        assert kernel_state(bystander.pid) == "running", "the alias bystander was killed"
+    finally:
+        monkeypatch.undo()
+        bystander.kill()
+        bystander.wait()
+
+
+@pytest.fixture
+def term_raises() -> Iterator[None]:
+    """SIGTERM raises, as the witnesses' own handlers make it."""
+
+    def stop(_signum: int, _frame: object) -> None:
+        raise InterruptedError("witness interrupted by SIGTERM")
+
+    previous = signal.signal(signal.SIGTERM, stop)
+    try:
+        yield
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+
+
+def wait_for_text(path: Path, seconds: float = 20.0) -> str:
+    """A stub's own announcement, awaited as an event with a finite bound; never a timing guess."""
+    limit = time.monotonic() + seconds
+    while not (path.exists() and path.read_text().strip()):
+        assert time.monotonic() < limit, f"{path} was never written"
+        time.sleep(0.01)
+    return path.read_text().strip()
+
+
+# A leader that starts one descendant in its own group, records the descendant's pid and exits.
+DESCENDANT = (
+    "import subprocess, sys\n"
+    "d = subprocess.Popen(['sleep', '120'])\n"
+    "open(sys.argv[1], 'w').write(str(d.pid))\n"
+)
+# A group member whose main thread exits while a worker thread lives on. With a `go` path it first
+# leaves the group, and its worker rejoins the group once `go` appears.
+MEMBER = """
+import ctypes, os, sys, threading, time
+from pathlib import Path
+marker = Path(sys.argv[1])
+go = Path(sys.argv[2]) if len(sys.argv) > 2 else None
+group = os.getpgid(0)
+def main_thread_exited():
+    stat = Path(f"/proc/{os.getpid()}/stat").read_text()
+    return stat[stat.rindex(")") + 2] == "Z"
+def worker():
+    while not main_thread_exited():
+        time.sleep(0.01)
+    if go is not None:
+        while not go.exists():
+            time.sleep(0.01)
+        os.setpgid(0, group)
+    marker.write_text(str(os.getpid()))
+    while True:
+        time.sleep(1)
+if go is not None:
+    os.setpgid(0, 0)
+    Path(f"{marker}.left").write_text("left")
+threading.Thread(target=worker).start()
+ctypes.CDLL(None).pthread_exit(None)
+"""
+# The leader waits until its member is in the state under test, then exits.
+LEADER = """
+import subprocess, sys, time
+from pathlib import Path
+subprocess.Popen([sys.executable, "-c", *sys.argv[1:]])
+ready = Path(sys.argv[2] + (".left" if len(sys.argv) > 3 else ""))
+while not ready.exists():
+    time.sleep(0.01)
+"""
+
+
+def test_kill_group_kills_only_its_own_group_and_proves_it_gone(
+    tmp_path: Path, alias: Alias
+) -> None:
+    child = alias.spawn(["sleep", "30"], tmp_path, "sleeper")
     assert os.getpgid(child.proc.pid) == child.proc.pid != os.getpgid(0)
 
     record = w.kill_group(child)
@@ -1102,98 +1347,10 @@ def test_kill_group_kills_only_its_own_group_and_proves_it_gone(tmp_path: Path) 
         "returncode": -signal.SIGKILL,
         "group_gone": True,
     }
+    assert alias.to(child.proc.pid) == [signal.SIGKILL]
 
 
-# --- the lifetime owner: a group number is signalled only while the kernel reserves it -----
-#
-# A pgid stays reserved while its leader is unreaped (the zombie keeps the pid allocated). The
-# `alias` fixture models the worst case of reuse deterministically: any group signal to an owned
-# number whose leader the KERNEL reports reaped is recorded and redirected to a live bystander
-# group, as if that number now belonged to it. A correct owner never produces such a signal.
-
-
-def leader_reaped(pid: int) -> bool:
-    """Kernel truth, without reaping: has this child's leader already been reaped?"""
-    try:
-        os.waitid(os.P_PID, pid, os.WEXITED | os.WNOWAIT | os.WNOHANG)
-    except ChildProcessError:
-        return True
-    return False
-
-
-def process_live(pid: int) -> bool:
-    try:
-        stat = Path(f"/proc/{pid}/stat").read_text()
-    except OSError:
-        return False
-    return stat[stat.rindex(")") + 2] not in "ZX"
-
-
-class Alias:
-    """Records every group signal; redirects one aimed at a reaped owned number to a bystander."""
-
-    def __init__(self, bystander: subprocess.Popen[bytes]) -> None:
-        self.bystander = bystander
-        self.owned: set[int] = set()
-        self.signals: list[tuple[int, int]] = []
-        self.unreserved: list[tuple[int, int]] = []
-        self.refuse_next_kill = False
-        self.real = os.killpg
-
-    def killpg(self, pgid: int, sig: int) -> None:
-        self.signals.append((pgid, sig))
-        if sig and self.refuse_next_kill:
-            self.refuse_next_kill = False
-            raise PermissionError("injected kill failure")
-        if pgid in self.owned and leader_reaped(pgid):
-            self.unreserved.append((pgid, sig))
-            self.real(self.bystander.pid, sig)
-            return
-        self.real(pgid, sig)
-
-    def spawn(self, argv: list[str], tmp_path: Path, phase: str) -> Any:
-        child = w.spawn(argv, {"PATH": "/usr/bin:/bin"}, tmp_path, tmp_path, phase)
-        self.owned.add(child.proc.pid)
-        return child
-
-    def to(self, pgid: int) -> list[int]:
-        return [sig for target, sig in self.signals if target == pgid]
-
-
-@pytest.fixture
-def alias(monkeypatch: pytest.MonkeyPatch) -> Iterator[Alias]:
-    bystander = subprocess.Popen(["sleep", "120"], start_new_session=True)
-    recorder = Alias(bystander)
-    monkeypatch.setattr(os, "killpg", recorder.killpg)
-    try:
-        yield recorder
-        assert recorder.unreserved == [], f"signals reached a reaped number: {recorder.unreserved}"
-        assert bystander.poll() is None, "the alias bystander was killed"
-    finally:
-        monkeypatch.undo()
-        bystander.kill()
-        bystander.wait()
-
-
-DESCENDANT = (
-    "import subprocess, sys\n"
-    "d = subprocess.Popen(['sleep', '120'])\n"
-    "open(sys.argv[1], 'w').write(str(d.pid))\n"
-)
-
-
-@pytest.fixture
-def descendant_marker(tmp_path: Path) -> Iterator[Path]:
-    """Where a stub leader records its descendant; a descendant left alive is killed afterwards."""
-    marker = tmp_path / "descendant.pid"
-    try:
-        yield marker
-    finally:
-        if marker.exists() and process_live(int(marker.read_text())):
-            os.kill(int(marker.read_text()), signal.SIGKILL)
-
-
-def test_a_normal_exit_is_settled_by_one_reserved_kill_and_released_exactly_once(
+def test_a_normal_exit_is_settled_by_one_group_kill_and_released_exactly_once(
     tmp_path: Path, alias: Alias
 ) -> None:
     child = alias.spawn(["true"], tmp_path, "solo")
@@ -1209,17 +1366,17 @@ def test_a_normal_exit_is_settled_by_one_reserved_kill_and_released_exactly_once
     assert alias.to(pgid) == [signal.SIGKILL]
 
 
-def test_an_exited_leaders_live_descendant_is_killed_before_the_number_is_released(
-    tmp_path: Path, alias: Alias, descendant_marker: Path
+def test_an_exited_leaders_live_descendant_is_killed_before_the_group_is_released(
+    tmp_path: Path, alias: Alias
 ) -> None:
-    marker = descendant_marker
+    marker = tmp_path / "descendant.pid"
     child = alias.spawn([sys.executable, "-c", DESCENDANT, str(marker)], tmp_path, "parent")
 
     record = w.finish(child, time.monotonic() + 10)
 
-    descendant = int(marker.read_text())
     assert record["exit"] == 0 and record["group_survivors"] is True
-    assert not process_live(descendant), "an owned descendant outlived the release"
+    # Adopted by this subreaper when its leader exited; "exited" means every thread is gone.
+    assert kernel_state(int(marker.read_text())) == "exited"
     assert leader_reaped(child.proc.pid)
 
 
@@ -1264,7 +1421,7 @@ def test_waiting_for_a_listener_never_reaps_an_early_exit(tmp_path: Path, alias:
 
     assert w.wait_listening(child, w.free_loopback_port(), time.monotonic() + 10) is False
 
-    assert not leader_reaped(child.proc.pid), "the reservation was dropped before settlement"
+    assert kernel_state(child.proc.pid) == "exited", "the reservation was dropped before settlement"
     assert w.kill_group(child)["group_gone"] is True
     assert leader_reaped(child.proc.pid)
 
@@ -1272,8 +1429,9 @@ def test_waiting_for_a_listener_never_reaps_an_early_exit(tmp_path: Path, alias:
 def test_a_leader_reaped_by_anyone_else_is_never_signalled(tmp_path: Path, alias: Alias) -> None:
     child = alias.spawn(["true"], tmp_path, "stolen")
     os.waitid(os.P_PID, child.proc.pid, os.WEXITED)  # a foreign reaper takes the reservation
+    child.proc.returncode = 0
 
-    with pytest.raises(RuntimeError, match="reservation"):
+    with pytest.raises(RuntimeError, match="reaped elsewhere"):
         w.kill_group(child)
 
     assert alias.to(child.proc.pid) == []
@@ -1287,39 +1445,499 @@ def test_a_failed_kill_keeps_the_reservation_and_a_retry_settles_the_group(
 
     with pytest.raises(PermissionError):
         w.kill_group(child)
-    assert not leader_reaped(child.proc.pid) and process_live(child.proc.pid)
+    assert kernel_state(child.proc.pid) == "running"
 
     assert w.kill_group(child)["group_gone"] is True
     assert leader_reaped(child.proc.pid)
 
 
-def test_the_settling_signal_and_the_release_happen_inside_the_callers_hold(
-    tmp_path: Path, alias: Alias, monkeypatch: pytest.MonkeyPatch, descendant_marker: Path
+# --- H5: a spawned group has one registered owner before its acquisition can fail ------------
+
+
+def test_a_failed_pidfd_acquisition_leaves_the_child_owned_for_its_finalizer(
+    tmp_path: Path, alias: Alias
 ) -> None:
-    marker = descendant_marker
-    child = alias.spawn([sys.executable, "-c", DESCENDANT, str(marker)], tmp_path, "held")
-    inside: list[bool] = []
-    seen: dict[str, bool] = {}
+    failures: list[int] = []
 
-    @contextlib.contextmanager
-    def hold() -> Generator[None]:
-        seen["reaped_on_entry"] = leader_reaped(child.proc.pid)
-        inside.append(True)
-        try:
-            yield
-        finally:
-            inside.pop()
-            seen["reaped_on_exit"] = leader_reaped(child.proc.pid)
+    def no_descriptor_left(pid: int) -> None:
+        if not failures:
+            failures.append(pid)
+            raise OSError(errno.EMFILE, "injected: no descriptor left")
 
-    def killpg(pgid: int, sig: int) -> None:
-        assert inside, "a settling signal was sent outside the caller's hold"
-        alias.killpg(pgid, sig)
+    alias.before_pidfd_open = no_descriptor_left
+    with pytest.raises(OSError, match="injected"):
+        alias.spawn(["sleep", "60"], tmp_path, "unacquired")
 
-    monkeypatch.setattr(os, "killpg", killpg)
-    w.finish(child, time.monotonic() + 10, hold)
+    [child] = alias.children  # registered before the acquisition failed
+    assert kernel_state(child.proc.pid) == "running" and alias.to(child.proc.pid) == []
+    assert w.kill_group(child)["group_gone"] is True  # the finalizer acquires, then settles
+    assert alias.to(child.proc.pid) == [signal.SIGKILL] and leader_reaped(child.proc.pid)
 
-    assert seen == {"reaped_on_entry": False, "reaped_on_exit": True}
+
+def test_a_cleanup_failure_keeps_ownership_and_a_later_finalizer_settles_the_group(
+    tmp_path: Path, alias: Alias
+) -> None:
+    fleet = w.Fleet()
+    failures: list[int] = []
+
+    def no_descriptor_left(pid: int) -> None:
+        if not failures:
+            failures.append(pid)
+            raise OSError(errno.EMFILE, "injected: no descriptor left")
+
+    alias.before_pidfd_open = no_descriptor_left
+    with pytest.raises(PermissionError) as raised:
+        with contextlib.ExitStack() as owners:
+            owners.callback(fleet.settle_all)  # the later, independent finalizer
+            owners.callback(fleet.settle_all)  # the first finalizer: its kill fails once
+            alias.refuse_next_kill = True
+            w.spawn(["sleep", "60"], {"PATH": "/usr/bin:/bin"}, tmp_path, tmp_path, "x", fleet.own)
+
+    assert isinstance(raised.value.__context__, OSError)
+    assert raised.value.__context__.errno == errno.EMFILE  # the acquisition error is kept
+    [child] = fleet.children
+    assert alias.to(child.proc.pid) == [signal.SIGKILL, signal.SIGKILL]  # refused, then delivered
+    assert leader_reaped(child.proc.pid)
+    assert fleet.settle_all() == []
+
+
+def test_a_reservation_lost_before_acquisition_is_refused_without_any_signal(
+    tmp_path: Path, alias: Alias
+) -> None:
+    def reaped_elsewhere(pid: int) -> None:
+        os.waitid(os.P_PID, pid, os.WEXITED)  # a foreign reaper takes the exited leader
+
+    alias.before_pidfd_open = reaped_elsewhere
+    with pytest.raises(RuntimeError, match="reaped"):
+        alias.spawn(["true"], tmp_path, "lost")
+
+    [child] = alias.children
+    child.proc.returncode = 0  # reaped by the test's foreign reaper
+    with pytest.raises(RuntimeError, match="reaped"):
+        w.kill_group(child)
+    assert [s for s in alias.signals if s[0] == child.proc.pid] == []
+
+
+def test_a_pidfd_that_names_another_process_is_refused_without_any_signal(
+    tmp_path: Path, alias: Alias
+) -> None:
+    alias.substitute = os.getppid()  # the number now names a process that is not our child
+
+    with pytest.raises(RuntimeError, match="another process"):
+        alias.spawn(["sleep", "60"], tmp_path, "renamed")
+
+    [child] = alias.children
+    with pytest.raises(RuntimeError, match="another process"):
+        w.kill_group(child)  # lost for good: nothing is retried or signalled
+    assert alias.signals == []
+    leader = alias.real_open(child.proc.pid)  # still this test's own child: settled here
+    alias.real_send(leader, signal.SIGKILL)
+    os.waitid(os.P_PIDFD, leader, os.WEXITED)
+    os.close(leader)
+    child.proc.returncode = -signal.SIGKILL
+
+
+def test_a_leader_reaped_between_its_check_and_the_kill_is_never_signalled_by_number(
+    tmp_path: Path, alias: Alias, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    child = alias.spawn(["true"], tmp_path, "raced")
+    assert child.wait_exit(10)
+    real_listdir = os.listdir
+
+    def reaped_after_the_check(path: str | Path = ".") -> list[str]:
+        if str(path) == "/proc" and not leader_reaped(child.proc.pid):
+            os.waitid(os.P_PID, child.proc.pid, os.WEXITED)  # a foreign reaper takes the leader
+        return real_listdir(path)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "listdir", reaped_after_the_check)
+        with pytest.raises(RuntimeError, match="reaped elsewhere"):
+            w.kill_group(child)
+    child.proc.returncode = 0
+
+    assert alias.unreserved == [], "the kill reached the number after its leader was reaped"
+    with pytest.raises(RuntimeError, match="reaped elsewhere"):
+        w.kill_group(child)
+
+
+def test_a_leader_that_outlives_its_cap_stays_owned_and_the_retry_never_kills_again(
+    tmp_path: Path, alias: Alias, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    child = alias.spawn(["sleep", "60"], tmp_path, "slow")
+    real_select = select.select
+    stalls: list[bool] = []
+
+    def one_stall(read: list[int], write: list[int], error: list[int], timeout: float) -> Any:
+        if alias.to(child.proc.pid) and not stalls:
+            stalls.append(True)
+            return [], [], []  # the killed leader has not finished exiting within the cap
+        return real_select(read, write, error, timeout)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(select, "select", one_stall)
+        with pytest.raises(RuntimeError, match="outlived"):
+            w.kill_group(child)
+    assert not leader_reaped(child.proc.pid)
+
+    assert w.kill_group(child)["group_gone"] is True
+    assert alias.to(child.proc.pid) == [signal.SIGKILL]  # the retry proves; it never kills again
+    assert leader_reaped(child.proc.pid)
+
+
+@pytest.mark.parametrize(
+    "mountinfo",
+    [
+        "27 32 0:25 / /proc rw,nosuid - proc proc rw,hidepid=invisible",
+        "27 32 0:25 / /proc rw,nosuid - proc proc rw,hidepid=2",
+        "27 32 0:25 / /tmp rw - tmpfs tmpfs rw",
+        "27 32 0:25 / /proc rw - proc proc rw\n28 27 0:40 / /proc rw - tmpfs none rw",
+    ],
+)
+def test_spawn_refuses_before_starting_anything_when_membership_is_unprovable(
+    tmp_path: Path, alias: Alias, monkeypatch: pytest.MonkeyPatch, mountinfo: str
+) -> None:
+    def view() -> Any:
+        return w.process_view(str(os.getpid()), os.getpid(), mountinfo)
+
+    monkeypatch.setattr(w, "read_process_view", view, raising=False)
+
+    with pytest.raises(RuntimeError, match="proc"):
+        alias.spawn(["sleep", "60"], tmp_path, "unseen")
+
+    assert alias.children == []
+
+
+def test_spawn_refuses_while_the_kernel_would_reap_children_by_itself(
+    tmp_path: Path, alias: Alias
+) -> None:
+    previous = signal.signal(signal.SIGCHLD, signal.SIG_IGN)
+    try:
+        with pytest.raises(RuntimeError, match="SIGCHLD"):
+            alias.spawn(["true"], tmp_path, "autoreaped")
+    finally:
+        signal.signal(signal.SIGCHLD, previous)
+
+    assert alias.children == []
+
+
+@pytest.mark.parametrize(
+    ("self_link", "mountinfo", "refusal"),
+    [
+        ("1", "27 32 0:25 / /proc rw - proc proc rw", "another pid namespace"),
+        (None, "", "no /proc mount"),
+        (None, "27 32 0:25 / /proc rw - proc proc rw,hidepid=1", "hidepid=1"),
+        (None, "27 32 0:25 / /proc rw - proc proc rw,hidepid=noaccess", "hidepid=noaccess"),
+        (None, "27 32 0:25 / /proc rw - sysfs sysfs rw", "not procfs"),
+    ],
+)
+def test_the_process_view_refuses_what_could_hide_a_member(
+    self_link: str | None, mountinfo: str, refusal: str
+) -> None:
+    with pytest.raises(RuntimeError, match=refusal):
+        w.process_view(self_link or "4242", 4242, mountinfo)
+
+
+@pytest.mark.parametrize(
+    "options", ["rw", "rw,hidepid=0", "rw,hidepid=off", "rw,subset=pid", "rw,hidepid=off,gid=5"]
+)
+def test_the_process_view_accepts_a_proc_that_shows_every_process(options: str) -> None:
+    mountinfo = f"27 32 0:25 / /proc rw,nosuid shared:5 - proc proc {options}\n"
+    assert w.process_view("4242", 4242, mountinfo).root == Path("/proc")
+
+
+# --- H6: membership is whole-process liveness, and uncertainty is never absence -------------
+
+
+def _fake_process(root: Path, pid: int, pgrp: int, tasks: dict[int, str]) -> None:
+    """A /proc entry with the given thread states; the process state is its leader task's."""
+    (root / str(pid) / "task").mkdir(parents=True)
+    stat = "{} (stub) {} 1 {} {} 0"
+    (root / str(pid) / "stat").write_text(stat.format(pid, tasks.get(pid, "Z"), pgrp, pgrp))
+    for tid, state in tasks.items():
+        (root / str(pid) / "task" / str(tid)).mkdir()
+        task_stat = root / str(pid) / "task" / str(tid) / "stat"
+        task_stat.write_text(stat.format(tid, state, pgrp, pgrp))
+
+
+def test_a_member_is_live_while_any_thread_lives_even_behind_a_zombie_main_thread(
+    tmp_path: Path,
+) -> None:
+    _fake_process(tmp_path, 100, 100, {100: "Z"})  # the exited leader
+    _fake_process(tmp_path, 101, 100, {101: "Z", 102: "S"})  # main thread gone, worker alive
+    _fake_process(tmp_path, 103, 100, {103: "Z"})  # an exited member (zombie)
+    _fake_process(tmp_path, 104, 100, {104: "Z", 105: "X"})  # its last thread is still unreleased
+    _fake_process(tmp_path, 106, 106, {106: "S"})  # another group
+    _fake_process(tmp_path, 107, 100, {107: "D"})  # a member still dying in the kernel
+
+    assert w.group_members(w.ProcessView(tmp_path), 100) == [101, 104, 107]
+
+
+def test_disappearance_while_reading_is_absence(tmp_path: Path) -> None:
+    _fake_process(tmp_path, 100, 100, {100: "Z"})
+    (tmp_path / "101").mkdir()  # its stat vanished between the listing and the read
+    _fake_process(tmp_path, 102, 100, {102: "S"})
+    (tmp_path / "102" / "task" / "102" / "stat").unlink()  # its only thread just went away
+    _fake_process(tmp_path, 103, 100, {103: "S"})
+    for part in (tmp_path / "103" / "task").iterdir():
+        (part / "stat").unlink()
+        part.rmdir()
+    (tmp_path / "103" / "task").rmdir()  # the whole task list disappeared
+
+    assert w.group_members(w.ProcessView(tmp_path), 100) == []
+
+
+@pytest.mark.parametrize("unreadable", ["stat", "task", "task-stat"])
+def test_an_unreadable_entry_is_uncertainty_never_absence(tmp_path: Path, unreadable: str) -> None:
+    assert os.geteuid() != 0, "an unreadable fake entry needs an unprivileged reader"
+    _fake_process(tmp_path, 101, 100, {101: "Z", 102: "S"})
+    target = {
+        "stat": tmp_path / "101" / "stat",
+        "task": tmp_path / "101" / "task",
+        "task-stat": tmp_path / "101" / "task" / "102" / "stat",
+    }[unreadable]
+    target.chmod(0)
+    try:
+        with pytest.raises(RuntimeError, match="uncertain"):
+            w.group_members(w.ProcessView(tmp_path), 100)
+    finally:
+        target.chmod(0o700)
+
+
+@pytest.mark.parametrize(
+    ("error", "outcome"),
+    [
+        (ProcessLookupError(errno.ESRCH, "gone"), []),
+        (OSError(errno.EIO, "I/O error"), "uncertain"),
+        (OSError(errno.EACCES, "denied"), "uncertain"),
+    ],
+)
+def test_only_disappearance_errors_mean_gone(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, error: OSError, outcome: object
+) -> None:
+    _fake_process(tmp_path, 101, 100, {101: "S"})
+    real = Path.read_text
+    member_stat = tmp_path / "101" / "stat"
+
+    def read_text(path: Path, *args: Any, **kwargs: Any) -> str:
+        if path == member_stat:
+            raise error
+        return real(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", read_text)
+    if outcome == "uncertain":
+        with pytest.raises(RuntimeError, match="uncertain"):
+            w.group_members(w.ProcessView(tmp_path), 100)
+    else:
+        assert w.group_members(w.ProcessView(tmp_path), 100) == outcome
+
+
+def test_a_malformed_stat_is_uncertainty(tmp_path: Path) -> None:
+    _fake_process(tmp_path, 101, 100, {101: "S"})
+    (tmp_path / "101" / "stat").write_text("101 no closing paren")
+
+    with pytest.raises(RuntimeError, match="uncertain"):
+        w.group_members(w.ProcessView(tmp_path), 100)
+
+
+def test_a_member_whose_main_thread_exited_while_a_worker_lives_is_a_survivor(
+    tmp_path: Path, alias: Alias
+) -> None:
+    marker = tmp_path / "member.pid"
+    argv = [sys.executable, "-c", LEADER, MEMBER, str(marker)]
+    child = alias.spawn(argv, tmp_path, "zombie-main")
+
+    record = w.finish(child, time.monotonic() + 20)
+
+    member = int(marker.read_text())
+    assert record["group_survivors"] is True, "a live worker behind a zombie main thread was missed"
+    assert kernel_state(member) == "exited"  # every thread of the member is gone
+    assert alias.to(child.proc.pid) == [signal.SIGKILL] and leader_reaped(child.proc.pid)
+
+
+def test_a_live_member_that_joins_after_the_kill_keeps_the_group_owned(
+    tmp_path: Path, alias: Alias, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    marker, go = tmp_path / "member.pid", tmp_path / "go"
+    argv = [sys.executable, "-c", LEADER, MEMBER, str(marker), str(go)]
+    child = alias.spawn(argv, tmp_path, "rejoined")
+    monkeypatch.setattr(w, "SETTLE_CAP_SECONDS", 0.5, raising=False)
+
+    def rejoin_after_the_settling_kill(target: int) -> None:
+        if target == child.proc.pid and not go.exists():
+            go.write_text("go")
+            wait_for_text(marker)  # its worker is back in the group; its main thread is a zombie
+
+    alias.after_kill = rejoin_after_the_settling_kill
+    with pytest.raises(RuntimeError, match="outlived"):
+        w.finish(child, time.monotonic() + 20)
+
+    member = int(marker.read_text())
+    assert kernel_state(member) == "running" and os.getpgid(member) == child.proc.pid
+    assert kernel_state(child.proc.pid) == "exited", "the group was released with a live member"
+    member_fd = alias.real_open(member)  # the member is this process's child: identity-safe
+    alias.real_send(member_fd, signal.SIGKILL)
+    os.waitid(os.P_PIDFD, member_fd, os.WEXITED)
+    os.close(member_fd)
+    assert w.kill_group(child)["group_gone"] is True
+    assert alias.to(child.proc.pid) == [signal.SIGKILL]  # never killed again after the first
+    assert leader_reaped(child.proc.pid)
+
+
+@pytest.mark.parametrize("error", [errno.EACCES, errno.EIO])
+def test_an_unreadable_member_is_never_counted_gone(
+    tmp_path: Path, alias: Alias, monkeypatch: pytest.MonkeyPatch, error: int
+) -> None:
+    marker = tmp_path / "descendant.pid"
+    child = alias.spawn([sys.executable, "-c", DESCENDANT, str(marker)], tmp_path, "unreadable")
+    assert child.wait_exit(20)
+    member = f"/proc/{int(marker.read_text())}/"
+    real_read, real_listdir = Path.read_text, os.listdir
+
+    def read_text(path: Path, *args: Any, **kwargs: Any) -> str:
+        if str(path).startswith(member):
+            raise OSError(error, os.strerror(error))
+        return real_read(path, *args, **kwargs)
+
+    def listdir(path: str | Path = ".") -> list[str]:
+        if str(path).startswith(member):
+            raise OSError(error, os.strerror(error))
+        return real_listdir(path)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "read_text", read_text)
+        patch.setattr(os, "listdir", listdir)
+        with pytest.raises(RuntimeError, match="uncertain"):
+            w.kill_group(child)
+    assert kernel_state(child.proc.pid) == "exited", "an unreadable member was taken as gone"
+
+    record = w.finish(child, time.monotonic() + 10)
+    assert record["group_survivors"] is None  # unreadable before the kill: unknown, not "none"
     assert alias.to(child.proc.pid) == [signal.SIGKILL]
+    assert leader_reaped(child.proc.pid)
+
+
+# --- H7: the owner holds interruptions itself, for every caller ------------------------------
+
+
+def test_an_interruption_at_the_settling_kill_waits_until_the_group_is_released(
+    tmp_path: Path, alias: Alias, term_raises: None
+) -> None:
+    marker = tmp_path / "descendant.pid"
+    child = alias.spawn([sys.executable, "-c", DESCENDANT, str(marker)], tmp_path, "term-kill")
+    alias.after_kill = lambda _target: os.kill(os.getpid(), signal.SIGTERM)
+
+    with pytest.raises(InterruptedError):
+        w.finish(child, time.monotonic() + 10)  # B104's own default path: no caller hold
+
+    assert leader_reaped(child.proc.pid), "the interruption split the settlement"
+    assert alias.to(child.proc.pid) == [signal.SIGKILL]
+    alias.after_kill = lambda _target: None
+    with pytest.raises(RuntimeError, match="released"):
+        w.kill_group(child)
+    assert alias.to(child.proc.pid) == [signal.SIGKILL]
+
+
+def test_an_interruption_after_the_first_absence_is_held_and_the_retry_sends_nothing(
+    tmp_path: Path, alias: Alias, monkeypatch: pytest.MonkeyPatch, term_raises: None
+) -> None:
+    marker = tmp_path / "descendant.pid"
+    child = alias.spawn([sys.executable, "-c", DESCENDANT, str(marker)], tmp_path, "term-gone")
+    real_waitid = os.waitid
+    fired: list[bool] = []
+
+    def exited(pid: int) -> bool:  # kernel truth for this process's children, never the owner's
+        try:
+            return real_waitid(os.P_PID, pid, os.WEXITED | os.WNOWAIT | os.WNOHANG) is not None
+        except ChildProcessError:
+            return True
+
+    def waitid(idtype: int, ident: int, options: int) -> Any:
+        group = (child.proc.pid, int(marker.read_text())) if marker.exists() else ()
+        if alias.to(child.proc.pid) and not fired and group and all(map(exited, group)):
+            fired.append(True)  # the first status query after the whole group is gone
+            os.kill(os.getpid(), signal.SIGTERM)
+        return real_waitid(idtype, ident, options)
+
+    monkeypatch.setattr(os, "waitid", waitid)
+    with pytest.raises(InterruptedError):
+        w.finish(child, time.monotonic() + 10)
+    monkeypatch.setattr(os, "waitid", real_waitid)
+
+    assert fired and leader_reaped(child.proc.pid), "the settlement was lost to the interruption"
+    with pytest.raises(RuntimeError, match="released"):
+        w.kill_group(child)
+    assert alias.to(child.proc.pid) == [signal.SIGKILL]
+
+
+def test_the_owner_refuses_to_act_while_another_thread_could_take_an_interruption(
+    tmp_path: Path, alias: Alias
+) -> None:
+    child = alias.spawn(["sleep", "60"], tmp_path, "threaded")
+    stop = threading.Event()
+    unmasked = threading.Thread(target=stop.wait)  # started with nothing blocked
+    unmasked.start()
+    try:
+        with pytest.raises(RuntimeError, match="thread"):
+            w.kill_group(child)
+        assert alias.to(child.proc.pid) == [] and kernel_state(child.proc.pid) == "running"
+    finally:
+        stop.set()
+        unmasked.join()
+
+    assert w.kill_group(child)["group_gone"] is True
+    assert alias.to(child.proc.pid) == [signal.SIGKILL]
+
+
+def test_the_owner_refuses_to_act_while_an_unheld_python_handler_could_interrupt(
+    tmp_path: Path, alias: Alias
+) -> None:
+    child = alias.spawn(["sleep", "60"], tmp_path, "handled")
+    previous = signal.signal(signal.SIGUSR1, lambda _signum, _frame: None)
+    try:
+        with pytest.raises(RuntimeError, match="handler"):
+            w.kill_group(child)
+        assert alias.to(child.proc.pid) == []
+    finally:
+        signal.signal(signal.SIGUSR1, previous)
+
+    assert w.kill_group(child)["group_gone"] is True
+
+
+def test_every_finalizer_unwinds_with_interruptions_held_even_after_one_fails() -> None:
+    """Between two finalizers the unwind itself cannot take an interruption and skip the rest."""
+    held: list[bool] = []
+
+    def observe() -> None:  # the kernel's own mask for this thread, read inside the unwind
+        held.append(w.INTERRUPTIONS <= signal.pthread_sigmask(signal.SIG_BLOCK, []))
+
+    def fail() -> None:
+        raise RuntimeError("a finalizer failed")
+
+    with pytest.raises(RuntimeError, match="finalizer failed"):
+        with w.Owners() as owners:
+            owners.callback(observe)
+            owners.callback(fail)
+            owners.callback(observe)
+
+    assert held == [True, True]
+    assert not w.INTERRUPTIONS & signal.pthread_sigmask(signal.SIG_BLOCK, [])
+
+
+def test_a_released_childs_descriptor_number_never_reaches_a_later_child(
+    tmp_path: Path, alias: Alias
+) -> None:
+    first = alias.spawn(["sleep", "60"], tmp_path, "first")
+    w.kill_group(first)
+    second = alias.spawn(["sleep", "60"], tmp_path, "second")  # may reuse the closed pidfd number
+
+    with pytest.raises(RuntimeError, match="released"):
+        w.kill_group(first)
+
+    assert alias.to(second.proc.pid) == []
+    assert w.kill_group(second)["group_gone"] is True
+
+
+# --- write-once records ------------------------------------------------------------------
 
 
 def test_records_are_written_once(tmp_path: Path) -> None:

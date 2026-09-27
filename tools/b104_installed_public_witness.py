@@ -39,11 +39,11 @@ import sys
 import threading
 import time
 import traceback
-from collections.abc import Callable
+from collections.abc import Callable, Generator
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
-from types import ModuleType
+from types import ModuleType, TracebackType
 from typing import Any
 
 # --- the shared installed-provenance owner ------------------------------------------------------
@@ -728,7 +728,61 @@ def run_phase(layout: Layout, phase: str, prove: Callable[[], dict[str, object]]
         raise
 
 
-# --- the parent: listener, children, kill, evaluation --------------------------------------
+# --- the parent: interruptions, listener, children, kill, evaluation --------------------------
+
+#: The only signals whose Python handlers raise into this parent: the witnesses' SIGTERM handler
+#: and SIGINT's KeyboardInterrupt. `interruptions_held` proves no other signal has one.
+INTERRUPTIONS = frozenset({signal.SIGTERM, signal.SIGINT})
+
+
+class UnsupportedConsumerError(RuntimeError):
+    """This process lacks a precondition of the lifetime owner; nothing was started or signalled."""
+
+
+@contextlib.contextmanager
+def _interruptions_blocked() -> Generator[None]:
+    previous = signal.pthread_sigmask(signal.SIG_BLOCK, INTERRUPTIONS)
+    try:
+        yield
+    finally:
+        signal.pthread_sigmask(signal.SIG_SETMASK, previous)
+
+
+@contextlib.contextmanager
+def interruptions_held() -> Generator[None]:
+    """Hold every interruption for one bounded region; a pending one is delivered on exit.
+
+    [LAW:no-ambient-temporal-coupling] CPython runs signal handlers only on the main thread, between
+    bytecodes. With `INTERRUPTIONS` blocked in every thread of the process, none can run inside the
+    region, so an interruption lands before it or after it, never between an effect and the state
+    that records it. That is true only if no other thread can take the signal and no other signal
+    has a Python handler, so both are proved on entry, from the kernel's own view of every thread.
+    """
+    with _interruptions_blocked():
+        handled = {s for s in signal.valid_signals() if callable(signal.getsignal(s))}
+        if extra := sorted(handled - INTERRUPTIONS):
+            names = [signal.strsignal(s) for s in extra]
+            raise UnsupportedConsumerError(
+                f"a Python handler for {names} could interrupt the owner"
+            )
+        wanted = sum(1 << (s - 1) for s in INTERRUPTIONS)
+        for tid in os.listdir("/proc/self/task"):
+            try:
+                status = Path(f"/proc/self/task/{tid}/status").read_text()
+            except (FileNotFoundError, ProcessLookupError):
+                continue  # that thread has exited
+            if int(_status_field(status, "SigBlk"), 16) & wanted != wanted:
+                raise UnsupportedConsumerError(
+                    f"thread {tid} could take SIGINT or SIGTERM from the owner"
+                )
+        yield
+
+
+def _status_field(status: str, name: str) -> str:
+    [value] = [
+        line.split(":", 1)[1].strip() for line in status.splitlines() if line.startswith(f"{name}:")
+    ]
+    return value
 
 
 class LoopbackCapture:
@@ -782,29 +836,162 @@ class LoopbackCapture:
         return int(self.server.server_address[1])
 
     def start(self) -> None:
-        self.thread.start()
+        # A thread inherits its creator's mask: this listener can never take an interruption.
+        with interruptions_held():
+            self.thread.start()
 
-    def close(self) -> None:
+    def stop(self) -> None:
+        """Stop the serving thread; the socket has its own owner (`server.server_close`)."""
         self.server.shutdown()
-        self.server.server_close()
         self.thread.join(timeout=3)
         if self.thread.is_alive():
             raise RuntimeError("owned loopback listener did not stop")
+
+
+# --- which processes are in a group: proved from /proc, never assumed -------------------------
+
+
+class UncertainMembershipError(RuntimeError):
+    """Which processes are in a group cannot be proved here, so neither can its absence."""
+
+
+@dataclass(frozen=True)
+class ProcessView:
+    """A `/proc` proved to show this process every process of its pid namespace.
+
+    [LAW:parse-dont-validate] `process_view` is the only maker for the real `/proc`, and
+    `group_members` demands one, so no scan runs on a view that could hide a member.
+    """
+
+    root: Path
+
+
+def process_view(self_link: str, pid: int, mountinfo: str) -> ProcessView:
+    """The proof that `/proc` hides no process from this one, or `UncertainMembershipError`."""
+    if self_link != str(pid):
+        raise UncertainMembershipError(
+            f"/proc belongs to another pid namespace: /proc/self is {self_link!r}, not {pid}"
+        )
+    mounts = [line.split(" - ", 1) for line in mountinfo.splitlines() if " - " in line]
+    on_proc = [after.split() for before, after in mounts if before.split()[4:5] == ["/proc"]]
+    if not on_proc:
+        raise UncertainMembershipError("no /proc mount is visible to this process")
+    top = on_proc[-1]  # later mounts cover earlier ones: the last is what paths reach
+    if top[0] != "proc":
+        raise UncertainMembershipError(f"/proc is not procfs but {top[0]}")
+    hiding = [o for o in top[-1].split(",") if o.startswith("hidepid=")]
+    if hiding and hiding[-1] not in ("hidepid=0", "hidepid=off"):
+        raise UncertainMembershipError(
+            f"/proc is mounted with {hiding[-1]}, which can hide a member"
+        )
+    return ProcessView(Path("/proc"))
+
+
+def read_process_view() -> ProcessView:
+    return process_view(
+        os.readlink("/proc/self"), os.getpid(), Path("/proc/self/mountinfo").read_text()
+    )
+
+
+def require_waitable_children(status: str) -> None:
+    """Refuse while the kernel would reap this process's children itself (SIGCHLD ignored)."""
+    if int(_status_field(status, "SigIgn"), 16) >> (signal.SIGCHLD - 1) & 1:
+        raise UnsupportedConsumerError(
+            "SIGCHLD is ignored, so no exited leader would keep its group"
+        )
+
+
+def _proc_read(path: Path) -> str | None:
+    """A /proc file's text, or `None` when its process or thread has vanished (ENOENT, ESRCH)."""
+    try:
+        return path.read_text()
+    except (FileNotFoundError, ProcessLookupError):
+        return None
+    except OSError as exc:
+        raise UncertainMembershipError(f"{path} is unreadable, so membership is uncertain") from exc
+
+
+def _proc_list(path: Path) -> list[str]:
+    """A /proc directory's entries; empty only when its process has vanished."""
+    try:
+        return os.listdir(path)
+    except (FileNotFoundError, ProcessLookupError):
+        return []
+    except OSError as exc:
+        raise UncertainMembershipError(f"{path} is unreadable, so membership is uncertain") from exc
+
+
+def _stat(path: Path) -> tuple[str, int] | None:
+    """(state, process group) of a /proc stat file, or `None` when it has vanished."""
+    text = _proc_read(path)
+    if text is None:
+        return None
+    try:
+        state, _ppid, pgrp = text[text.rindex(")") + 2 :].split()[:3]
+        return state, int(pgrp)
+    except ValueError as exc:
+        raise UncertainMembershipError(f"{path} is malformed, so membership is uncertain") from exc
+
+
+def _has_live_thread(process: Path) -> bool:
+    """Until its whole thread group exits a process is alive, even behind a zombie main thread."""
+    for tid in _proc_list(process / "task"):
+        stat = _stat(process / "task" / tid / "stat")
+        if stat is not None and (tid != process.name or stat[0] not in ("Z", "X")):
+            return True
+    return False
+
+
+def group_members(view: ProcessView, pgid: int) -> list[int]:
+    """The processes of group `pgid` with any thread still alive, in pid order.
+
+    Authoritative only while the group's number cannot be anyone else's: while its leader is
+    unreaped, or any member lives. Only a vanished entry means gone; any other failure to read one
+    is `UncertainMembershipError`, never absence.
+    """
+    try:
+        entries = os.listdir(view.root)
+    except OSError as exc:
+        raise UncertainMembershipError(
+            f"{view.root} is unreadable, so membership is uncertain"
+        ) from exc
+    return sorted(
+        int(entry)
+        for entry in entries
+        if entry.isdecimal()
+        and (stat := _stat(view.root / entry / "stat")) is not None
+        and stat[1] == pgid
+        and _has_live_thread(view.root / entry)
+    )
+
+
+# --- the lifetime owner: one typed state per stage, each stored as soon as its effect happens ---
+
+#: linux/pidfd.h (Linux 6.9+): signal the process group of the pidfd's process by its identity,
+#: which a reused number can never share.
+PIDFD_SIGNAL_PROCESS_GROUP = 4
+LEADER_CAP_SECONDS = 5.0
+SETTLE_CAP_SECONDS = 5.0
 
 
 class GroupReleasedError(RuntimeError):
     """The group was settled and its leader reaped: its number now carries no authority."""
 
 
+class ReservationLostError(RuntimeError):
+    """Another reaper took the leader: nothing about this group can be proved or signalled again."""
+
+
 @dataclass(frozen=True)
 class Settlement:
-    """A settled group: every member other than the still-unreaped leader was proved gone."""
+    """A settled group: after its one SIGKILL no process of it had any thread alive."""
 
     pgid: int
     returncode: int
-    #: Live members other than the leader seen before the settling kill. A report, not an
-    #: absence proof: one scan can miss a member that forks and exits while it runs.
-    survivors: bool
+    #: Whether processes other than the leader were alive just before the settling kill, `None`
+    #: when that was unreadable. A report, never an absence proof: one scan can miss a member that
+    #: forks and exits while it runs.
+    survivors: bool | None
 
     def record(self) -> dict[str, object]:
         return {
@@ -815,15 +1002,61 @@ class Settlement:
         }
 
 
+@dataclass(frozen=True)
+class Unacquired:
+    """Started, no pidfd yet: the unreaped leader keeps its number for this child alone."""
+
+
+@dataclass(frozen=True)
+class Owned:
+    """The leader's pidfd is open; group signals name the group's identity, never its number."""
+
+    pidfd: int
+
+
+@dataclass(frozen=True)
+class Killed:
+    """The one settling SIGKILL was delivered: only proof, never another signal, may follow."""
+
+    pidfd: int
+    survivors: bool | None
+
+
+@dataclass(frozen=True)
+class Settled:
+    """Absence proved with the leader still unreaped: only the one reap remains."""
+
+    pidfd: int
+    settlement: Settlement
+
+
+@dataclass(frozen=True)
+class Released:
+    """Reaped once: the number and the pidfd are given up and carry no authority."""
+
+    settlement: Settlement
+
+
+@dataclass(frozen=True)
+class Lost:
+    """Another reaper took the leader: this group can never be proved or signalled again."""
+
+    reason: str
+
+
+Lifetime = Unacquired | Owned | Killed | Settled | Released | Lost
+
+
 @dataclass
 class Child:
-    """One started phase process in its own group: the only owner of that group's lifetime.
+    """One started process in its own group: the only owner of that group's lifetime.
 
-    [LAW:no-ambient-temporal-coupling] A group's number is reserved only while its leader is
-    unreaped: the zombie keeps the pid allocated, and only this group's own session can join it.
-    So this owner never reaps before settling, sends group signals only after the kernel confirms
-    the leader is still unreaped, proves every other member gone while the number is reserved,
-    and reaps exactly once. After that the number carries no authority and `settle` refuses.
+    [LAW:types-are-the-program] Each stage is a state holding exactly the capability it permits,
+    stored as soon as its effect happens. Only `Owned` may signal, once, through the leader's
+    pidfd; `Killed` may only prove; `Settled` may only reap; `Released` and `Lost` hold nothing.
+    [LAW:no-ambient-temporal-coupling] Every transition runs with interruptions held, whoever
+    calls, so a retry always resumes from the stored state: it cannot kill twice, and nothing
+    after release or loss can reach the number again.
     """
 
     phase: str
@@ -831,93 +1064,131 @@ class Child:
     stdout: Path
     stderr: Path
     started: float
-    #: Observes the leader's exit without reaping it (`select` and `waitid(WNOWAIT)`).
-    pidfd: int
-    settlement: Settlement | None = None
-    released: bool = False
+    state: Lifetime = Unacquired()
+
+    @property
+    def finished(self) -> bool:
+        """Released, or lost to another reaper: either way nothing is left to settle."""
+        return isinstance(self.state, Released | Lost)
+
+    def acquire(self) -> None:
+        """Open the leader's pidfd, proved to name this process's own unreaped child."""
+        self._pidfd()
 
     def wait_exit(self, timeout: float) -> bool:
-        """Whether the leader exits within `timeout` seconds; it is never reaped here."""
-        if self.released:
-            raise GroupReleasedError(f"{self.phase} group {self.proc.pid} was already released")
-        ready, _, _ = select.select([self.pidfd], [], [], max(timeout, 0.0))
+        """Whether the leader's whole process exits within `timeout` seconds; it is never reaped."""
+        ready, _, _ = select.select([self._pidfd()], [], [], max(timeout, 0.0))
         return bool(ready)
 
     def exited(self) -> bool:
         return self.wait_exit(0.0)
 
     def settle(self) -> Settlement:
-        """Kill what is left of the group, prove it gone, reap the leader: exactly once.
+        """Kill what is left of the group once, prove every member gone, reap the leader once.
 
-        A failure before absence is proved leaves the group owned and reserved, so a later call
-        may kill again. Once absence is proved no further signal is sent; a later call only
-        finishes the release. After release every call raises `GroupReleasedError`.
+        A failure keeps the last stored state and a later call resumes from it. After release every
+        call raises `GroupReleasedError`; after loss, `ReservationLostError`.
         """
-        if self.released:
-            raise GroupReleasedError(f"{self.phase} group {self.proc.pid} was already released")
-        if self.settlement is None:
-            self.settlement = self._prove_settled()
-        settlement = self.settlement
-        self._reap_leader()
-        self.proc.returncode = settlement.returncode
-        self.released = True
-        os.close(self.pidfd)
-        return settlement
+        with interruptions_held():
+            if isinstance(self.state, Released):
+                raise GroupReleasedError(f"{self.phase} group {self.proc.pid} was already released")
+            while True:
+                match self.state:
+                    case Unacquired():
+                        self.state = self._acquired()
+                    case Owned(pidfd):
+                        self.state = self._killed(pidfd)
+                    case Killed(pidfd, survivors):
+                        self.state = self._settled(pidfd, survivors)
+                    case Settled(pidfd, settlement):
+                        self.state = self._released(pidfd, settlement)
+                    case Released(settlement):
+                        return settlement
+                    case Lost(reason):
+                        raise ReservationLostError(reason)
 
-    def _prove_settled(self) -> Settlement:
-        pgid = self.proc.pid
-        self._require_reserved()
-        survivors = bool(self._live_members())
-        os.killpg(pgid, signal.SIGKILL)  # the one settling signal; the number is reserved
-        if not self.wait_exit(5.0):
-            raise RuntimeError(f"{self.phase} leader outlived SIGKILL; its group stays owned")
-        for _ in range(100):
-            if not self._live_members():
-                return Settlement(pgid, self._leader_returncode(), survivors)
-            time.sleep(0.05)
-        raise RuntimeError(f"{self.phase} group members outlived SIGKILL; it stays owned")
+    def _pidfd(self) -> int:
+        with interruptions_held():
+            if isinstance(self.state, Unacquired):
+                self.state = self._acquired()
+            match self.state:
+                case Owned(pidfd) | Killed(pidfd, _) | Settled(pidfd, _):
+                    return pidfd
+                case Released():
+                    raise GroupReleasedError(f"{self.phase} group {self.proc.pid} was released")
+                case Lost(reason):
+                    raise ReservationLostError(reason)
 
-    def _require_reserved(self) -> None:
+    def _lost(self, pidfd: int, why: str) -> Lost:
+        os.close(pidfd)
+        return Lost(f"{self.phase} leader {self.proc.pid} {why}")
+
+    def _ours(self, pidfd: int) -> bool:
+        """waitid answers only for this process's own unreaped child."""
         try:
-            os.waitid(os.P_PIDFD, self.pidfd, os.WEXITED | os.WNOWAIT | os.WNOHANG)
-        except ChildProcessError as exc:
-            raise RuntimeError(
-                f"{self.phase} leader was reaped elsewhere; its group number lost its reservation"
-            ) from exc
+            os.waitid(os.P_PIDFD, pidfd, os.WEXITED | os.WNOWAIT | os.WNOHANG)
+        except ChildProcessError:
+            return False
+        return True
 
-    def _live_members(self) -> list[int]:
-        """Live processes of this group other than its leader, read from /proc.
+    def _acquired(self) -> Owned | Lost:
+        try:
+            pidfd = os.pidfd_open(self.proc.pid)
+        except ProcessLookupError:
+            return Lost(
+                f"{self.phase} leader {self.proc.pid} was reaped elsewhere before acquisition"
+            )
+        try:
+            if not self._ours(pidfd):
+                return self._lost(pidfd, "was reaped elsewhere: its pidfd names another process")
+            # The kernel can signal this group by identity, before anything relies on it.
+            signal.pidfd_send_signal(pidfd, 0, None, PIDFD_SIGNAL_PROCESS_GROUP)
+        except BaseException:
+            os.close(pidfd)
+            raise
+        return Owned(pidfd)
 
-        Authoritative only while the number is reserved: then nothing outside this group's own
-        session can hold it. Zombies are dead, so they are not live members.
-        """
-        pgid, live = self.proc.pid, list[int]()
-        for entry in os.listdir("/proc"):
-            if not entry.isdecimal() or int(entry) == pgid:
-                continue
-            try:
-                stat = Path(f"/proc/{entry}/stat").read_text()
-            except OSError:  # it exited while the directory was being read: not live
-                continue
-            state, _ppid, pgrp = stat[stat.rindex(")") + 2 :].split()[:3]
-            if int(pgrp) == pgid and state not in "ZX":
-                live.append(int(entry))
-        return live
+    def _killed(self, pidfd: int) -> Killed | Lost:
+        if not self._ours(pidfd):
+            return self._lost(pidfd, "was reaped elsewhere before its group was killed")
+        try:
+            members = group_members(read_process_view(), self.proc.pid)
+            survivors = any(pid != self.proc.pid for pid in members)
+        except UncertainMembershipError:
+            survivors = None
+        try:
+            signal.pidfd_send_signal(pidfd, signal.SIGKILL, None, PIDFD_SIGNAL_PROCESS_GROUP)
+        except ProcessLookupError:  # no task left: the unreaped leader was reaped since the check
+            return self._lost(pidfd, "was reaped elsewhere while its group was being killed")
+        return Killed(pidfd, survivors)
 
-    def _leader_returncode(self) -> int:
-        status = os.waitid(os.P_PIDFD, self.pidfd, os.WEXITED | os.WNOWAIT)
+    def _settled(self, pidfd: int, survivors: bool | None) -> Settled | Lost:
+        if not select.select([pidfd], [], [], LEADER_CAP_SECONDS)[0]:
+            raise RuntimeError(f"{self.phase} leader outlived SIGKILL; its group stays owned")
+        view = read_process_view()
+        limit = time.monotonic() + SETTLE_CAP_SECONDS
+        while live := group_members(view, self.proc.pid):
+            if time.monotonic() > limit:
+                raise RuntimeError(f"{self.phase} members {live} outlived SIGKILL; they stay owned")
+            time.sleep(0.05)  # paces the scans; each fresh scan, never the sleep, is the proof
+        try:
+            status = os.waitid(os.P_PIDFD, pidfd, os.WEXITED | os.WNOWAIT)
+        except ChildProcessError:
+            return self._lost(pidfd, "was reaped elsewhere before its settlement was stored")
         if status is None:
             raise RuntimeError(f"{self.phase} leader reported no exit status")
         killed = status.si_code in (os.CLD_KILLED, os.CLD_DUMPED)
-        return -status.si_status if killed else status.si_status
+        returncode = -status.si_status if killed else status.si_status
+        return Settled(pidfd, Settlement(self.proc.pid, returncode, survivors))
 
-    def _reap_leader(self) -> None:
+    def _released(self, pidfd: int, settlement: Settlement) -> Released | Lost:
         try:
-            os.waitid(os.P_PIDFD, self.pidfd, os.WEXITED)
+            os.waitid(os.P_PIDFD, pidfd, os.WEXITED)  # the one reap: the number is given up here
         except ChildProcessError:
-            # Only after absence was proved: an earlier call of this release was interrupted
-            # after its reap. The group is settled either way, so nothing is signalled.
-            pass
+            return self._lost(pidfd, "was reaped elsewhere after its group was settled")
+        os.close(pidfd)
+        self.proc.returncode = settlement.returncode
+        return Released(settlement)
 
 
 Launcher = Callable[[str], Child]
@@ -940,25 +1211,94 @@ def child_env(layout: Layout) -> dict[str, str]:
     }
 
 
-def spawn(argv: list[str], env: dict[str, str], cwd: Path, logs: Path, phase: str) -> Child:
+def spawn(
+    argv: list[str],
+    env: dict[str, str],
+    cwd: Path,
+    logs: Path,
+    phase: str,
+    own: Callable[[Child], None],
+) -> Child:
+    """Start `argv` as the leader of a new group, handed to `own` before anything can fail.
+
+    [LAW:single-enforcer] The only place a group comes into being. The membership and reaping
+    preconditions are proved before anything starts. Then, with interruptions held, the child is
+    registered before its pidfd is opened, so a failed acquisition leaves an owner whose finalizer
+    retries through `Child.settle`: never a stray group, a numeric kill or an unbounded wait.
+    """
+    read_process_view()  # refused here, nothing starts; every proof re-reads its own view
+    require_waitable_children(Path("/proc/self/status").read_text())
     stdout, stderr = logs / f"{phase}.stdout", logs / f"{phase}.stderr"
-    with stdout.open("xb") as out, stderr.open("xb") as err:
-        proc = subprocess.Popen(
-            argv,
-            cwd=cwd,
-            env=env,
-            stdin=subprocess.DEVNULL,
-            stdout=out,
-            stderr=err,
-            start_new_session=True,
-        )
-    try:
-        pidfd = os.pidfd_open(proc.pid)
-    except BaseException:
-        os.killpg(proc.pid, signal.SIGKILL)  # still unreaped, so the number is still reserved
-        proc.wait()
-        raise
-    return Child(phase, proc, stdout, stderr, time.monotonic(), pidfd)
+    with interruptions_held():
+        with stdout.open("xb") as out, stderr.open("xb") as err:
+            proc = subprocess.Popen(
+                argv,
+                cwd=cwd,
+                env=env,
+                stdin=subprocess.DEVNULL,
+                stdout=out,
+                stderr=err,
+                start_new_session=True,
+            )
+        child = Child(phase, proc, stdout, stderr, time.monotonic())
+        own(child)
+        child.acquire()
+    return child
+
+
+class Fleet:
+    """Every child one attempt started, so cleanup offers each unfinished one to its own owner.
+
+    [LAW:single-enforcer] Each child's `settle` alone signals and proves; the fleet holds no numbers
+    and validates nothing. `spawn` fills it before acquisition can fail.
+    """
+
+    def __init__(self) -> None:
+        self.children: list[Child] = []
+
+    def own(self, child: Child) -> None:
+        self.children.append(child)
+
+    def settle_all(self) -> list[dict[str, object]]:
+        """Settle every unfinished child, each independently of the others' failures.
+
+        One failure is raised as itself and several as one group, so none is dropped. Both keep the
+        exception already being handled as their context (a nested `ExitStack` would reset it).
+        """
+        kills: list[dict[str, object]] = []
+        failures: list[BaseException] = []
+        for child in [c for c in self.children if not c.finished]:
+            try:
+                kills.append(kill_group(child))
+            except BaseException as exc:  # [LAW:no-silent-failure] every one is raised below
+                failures.append(exc)
+        if len(failures) > 1:
+            raise BaseExceptionGroup("several owned groups failed to settle", failures)
+        if failures:
+            raise failures[0]
+        return kills
+
+
+class Owners(contextlib.ExitStack[None]):
+    """A scope, entered before anything is acquired, whose finalizers run with interruptions held.
+
+    [LAW:no-ambient-temporal-coupling] Acquire each resource and register its finalizer in one
+    `interruptions_held` region inside this scope, so nothing lands between creation and ownership.
+    `ExitStack` runs every finalizer even when an earlier one raises: a failed close never strands a
+    later owner, and its failure is chained onto whatever ended the body. Its finalizers are plain
+    callbacks, so it never suppresses an exception. The unwind blocks interruptions without the
+    proof, so a consumer that fails it still closes what it can while each `settle` refuses.
+    """
+
+    def __exit__(
+        self,
+        typ: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+        /,
+    ) -> None:
+        with _interruptions_blocked():
+            super().__exit__(typ, exc, tb)
 
 
 def kill_group(child: Child) -> dict[str, object]:
@@ -966,20 +1306,14 @@ def kill_group(child: Child) -> dict[str, object]:
     return child.settle().record()
 
 
-def finish(
-    child: Child,
-    deadline: float,
-    hold: Callable[[], contextlib.AbstractContextManager[None]] = contextlib.nullcontext,
-) -> dict[str, object]:
+def finish(child: Child, deadline: float) -> dict[str, object]:
     """Wait within the child and overall caps, then settle and release the group.
 
-    A timeout's settlement is recorded as its `kill`. `hold` brackets the settlement, so a caller
-    can keep an interruption out of it (the pre-action witness holds SIGTERM there).
+    A timeout's settlement is recorded as its `kill`. The owner holds interruptions itself.
     """
     cap = min(CHILD_CAP_SECONDS - (time.monotonic() - child.started), deadline - time.monotonic())
     timed_out = not child.wait_exit(cap)
-    with hold():
-        settlement = child.settle()
+    settlement = child.settle()
     return {
         **stream_record(child),
         "exit": settlement.returncode,
@@ -1039,31 +1373,43 @@ def with_services(
     python: Path,
     logs: Path,
     deadline: float,
+    fleet: Fleet,
     body: Callable[[LoopbackCapture], dict[str, object]],
 ) -> dict[str, object]:
-    """Own the webhook listener and the witness tool server for exactly the scenario's life."""
-    capture = LoopbackCapture()
-    tool_port = free_loopback_port()
-    write_new(layout.mcp_server, MCP_SERVER_SOURCE)
-    write_new(layout.config, config_text(layout, capture.port, tool_port))
-    capture.start()
-    server = spawn(
-        [str(python), "-I", str(layout.mcp_server), str(layout.tool_calls), str(tool_port)],
-        {"PATH": "/usr/bin:/bin", "HOME": str(layout.home), "TMPDIR": str(layout.tmp)},
-        layout.tmp,
-        logs,
-        "tool-server",
-    )
-    ready = False
-    try:
+    """Own the webhook listener, the tool server and every phase group for the scenario's life.
+
+    They close in reverse order of ownership: phase groups, the tool server's record then its
+    group, the listener's thread, then its socket.
+    """
+    tool_server: dict[str, object] = {}
+    phase_cleanup: list[dict[str, object]] = []
+    with Owners() as owners:
+        with interruptions_held():
+            capture = LoopbackCapture()
+            owners.callback(capture.server.server_close)
+            capture.start()
+            owners.callback(capture.stop)
+        tool_port = free_loopback_port()
+        write_new(layout.mcp_server, MCP_SERVER_SOURCE)
+        write_new(layout.config, config_text(layout, capture.port, tool_port))
+
+        def own_server(server: Child) -> None:
+            owners.callback(lambda: tool_server.update(kill=kill_group(server)))
+
+        server = spawn(
+            [str(python), "-I", str(layout.mcp_server), str(layout.tool_calls), str(tool_port)],
+            {"PATH": "/usr/bin:/bin", "HOME": str(layout.home), "TMPDIR": str(layout.tmp)},
+            layout.tmp,
+            logs,
+            "tool-server",
+            own_server,
+        )
+        owners.callback(lambda: tool_server.update(stream_record(server)))
+        owners.callback(lambda: phase_cleanup.extend(fleet.settle_all()))
         ready = wait_listening(server, tool_port, deadline)
-        evidence = body(capture) if ready else {"runs": {}, "results": {}}
-    finally:
-        # Settled before its record is read, so a failure reading the record cannot skip it.
-        kill = kill_group(server)
-        tool_server = {**stream_record(server), "ready": ready, "kill": kill}
-        capture.close()
-    evidence["tool_server"] = tool_server
+        evidence: dict[str, object] = body(capture) if ready else {"runs": {}, "results": {}}
+    evidence["phase_cleanup"] = phase_cleanup
+    evidence["tool_server"] = {**tool_server, "ready": ready}
     evidence["webhook_requests"] = capture.requests
     evidence["webhook_errors"] = capture.errors
     evidence["tool_calls"] = (
@@ -1637,9 +1983,11 @@ def run(
         expected_head,
     ]
     env = child_env(layout)
+    fleet = Fleet()
 
     def launch(phase: str) -> Child:
-        return spawn(child_argv(python, helper, phase, fixed), env, layout.tmp, logs, phase)
+        argv = child_argv(python, helper, phase, fixed)
+        return spawn(argv, env, layout.tmp, logs, phase, fleet.own)
 
     report: dict[str, object] = {
         "plan": PLAN,
@@ -1661,13 +2009,17 @@ def run(
 
     signal.signal(signal.SIGTERM, stop)
     try:
-        evidence = with_services(
-            layout,
-            python,
-            logs,
-            deadline,
-            lambda capture: scenario(layout, launch, capture, deadline),
-        )
+        # The later, independent finalizer: it retries any phase whose first cleanup failed.
+        with Owners() as outer:
+            outer.callback(fleet.settle_all)
+            evidence = with_services(
+                layout,
+                python,
+                logs,
+                deadline,
+                fleet,
+                lambda capture: scenario(layout, launch, capture, deadline),
+            )
     finally:
         signal.signal(signal.SIGTERM, previous_term)
     report["config_sha256"] = sha256(layout.config)
