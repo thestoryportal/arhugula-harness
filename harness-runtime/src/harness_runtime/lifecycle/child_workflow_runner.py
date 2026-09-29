@@ -44,6 +44,7 @@ from typing import Any, Protocol, cast, runtime_checkable
 
 from harness_cp.cp_shared_types import ModelBinding
 from harness_cp.handoff_context import HandoffContext
+from harness_cp.hitl_placement import HITLPlacement
 from harness_cp.pause_resume_protocol_types import PausedChildCapture, ResumeContext
 from harness_cp.sub_agent_gate_level_descent import SubAgentGateLevelDescent
 from harness_cp.workflow_driver import DriverContext as _CpDriverContext
@@ -95,6 +96,7 @@ class ChildWorkflowRunner(Protocol):
         descent: SubAgentGateLevelDescent,
         default_model_binding: ModelBinding,
         descent_depth: int,
+        inherited_hitl_placements: tuple[HITLPlacement, ...] = (),
         child_resume: PausedChildCapture | None = None,
         child_run_id_seed: str | None = None,
         resume_context: ResumeContext | None = None,
@@ -224,6 +226,7 @@ def compose_child_workflow_runner(
         descent: SubAgentGateLevelDescent,
         default_model_binding: ModelBinding,
         descent_depth: int,
+        inherited_hitl_placements: tuple[HITLPlacement, ...] = (),
         child_resume: PausedChildCapture | None = None,
         child_run_id_seed: str | None = None,
         resume_context: ResumeContext | None = None,
@@ -307,6 +310,7 @@ def compose_child_workflow_runner(
                 cast(_CpDriverContext, ctx),
                 default_model_binding=default_model_binding,
                 step_dispatchers=cast(Any, ctx.step_dispatchers),
+                inherited_hitl_placements=inherited_hitl_placements,
                 pause_snapshot_input=pause_snapshot_input,
                 resume_context=resume_context,
                 hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,

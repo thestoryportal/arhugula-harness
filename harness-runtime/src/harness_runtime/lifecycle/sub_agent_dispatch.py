@@ -122,6 +122,7 @@ from harness_cp.handoff_context import (
     RetryHistory,
     StateSummary,
 )
+from harness_cp.hitl_placement import HITLPlacementKind
 from harness_cp.pause_resume_protocol_types import PausedChildCapture
 from harness_cp.sub_agent_brief import SubAgentBrief
 from harness_cp.topology_pattern import TopologyPattern
@@ -1110,6 +1111,13 @@ class RuntimeSubAgentDispatcher:
                     # [LAW:one-source-of-truth] the child's depth derives from the parent's
                     # `descent_depth`; no second counter exists.
                     descent_depth=step_context.descent_depth + 1,
+                    # CP §17.3: the parent step context already carries the
+                    # ancestor-first fold; only PRE_ACTION crosses this boundary.
+                    inherited_hitl_placements=tuple(
+                        placement
+                        for placement in step_context.hitl_placements
+                        if placement.position is HITLPlacementKind.PRE_ACTION
+                    ),
                     child_resume=step_context.child_resume,
                     # B-104 Task 5b-1 — CP's opaque carrier, threaded beside `child_resume`.
                     child_resume_authority=step_context.child_resume_authority,

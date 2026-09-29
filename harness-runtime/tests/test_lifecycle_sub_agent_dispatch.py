@@ -55,6 +55,7 @@ from harness_cp.cross_family_fallback_chain import (
 from harness_cp.engine_class import EngineClass
 from harness_cp.gate_level_rule import GateLevel
 from harness_cp.handoff_context import ActionKind, StateSummary
+from harness_cp.hitl_placement import HITLPlacement, HITLPlacementKind
 from harness_cp.pause_resume_protocol_types import (
     PausedChildCapture,
     PauseSnapshot,
@@ -275,6 +276,7 @@ class _MockChildWorkflowRunner:
         descent: SubAgentGateLevelDescent,
         default_model_binding: ModelBinding,
         descent_depth: int,
+        inherited_hitl_placements: tuple[HITLPlacement, ...] = (),
         child_resume: Any = None,
         child_run_id_seed: str | None = None,
         child_resume_authority: Any = None,
@@ -286,6 +288,7 @@ class _MockChildWorkflowRunner:
         self.calls.append(
             {
                 "descent_depth": descent_depth,
+                "inherited_hitl_placements": inherited_hitl_placements,
                 "workflow_id": workflow_id,
                 "manifest_entry": manifest_entry,
                 "steps": tuple(steps),
@@ -662,6 +665,43 @@ def test_dispatch_invokes_child_workflow_runner(tmp_path: Path) -> None:
     assert call["manifest_entry"].workflow_id == "child-wf"
     assert len(call["steps"]) == 1
     assert call["default_model_binding"] == _binding().model_binding
+
+
+def test_dispatch_real_runner_passes_ancestor_pre_action_prefix_to_cp(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The real dispatcher and runner must pass the ancestor prefix to CP.
+
+    Removing either forwarding step drops the child policy; a standalone CP
+    inherited-placement test cannot catch that production wiring failure.
+    """
+    from types import SimpleNamespace
+
+    import harness_runtime.lifecycle.child_workflow_runner as cwr
+
+    root = HITLPlacement(position=HITLPlacementKind.PRE_ACTION, tool_filter=("fs.write",))
+    parent = HITLPlacement(position=HITLPlacementKind.PRE_ACTION, tool_filter=("http.get",))
+    boundary = HITLPlacement(position=HITLPlacementKind.SUB_AGENT_BOUNDARY)
+    captured: dict[str, Any] = {}
+
+    def capture_child_entry(*_args: Any, **kwargs: Any) -> RunResult:
+        captured.update(kwargs)
+        return _success_result()
+
+    monkeypatch.setattr(cwr, "execute_workflow_at_depth", capture_child_entry)
+    dispatcher, _, _ = _dispatcher(tmp_path)
+    dispatcher.child_workflow_runner = cwr.compose_child_workflow_runner(
+        cast(Any, SimpleNamespace(step_dispatchers={})),
+        durable_admission=RefuseDurableChildAdmission(),
+    )
+    parent_context = _step_context().model_copy(
+        update={"hitl_placements": (root, parent, boundary)}
+    )
+
+    dispatcher.dispatch(_binding(), _step(), step_context=parent_context)
+
+    assert captured["inherited_hitl_placements"] == (root, parent)
+    assert captured["descent_depth"] == 1
 
 
 def test_child_runner_receives_handoff_context_and_descent(tmp_path: Path) -> None:

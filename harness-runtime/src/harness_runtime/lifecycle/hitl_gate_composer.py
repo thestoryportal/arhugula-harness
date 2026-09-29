@@ -121,7 +121,7 @@ import hashlib
 import inspect
 import json
 import logging
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -151,6 +151,7 @@ from harness_cp.hitl_placement import (
     HITLPlacementKind,
     HITLResult,
     LoosenablePlacementKind,
+    select_governing_pre_action_placement,
 )
 from harness_cp.hitl_response_palette import HITLResponse
 from harness_cp.hitl_timeout_degradation import (
@@ -171,7 +172,7 @@ from harness_cp.persona_engine_hitl_matrix import (
     matrix_cell_for,
 )
 from harness_cp.validator_framework_types import HITLEscalationBrief
-from harness_cp.workflow_driver_types import StepExecutionContext, WorkflowStep
+from harness_cp.workflow_driver_types import StepExecutionContext, StepKind, WorkflowStep
 from harness_cxa.cp_audit_conversion import cp_audit_to_od_audit
 from harness_is.state_ledger_entry_schema import Identifier
 from harness_is.state_ledger_write import (
@@ -988,6 +989,40 @@ def _compute_handoff_context_size_bytes(handoff_context: Any) -> int:
         return len(dump_method().encode("utf-8"))
     except Exception:  # pragma: no cover — defensive
         return 0
+
+
+def _matching_wrap_placements(
+    placements: Sequence[HITLPlacement],
+    applicable: frozenset[HITLPlacementKind],
+    step: WorkflowStep,
+) -> list[HITLPlacement]:
+    """Select one governing PRE_ACTION for this action, preserving other kinds.
+
+    CP §17.3 supplies ancestor-first order and the exact-name selector. The
+    same selection governs a fresh dispatch and durable-resume Step 0.
+    """
+    matching = [
+        placement
+        for placement in placements
+        if placement.position in applicable
+        and placement.position is not HITLPlacementKind.VALIDATOR_ESCALATION
+    ]
+    if HITLPlacementKind.PRE_ACTION not in applicable:
+        return matching
+    tool_id = step.step_payload.get("tool_id") if step.step_kind is StepKind.TOOL_STEP else None
+    governing = select_governing_pre_action_placement(
+        matching, tool_id=tool_id if isinstance(tool_id, str) else None
+    )
+    selected = False
+    result: list[HITLPlacement] = []
+    for placement in matching:
+        if placement.position is HITLPlacementKind.PRE_ACTION:
+            if placement is governing and not selected:
+                result.append(placement)
+                selected = True
+        else:
+            result.append(placement)
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -1909,12 +1944,9 @@ class RuntimeHITLGateComposer:
             resumed_placements = getattr(step_context, "hitl_placements", ()) or getattr(
                 step, "hitl_placements", ()
             )
-            resumed_matching = [
-                p
-                for p in resumed_placements
-                if p.position in self.applicable_placements
-                and p.position != HITLPlacementKind.VALIDATOR_ESCALATION
-            ]
+            resumed_matching = _matching_wrap_placements(
+                resumed_placements, self.applicable_placements, step
+            )
             resumed_parent_action_id = cast(ActionID, step_context.parent_action_id)
             # Step 0 re-evaluates the current gate without repeating the HITL request.
             # [LAW:single-enforcer] The same floor/palette helper serves first dispatch and resume.
@@ -2023,19 +2055,11 @@ class RuntimeHITLGateComposer:
         if not placements:
             return await self._dispatch_inner(binding, step, step_context=step_context)
 
-        # --- Step 2: Filter by composer's applicable set --------------------
-        matching = [p for p in placements if p.position in self.applicable_placements]
-        if not matching:
-            return await self._dispatch_inner(binding, step, step_context=step_context)
-
-        # --- Step 3: Filter VALIDATOR_ESCALATION placements (Reading B v1.22).
-        # Per spec v1.22 §14.8.2 step 3: VALIDATOR_ESCALATION placements are
-        # VALID at v1.22 — they fire via the mid-step re-entry path at
-        # `validator_escalation_composer.compose_validator_escalation_gate`
-        # invoked from workflow_driver post-dispatch hook (NOT here at
-        # wrap-time composer). The wrap-time composer body ignores
-        # VALIDATOR_ESCALATION placements (filtered out of `matching`).
-        matching = [p for p in matching if p.position != HITLPlacementKind.VALIDATOR_ESCALATION]
+        # --- Steps 2/3: Applicable positions and CP §17.3 first match ------
+        # The validator gate remains a mid-step re-entry path. PRE_ACTION
+        # chooses one governing placement by exact tool name (or no tool for
+        # inference); inherited ancestors appear first in the CP-composed tuple.
+        matching = _matching_wrap_placements(placements, self.applicable_placements, step)
         if not matching:
             return await self._dispatch_inner(binding, step, step_context=step_context)
 

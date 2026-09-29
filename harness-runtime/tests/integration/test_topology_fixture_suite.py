@@ -49,6 +49,7 @@ from harness_core import PersonaTier
 from harness_cp.cp_shared_types import ModelBinding
 from harness_cp.engine_class import EngineClass
 from harness_cp.gate_level_rule import GateLevel
+from harness_cp.hitl_placement import HITLPlacement
 from harness_cp.per_step_override_evaluator import StepEffectiveBinding
 from harness_cp.per_workload_class_topology import is_topology_permitted_for_workload
 from harness_cp.sub_agent_gate_level_descent import SubAgentGateLevelDescent
@@ -119,6 +120,7 @@ class _MockChildWorkflowRunner:
         descent: SubAgentGateLevelDescent,
         default_model_binding: ModelBinding,
         descent_depth: int,
+        inherited_hitl_placements: tuple[HITLPlacement, ...] = (),
         child_resume: Any = None,
         child_run_id_seed: str | None = None,
         child_resume_authority: Any = None,
@@ -137,6 +139,7 @@ class _MockChildWorkflowRunner:
         # uniform-fallback eligibility payload.
         _ = (
             descent_depth,
+            inherited_hitl_placements,
             child_resume,
             child_run_id_seed,
             resume_context,

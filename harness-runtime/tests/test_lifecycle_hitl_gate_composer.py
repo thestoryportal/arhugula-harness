@@ -1321,20 +1321,64 @@ async def test_respond_response_does_not_inject_payload(
 
 
 # ---------------------------------------------------------------------------
+# CP §17.3 — a filtered PRE_ACTION gates only its exact tool action
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("kind", "tool_id", "expected_prompts"),
+    [
+        (StepKind.INFERENCE_STEP, None, 0),
+        (StepKind.TOOL_STEP, "http.get", 0),
+        (StepKind.TOOL_STEP, "fs.write", 1),
+    ],
+)
+async def test_filtered_pre_action_uses_exact_action_tool_name(
+    tracer_provider: tuple[TracerProvider, InMemorySpanExporter],
+    kind: StepKind,
+    tool_id: str | None,
+    expected_prompts: int,
+) -> None:
+    """The real composer must not gate inference or a different tool.
+
+    Removing runtime selector use makes both zero-prompt cases fail while the
+    standalone CP selector test stays green.
+    """
+    provider, _ = tracer_provider
+    inner = _MockInnerDispatcher()
+    surface = _MockAskUserQuestionSurface(
+        [AskUserQuestionResult(response=HITLResponse.APPROVE, latency_ms=1.0)]
+    )
+    composer = _make_composer(inner=inner, surface=surface, tracer_provider=provider)
+    placement = HITLPlacement(position=HITLPlacementKind.PRE_ACTION, tool_filter=("fs.write",))
+    step = WorkflowStep(
+        step_id=StepID("step-filtered"),
+        step_kind=kind,
+        step_payload={"tool_id": tool_id} if tool_id is not None else {},
+    )
+
+    await composer.dispatch(
+        cast(Any, object()), step, step_context=_make_step_context(placements=(placement,))
+    )
+
+    assert len(surface.calls) == expected_prompts
+    assert len(inner.calls) == 1
+
+
+# ---------------------------------------------------------------------------
 # AC #11 — multi-placement same-position 4-span emission count
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_two_pre_action_placements_emit_per_placement_canonical_4_spans(
+async def test_two_pre_action_placements_prompt_once_for_first_match(
     tracer_provider: tuple[TracerProvider, InMemorySpanExporter],
 ) -> None:
-    """AC #11: 2 PRE_ACTION placements on a single step → 2× each canonical span.
+    """CP §17.3 first-match: overlapping PRE_ACTION placements prompt once.
 
-    Per spec v1.11 §14.8.5 hierarchy diagram + §14.8.6 Invariants ("exactly
-    once per matching placement"): each matching placement gets exactly one
-    `hitl.gate.evaluated` + one `hitl.invocation.opened` + one
-    `hitl.invocation.responded`. Distinct action_ids per placement preserved.
+    Deleting the first-match selection from the production composer must make
+    this fail even though the standalone CP selector still passes its tests.
     """
     provider, exporter = tracer_provider
     inner = _MockInnerDispatcher()
@@ -1365,28 +1409,59 @@ async def test_two_pre_action_placements_emit_per_placement_canonical_4_spans(
 
     await composer.dispatch(cast(Any, object()), step, step_context=ctx)
 
-    # Surface called twice (once per placement)
-    assert len(surface.calls) == 2
-    # 2× each canonical span
+    assert len(surface.calls) == 1
     span_names = [s.name for s in exporter.get_finished_spans()]
-    assert span_names.count("hitl.gate.evaluated") == 2
-    assert span_names.count("hitl.invocation.opened") == 2
-    assert span_names.count("hitl.invocation.responded") == 2
-    # 2× audit entries reach the writer
-    assert len(audit.appends) == 2
-    # Note: the v1.11 MVP action_id shape `hitl:<parent>:<position>` collides
-    # across same-position placements. NOTE 6-i does NOT license that — it
-    # ASSERTS the opposite ("Each placement's audit entry uses a distinct
-    # `action_id`"), justifying it by "action_id includes placement.position.value",
-    # which only holds when the positions DIFFER (its own example pairs PRE_ACTION
-    # with SUB_AGENT_BOUNDARY). The earlier reading of this comment — that the
-    # in-loop sub-shape is impl-discretion — inverted the spec into a licence and
-    # is why the collision went unexamined from v1.11. It is now filed as `B-165`
-    # (Class 1 back-flow, `.harness/class_1_fork_b165_same_position_placement_
-    # identity_collision.md`) and witnessed at
-    # `test_b165_same_position_placement_identity_witness.py`. This test's own
-    # scope is unchanged: the 2-emission cardinality and surface invocation
-    # pattern; the identity claim is the B-165 witness's to make.
+    assert span_names.count("hitl.gate.evaluated") == 1
+    assert span_names.count("hitl.invocation.opened") == 1
+    assert span_names.count("hitl.invocation.responded") == 1
+    assert len(audit.appends) == 1
+    # CP v1.120 first-match selection prevents a second prompt or audit write for
+    # overlapping PRE_ACTION declarations. B-165 retains the underlying key-only
+    # ledger dedup invariant as a separate boundary witness.
+
+
+@pytest.mark.parametrize(
+    ("tool_id", "expected_timeout"),
+    [("fs.write", 0.1), ("http.get", 0.2)],
+)
+@pytest.mark.asyncio
+async def test_pre_action_first_match_keeps_ancestor_priority_and_child_gap(
+    tool_id: str,
+    expected_timeout: float,
+    tracer_provider: tuple[TracerProvider, InMemorySpanExporter],
+) -> None:
+    """A later child declaration cannot steal a matching ancestor action.
+
+    The distinct timeouts expose which placement the real composer used. A
+    nonmatching ancestor leaves the action for the child's unfiltered gate.
+    """
+    provider, _ = tracer_provider
+    surface = _MockAskUserQuestionSurface(
+        [AskUserQuestionResult(response=HITLResponse.APPROVE, latency_ms=1.0)]
+    )
+    composer = _make_composer(
+        inner=_MockInnerDispatcher(), surface=surface, tracer_provider=provider
+    )
+    ancestor = HITLPlacement(
+        position=HITLPlacementKind.PRE_ACTION,
+        tool_filter=("fs.write",),
+        timeout=100,
+    )
+    child = HITLPlacement(position=HITLPlacementKind.PRE_ACTION, timeout=200)
+    step = WorkflowStep(
+        step_id=StepID("step-0"),
+        step_kind=StepKind.TOOL_STEP,
+        step_payload={"tool_id": tool_id},
+    )
+
+    await composer.dispatch(
+        cast(Any, object()),
+        step,
+        step_context=_make_step_context(placements=(ancestor, child)),
+    )
+
+    assert len(surface.calls) == 1
+    assert surface.calls[0][2] == expected_timeout
 
 
 # ---------------------------------------------------------------------------
@@ -2875,6 +2950,38 @@ def _make_resume_composer_with_audit(
         audit_writer=audit,
     )
     return composer, audit, _make_step_context(placements=placements)
+
+
+@pytest.mark.asyncio
+async def test_resume_step_zero_audits_only_the_governing_pre_action(
+    tracer_provider: tuple[TracerProvider, InMemorySpanExporter],
+) -> None:
+    """A delivered response is audited once for the first matching placement.
+
+    Restoring the old resume Step-0 loop would append two audit records for one
+    operator response, even if the normal dispatch path were corrected.
+    """
+    from harness_cp.pause_resume_protocol_types import HITLDeliveryCell
+
+    provider, _ = tracer_provider
+    inner = _MockInnerDispatcher()
+    first = HITLPlacement(position=HITLPlacementKind.PRE_ACTION)
+    second = HITLPlacement(position=HITLPlacementKind.PRE_ACTION)
+    composer, audit, ctx = _make_resume_composer_with_audit(
+        inner, provider, placements=(first, second)
+    )
+    ctx = ctx.model_copy(
+        update={
+            "hitl_delivery_holder": HITLDeliveryCell(_make_resume_hitl_result(HITLResponse.APPROVE))
+        }
+    )
+
+    await composer.dispatch(
+        cast(Any, object()), _resume_step_with_payload({"orig": 1}), step_context=ctx
+    )
+
+    assert len(audit.appends) == 1
+    assert len(inner.calls) == 1
 
 
 @pytest.mark.asyncio

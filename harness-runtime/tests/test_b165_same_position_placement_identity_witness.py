@@ -1,90 +1,13 @@
-"""`B-165` — the same-position placement identity collision, WITNESSED.
+"""B-165 placement-identity boundaries after CP v1.120 first-match selection.
 
-`B-165` was registered at the `B-71` spec leg with an **explicitly unverified
-premise**: whether two placements declared at the SAME position can both mint an
-escalation token, in which case they collide, because the ratified basis
-(`Spec_Control_Plane_v1_119.md` §0.4(2)) hashes the placement POSITION and not the
-declaration. The row's own close-out made grounding step 1 and forbade calling it a
-defect first: an earlier draft cited
-`test_two_pre_action_placements_emit_per_placement_canonical_4_spans` as proof the
-shape is live, and review showed that test builds the composer WITHOUT
-`pause_resume_protocol`/`webhook_delivery_composer`, so it exercises the SYNCHRONOUS
-loop, which mints no token at all.
-
-This module is that grounding, BY EXECUTION. It answers the row's (a)/(b)/(c):
-
-* **(a) durable-async webhook venue — NO.** `_escalate_to_secondary_channel` is
-  `NoReturn`; with TWO same-position placements declared, exactly ONE escalation is
-  entered per pass and the second is unreachable. Witnessed with a POSITIVE control
-  (a counter on the real escalation), because "zero ledger writes observed" cannot
-  tell *one mint* apart from *looked in the wrong place*.
-* **(b) YES — another venue does.** The SYNC-BLOCKING loop at §14.8.2 step 4 runs
-  once per matching placement and `continue`s past APPROVE, so two same-position
-  placements each reach the 4h audit write.
-* **(c) The key COLLIDES, token included.** Both writes carry a byte-identical
-  `action_id`/`idempotency_key`. The `B-71` token does not separate them: it is
-  derived from the run-scoped branch identity plus `placement.position.value`, both
-  of which two same-position placements on one branch share.
-
-**What this module is NOT.** It is not a repair, and it does not assert the
-collision is *correct*. It PINS the as-built identity so the cost is visible and a
-later fix can re-price it. The repair is not a Phase-7 edit: `Spec_Harness_Runtime_v1.md`
-§14.8.7 NOTE 6-i asserts "Each placement's audit entry uses a distinct `action_id`"
-and "sibling-distinguishability ... is preserved", which these tests show is FALSE
-for the same-position case. Correcting that claim — or widening the §0.4(2) basis to
-include a per-declaration ordinal — revisits a ratified design record, so it routes to
-back-flow per workspace `CLAUDE.md` §4.3. The Class 1 fork filing lands in the
-IMMEDIATE FOLLOW-ON PR at
-`.harness/class_1_fork_b165_same_position_placement_identity_collision.md`; it is split
-out because the codex context guard hard-fails a PR mixing fork-doc and test surfaces
-(`DESIGN_IMPL_MIX`), so the witness lands first and the filing cites it.
-
-**Not a `B-71` regression.** The two-argument key `hitl:{parent}:{position}` already
-collided for same-position placements before the arc; `B-71` neither introduced nor
-closed this. Test 4 is the discriminator that keeps those two facts apart.
-
-**How far the grounding reaches — stated, because the first draft over-reached.**
-Out-of-family review of this arc objected, correctly, that tests 3 and 5 synthesise
-every load-bearing precondition (placements via the test-only step fallback, a
-hand-set basis, a bare `object()` binding selecting the sentinel matrix cell), so on
-their own they show only that the composer collides *if fed* the shape — not that
-production *feeds* it. Two things were added in response.
-
-Test 2-bis removes all three props here: a real `WorkflowManifestEntry`, the real
-fold, the real `compose_branch_child_context` plus the same `model_copy` update the
-fan-out site performs, a real `StepEffectiveBinding` on an asserted SYNC_BLOCKING
-cell, and a PLAIN step so the gate can only fire off `step_context`.
-
-But 2-bis still composes that context *itself*, so it could not detect
-`workflow_driver` ceasing to carry either field — which review then said, also
-correctly. The production-feed claim is therefore owned by a separate CP-side module,
-`harness-cp/tests/test_b165_production_feed_duplicate_placements.py`, which drives the
-REAL `execute_workflow` on a `PARALLELIZATION` topology and asserts on the
-`StepExecutionContext` production hands each branch's dispatcher: both same-position
-placements present, and the `B-71` basis non-`None` on that same context.
-
-*(An earlier draft justified that split by claiming harness-runtime cannot import the
-CP driver. That is FALSE and review corrected it — `tests/integration/
-test_u_rt_95_hitl_pause_trigger_durable_async_full_execution_path.py:84` imports
-`harness_cp.workflow_driver.execute_workflow`. The split is by concern, not by
-capability: one module owns what production DELIVERS, the other what the composer DOES
-with it. The unified round-trip is now LANDED at
-`harness-runtime/tests/integration/test_b165_driver_through_composer_round_trip.py`,
-which drives the real `execute_workflow` through a real `RuntimeHITLGateComposer`
-wrapped in the real `SyncDispatcherFacade` stage 5 uses.)*
-
-Test 3-bis then answers the last objection — that omitting the Stage-5
-`blast_radius_resolver` describes a configuration the operator may not run. It wires a
-production-valid resolver across all four `BlastRadiusTier` values, and the result is
-WIDER than the earlier tests showed: on READ_ONLY the gate auto-approves and prompts
-NOBODY, yet both placements still write and still collide onto one identity. The
-colliding key does not depend on a human being asked.
-
-What is therefore established: production COMPOSES and DELIVERS the colliding shape,
-the composer collides on it, and it collides on every blast-radius tier including the
-no-prompt one. What is NOT established, and is not claimed: that any shipped workflow
-declares duplicate placements today — none does. `B-165` is a reachable-by-construction
-bound, not an observed production incident.
+Manifests and the CP fold may retain two PRE_ACTION declarations at one position.
+The Runtime composer selects one governing PRE_ACTION placement, including in
+the real branch context and across all blast-radius tiers. SUB_AGENT_BOUNDARY
+still loops per declaration: duplicate positions can produce two same-key writes.
+That remains the open Class 1 B-165 residual at
+`.harness/class_1_fork_b165_same_position_placement_identity_collision.md`.
+The raw key function uses branch and position; its duplicate-key behavior is
+also tested separately as a state-ledger invariant.
 """
 
 from __future__ import annotations
@@ -372,32 +295,12 @@ def test_the_add_only_fold_preserves_both_same_position_placements() -> None:
 # the gate can only fire if the composer reads placements off `step_context`. Deleting
 # that arm makes both placements invisible and the gate never fires.
 @pytest.mark.asyncio
-async def test_the_production_branch_composition_hands_the_composer_the_colliding_shape() -> None:
-    """Closes the gap between "the composer collides IF fed this" and "production
-    FEEDS it" — the load-bearing objection to tests 3/5, raised by out-of-family
-    review of this arc and correct as raised.
+async def test_the_production_branch_composition_selects_one_governing_placement() -> None:
+    """A real branch context carries both declarations; Runtime gates once.
 
-    Tests 3 and 5 synthesise their preconditions three ways, and each is a way the
-    collision could be an artifact of the test rather than of the system:
-    placements arrive via the `_StepWithPlacements` proxy (the explicitly test-only
-    `getattr(step, ...)` fallback) instead of `step_context`; the basis is set by
-    hand; and a bare `object()` binding selects the partial-binding SENTINEL matrix
-    cell rather than a real one. This test removes all three:
-
-    * placements reach the composer ONLY through `step_context.hitl_placements` —
-      the production producer surface — and the step passed in is PLAIN, so the
-      test-only fallback would find nothing;
-    * the context is built by the REAL `compose_branch_child_context` plus the same
-      `model_copy` update the fan-out site performs at
-      `workflow_driver.py:8589-8606`, seeded from a REAL `WorkflowManifestEntry`
-      and folded by the REAL `fold_step_hitl_placements`;
-    * the binding is a REAL `StepEffectiveBinding` whose persona_tier × engine_class
-      resolves to a genuine non-excluded SYNC_BLOCKING cell.
-
-    What it does NOT claim: that a full `_execute_parallelization` run was driven.
-    It mirrors that site's composition faithfully rather than invoking the driver
-    end to end, so it proves the SHAPE production composes, not that a shipped
-    workflow declares duplicate placements today.
+    The plain step has no test-only placements. The real manifest fold, branch
+    context, and effective binding supply the pair through the production carrier.
+    The separate driver-through-composer test witnesses the full round trip.
     """
     candidate = ProviderCandidate(
         provider="anthropic", model="claude-opus-5", family=ProviderFamily.ANTHROPIC
@@ -462,30 +365,25 @@ async def test_the_production_branch_composition_hands_the_composer_the_collidin
 
     await composer.dispatch(cast(Any, binding), plain_step, step_context=child)
 
-    assert len(surface.calls) == 2, "both placements gated off the PRODUCTION carrier"
+    assert len(surface.calls) == 1, "first match gates once off the production carrier"
     keys = [str(key.idempotency_key) for _payload, key in ledger.appends]
-    assert len(keys) == 2
-    assert len(set(keys)) == 1, (
-        "production-composed context + real binding still collide onto ONE identity"
-    )
+    assert len(keys) == 1
 
 
 # ---------------------------------------------------------------------------
-# 3 — (b) + (c): the SYNC venue mints twice, onto ONE identity
+# 3 — the synchronous venue selects one governing placement
 # ---------------------------------------------------------------------------
 
 
-# mutation-probe: append a per-placement ordinal to the composed key inside
-# `compose_hitl_action_id` (e.g. a trailing `:0`/`:1` per loop iteration).
+# mutation-probe: bypass first-match selection so both declarations gate.
 @pytest.mark.asyncio
-async def test_two_same_position_placements_compose_one_identity_on_the_sync_venue() -> None:
-    """THE CORE WITNESS — (b) and (c) together.
+async def test_two_same_position_placements_select_once_on_the_sync_venue() -> None:
+    """Two declarations select one governing placement on the synchronous path.
 
     On a gate-owning fan-out branch the token IS resolved on the sync venue (the
     basis rides `StepExecutionContext` unconditionally), so this is not the
     token-free path the falsified first draft of `B-165` accidentally described.
-    Both placements are gated, both write, and both writes carry the SAME
-    `idempotency_key` — token included.
+    The composer selects one placement, so only one write carries the tokenized key.
     """
     provider = TracerProvider()
     surface = _Surface(
@@ -500,9 +398,7 @@ async def test_two_same_position_placements_compose_one_identity_on_the_sync_ven
     )
     ctx = _gate_owning_context(0)
 
-    # The token is genuinely present on this venue — pinned before the dispatch so
-    # a future change that silently drops it cannot leave this test asserting a
-    # collision between two token-FREE keys (which would prove nothing about B-71).
+    # The governing write keeps the branch token; selection must not erase it.
     token = resolve_escalation_instance_id(ctx, _GATE)
     assert token is not None
 
@@ -512,17 +408,14 @@ async def test_two_same_position_placements_compose_one_identity_on_the_sync_ven
         step_context=ctx,
     )
 
-    assert len(surface.calls) == 2, "both placements must be gated independently"
+    assert len(surface.calls) == 1, "only the governing placement is gated"
     keys = [str(key.idempotency_key) for _payload, key in ledger.appends]
-    assert len(keys) == 2, "both placements must reach the 4h F2 write"
-
     expected = f"hitl:{_PARENT_ACTION_ID}:{_GATE.value}:{token}"
-    assert keys == [expected, expected]
-    assert len(set(keys)) == 1, "the two placements collide onto ONE identity"
+    assert keys == [expected], "one governing placement reaches the F2 write"
 
 
 # ---------------------------------------------------------------------------
-# 3-bis — the collision survives the AUTO-APPROVE path, on every blast radius
+# 3-bis — first-match selection also governs the AUTO-APPROVE path
 # ---------------------------------------------------------------------------
 
 
@@ -530,30 +423,17 @@ async def test_two_same_position_placements_compose_one_identity_on_the_sync_ven
 # `_compose_and_persist_audit_off_loop(..., auto_approved=True)` call inside the
 # `if not hitl_required:` skip block (~`hitl_gate_composer.py:2091`).
 #
-# That site, NOT the 4h write, is where READ_ONLY's two colliding entries come from,
-# and instrumenting was the only way to learn it: on READ_ONLY the gate skips, so it
-# never reaches 4h at all, yet still writes twice. An annotation naming 4h looked
-# obviously right and SURVIVED the probe.
+# READ_ONLY skips the prompt but still emits exactly one audit write for the
+# governing placement. The second declaration must not reach either path.
 @pytest.mark.parametrize("tier", list(BlastRadiusTier))
 @pytest.mark.asyncio
-async def test_the_collision_holds_on_every_blast_radius_including_auto_approve(
+async def test_one_governing_placement_on_every_blast_radius_including_auto_approve(
     tier: BlastRadiusTier,
 ) -> None:
-    """Wires a PRODUCTION-VALID `blast_radius_resolver` — the Stage-5 dependency the
-    other tests omit — and finds the collision is WIDER than they showed.
+    """One selected placement writes on every tier, including auto-approval.
 
-    Out-of-family review observed that omitting the resolver is not neutral: with the
-    production READ_ONLY resolver and the default solo policy the gate produces ZERO
-    prompts, so a witness that never wires one is describing a configuration the
-    operator may not run. That observation is correct, and this test pins it — but the
-    conclusion runs the other way from "the collision may be unreachable in practice".
-
-    On READ_ONLY the gate auto-approves and prompts nobody. BOTH placements still reach
-    the 4h audit write, and the two writes still carry ONE identity. So the colliding
-    audit key does NOT depend on an operator being asked: it holds on all four tiers,
-    including the one where no human is involved at all. If anything that is worse —
-    the dropped second entry (test 6) is then invisible from the operator's side too,
-    with no prompt to remember having answered.
+    READ_ONLY asks no operator; the other tiers ask once. The production-valid
+    blast-radius resolver keeps this distinct from the partial-binding sentinel.
     """
     provider = TracerProvider()
     surface = _Surface(
@@ -595,12 +475,11 @@ async def test_the_collision_holds_on_every_blast_radius_including_auto_approve(
     await composer.dispatch(cast(Any, _RealCellBinding()), plain_step, step_context=ctx)
 
     keys = [str(key.idempotency_key) for _payload, key in ledger.appends]
-    assert len(keys) == 2, f"both placements must write on {tier.name}"
-    assert len(set(keys)) == 1, f"and collide onto ONE identity on {tier.name}"
+    assert len(keys) == 1, f"one governing placement must write on {tier.name}"
 
     # The prompt count is the part that DOES vary — pinned so the auto-approve path is
     # a stated property of this test rather than an unnoticed side effect.
-    expected_prompts = 0 if tier is BlastRadiusTier.READ_ONLY else 2
+    expected_prompts = 0 if tier is BlastRadiusTier.READ_ONLY else 1
     assert len(surface.calls) == expected_prompts, (
         f"{tier.name}: expected {expected_prompts} prompts, got {len(surface.calls)}"
     )
@@ -711,6 +590,56 @@ async def test_the_durable_async_venue_enters_exactly_one_escalation_per_pass(
 
 
 # ---------------------------------------------------------------------------
+# 5-bis — duplicate SUB_AGENT_BOUNDARY declarations still collide
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_duplicate_sub_agent_boundary_gates_still_share_one_key() -> None:
+    """PRE_ACTION first-match does not silently close the boundary half of B-165."""
+    boundary = HITLPlacement(position=HITLPlacementKind.SUB_AGENT_BOUNDARY)
+    ctx = _gate_owning_context(0).model_copy(update={"hitl_placements": (boundary, boundary)})
+    binding = StepEffectiveBinding(
+        step_id="step-0",
+        model_binding=ModelBinding(provider="anthropic", model="claude-opus-5"),
+        engine_class=EngineClass.SAVE_POINT_CHECKPOINT,
+        persona_tier=PersonaTier.SOLO_DEVELOPER,
+        override_applied=False,
+        hitl_placement=None,
+    )
+    surface = _Surface(
+        [
+            AskUserQuestionResult(response=HITLResponse.APPROVE, latency_ms=1.0),
+            AskUserQuestionResult(response=HITLResponse.APPROVE, latency_ms=2.0),
+        ]
+    )
+    ledger = _LedgerWriter()
+    composer = RuntimeHITLGateComposer(
+        inner=cast(Any, _Inner()),
+        applicable_placements=frozenset({HITLPlacementKind.SUB_AGENT_BOUNDARY}),
+        ask_user_question_surface=cast(AskUserQuestionSurface, surface),
+        ledger_writer=cast(Any, ledger),
+        audit_writer=cast(Any, _AuditWriter()),
+        tracer_provider=TracerProvider(),
+        audit_signing_key_id="harness-runtime-b165-boundary",
+        audit_signing_algorithm=SignatureAlgorithm.ED25519,
+        procedural_tier_snapshot_resolver=lambda: _Identifier("b" * 64),
+    )
+    step = WorkflowStep(
+        step_id=StepID("step-0"),
+        step_kind=StepKind.SUB_AGENT_DISPATCH,
+        step_payload={},
+    )
+
+    await composer.dispatch(cast(Any, binding), step, step_context=ctx)
+
+    assert len(surface.calls) == 2
+    keys = [str(key.idempotency_key) for _payload, key in ledger.appends]
+    assert len(keys) == 2
+    assert keys[0] == keys[1]
+
+
+# ---------------------------------------------------------------------------
 # 6 — the CONSEQUENCE, at the REAL writer: the second entry is DROPPED
 # ---------------------------------------------------------------------------
 
@@ -720,14 +649,11 @@ async def test_the_durable_async_venue_enters_exactly_one_escalation_per_pass(
 def test_the_second_same_position_f2_entry_is_dropped_by_key_only_dedup(
     tmp_path: Path,
 ) -> None:
-    """Why the collision COSTS something, asserted against the REAL writer.
+    """The real ledger deduplicates a repeated position key.
 
-    `hitl_gate_composer` uses the composed key as BOTH the CP audit `action_id` and
-    the F2 `idempotency_key`. `append_ledger_entry`'s dedup is key-only, so the
-    second same-position placement's entry is an `IDEMPOTENT_NOOP`: an oversight
-    gate fires, the operator answers it, and its state-ledger record does not
-    exist. The mocked writers in tests 3 and 5 cannot show this — they record
-    every call — so this one drives the production function.
+    This is a key-only writer invariant. PRE_ACTION first-match prevents a
+    second write within one dispatch; duplicate SUB_AGENT_BOUNDARY declarations
+    still reach the same key and remain the open B-165 residual.
     """
     from harness_is.jsonl_event_ledger_lifecycle import JsonlLedgerHandle
     from harness_is.state_ledger_write import (
@@ -743,9 +669,10 @@ def test_the_second_same_position_f2_entry_is_dropped_by_key_only_dedup(
     ledger_path.write_text("")
     handle = JsonlLedgerHandle(canonical_path=ledger_path, exists=True, entry_count=0)
 
-    # The exact colliding key test 3 observed the composer produce.
-    token = resolve_escalation_instance_id(_gate_owning_context(0), _GATE)
-    colliding = str(compose_hitl_action_id(cast(Any, _PARENT_ACTION_ID), _GATE, token))
+    # Use the same boundary position whose two writer calls remain reachable.
+    boundary = HITLPlacementKind.SUB_AGENT_BOUNDARY
+    token = resolve_escalation_instance_id(_gate_owning_context(0), boundary)
+    colliding = str(compose_hitl_action_id(cast(Any, _PARENT_ACTION_ID), boundary, token))
 
     def _write() -> WriteResult:
         payload = EntryPayload(
@@ -765,9 +692,6 @@ def test_the_second_same_position_f2_entry_is_dropped_by_key_only_dedup(
         )
         return append_ledger_entry(handle, payload, key)
 
-    assert _write() is WriteResult.APPENDED, "placement 1 lands"
-    assert _write() is WriteResult.IDEMPOTENT_NOOP, "placement 2 is DROPPED"
-
-    assert len(read_ledger(handle)) == 1, (
-        "two gated placements produced ONE persisted state-ledger entry"
-    )
+    assert _write() is WriteResult.APPENDED
+    assert _write() is WriteResult.IDEMPOTENT_NOOP
+    assert len(read_ledger(handle)) == 1

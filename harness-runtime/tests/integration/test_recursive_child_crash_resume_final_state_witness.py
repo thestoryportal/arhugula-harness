@@ -971,3 +971,173 @@ def test_maybe_ran_nonleaf_child_grandchild_auto_resumes_at_most_once(tmp_path: 
     assert result.final_state is not None
     grandchild_final = result.final_state["step-1"]
     assert set(grandchild_final.keys()) == {"g-step-0", "g-step-1", "g-step-2"}
+
+
+@pytest.mark.asyncio
+async def test_recursive_child_real_runner_and_hitl_composer_preserve_pre_action_priority(
+    tmp_path: Path,
+) -> None:
+    """CP v1.120 §0.5: real runner/driver/composer gates descendants once per action.
+
+    The root's filtered gate outranks child and grandchild for ``fs.write``;
+    the child's unfiltered gate fills ``http.get`` gaps at both depths. The
+    different timeouts expose placement identity, not just prompt cardinality.
+    """
+    from collections.abc import Sequence
+    from datetime import UTC, datetime
+
+    from harness_cp.hitl_placement import HITLPlacement, HITLPlacementKind
+    from harness_cp.hitl_response_palette import HITLResponse
+    from harness_runtime.lifecycle.ask_user_question_surface import (
+        AskUserQuestionResult,
+        AskUserQuestionSurface,
+    )
+    from harness_runtime.lifecycle.hitl_gate_composer import RuntimeHITLGateComposer
+    from harness_runtime.lifecycle.sync_dispatcher_facade import (
+        materialize_sync_dispatcher_facade,
+    )
+    from opentelemetry.sdk.trace import TracerProvider
+
+    class _GateSurface:
+        def __init__(self) -> None:
+            self.timeouts: list[float | None] = []
+
+        async def ask(
+            self, prompt: str, options: Sequence[HITLResponse], timeout: float | None
+        ) -> AskUserQuestionResult:
+            _ = (prompt, options)
+            self.timeouts.append(timeout)
+            return AskUserQuestionResult(response=HITLResponse.APPROVE, latency_ms=1.0)
+
+    class _GateLedger:
+        def __init__(self) -> None:
+            self.appends: list[tuple[Any, Any]] = []
+
+        def append(self, payload: Any, key: Any) -> tuple[str, Any, Any]:
+            self.appends.append((payload, key))
+            return ("dummy-entry-hash", payload, key)
+
+    class _GateAudit:
+        def __init__(self) -> None:
+            self.appends: list[tuple[Any, Any]] = []
+
+        def append(self, *, tenant_id: Any, audit_entry: Any) -> tuple[str, Any]:
+            self.appends.append((tenant_id, audit_entry))
+            return ("dummy-write-result", audit_entry)
+
+    root_gate = HITLPlacement(
+        position=HITLPlacementKind.PRE_ACTION, tool_filter=("fs.write",), timeout=100
+    )
+    child_gate = HITLPlacement(position=HITLPlacementKind.PRE_ACTION, timeout=200)
+    grandchild_gate = HITLPlacement(position=HITLPlacementKind.PRE_ACTION, timeout=300)
+
+    def _gate_manifest(workflow_id: str, placement: HITLPlacement) -> WorkflowManifestEntry:
+        return WorkflowManifestEntry(
+            workflow_id=workflow_id,
+            workload_class=WorkloadClass.PIPELINE_AUTOMATION,
+            persona_tier=PersonaTier.SOLO_DEVELOPER,
+            engine_class=EngineClass.PURE_PATTERN_NO_ENGINE,
+            topology_pattern=TopologyPattern.SINGLE_THREADED_LINEAR,
+            layer_budgets=(),
+            fallback_chain=_CHAIN,
+            hitl_placements=(placement,),
+            per_step_overrides={},
+        )
+
+    def _tool_step(step_id: str, tool_id: str) -> WorkflowStep:
+        return WorkflowStep(
+            step_id=StepID(step_id),
+            step_kind=StepKind.TOOL_STEP,
+            step_payload={"tool_id": tool_id},
+        )
+
+    grandchild_payload = SubAgentDispatchPayload(
+        child_workflow_id="grandchild-gated",
+        child_manifest_entry=_gate_manifest("grandchild-gated", grandchild_gate),
+        child_steps=(
+            _tool_step("grandchild-write", "fs.write"),
+            _tool_step("grandchild-read", "http.get"),
+        ),
+        brief=_f1_brief(),
+    )
+    child_payload = SubAgentDispatchPayload(
+        child_workflow_id="child-gated",
+        child_manifest_entry=_gate_manifest("child-gated", child_gate),
+        child_steps=(
+            _tool_step("child-write", "fs.write"),
+            _tool_step("child-read", "http.get"),
+            WorkflowStep(
+                step_id=StepID("dispatch-grandchild"),
+                step_kind=StepKind.SUB_AGENT_DISPATCH,
+                step_payload=grandchild_payload.model_dump(),
+            ),
+        ),
+        brief=_f1_brief(),
+    )
+
+    ctx = _Ctx(
+        ledger=_Ledger(),
+        reader=_LedgerReader({}),
+        store=None,
+        dispatchers=_Registry(_Echo()),
+    )
+    runner = compose_child_workflow_runner(
+        cast(Any, ctx), durable_admission=RefuseDurableChildAdmission()
+    )
+    ledger_writer = _parent_ledger_writer(tmp_path)
+    subagent = RuntimeSubAgentDispatcher(
+        handoff_registry=RuntimeHandoffRegistry(),
+        topology_dispatcher=RuntimeTopologyDispatcher(),
+        tracer_provider=cast(Any, ctx.tracer_provider),
+        child_workflow_runner=cast(Any, runner),
+        ledger_writer=ledger_writer,
+        audit_writer=RuntimeAuditLedgerWriter(
+            ledger_writer=ledger_writer, time_source=lambda: datetime.now(UTC)
+        ),
+        audit_signing_key_id="test-signing-key",
+        audit_signing_algorithm=SignatureAlgorithm.ED25519,
+        time_source=lambda: datetime.now(UTC),
+        procedural_tier_snapshot_resolver=lambda: _Identifier("b" * 64),
+    )
+    surface = _GateSurface()
+    gate_ledger = _GateLedger()
+    gate_audit = _GateAudit()
+    composer = RuntimeHITLGateComposer(
+        inner=cast(Any, _Echo()),
+        applicable_placements=frozenset({HITLPlacementKind.PRE_ACTION}),
+        ask_user_question_surface=cast(AskUserQuestionSurface, surface),
+        ledger_writer=cast(Any, gate_ledger),
+        audit_writer=cast(Any, gate_audit),
+        tracer_provider=TracerProvider(),
+        audit_signing_key_id="recursive-gate-test",
+        audit_signing_algorithm=SignatureAlgorithm.ED25519,
+        procedural_tier_snapshot_resolver=lambda: _Identifier("c" * 64),
+    )
+    facade = materialize_sync_dispatcher_facade(cast(Any, composer), result_timeout_seconds=30.0)
+    ctx.step_dispatchers = cast(
+        Any,
+        _KindRegistry(
+            {
+                StepKind.TOOL_STEP: facade,
+                StepKind.SUB_AGENT_DISPATCH: subagent,
+            }
+        ),
+    )
+    root_context = _parent_step_context().model_copy(update={"hitl_placements": (root_gate,)})
+    root_step = WorkflowStep(
+        step_id=StepID("dispatch-child"),
+        step_kind=StepKind.SUB_AGENT_DISPATCH,
+        step_payload=child_payload.model_dump(),
+    )
+
+    result = await asyncio.to_thread(
+        subagent.dispatch,
+        _parent_binding(),
+        root_step,
+        step_context=root_context,
+    )
+
+    assert set(result) == {"child-write", "child-read", "dispatch-grandchild"}
+    assert surface.timeouts == [0.1, 0.2, 0.1, 0.2]
+    assert len(gate_ledger.appends) == 4
+    assert len(gate_audit.appends) == 4
