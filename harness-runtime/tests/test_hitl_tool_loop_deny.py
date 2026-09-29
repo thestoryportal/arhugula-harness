@@ -2,8 +2,8 @@
 
 The gate level comes from the owning MCP host's real trust tier (never a constant), the
 operator sees only the palette that level allows, and no DENY outcome ever dispatches.
-Provider-free: host and dispatcher doubles only. Scope is the DENY slice; the C-CP-20
-operator-response audit is a separate, later slice and is not asserted here.
+Provider-free: host and dispatcher doubles only. Scope is the DENY slice; the
+response-audit chain is asserted separately from the pre-gate rewrite.
 """
 
 from __future__ import annotations
@@ -359,7 +359,12 @@ def test_the_rewrite_ledger_entry_records_the_narrowed_palette(tmp_path: Path) -
 
     rewritten = results[0].rewritten_tool_call
     assert rewritten is not None and rewritten.response_palette == DENY_PALETTE
-    (entry,) = read_ledger(stage.hitl_tool_loop.wiring.ledger_writer.handle)
+    rewrite_entry, response_entry, audit_entry = read_ledger(
+        stage.hitl_tool_loop.wiring.ledger_writer.handle
+    )
+    assert str(rewrite_entry.action_id) == "cp.hitl-tool-call-rewriting"
+    assert str(response_entry.action_id).startswith("hitl:")
+    assert str(audit_entry.action_id).startswith("audit:")
 
     def _key(palette: frozenset[HITLResponse]) -> str:
         outcome = RewrittenToolCall.model_validate(
@@ -374,5 +379,5 @@ def test_the_rewrite_ledger_entry_records_the_narrowed_palette(tmp_path: Path) -
             hashlib.sha256(_canonicalize_outcome_bytes(outcome)).hexdigest(),
         )
 
-    assert str(entry.idempotency_key) == _key(DENY_PALETTE)
-    assert str(entry.idempotency_key) != _key(ALL)
+    assert str(rewrite_entry.idempotency_key) == _key(DENY_PALETTE)
+    assert str(rewrite_entry.idempotency_key) != _key(ALL)

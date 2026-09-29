@@ -492,6 +492,8 @@ _SENTINEL_ROSTER: dict[str, int] = {
     "harness-cp/src/harness_cp/per_step_override_evaluator.py": 1,
     # row 11
     "harness-runtime/src/harness_runtime/lifecycle/hitl_gate_composer.py": 1,
+    # row 15 — IS plan v2.10, model-tool HITL response F2 append
+    "harness-runtime/src/harness_runtime/lifecycle/hitl_tool_response_audit.py": 1,
     # row 12 — injection-caveat, resolved ELECT
     "harness-runtime/src/harness_runtime/lifecycle/audit_writer.py": 1,
     # row 13 — injection-caveat, resolved ELECT
@@ -547,7 +549,7 @@ def _sentinel_stamps_by_module() -> dict[str, int]:
     return found
 
 
-def test_sentinel_electing_sites_match_the_plan_v2_9_roster() -> None:
+def test_sentinel_electing_sites_match_the_plan_v2_10_roster() -> None:
     """AC #17 — the arc converted EXACTLY the rows §2.1 classifies ELECT.
 
     A conversion at a site the table does not classify ELECT, or a missed ELECT
@@ -583,9 +585,9 @@ def test_no_production_module_touches_the_sentinel_outside_the_roster() -> None:
     modules MENTION `WRITER_OWNED_TIMESTAMP` at all, in any form.
 
     A new module reaching for the sentinel trips this even if it never writes
-    the canonical line — at which point it must be classified against IS plan
-    v2.9 §2.1 (or, only if it produces the durable recovery append, as a
-    C-IS-07 §7.8 required site) before it can land.
+    the canonical line. Before it lands, classify it under IS plan v2.10 §1
+    (v2.9 §2.1 plus row 15), or under C-IS-07 §7.8 if it produces the
+    durable recovery append.
     """
     mentioning = {
         module.relative_to(_REPO_ROOT).as_posix()

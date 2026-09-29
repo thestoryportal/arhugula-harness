@@ -36,6 +36,7 @@ from harness_runtime.lifecycle.hitl_tool_loop import (
 )
 from harness_runtime.lifecycle.llm_dispatch import RuntimeLLMDispatcher
 
+from .test_hitl_tool_loop import _Auditor
 from .test_hitl_tool_loop_deny import _Host
 from .test_lifecycle_llm_dispatch import (
     _AnthropicFakeAdapter,
@@ -129,6 +130,7 @@ def test_a_malformed_evaluator_value_refuses_without_prompt_rewrite_or_dispatch(
         assess=lambda _call, _context: cast(Any, value),
         gate=stage_loop.gate,
         dispatcher=stage_loop.dispatcher,
+        response_auditor=stage_loop.response_auditor,
     )
 
     (result,) = asyncio.run(loop.run_tool_calls([_call("read_file", "real-l1-host")], _context()))
@@ -181,6 +183,7 @@ async def test_a_malformed_evaluator_value_reaches_the_model_as_an_error_and_the
         assess=assess,
         gate=gate,
         dispatcher=tools,
+        response_auditor=_Auditor(),
     )
     client = _two_tool_use_turn_client()
     tp, exporter = _tracer_provider_with_exporter()
@@ -293,6 +296,7 @@ def test_the_loop_hands_the_gate_and_dispatcher_the_assessed_owner(tmp_path: Pat
         ),
         gate=gate,
         dispatcher=tools,
+        response_auditor=_Auditor(),
     )
 
     (result,) = asyncio.run(loop.run_tool_calls([_call("read_file", "spoofed")], _context()))

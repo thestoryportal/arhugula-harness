@@ -67,7 +67,7 @@ Canonical plan heads — one family per row (same adjacency rule as §2.3):
 | Axis | Head plan artifact |
 |---|---|
 | core | `Implementation_Plan_Harness_Core_v1_3.md` |
-| IS | `Implementation_Plan_Information_Substrate_v2_9.md` |
+| IS | `Implementation_Plan_Information_Substrate_v2_10.md` |
 | AS | `Implementation_Plan_Action_Surface_v1_6.md` (v1.6, cleared 2026-07-15) |
 | CP | `Implementation_Plan_Control_Plane_v2_54.md` |
 | OD | `Implementation_Plan_Operational_Discipline_v2_36.md` |

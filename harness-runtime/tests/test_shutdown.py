@@ -298,27 +298,31 @@ async def test_flush_observability_fsyncs_ledger_path(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """`os.fsync` is called with the open fd of the ledger canonical_path."""
+    """The ledger inode is fsynced once even when another file is flushed."""
     ledger_path = tmp_path / "state.jsonl"
     ledger_path.write_text("entry-1\n")
 
-    fsynced_fds: list[int] = []
+    fsynced_inodes: list[tuple[int, int]] = []
     real_fsync = os.fsync
 
     def _spy_fsync(fd: int) -> None:
-        fsynced_fds.append(fd)
+        opened = os.fstat(fd)
+        fsynced_inodes.append((opened.st_dev, opened.st_ino))
         real_fsync(fd)
 
     monkeypatch.setattr(os, "fsync", _spy_fsync)
+    unrelated_path = tmp_path / "unrelated.bin"
+    unrelated_path.write_bytes(b"unrelated")
+    with unrelated_path.open("rb") as unrelated:
+        os.fsync(unrelated.fileno())
     tracer = _FakeTracerProvider(returns=True)
     ctx = _ctx_with(tmp_path, tracer=tracer, ledger_path=ledger_path)
 
     report = await flush_observability(ctx)
 
     assert report.ledger_fsynced is True
-    assert len(fsynced_fds) == 1
-    # fd is process-local; can't assert exact value but it must be valid.
-    assert fsynced_fds[0] >= 0
+    ledger_inode = ledger_path.stat()
+    assert fsynced_inodes.count((ledger_inode.st_dev, ledger_inode.st_ino)) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -1427,6 +1431,7 @@ async def test_cancelled_flush_keeps_registration_for_flush_before_close(
     await point), and a later `shutdown()` of the same ctx must still skip
     the provider close."""
     release = threading.Event()
+    existing_threads = set(threading.enumerate())
 
     class _StallingTracer(_FakeTracerWithShutdown):
         def force_flush(self, timeout_millis: int = 30_000) -> bool:
@@ -1444,12 +1449,27 @@ async def test_cancelled_flush_keeps_registration_for_flush_before_close(
         with pytest.raises(asyncio.CancelledError):
             await flush_task
         report = await asyncio.wait_for(shutdown(ctx, timeout=2.0), timeout=10.0)
-        # Asserted BEFORE releasing: the close never overlapped the worker
-        # (after release the round-5 deferred watcher legitimately closes).
+        # Asserted BEFORE releasing: the close never overlapped the worker.
         assert tracer.shutdown_called is False
+        own_watchers = [
+            thread
+            for thread in threading.enumerate()
+            if thread.name == "harness-deferred-tracer-close" and thread not in existing_threads
+        ]
+        assert len(own_watchers) == 1
+        watcher = own_watchers[0]
     finally:
         release.set()
 
+    # This watcher's final action unregisters its ordered atexit backstop.
+    # Its exit, rather than tracer.shutdown_called, is the cleanup boundary.
+    # Keep the event loop moving while its flush completion is delivered.
+    for _ in range(500):
+        if not watcher.is_alive():
+            break
+        await asyncio.sleep(0.01)
+    assert not watcher.is_alive()
+    assert tracer.shutdown_called is True
     assert "tracer_provider" in report.failures
 
 

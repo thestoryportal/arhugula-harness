@@ -798,7 +798,7 @@ def _empty_summary_hash() -> str:
     return hashlib.sha256(b"").hexdigest()
 
 
-def _post_mutation_payload_hash(payload: Mapping[str, Any]) -> str:
+def post_mutation_payload_hash(payload: Mapping[str, Any]) -> str:
     """`sha256` over the canonical JSON of a post-mutation step_payload (hex-64).
 
     Canonical form matches the workspace convention
@@ -882,7 +882,7 @@ def _compute_response_summary_hash(
     Returns hex-64.
     """
     if result.response == HITLResponse.EDIT and edited_payload is not None:
-        return _post_mutation_payload_hash(edited_payload)
+        return post_mutation_payload_hash(edited_payload)
     payload: bytes
     if result.response == HITLResponse.EDIT and result.edited_proposal is not None:
         payload = result.edited_proposal.encode("utf-8")
@@ -1688,7 +1688,7 @@ class RuntimeHITLGateComposer:
             # carrier); REJECT uses the pre-computed `response_summary_hash`.
             response_value = resume_response.response.value
             edited_hash = (
-                _post_mutation_payload_hash(edited_payload)
+                post_mutation_payload_hash(edited_payload)
                 if resume_response.response == HITLResponse.EDIT and edited_payload is not None
                 else None
             )
@@ -1720,7 +1720,7 @@ class RuntimeHITLGateComposer:
             # failure (edited_payload is None) fall back to the raw operator
             # `str` so the attempt is still recorded before the step-4i raise.
             edited_hash = (
-                _post_mutation_payload_hash(edited_payload)
+                post_mutation_payload_hash(edited_payload)
                 if gate_result.response == HITLResponse.EDIT and edited_payload is not None
                 else (
                     hashlib.sha256(gate_result.edited_proposal.encode("utf-8")).hexdigest()

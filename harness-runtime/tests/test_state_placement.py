@@ -11,6 +11,9 @@ tmpfs on this host, which the verifier (correctly) refuses as a durable root.
 
 from __future__ import annotations
 
+import errno
+import fcntl
+import multiprocessing as mp
 import os
 import shutil
 import stat
@@ -428,6 +431,169 @@ def test_a_group_writable_parent_without_sticky_bit_is_unsafe(lay: Layout) -> No
     _assert_refused_without_mutation(
         lay, Refusal.PARENT_UNSAFE, lambda: _bootstrap(lay, parent / "root")
     )
+
+
+def test_an_unsafe_grandparent_refuses_a_new_root_without_mutation(lay: Layout) -> None:
+    shared = lay.home / "shared"
+    shared.mkdir()
+    private = shared / "private"
+    private.mkdir(mode=0o700)
+    shared.chmod(0o777)
+
+    _assert_refused_without_mutation(
+        lay, Refusal.PARENT_UNSAFE, lambda: _bootstrap(lay, private / "root")
+    )
+
+
+def test_an_unsafe_grandparent_refuses_an_existing_root_without_mutation(lay: Layout) -> None:
+    shared = lay.home / "shared"
+    shared.mkdir()
+    private = shared / "private"
+    private.mkdir(mode=0o700)
+    root = private / "root"
+    _bootstrap(lay, root)
+    shared.chmod(0o777)
+
+    _assert_refused_without_mutation(lay, Refusal.PARENT_UNSAFE, lambda: _probe(lay, root))
+
+
+def test_two_processes_bootstrap_one_missing_root_to_the_same_stamp(lay: Layout) -> None:
+    """Force both processes to judge the root missing before either may create it."""
+    from harness_runtime.config import state_placement as sp
+
+    root = lay.home / "state" / "root"
+    ctx = mp.get_context("fork")
+    barrier = ctx.Barrier(2)
+    results = ctx.Queue()
+
+    def worker() -> None:
+        original = sp._judge
+        first = True
+
+        def synchronized_judge(*args: Any, **kwargs: Any) -> Any:
+            nonlocal first
+            judged = original(*args, **kwargs)
+            if first:
+                first = False
+                barrier.wait(timeout=10)
+            return judged
+
+        sp._judge = synchronized_judge
+        try:
+            results.put(("ok", _bootstrap(lay, root)))
+        except BaseException as exc:
+            results.put(("error", type(exc).__name__))
+
+    children = [ctx.Process(target=worker) for _ in range(2)]
+    try:
+        for child in children:
+            child.start()
+        for child in children:
+            child.join(timeout=15)
+        assert all(not child.is_alive() for child in children)
+        answers = [results.get(timeout=2) for _ in children]
+        assert answers[0][0] == answers[1][0] == "ok", answers
+        assert answers[0][1] == answers[1][1]
+    finally:
+        for child in children:
+            if child.is_alive():
+                child.terminate()
+                child.join(timeout=5)
+        results.close()
+
+
+def test_contended_parent_lock_refuses_within_deadline_without_creating_root(lay: Layout) -> None:
+    """A different process holding the parent inode cannot hang bootstrap forever."""
+    from harness_runtime.config import state_placement as sp
+
+    parent = lay.home / "state"
+    root = parent / "root"
+    ctx = mp.get_context("fork")
+    locked = ctx.Event()
+    release = ctx.Event()
+    result = ctx.Queue()
+
+    def holder() -> None:
+        fd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            locked.set()
+            release.wait(timeout=5)
+        finally:
+            os.close(fd)
+
+    def contender() -> None:
+        sp._PARENT_LOCK_DEADLINE_SECONDS = 0.1
+        try:
+            _bootstrap(lay, root)
+        except StateRootPlacementError as exc:
+            result.put(exc.reason)
+        else:
+            result.put("unexpected success")
+
+    holder_process = ctx.Process(target=holder)
+    contender_process = ctx.Process(target=contender)
+    try:
+        holder_process.start()
+        assert locked.wait(timeout=2)
+        contender_process.start()
+        contender_process.join(timeout=2)
+        assert not contender_process.is_alive(), "state-root bootstrap exceeded lock deadline"
+        assert result.get(timeout=2) is Refusal.PARENT_UNSAFE
+        assert not root.exists()
+    finally:
+        release.set()
+        for process in (holder_process, contender_process):
+            if process.pid is not None:
+                if process.is_alive():
+                    process.terminate()
+                process.join(timeout=5)
+        result.close()
+
+
+def test_rejudged_parent_must_be_the_locked_inode(
+    lay: Layout, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Retargeting a lexical ancestor cannot create under a stale locked parent."""
+    from harness_runtime.config import state_placement as sp
+
+    first = lay.home / "state"
+    second = lay.home / "other"
+    second.mkdir(mode=0o700)
+    alias = lay.home / "alias"
+    alias.symlink_to(first, target_is_directory=True)
+    real_lock = sp.flock_until_deadline
+
+    def retarget_after_lock(*args: Any, **kwargs: Any) -> None:
+        real_lock(*args, **kwargs)
+        alias.unlink()
+        alias.symlink_to(second, target_is_directory=True)
+
+    monkeypatch.setattr(sp, "flock_until_deadline", retarget_after_lock)
+    with pytest.raises(StateRootPlacementError) as excinfo:
+        _bootstrap(lay, alias / "root")
+    assert excinfo.value.reason is Refusal.PARENT_UNSAFE
+    assert not (first / "root").exists()
+    assert not (second / "root").exists()
+
+
+def test_symlink_race_in_parent_chain_is_parent_unsafe(
+    lay: Layout, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Linux may report ENOTDIR for O_NOFOLLOW|O_DIRECTORY on a symlink."""
+    from harness_runtime.config import state_placement as sp
+
+    original = os.open
+
+    def raced_open(path: Any, flags: int, *args: Any, **kwargs: Any) -> int:
+        if path == lay.home.name and kwargs.get("dir_fd") is not None:
+            raise NotADirectoryError(errno.ENOTDIR, "symlink raced")
+        return original(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(os, "open", raced_open)
+    with pytest.raises(StateRootPlacementError) as excinfo:
+        sp._open_safe_parent(lay.home / "state")
+    assert excinfo.value.reason is Refusal.PARENT_UNSAFE
 
 
 @pytest.mark.parametrize("fstype", ["tmpfs", "ramfs"])

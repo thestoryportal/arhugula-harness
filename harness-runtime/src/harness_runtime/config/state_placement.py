@@ -11,15 +11,16 @@ proves a root is still the one a stamp was issued for.
 Every refusal is a typed `StateRootPlacementError` raised BEFORE any filesystem mutation,
 so a refused placement leaves nothing behind ([LAW:no-silent-failure]).
 
-S1 is code-only: nothing calls these functions from bootstrap, the factories, inspect or
-the B-104 claim gateway yet, so this module by itself does not make any production path
-external. `state_path` is the one pure derivation those later slices route through; with no
-verified root it returns the exact legacy `<repo>/.harness/<name>` path.
+Stage 1 bootstrap and inspect call this verifier, and persistent-store factories take
+its stamp. `state_path` is the one pure derivation for those stores; with no verified root
+it returns the exact legacy `<repo>/.harness/<name>` path. Claim-gateway readiness
+remains separate from this placement check.
 
 Checks run in this order (first failing reason wins):
 RELATIVE, SYMLINK_ROOT, NOT_A_DIRECTORY, INSIDE_CHECKOUT, CONTAINS_CHECKOUT,
 INSIDE_FORBIDDEN, LEDGER_CELL_OUTSIDE, NON_DURABLE_FS / FS_UNDETERMINED,
-PERMISSIONS / PARENT_MISSING / PARENT_UNSAFE, LEGACY_STATE_PRESENT (bootstrap only),
+PERMISSIONS / PARENT_MISSING / PARENT_UNSAFE (resolved ancestor chain),
+LEGACY_STATE_PRESENT (bootstrap only),
 then identity (marker: regular, effective-user-owned, 0600-class; inode/device).
 
 Private-state invariant: an existing root must be effective-user-owned with no group/other
@@ -29,6 +30,7 @@ returns a `VerifiedStateRoot` (bootstrap, probe, revalidate).
 
 from __future__ import annotations
 
+import errno
 import os
 import re
 import secrets
@@ -38,6 +40,11 @@ from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
+from harness_core.cross_process_lock_deadline import (
+    CrossProcessLockDeadline,
+    CrossProcessLockTimeoutError,
+    flock_until_deadline,
+)
 from harness_is.path_class_registry import PathClass
 
 from harness_runtime.config.path_bindings import build_path_binding
@@ -74,6 +81,7 @@ MARKER_NAME = ".arhugula-state-root"
 _ROOT_ID_PATTERN = re.compile(r"[0-9a-f]{32}")
 _VOLATILE_FILESYSTEMS = frozenset({"tmpfs", "ramfs"})
 _GROUP_OTHER_BITS = stat.S_IRWXG | stat.S_IRWXO
+_PARENT_LOCK_DEADLINE_SECONDS = 5.0
 
 
 class StatePlacementRefusal(StrEnum):
@@ -348,29 +356,62 @@ def _judge(
                 "state root must be owned by the effective user with no group/other "
                 "permissions (0700-class)",
             )
-    elif creating:
+    if exists or creating:
         _require_safe_parent(resolved.parent)
     return _Judged(lexical=root, resolved=resolved, exists=exists)
 
 
-def _require_safe_parent(parent: Path) -> None:
+def _open_safe_parent(parent: Path) -> int:
+    """Open and retain the complete resolved parent chain without following links.
+
+    A private immediate parent under a writable non-sticky grandparent is not stable:
+    another user may rename the private directory. Every ancestor must therefore pass
+    the ownership and mode rule on the opened inode, including for an existing root.
+    """
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
     try:
-        st = os.stat(parent)
+        fd = os.open("/", flags)
     except OSError as exc:
         raise StateRootPlacementError(
-            StatePlacementRefusal.PARENT_MISSING,
-            f"parent {str(parent)!r} of the state root must already exist ({exc.strerror})",
+            StatePlacementRefusal.PARENT_MISSING, f"cannot open filesystem root: {exc.strerror}"
         ) from exc
-    if not stat.S_ISDIR(st.st_mode):
-        raise StateRootPlacementError(
-            StatePlacementRefusal.PARENT_MISSING, f"parent {str(parent)!r} is not a directory"
-        )
-    others_can_write = st.st_mode & (stat.S_IWGRP | stat.S_IWOTH) and not st.st_mode & stat.S_ISVTX
-    if st.st_uid not in {os.geteuid(), 0} or others_can_write:
-        raise StateRootPlacementError(
-            StatePlacementRefusal.PARENT_UNSAFE,
-            f"parent {str(parent)!r} is owned by another user or writable by group/other",
-        )
+    current = Path("/")
+    try:
+        for part in (None, *parent.parts[1:]):
+            if part is not None:
+                current = current / part
+                try:
+                    next_fd = os.open(part, flags, dir_fd=fd)
+                except OSError as exc:
+                    reason = (
+                        StatePlacementRefusal.PARENT_UNSAFE
+                        if exc.errno in {errno.ELOOP, errno.ENOTDIR}
+                        else StatePlacementRefusal.PARENT_MISSING
+                    )
+                    raise StateRootPlacementError(
+                        reason, f"parent ancestor {str(current)!r} cannot be opened safely"
+                    ) from exc
+                os.close(fd)
+                fd = next_fd
+            st = os.fstat(fd)
+            others_can_write = bool(st.st_mode & (stat.S_IWGRP | stat.S_IWOTH)) and not bool(
+                st.st_mode & stat.S_ISVTX
+            )
+            if st.st_uid not in {os.geteuid(), 0} or others_can_write:
+                raise StateRootPlacementError(
+                    StatePlacementRefusal.PARENT_UNSAFE,
+                    f"parent ancestor {str(current)!r} is owned by another user or "
+                    "writable by group/other without the sticky bit",
+                )
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def _require_safe_parent(parent: Path) -> None:
+    fd = _open_safe_parent(parent)
+    os.close(fd)
 
 
 _KNOWN_LEGACY_LEDGER = Path(".harness") / "onboarding" / "state-ledger"
@@ -540,29 +581,75 @@ def bootstrap_state_root(
         filesystem_type=filesystem_type,
         creating=True,
     )
-    legacy = _legacy_state_present(repository_root)
-    if legacy:
-        raise StateRootPlacementError(
-            StatePlacementRefusal.LEGACY_STATE_PRESENT,
-            "non-empty repo-local state exists at "
-            + ", ".join(str(p) for p in legacy)
-            + "; stop the harness and migrate or archive it explicitly "
-            "before placing state externally",
+    parent_fd = _open_safe_parent(judged.resolved.parent)
+    try:
+        # Lock the EXISTING directory inode: no lock file may be left by a refused
+        # placement. Every bootstrap using this verifier serializes root/marker
+        # creation, so a second process re-judges and adopts the completed marker.
+        try:
+            from fcntl import LOCK_EX  # POSIX-only; import only at the lock site.
+
+            flock_until_deadline(
+                parent_fd,
+                LOCK_EX,
+                deadline=CrossProcessLockDeadline.starting_now(_PARENT_LOCK_DEADLINE_SECONDS),
+                lock_target=str(judged.resolved.parent),
+            )
+        except (ImportError, OSError, CrossProcessLockTimeoutError) as exc:
+            raise StateRootPlacementError(
+                StatePlacementRefusal.PARENT_UNSAFE,
+                "state-root parent cannot be locked for cross-process bootstrap",
+            ) from exc
+        judged = _judge(
+            placement,
+            repository_root=repository_root,
+            worktree_base=worktree_base,
+            path_bindings=path_bindings,
+            filesystem_type=filesystem_type,
+            creating=True,
         )
-    root_id = _read_marker(judged.resolved) if judged.exists else None
-    if judged.exists and root_id is None and any(judged.resolved.iterdir()):
-        raise StateRootPlacementError(
-            StatePlacementRefusal.MARKER_MISSING,
-            "existing non-empty state root has no marker and will not be adopted",
-        )
-    if not judged.exists:
-        os.mkdir(judged.resolved, 0o700)
-        _fsync_dir(judged.resolved.parent)
-    if root_id is None:
-        _write_marker_exclusively(judged.resolved)
-        root_id = _read_marker(judged.resolved)
-    assert root_id is not None  # just written: absence here is a broken filesystem, not input
-    return _stamp(judged.resolved, root_id)
+        # The lexical path may have resolved through a symlink that moved while
+        # we acquired the lock. Creation uses parent_fd, so the rejudged parent
+        # must still name that exact locked inode before any mutation.
+        rejudged_parent_fd = _open_safe_parent(judged.resolved.parent)
+        try:
+            held_parent = os.fstat(parent_fd)
+            rejudged_parent = os.fstat(rejudged_parent_fd)
+        finally:
+            os.close(rejudged_parent_fd)
+        if (held_parent.st_dev, held_parent.st_ino) != (
+            rejudged_parent.st_dev,
+            rejudged_parent.st_ino,
+        ):
+            raise StateRootPlacementError(
+                StatePlacementRefusal.PARENT_UNSAFE,
+                "rejudged state-root parent no longer names the locked directory",
+            )
+        legacy = _legacy_state_present(repository_root)
+        if legacy:
+            raise StateRootPlacementError(
+                StatePlacementRefusal.LEGACY_STATE_PRESENT,
+                "non-empty repo-local state exists at "
+                + ", ".join(str(p) for p in legacy)
+                + "; stop the harness and migrate or archive it explicitly "
+                "before placing state externally",
+            )
+        root_id = _read_marker(judged.resolved) if judged.exists else None
+        if judged.exists and root_id is None and any(judged.resolved.iterdir()):
+            raise StateRootPlacementError(
+                StatePlacementRefusal.MARKER_MISSING,
+                "existing non-empty state root has no marker and will not be adopted",
+            )
+        if not judged.exists:
+            os.mkdir(judged.resolved.name, 0o700, dir_fd=parent_fd)
+            os.fsync(parent_fd)
+        if root_id is None:
+            _write_marker_exclusively(judged.resolved)
+            root_id = _read_marker(judged.resolved)
+        assert root_id is not None  # just written: absence here is a broken filesystem
+        return _stamp(judged.resolved, root_id)
+    finally:
+        os.close(parent_fd)
 
 
 def revalidate_state_root(

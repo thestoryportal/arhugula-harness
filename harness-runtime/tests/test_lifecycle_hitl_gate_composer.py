@@ -1039,7 +1039,7 @@ async def test_edit_valid_json_applies_replacement_full_chain(
     import hashlib
     import json as _json
 
-    from harness_runtime.lifecycle.hitl_gate_composer import _post_mutation_payload_hash
+    from harness_runtime.lifecycle.hitl_gate_composer import post_mutation_payload_hash
 
     provider, _ = tracer_provider
     inner = _MockInnerDispatcher()
@@ -1093,7 +1093,7 @@ async def test_edit_valid_json_applies_replacement_full_chain(
     # decoded Mapping), NOT the raw operator `str`.
     _, od_entry = audit.appends[0]
     audit_hash = od_entry.payload.audit_namespace_attrs["audit.cp.edited_proposal_hash"]
-    assert audit_hash == _post_mutation_payload_hash(replacement_payload)
+    assert audit_hash == post_mutation_payload_hash(replacement_payload)
     assert audit_hash != hashlib.sha256(edited_str.encode("utf-8")).hexdigest()
 
 
@@ -2923,7 +2923,7 @@ async def test_resume_edit_audits_post_mutation_hash_and_applies(
     from the structured edited_proposal.payload), AND the edit is applied +
     dispatched."""
     from harness_cp.handoff_context import ActionKind, ProposedAction
-    from harness_runtime.lifecycle.hitl_gate_composer import _post_mutation_payload_hash
+    from harness_runtime.lifecycle.hitl_gate_composer import post_mutation_payload_hash
 
     provider, _ = tracer_provider
     inner = _MockInnerDispatcher()
@@ -2950,7 +2950,7 @@ async def test_resume_edit_audits_post_mutation_hash_and_applies(
     assert len(audit.appends) == 1
     attrs = audit.appends[0][1].payload.audit_namespace_attrs
     assert attrs["audit.cp.response"] == HITLResponse.EDIT.value
-    assert attrs["audit.cp.edited_proposal_hash"] == _post_mutation_payload_hash({"edited": 2})
+    assert attrs["audit.cp.edited_proposal_hash"] == post_mutation_payload_hash({"edited": 2})
 
 
 @pytest.mark.asyncio

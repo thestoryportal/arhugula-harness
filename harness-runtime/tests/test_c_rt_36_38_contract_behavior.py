@@ -60,6 +60,8 @@ from harness_runtime.types import (
     StatePlacementConfig,
 )
 
+from .test_hitl_tool_loop import _Auditor
+
 # --- C-RT-36 §14.25: the persistent state root lives outside every Git checkout ----------
 
 
@@ -252,6 +254,7 @@ def _run(tmp_path: Path, assess: Any) -> tuple[HITLToolLoopCallResult, _Gate, _D
         assess=assess,
         gate=gate,
         dispatcher=dispatcher,
+        response_auditor=_Auditor(),
     )
     call = ModelToolCall(
         tool_call_id="call-1",

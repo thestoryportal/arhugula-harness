@@ -76,6 +76,7 @@ class HITLGateDecision:
     response: HITLResponse
     edited_arguments: Mapping[str, Any] | None = None
     response_text: str | None = None
+    rejection_reason: str | None = None
 
 
 class HITLToolRefusalReason(StrEnum):
@@ -116,6 +117,19 @@ class HITLToolLoopCallResult:
     dispatched: bool
     dispatch_result: Mapping[str, Any] | None
     refusal: HITLToolRefusal | None = None
+
+
+class HITLToolResponseAuditor(Protocol):
+    """Persist one admitted operator reply before its disposition or tool effect."""
+
+    async def record(
+        self,
+        *,
+        call: ModelToolCall,
+        context: HITLToolLoopContext,
+        level: GateLevel,
+        decision: HITLGateDecision,
+    ) -> None: ...
 
 
 class HITLToolDispatcher(Protocol):
@@ -169,6 +183,7 @@ class RuntimeHITLToolLoop:
     assess: HITLToolCallEvaluator
     gate: HITLGateAdapter
     dispatcher: HITLToolDispatcher
+    response_auditor: HITLToolResponseAuditor
 
     async def run_tool_calls(
         self,
@@ -222,7 +237,14 @@ class RuntimeHITLToolLoop:
             actor=context.actor,
         )
         reply = cast(object, await self.gate.decide(call=call, context=context, palette=palette))
-        decision = _admit(level, palette, reply)
+        decision, admitted_reply = _admit(level, palette, reply)
+        # A DENY reply is still an operator response even though it cannot dispatch.
+        # Admission is the single authority for the audit boundary: malformed,
+        # out-of-palette and contentless EDIT replies are never recorded as valid.
+        if admitted_reply is not None:
+            await self.response_auditor.record(
+                call=call, context=context, level=level, decision=admitted_reply
+            )
         if isinstance(decision, HITLToolRefusal):
             response = reply.response if isinstance(reply, HITLGateDecision) else None
             return _refused(call, rewritten, write_result, response, decision)
@@ -250,7 +272,9 @@ class RuntimeHITLToolLoop:
                 tool_call_id=call.tool_call_id,
                 tool=call.tool,
                 server=call.server,
-                arguments=decision.edited_arguments or call.arguments,
+                arguments=decision.edited_arguments
+                if decision.edited_arguments is not None
+                else call.arguments,
                 provider=call.provider,
                 model=call.model,
             )
@@ -297,7 +321,7 @@ def _admit(
     level: GateLevel,
     palette: frozenset[HITLResponse],
     reply: object,
-) -> HITLGateDecision | HITLToolRefusal:
+) -> tuple[HITLGateDecision | HITLToolRefusal, HITLGateDecision | None]:
     """Parse an adapter reply into an admitted decision, or the refusal it earns.
 
     [LAW:parse-dont-validate] The one place a reply is judged against the level and palette;
@@ -307,16 +331,18 @@ def _admit(
     RESPOND) still refuses, carrying RESPOND text.
     """
     if not isinstance(reply, HITLGateDecision):
-        return HITLToolRefusal(HITLToolRefusalReason.MALFORMED_GATE_REPLY)
+        return HITLToolRefusal(HITLToolRefusalReason.MALFORMED_GATE_REPLY), None
     response = cast(object, reply.response)
     if not isinstance(response, HITLResponse):
-        return HITLToolRefusal(HITLToolRefusalReason.MALFORMED_GATE_REPLY)
+        return HITLToolRefusal(HITLToolRefusalReason.MALFORMED_GATE_REPLY), None
     if response not in palette:
-        return HITLToolRefusal(HITLToolRefusalReason.RESPONSE_OUTSIDE_PALETTE)
+        return HITLToolRefusal(HITLToolRefusalReason.RESPONSE_OUTSIDE_PALETTE), None
+    if response is HITLResponse.EDIT and reply.edited_arguments is None:
+        return HITLToolRefusal(HITLToolRefusalReason.MALFORMED_GATE_REPLY), None
     if level is GateLevel.DENY:
         text = reply.response_text if response is HITLResponse.RESPOND else None
-        return HITLToolRefusal(HITLToolRefusalReason.POLICY_DENY, response_text=text)
-    return reply
+        return HITLToolRefusal(HITLToolRefusalReason.POLICY_DENY, response_text=text), reply
+    return reply, reply
 
 
 def _refused(

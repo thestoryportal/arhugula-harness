@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any, cast
+from typing import Any, NoReturn, cast
 
 from harness_as.sandbox_tier import BlastRadiusTier, SandboxTier
 from harness_cp.cp_shared_types import ActorIdentity, MCPTrustTier, ModelBinding
@@ -34,6 +34,7 @@ from harness_runtime.lifecycle.hitl_tool_loop import (
     RuntimeHITLToolLoop,
     model_tool_call_step,
 )
+from harness_runtime.lifecycle.hitl_tool_response_audit import RuntimeHITLToolResponseAuditor
 from harness_runtime.lifecycle.reconciler_pause_resume_substrate import (
     ReconcilerEnginePauseResumeSubstrate,
 )
@@ -156,12 +157,18 @@ class _AskUserQuestionGateAdapter:
             timeout=self.timeout_seconds,
         )
         edited_arguments = None
-        if result.response is HITLResponse.EDIT and result.edited_proposal:
-            edited_arguments = _parse_edited_arguments(result.edited_proposal)
+        if result.response is HITLResponse.EDIT and isinstance(result.edited_proposal, str):
+            try:
+                edited_arguments = _parse_edited_arguments(result.edited_proposal)
+            except ValueError:
+                # The loop admits EDIT only with a decoded argument object. Preserve
+                # a malformed reply for its typed refusal; never dispatch originals.
+                pass
         return HITLGateDecision(
             response=result.response,
             edited_arguments=edited_arguments,
             response_text=result.response_text,
+            rejection_reason=result.rejection_reason,
         )
 
 
@@ -290,6 +297,11 @@ def materialize_r_cxa_2_producer_loop_stage(
             "through the existing C-RT-19 tool dispatcher"
         )
 
+    if ctx.audit_writer is None:
+        raise RCXA2ProducerLoopMaterializeError(
+            "ctx.audit_writer is None at stage 5; stage 4 OD must bind the audit writer"
+        )
+
     wiring = cast(RuntimeCpIsWiring, ctx.cxa_stages["cp_is_wiring"].wiring)
     placement_registry = cast(RuntimeHITLPlacementRegistry, ctx.hitl_registry)
     actor = _actor_identity_from_context(ctx)
@@ -299,6 +311,13 @@ def materialize_r_cxa_2_producer_loop_stage(
         placement_registry=placement_registry,
         assess=_HostTrustGateLevelEvaluator(ctx),
         gate=_AskUserQuestionGateAdapter(ctx.ask_user_question_surface),
+        response_auditor=RuntimeHITLToolResponseAuditor(
+            ledger_writer=wiring.ledger_writer,
+            audit_writer=cast(Any, ctx.audit_writer),
+            procedural_tier_snapshot_resolver=wiring.procedural_tier_snapshot_resolver,
+            tenant_id=config.tenant_id,
+            signing_backend=ctx.audit_signing_backend,
+        ),
         dispatcher=_RuntimeToolDispatcherModelCallAdapter(
             tool_dispatcher=ctx.tool_dispatcher,
             tenant_id=config.tenant_id,
@@ -364,8 +383,12 @@ def _default_engine_state_summary() -> StateSummary:
     )
 
 
+def _reject_nonfinite_edit_constant(constant: str) -> NoReturn:
+    raise ValueError(f"non-finite JSON constant {constant!r} in HITL EDIT response")
+
+
 def _parse_edited_arguments(edited_proposal: str) -> Mapping[str, Any]:
-    parsed = json.loads(edited_proposal)
-    if not isinstance(parsed, Mapping):
+    parsed = json.loads(edited_proposal, parse_constant=_reject_nonfinite_edit_constant)
+    if not isinstance(parsed, dict):
         raise ValueError("HITL EDIT response must be a JSON object of tool arguments")
     return cast(Mapping[str, Any], parsed)

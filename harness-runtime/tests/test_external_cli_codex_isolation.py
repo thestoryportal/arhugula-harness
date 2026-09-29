@@ -1,8 +1,8 @@
 """Codex CLI isolation slice C: a private cwd, and typed refusal when the JSONL shows tool use.
 
 Provider-free: the parser tests script `CLIProcessResult` stdout; the cwd tests run the DEFAULT
-Codex runner against a fake `codex` executable. Nothing here proves the real CLI cannot start
-a tool: refusal is detection after the fact, and the CLI's own tool/MCP switches stay HELD.
+Codex runner against a fake `codex` executable. The argv regression in test_external_cli_provider pins the installed CLI's tool-disable
+switches. Parser refusal remains a second boundary for unexpected output.
 """
 
 from __future__ import annotations
