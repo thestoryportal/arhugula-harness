@@ -627,13 +627,17 @@ def test_changed_or_lost_evidence_under_a_pending_intent_is_a_permanent_hold(
         with claim.open("ab") as f:
             f.write(b"x")
     elif change == "inode-replaced":
+        original = claim.lstat()
         target = os.readlink(claim) if claim.is_symlink() else None
         data = None if target else claim.read_bytes()
-        claim.unlink()
+        replacement = claim.with_name(f"{claim.name}.replacement")
         if target:
-            claim.symlink_to(target)
+            replacement.symlink_to(target)
         else:
-            claim.write_bytes(data or b"")
+            replacement.write_bytes(data or b"")
+        os.replace(replacement, claim)
+        current = claim.lstat()
+        assert (current.st_dev, current.st_ino) != (original.st_dev, original.st_ino)
     elif change == "claim-removed":
         claim.unlink()
     elif change == "parent-replaced":

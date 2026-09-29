@@ -1,4 +1,4 @@
-"""External persistent state-root verifier — the single placement checkpoint (S1).
+"""C-RT-36 §14.25 external persistent state-root verifier (S1 checkpoint).
 
 A declared `StatePlacementConfig` names where persistent recovery state must live so a
 checkout `git clean`/restore can never destroy or rewind it. This module is the ONE unit

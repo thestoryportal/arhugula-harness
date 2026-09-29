@@ -1,4 +1,4 @@
-"""Read a completed Ollama assistant response as a CP evaluator verdict."""
+"""C-RT-37 §14.26: read a completed Ollama reply as a CP evaluator verdict."""
 
 from __future__ import annotations
 
