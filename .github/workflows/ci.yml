@@ -235,7 +235,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        axis: [core, is, as, cp, od, cxa]
+        # Each root must be one of pyproject's `testpaths` (tools/test_ci_axis_roots.py).
+        include:
+          - { axis: core, test_root: harness-core/tests }
+          - { axis: is, test_root: harness-is/tests }
+          - { axis: as, test_root: harness-as/tests }
+          - { axis: cp, test_root: harness-cp/cp_tests }
+          - { axis: od, test_root: harness-od/tests }
+          - { axis: cxa, test_root: harness-cxa/tests }
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -252,8 +259,8 @@ jobs:
       - name: Layer test tooling (no harness deps — isolation preserved)
         run: uv pip install "pytest>=8.3" "pytest-asyncio>=0.25"
 
-      - name: Pytest harness-${{ matrix.axis }}/tests in isolation (excludes e2e)
-        run: uv run --no-sync pytest harness-${{ matrix.axis }}/tests -m "not e2e"
+      - name: Pytest ${{ matrix.test_root }} in isolation (excludes e2e)
+        run: uv run --no-sync pytest ${{ matrix.test_root }} -m "not e2e"
 
   coverage:
     # R-200-ci-coverage-gating — INFORMATIONAL coverage at PR. v1 posture: NO

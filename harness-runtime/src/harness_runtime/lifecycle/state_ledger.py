@@ -4,8 +4,15 @@ Per `Spec_Harness_Runtime_v1.md` v1.1 §2 (C-RT-02 stage 1 IS post-conditions:
 `ctx.ledger_writer` non-None; ledger chain reattached and verified) and Phase 2
 Session 3 plan v2.1 §2 L2:
 
-- Opens `.harness/state.jsonl` via `harness_is.initialize_jsonl_event_ledger`
-  (fresh-creates an empty ledger when absent; line-counts an existing file).
+- Opens the JSONL ledger via `harness_is.initialize_jsonl_event_ledger`, which
+  resolves the `STATE_LEDGER` path-class binding to a directory and opens
+  `<dir>/state.jsonl` inside it (IS spec v1.3 §1 amendment, 2026-05-20; fresh-
+  creates an empty ledger when absent, line-counts an existing file). The
+  path is deployment/config-defined, not the fixed `.harness/state.jsonl`
+  literal — that literal is a DIFFERENT, separate default belonging to
+  `harness_runtime.admin.inspect`'s `--ledger-path` CLI flag, which does not
+  necessarily match a given deployment's configured `STATE_LEDGER`
+  directory.
 - On reattach (existing entries), invokes `harness_is.verify_chain`; a
   `VerificationStatus.INVALID` result raises `TamperedChainError`.
 - Wraps `harness_is.append_ledger_entry` behind a `LedgerWriter` handle bound

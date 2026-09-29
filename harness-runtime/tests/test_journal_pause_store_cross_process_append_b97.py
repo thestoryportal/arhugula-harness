@@ -88,8 +88,14 @@ semantics carry this mark.
 """
 
 _WORKFLOW_ID = "wf-b97-cross-process"
-_READY_TIMEOUT = 30.0
-"""A cold child interpreter's own import of `harness_runtime` costs seconds here."""
+_READY_TIMEOUT = 120.0
+"""[LAW:comments-carry-meaning] A cold child imports the harness before signaling.
+A related witness measured 33.89s on this host; this module also missed a 60s
+readiness window under load. The post-signal blocking assertion remains 0.5s."""
+_COMPLETION_TIMEOUT = 30.0
+# [LAW:no-ambient-temporal-coupling] The first ready bulk child must wait through
+# the second child's entire readiness window before the parent opens the barrier.
+_BULK_BARRIER_TIMEOUT = 2 * _READY_TIMEOUT
 
 _BLOCKED_WINDOW = 0.5
 """Bounded wait AFTER the child signals it is AT the `flock` syscall (the B-73
@@ -171,10 +177,10 @@ with store._cross_process_append_lock(store._journal_file(workflow_id)):
 _CHILD_BULK_APPEND_SCRIPT = (
     _CHILD_PREAMBLE
     + """
-journal_dir, tag, count, payload_size, go_marker, ready_marker = sys.argv[1:7]
+journal_dir, tag, count, payload_size, go_marker, ready_marker, barrier_timeout = sys.argv[1:8]
 store = JournalWorkflowPauseStore(journal_dir=Path(journal_dir), tenant_id=None)
 Path(ready_marker).write_text("ready")
-deadline = time.monotonic() + 60.0
+deadline = time.monotonic() + float(barrier_timeout)
 while not Path(go_marker).exists():
     assert time.monotonic() < deadline, "start barrier never opened"
     time.sleep(0.005)
@@ -311,7 +317,7 @@ def test_append_blocks_a_second_os_process_holding_the_journal_lock(tmp_path: Pa
             child.wait(timeout=30.0)
             raise
 
-    assert child.wait(timeout=_READY_TIMEOUT) == 0
+    assert child.wait(timeout=_COMPLETION_TIMEOUT) == 0
     assert done.exists()
     store = JournalWorkflowPauseStore(journal_dir=journal_dir, tenant_id=None)
     read = store.read_latest_attributed(_WORKFLOW_ID)
@@ -344,7 +350,7 @@ def test_both_processes_contend_on_the_same_lock_file_identity(tmp_path: Path) -
 
     with _child(_CHILD_CAPTURE_SCRIPT, journal_dir, done, ready, child_identity) as child:
         _await_marker(ready, what="the child's flock-attempt signal")
-        assert child.wait(timeout=_READY_TIMEOUT) == 0
+        assert child.wait(timeout=_COMPLETION_TIMEOUT) == 0
 
     lock_file = _lock_file(journal_dir)
     assert lock_file.exists(), "this workflow's journal carries no cross-process lock file"
@@ -419,7 +425,9 @@ def test_two_workflows_lock_distinct_targets_and_do_not_block_each_other(
     identity = tmp_path / "child_identity"
     with _hold_append_lock(journal_dir, other):
         with _child(_CHILD_CAPTURE_SCRIPT, journal_dir, done, ready, identity) as child:
-            assert child.wait(timeout=_READY_TIMEOUT) == 0, (
+            # [LAW:no-ambient-temporal-coupling] This wait starts at spawn, so it
+            # includes cold-child readiness plus the capture's completion time.
+            assert child.wait(timeout=_READY_TIMEOUT + _COMPLETION_TIMEOUT) == 0, (
                 "a capture for one workflow blocked behind a lock held on ANOTHER "
                 "workflow's journal — the lock is coarser than the store's isolation"
             )
@@ -450,10 +458,24 @@ def test_two_os_processes_appending_large_records_leave_every_record_whole(
 
     readies = [tmp_path / "ready-A", tmp_path / "ready-B"]
     with _child(
-        _CHILD_BULK_APPEND_SCRIPT, journal_dir, "A", per_process, payload, go, readies[0]
+        _CHILD_BULK_APPEND_SCRIPT,
+        journal_dir,
+        "A",
+        per_process,
+        payload,
+        go,
+        readies[0],
+        _BULK_BARRIER_TIMEOUT,
     ) as a:
         with _child(
-            _CHILD_BULK_APPEND_SCRIPT, journal_dir, "B", per_process, payload, go, readies[1]
+            _CHILD_BULK_APPEND_SCRIPT,
+            journal_dir,
+            "B",
+            per_process,
+            payload,
+            go,
+            readies[1],
+            _BULK_BARRIER_TIMEOUT,
         ) as b:
             for marker in readies:
                 _await_marker(marker, what=f"{marker.name} (a bulk appender)")
@@ -562,7 +584,7 @@ def test_read_completes_while_a_separate_os_process_holds_the_journal_lock(
             )
         finally:
             release.write_text("go")
-        assert child.wait(timeout=_READY_TIMEOUT) == 0
+        assert child.wait(timeout=_COMPLETION_TIMEOUT) == 0
 
 
 # --------------------------------------------------------------------------

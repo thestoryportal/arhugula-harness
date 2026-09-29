@@ -72,7 +72,11 @@ tools/test_concurrency_surface.py \
   tools/test_r820_managed_agents_live_e2e.py \
   tools/test_sandbox_host_readiness.py \
   tools/test_self_hosted_readiness.py \
-  tools/test_tools_test_coverage_guard.py
+  tools/test_tools_test_coverage_guard.py \
+  tools/test_ci_axis_roots.py \
+  tools/test_installed_witness_provenance.py \
+  tools/test_b104_installed_public_witness.py \
+  tools/test_preaction_installed_witness.py
 
 # tools/roadmap-audit/ is named explicitly alongside the other two dirs: pytest's
 # testpaths does not reach tools/, so a shell suite that is not listed here simply never

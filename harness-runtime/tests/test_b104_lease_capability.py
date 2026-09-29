@@ -49,9 +49,7 @@ returns in microseconds, has certainly returned, and never a condition the code 
 
 def test_a_lease_capability_cannot_be_subclassed() -> None:
     with pytest.raises(TypeError):
-
-        class Forged(LeaseCapability):  # the definition itself must fail
-            pass
+        type("Forged", (LeaseCapability,), {})  # subclass creation itself must fail
 
 
 def test_a_lease_capability_cannot_be_constructed_outside_the_store() -> None:

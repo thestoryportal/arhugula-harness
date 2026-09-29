@@ -33,7 +33,7 @@ from harness_is.state_ledger_write import (
     EntryPayload,
     WriteResult,
 )
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_serializer
 
 from harness_cp.cp_shared_types import ActorIdentity
 from harness_cp.handoff_context import ProposedAction
@@ -136,6 +136,13 @@ class RewrittenToolCall(BaseModel):
 
     response_palette: frozenset[HITLResponse] | None
     """Populated iff `hitl_required` — full, or restricted per U-CP-48."""
+
+    @field_serializer("response_palette", when_used="json")
+    def _serialize_response_palette(
+        self, palette: frozenset[HITLResponse] | None
+    ) -> list[str] | None:
+        """Give equal palettes one JSON byte order for ledger-key hashing."""
+        return None if palette is None else sorted(response.value for response in palette)
 
 
 def select_variant(

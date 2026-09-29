@@ -94,12 +94,17 @@ class _Holder:
         )
 
     def __enter__(self) -> _Holder:
-        limit = time.monotonic() + 60
+        # The real holder imports the runtime before signaling readiness; keep
+        # that cold-start budget separate from the post-marker exclusion checks.
+        limit = time.monotonic() + 120
         while not self._ready.exists() and time.monotonic() < limit:
             if self._proc.poll() is not None:  # pragma: no cover — holder crashed
                 raise AssertionError(f"holder exited early with {self._proc.returncode}")
             time.sleep(0.01)
-        assert self._ready.exists(), "holder never acquired the lock"
+        if not self._ready.exists():
+            self._proc.kill()
+            self._proc.wait(timeout=30)
+            raise AssertionError("holder never acquired the lock")
         return self
 
     def __exit__(self, *_exc: object) -> None:

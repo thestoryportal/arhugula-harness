@@ -6,6 +6,7 @@ import asyncio
 import json
 import os
 import shutil
+import signal
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -141,13 +142,19 @@ async def test_claude_dispatch_uses_argv_and_stdin_for_text_only_prompt() -> Non
     assert timeout == 42.0
 
 
-def _fake_claude(tmp_path: Path, *, sleeper: bool = False) -> tuple[str, Path]:
+def _fake_claude(
+    tmp_path: Path, *, sleeper: bool = False, startup_marker: Path | None = None
+) -> tuple[str, Path]:
     script = tmp_path / "fake-claude"
     records = tmp_path / "records.jsonl"
+    startup_line = (
+        f"with open({str(startup_marker)!r}, 'w') as stream: stream.write('{{\"started\": 1}}')\n"
+        if startup_marker is not None
+        else ""
+    )
     script.write_text(
         f"#!{sys.executable}\n"
-        "import json, os, pathlib, stat, sys, time\n"
-        "cwd = pathlib.Path.cwd()\n"
+        "import json, os, pathlib, stat, sys, time\n" + startup_line + "cwd = pathlib.Path.cwd()\n"
         "record = {'argv': sys.argv[1:], 'stdin': sys.stdin.read(), "
         "'cwd': str(cwd), 'mode': stat.S_IMODE(cwd.stat().st_mode), "
         "'entries': sorted(p.name for p in cwd.iterdir()), "
@@ -260,9 +267,15 @@ async def test_default_claude_runner_isolates_auth_and_inference(
 @pytest.mark.parametrize("cancel", [False, True])
 async def test_claude_scratch_cwd_removed_after_timeout_or_cancel(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
     cancel: bool,
 ) -> None:
-    command, records = _fake_claude(tmp_path, sleeper=True)
+    startup_marker = tmp_path / "started.json" if not cancel else None
+    command, records = _fake_claude(tmp_path, sleeper=True, startup_marker=startup_marker)
+    if startup_marker is not None:
+        # The marker precedes the fake CLI's stdin read. Start the timeout only
+        # after child startup, then inspect its full private-cwd record.
+        _wait_for_group_spawn(monkeypatch, startup_marker, record_timeout=120)
     runner = _ClaudeCodeSubprocessRunner()
     task = asyncio.create_task(
         runner.run((command,), stdin="", timeout_seconds=15.0 if cancel else 3.0)
@@ -1223,12 +1236,16 @@ async def test_generic_command_auth_check_without_auth_args_raises_before_any_sp
 
 # [LAW:behavior-not-structure] These fixtures observe OS process-group behavior
 # through a provider-free executable, not a mocked CLI implementation.
-def _group_cli(tmp_path: Path, *, normal: bool = False) -> tuple[str, Path]:
+def _group_cli(
+    tmp_path: Path, *, normal: bool = False, startup_delay: float = 0.0
+) -> tuple[str, Path]:
     script = tmp_path / "fake-group-cli"
     records = tmp_path / "group-record.json"
     script.write_text(
         f"#!{sys.executable}\n"
         "import json, os, subprocess, sys, time\n"
+        # Timeout cases delay startup beyond their timeout to prove the spawn gate matters.
+        f"time.sleep({startup_delay!r})\n"
         "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(300)'], "
         "stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
         f"with open({str(records)!r}, 'w') as stream: "
@@ -1241,8 +1258,8 @@ def _group_cli(tmp_path: Path, *, normal: bool = False) -> tuple[str, Path]:
     return str(script), records
 
 
-async def _recorded_group(records: Path) -> dict[str, int]:
-    async with asyncio.timeout(5):
+async def _recorded_group(records: Path, *, record_timeout: float = 5) -> dict[str, int]:
+    async with asyncio.timeout(record_timeout):
         while True:
             if records.exists():
                 try:
@@ -1252,10 +1269,33 @@ async def _recorded_group(records: Path) -> dict[str, int]:
             await asyncio.sleep(0.01)
 
 
+def _wait_for_group_spawn(
+    monkeypatch: pytest.MonkeyPatch, records: Path, *, record_timeout: float = 5
+) -> None:
+    real_spawn = asyncio.create_subprocess_exec
+    real_killpg = os.killpg
+
+    async def spawn_after_record(*argv: Any, **kwargs: Any) -> asyncio.subprocess.Process:
+        process = await real_spawn(*argv, **kwargs)
+        try:
+            await _recorded_group(records, record_timeout=record_timeout)
+        except BaseException:
+            try:
+                real_killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            await process.wait()
+            raise
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", spawn_after_record)
+
+
 def _not_running(pid: int) -> bool:
     try:
         state = Path(f"/proc/{pid}/stat").read_text().split(") ", 1)[1].split()[0]
-    except FileNotFoundError:
+    except (FileNotFoundError, ProcessLookupError):
+        # procfs can report ESRCH if the PID task is released after open.
         return True
     return state in {"Z", "X"}
 
@@ -1295,16 +1335,9 @@ async def test_default_runner_uses_private_group_and_reaps_detached_grandchild_o
 async def test_default_runner_reaps_entire_group_on_interrupted_exit(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, exit_kind: str
 ) -> None:
-    command, records = _group_cli(tmp_path)
-    real_spawn = asyncio.create_subprocess_exec
-
-    async def spawn_after_record(*argv: Any, **kwargs: Any) -> asyncio.subprocess.Process:
-        process = await real_spawn(*argv, **kwargs)
-        if exit_kind == "observer":
-            await _recorded_group(records)
-        return process
-
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", spawn_after_record)
+    command, records = _group_cli(tmp_path, startup_delay=0.35 if exit_kind == "timeout" else 0.0)
+    if exit_kind in {"timeout", "observer"}:
+        _wait_for_group_spawn(monkeypatch, records)
     real_killpg = os.killpg
     targets: list[int] = []
 
@@ -1407,7 +1440,13 @@ async def test_scratch_removal_failure_preserves_outcome(
 ) -> None:
     import harness_runtime.lifecycle.external_cli_provider as provider
 
-    command, records = _group_cli(tmp_path, normal=exit_kind == "success")
+    command, records = _group_cli(
+        tmp_path,
+        normal=exit_kind == "success",
+        startup_delay=0.35 if exit_kind == "timeout" else 0.0,
+    )
+    if exit_kind == "timeout":
+        _wait_for_group_spawn(monkeypatch, records)
     real_rmtree = shutil.rmtree
 
     def failing_rmtree(path: str) -> None:
@@ -1446,7 +1485,9 @@ async def test_refused_group_signal_keeps_outcome_and_reports_uncertainty(
 ) -> None:
     import harness_runtime.lifecycle.external_cli_provider as provider
 
-    command, records = _group_cli(tmp_path)
+    command, records = _group_cli(tmp_path, startup_delay=0.35 if exit_kind == "timeout" else 0.0)
+    if exit_kind == "timeout":
+        _wait_for_group_spawn(monkeypatch, records)
     real_killpg = os.killpg
 
     def denied_killpg(pgid: int, sig: int) -> None:
@@ -1497,14 +1538,7 @@ async def test_observer_timeout_error_remains_the_observer_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     command, records = _group_cli(tmp_path)
-    real_spawn = asyncio.create_subprocess_exec
-
-    async def spawn_after_record(*argv: Any, **kwargs: Any) -> asyncio.subprocess.Process:
-        process = await real_spawn(*argv, **kwargs)
-        await _recorded_group(records)
-        return process
-
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", spawn_after_record)
+    _wait_for_group_spawn(monkeypatch, records)
     failure = TimeoutError("observer's own timeout")
 
     def observer() -> None:

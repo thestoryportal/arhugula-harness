@@ -45,7 +45,7 @@ from typing import Any, cast
 
 import harness_runtime.lifecycle.child_workflow_runner as cwr
 import pytest
-from harness_as.sandbox_tier import SandboxTier
+from harness_as.sandbox_tier import BlastRadiusTier, SandboxTier
 from harness_core import PersonaTier, StepID, WorkloadClass
 from harness_cp.cp_shared_types import ModelBinding
 from harness_cp.cross_family_fallback_chain import (
@@ -66,6 +66,7 @@ from harness_cp.sub_agent_brief import (
     OutputSchemaKind,
     SubAgentBrief,
 )
+from harness_cp.sub_agent_gate_level_descent import SubAgentGateLevelDescent
 from harness_cp.topology_pattern import TopologyPattern
 from harness_cp.workflow_driver import (
     _compute_run_idempotency_key,
@@ -106,6 +107,23 @@ _CHAIN = FallbackChain(
 _CHILD_RUN = "child-run-pinned-e1"
 _CHILD_WF = "child-wf"
 _ENTRY_VERSION = 1  # WorkflowManifestEntry default; the driver hashes str(entry_version).
+
+
+def _root_child_descent() -> SubAgentGateLevelDescent:
+    """A root child's real gate-level descent at the historical AUTO floor —
+    the `parent_gate_floor` `execute_workflow_at_depth` defaulted to before
+    `child_workflow_runner.py` started forwarding `descent.child_gate_level`
+    (`[LAW:single-enforcer]`). Every field is real and contract-valid; these
+    depth-1 witnesses exercise no override and no privilege escalation."""
+    return SubAgentGateLevelDescent(
+        parent_gate_level=GateLevel.AUTO,
+        parent_sandbox_tier=SandboxTier.TIER_1_PROCESS,
+        child_blast_radius_ceiling=BlastRadiusTier.READ_ONLY,
+        child_sandbox_tier=SandboxTier.TIER_1_PROCESS,
+        child_gate_level=GateLevel.AUTO,
+        override_applied=False,
+        override_audit_ref=None,
+    )
 
 
 def _run_key(run_id: str = _CHILD_RUN, workflow_id: str = _CHILD_WF) -> str:
@@ -352,7 +370,7 @@ def test_recursive_child_crash_resume_reconstructs_full_final_state(
         manifest_entry=_manifest(),
         steps=[_step(0), _step(1), _step(2)],
         handoff_context=cast(Any, None),  # not forwarded to execute_workflow
-        descent=cast(Any, None),  # not forwarded to execute_workflow
+        descent=_root_child_descent(),
         descent_depth=1,  # a direct child-runner call is a depth-1 child of the root
         default_model_binding=_DEFAULT_BINDING,
         child_resume=None,  # CRASH-resume (not a pause-resume)
@@ -401,7 +419,7 @@ def test_recursive_child_crash_resume_save_point_reconstructs_full_final_state(
         manifest_entry=_manifest(engine_class=EngineClass.SAVE_POINT_CHECKPOINT),
         steps=[_step(0), _step(1), _step(2)],
         handoff_context=cast(Any, None),
-        descent=cast(Any, None),
+        descent=_root_child_descent(),
         descent_depth=1,  # a direct child-runner call is a depth-1 child of the root
         default_model_binding=_DEFAULT_BINDING,
         child_resume=None,  # CRASH-resume (not a pause-resume)
@@ -464,7 +482,7 @@ def test_recursive_child_crash_resume_reconciler_clean_cas_auto_resumes(
         manifest_entry=_manifest(engine_class=EngineClass.RECONCILER_LOOP),
         steps=[_step(0), _step(1), _step(2)],
         handoff_context=cast(Any, None),
-        descent=cast(Any, None),
+        descent=_root_child_descent(),
         descent_depth=1,  # a direct child-runner call is a depth-1 child of the root
         default_model_binding=_DEFAULT_BINDING,
         child_resume=None,  # CRASH-resume
@@ -512,7 +530,7 @@ def test_recursive_child_crash_resume_reconciler_f1_abort_fails_closed_at_most_o
         manifest_entry=_manifest(engine_class=EngineClass.RECONCILER_LOOP),
         steps=[_step(0), _step(1), _step(2)],
         handoff_context=cast(Any, None),
-        descent=cast(Any, None),
+        descent=_root_child_descent(),
         descent_depth=1,  # a direct child-runner call is a depth-1 child of the root
         default_model_binding=_DEFAULT_BINDING,
         child_resume=None,  # CRASH-resume
@@ -571,7 +589,7 @@ def test_recursive_child_crash_resume_e1_live_seed_reconstructs_full_final_state
         manifest_entry=_manifest(),
         steps=[_step(0), _step(1), _step(2)],
         handoff_context=cast(Any, None),
-        descent=cast(Any, None),
+        descent=_root_child_descent(),
         descent_depth=1,  # a direct child-runner call is a depth-1 child of the root
         default_model_binding=_DEFAULT_BINDING,
         child_resume=None,  # CRASH-resume (not a pause-resume)
@@ -607,7 +625,7 @@ def test_recursive_child_crash_resume_without_store_degrades_to_suffix_only(
         manifest_entry=_manifest(),
         steps=[_step(0), _step(1), _step(2)],
         handoff_context=cast(Any, None),
-        descent=cast(Any, None),
+        descent=_root_child_descent(),
         descent_depth=1,  # a direct child-runner call is a depth-1 child of the root
         default_model_binding=_DEFAULT_BINDING,
         child_resume=None,
@@ -935,7 +953,7 @@ def test_maybe_ran_nonleaf_child_grandchild_auto_resumes_at_most_once(tmp_path: 
         manifest_entry=_manifest(engine_class=EngineClass.EVENT_SOURCED_REPLAY),
         steps=[_step(0), grandchild_step],
         handoff_context=cast(Any, None),
-        descent=cast(Any, None),
+        descent=_root_child_descent(),
         descent_depth=1,  # a direct child-runner call is a depth-1 child of the root
         default_model_binding=_DEFAULT_BINDING,
         child_resume=None,  # CRASH-resume

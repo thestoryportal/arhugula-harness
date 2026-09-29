@@ -72,7 +72,7 @@ source = [
     "harness_cxa",
     "harness_runtime",
 ]
-omit = ["*/tests/*"]
+omit = ["*/tests/*", "*/cp_tests/*"]
 
 [tool.coverage.report]
 show_missing = true
@@ -96,7 +96,7 @@ include = [
     "harness-core/src",    "harness-core/tests",
     "harness-is/src",      "harness-is/tests",
     "harness-as/src",      "harness-as/tests",
-    "harness-cp/src",      "harness-cp/tests",
+    "harness-cp/src",      "harness-cp/cp_tests",
     "harness-od/src",      "harness-od/tests",
     "harness-cxa/src",     "harness-cxa/tests",
     "harness-runtime/src", "harness-runtime/tests",
@@ -193,7 +193,7 @@ reportUnusedImport = "none"
 reportUnusedVariable = "none"
 
 [[tool.pyright.executionEnvironments]]
-root = "harness-cp/tests"
+root = "harness-cp/cp_tests"
 reportArgumentType = "none"
 reportAttributeAccessIssue = "none"
 reportMissingTypeStubs = "none"
@@ -338,7 +338,7 @@ ignore = ["RUF001", "RUF002", "RUF003", "ASYNC109"]
 "harness-od/src/harness_od/pause_resume_namespace.py" = ["E501"]
 
 # Test files carry idioms that are legitimate in test context but flagged by the
-# production-grade lint profile. Scoped to tests/ only (never src/), and excludes
+# production-grade lint profile. Scoped to tests/ and cp_tests/ only (never src/), and excludes
 # all F-codes so real undefined-name / unused-import bugs still surface:
 #   E402  — imports after monkeypatch / sys.modules setup or sys.path fixup
 #   E501  — AC-coverage docstring tables + long inline JSON / manifest fixtures
@@ -351,7 +351,7 @@ ignore = ["RUF001", "RUF002", "RUF003", "ASYNC109"]
 #   RUF012/RUF015/RUF022/RUF043/RUF059 — test-fixture mutable attrs + minor style
 #   ASYNC110/ASYNC240 — faithful mocks of polling servers + module-source
 #            introspection reads (blocking is correct in the test double)
-"**/tests/**/*.py" = [
+"**/{tests,cp_tests}/**/*.py" = [
     "E402",
     "E501",
     "B017",
@@ -377,9 +377,10 @@ docstring-code-format = true
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-# `importlib` mode prevents the `ModuleNotFoundError: No module named 'tests.X'`
-# collision that arises when multiple workspace members each carry a `tests/`
-# package with `__init__.py`. Standard fix per the pytest-importmode docs.
+# `importlib` mode keeps same-named test files in different members from replacing each
+# other in `sys.modules`. It does not stop relative sibling imports from resolving against
+# whichever `tests` package was bound first (runtime's conftests bind it), so CP's tests,
+# which use relative sibling imports, live in their own `cp_tests` package.
 addopts = "--import-mode=importlib"
 markers = [
     "e2e: end-to-end tests exercising real external services (e.g., Anthropic API); typically gated on credential env vars (ANTHROPIC_API_KEY etc.) and excluded from default CI runs",
@@ -388,7 +389,7 @@ testpaths = [
     "harness-core/tests",
     "harness-is/tests",
     "harness-as/tests",
-    "harness-cp/tests",
+    "harness-cp/cp_tests",
     "harness-od/tests",
     "harness-cxa/tests",
     "harness-runtime/tests",

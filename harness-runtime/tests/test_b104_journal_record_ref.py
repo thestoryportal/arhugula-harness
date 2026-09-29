@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import inspect
 import json
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -70,7 +70,7 @@ def test_capture_returns_first_identity_before_sibling_append(tmp_path: Path) ->
     lock = store._cross_process_append_lock
 
     @contextmanager
-    def append_sibling_after_unlock(path: Path) -> Iterator[None]:
+    def append_sibling_after_unlock(path: Path) -> Generator[None, None, None]:
         with lock(path):
             yield
         sibling.capture(_snapshot("run-2"), depth=None)

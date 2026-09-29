@@ -121,7 +121,7 @@ from typing import Any, NamedTuple
 WIRING = Path("graft/.graph/wiring.json")
 
 _SRC = re.compile(r"harness-[a-z]+/src/")
-_TEST = re.compile(r"(^|/)tests?/|(^|/)test_[^/]*\.py$|conftest\.py$")
+_TEST = re.compile(r"(^|/)(tests?|cp_tests)/|(^|/)test_[^/]*\.py$|conftest\.py$")
 
 # Only these node kinds carry a meaningful "who calls me" question. Classes and modules
 # are reached by construction and import, which `calls` edges model differently.

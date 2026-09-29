@@ -243,10 +243,12 @@ Path(done_marker).write_text("done")
 
 # A cold child must import cryptography plus every harness dependency before it
 # reaches the lock. B-143 measured 5.39s / 33.89s / 7.69s on the same host, so
-# the former 10s deadline sat inside the observed distribution. Sixty seconds
-# matches the repo's other cold-process witnesses while preserving a bounded
-# failure; `_wait_for_child_ready` separately fails immediately on child exit.
-_COLD_CHILD_READY_TIMEOUT_SECONDS = 60.0
+# the former 10s deadline sat inside the observed distribution. The assembled
+# full suite also had two live children miss a 60s readiness window on this host.
+# [LAW:comments-carry-meaning] This is a bounded pre-flock readiness budget;
+# `_wait_for_child_ready` still fails immediately on child exit, and the
+# post-marker blocking observation remains 0.5s.
+_COLD_CHILD_READY_TIMEOUT_SECONDS = 120.0
 
 
 def _wait_for_child_ready(child: subprocess.Popen[bytes], ready_marker: Path) -> None:

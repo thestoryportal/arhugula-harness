@@ -58,9 +58,10 @@ The map supplies the §21.2.2 row-1 PER-ROW resolver.
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, TypeGuard, cast
 
 from harness_core import PersonaTier
 from harness_cp.audit_walk_verification import (
@@ -301,6 +302,47 @@ def _read_sidecar(sidecar_path: Path) -> _SidecarContent:
     )
 
 
+def _is_object_keyed_mapping(value: object) -> TypeGuard[Mapping[object, object]]:
+    """True when `value` is a `dict`, narrowed only to the READ capability
+    the `isinstance` check actually proves.
+
+    A bare `isinstance(value, dict)` on an `object`-typed value narrows to
+    `dict[Unknown, Unknown]` (there is no runtime generic to recover), which
+    then makes `.items()` yield `Unknown` keys and values below. Every
+    Python value is an `object`, so reading any `dict`'s keys and values as
+    `object` is always sound — but a *mutable* `dict[object, object]` is a
+    stronger, unsound claim: the same object could still be aliased
+    elsewhere as, say, `dict[str, int]`, and a writable `dict[object,
+    object]` view would let a caller insert a non-`str` key or non-`int`
+    value through that alias. This function is only ever used to iterate an
+    already-decoded JSON value, never to write through it, so the guard
+    narrows to the read-only `Mapping[object, object]` — exactly the
+    capability the runtime check proves, nothing more — while the
+    `isinstance(value, dict)` runtime restriction (real `dict` values only)
+    is unchanged.
+    """
+    return isinstance(value, dict)
+
+
+def _as_str_keyed_mapping(value: object) -> dict[str, object] | None:
+    """Prove `value` is a JSON object with `str` keys, or return `None`.
+
+    `json.loads` on a JSON object always produces `str` keys, but nothing in
+    the type system says so until this function checks it: it is the single
+    parser both the top-level key map and each entry's spec route through,
+    so nothing downstream re-derives or assumes the shape via a cast.
+    [LAW:parse-dont-validate]
+    """
+    if not _is_object_keyed_mapping(value):
+        return None
+    result: dict[str, object] = {}
+    for key, item in value.items():
+        if not isinstance(key, str):
+            return None
+        result[key] = item
+    return result
+
+
 def _load_key_map(path: Path) -> tuple[dict[str, SigningBackend], dict[str, str]]:
     """Parse the operator key map into per-`(algorithm, key_id)` backends.
 
@@ -337,19 +379,18 @@ def _load_key_map(path: Path) -> tuple[dict[str, SigningBackend], dict[str, str]
     )
     from harness_runtime.types import AuditSigningConfig
 
-    raw: object = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(raw, dict):
+    raw_value: object = json.loads(path.read_text(encoding="utf-8"))
+    key_map = _as_str_keyed_mapping(raw_value)
+    if key_map is None:
         raise ValueError("--signing-key-map must be a JSON object")
     backends: dict[str, SigningBackend] = {}
     materials: dict[str, str] = {}
-    if not raw:
+    if not key_map:
         # An empty mapping is the row-3 input NOT supplied in substance — at
         # MTC it would otherwise let a zero-row walk emit a false VERIFIED
         # (codex round-6 P1).
         raise ValueError("--signing-key-map contains no entries")
-    for map_key, spec in cast("dict[str, object]", raw).items():
-        if not isinstance(map_key, str):
-            raise ValueError("--signing-key-map keys must be strings")
+    for map_key, spec in key_map.items():
         if ":" not in map_key:
             raise ValueError(f"key-map key {map_key!r} must be '<algorithm>:<key_id>'")
         algo_prefix = map_key.split(":", 1)[0]
@@ -363,18 +404,19 @@ def _load_key_map(path: Path) -> tuple[dict[str, SigningBackend], dict[str, str]
                 f"key-map key {map_key!r}: {algo_prefix!r} is not an admissible SignatureAlgorithm"
             ) from exc
         key_id = map_key.split(":", 1)[1]
-        if isinstance(spec, dict) and spec.get("kind") == "local-ed25519-public":
+        spec_map = _as_str_keyed_mapping(spec)
+        if spec_map is not None and spec_map.get("kind") == "local-ed25519-public":
             # [LAW:parse-dont-validate] One inspect-only boundary stamps a
             # contained public path and matching SPKI pin before constructing
             # a verifier. Private material never enters this branch.
             if algo_prefix != "ed25519" or not key_id:
                 raise ValueError(f"key-map entry {map_key!r}: invalid public key identity")
-            if set(spec) != {"kind", "public_key_path", "spki_sha256"}:
+            if set(spec_map) != {"kind", "public_key_path", "spki_sha256"}:
                 raise ValueError(
                     f"key-map entry {map_key!r}: public entry has missing/extra fields"
                 )
-            relative = spec["public_key_path"]
-            pin = spec["spki_sha256"]
+            relative = spec_map["public_key_path"]
+            pin = spec_map["spki_sha256"]
             if (
                 not isinstance(relative, str)
                 or not relative
@@ -404,7 +446,7 @@ def _load_key_map(path: Path) -> tuple[dict[str, SigningBackend], dict[str, str]
             continue
         # [LAW:single-enforcer] Refuse private specs at the raw map boundary,
         # before model errors can echo paths from malformed entries.
-        if isinstance(spec, dict) and spec.get("backend") == "local-ed25519":
+        if spec_map is not None and spec_map.get("backend") == "local-ed25519":
             raise ValueError(
                 f"key-map entry {map_key!r}: private local key specs are not accepted by inspect"
             )

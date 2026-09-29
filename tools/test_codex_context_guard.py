@@ -146,6 +146,19 @@ def test_design_and_implementation_mix_is_hard_failure() -> None:
     assert any(f.code == "DESIGN_IMPL_MIX" and f.severity == "hard" for f in findings)
 
 
+def test_design_and_cp_test_change_mix_is_hard_failure() -> None:
+    """CP's tests live in `cp_tests`; changing one is implementation work too."""
+    design = "design-substrate/Spec_Control_Plane_v1_30.md"
+    cp_test = "harness-cp/cp_tests/test_x.py"
+    state = _state(
+        status_entries=[f" M {design}", f" M {cp_test}"], changed_files=[design, cp_test]
+    )
+
+    findings = cg.validate(state, mode="closeout")
+
+    assert any(f.code == "DESIGN_IMPL_MIX" and f.severity == "hard" for f in findings)
+
+
 def test_design_and_codex_tooling_mix_is_hard_failure() -> None:
     state = _state(
         status_entries=[
@@ -622,6 +635,16 @@ def test_cite_bearing_changes_require_overlay_check_evidence() -> None:
         status_entries=[" M harness-is/src/harness_is/entry_hash.py"],
         changed_files=["harness-is/src/harness_is/entry_hash.py"],
     )
+
+    findings = cg.validate(state, mode="closeout")
+
+    assert any(f.code == "OVERLAY_CHECK_REQUIRED" for f in findings)
+
+
+def test_cite_bearing_cp_test_changes_require_overlay_check_evidence() -> None:
+    """CP's tests live in `cp_tests`; a cite-bearing change there still needs the overlay check."""
+    path = "harness-cp/cp_tests/test_authority_carrier.py"
+    state = _state(status_entries=[f" M {path}"], changed_files=[path])
 
     findings = cg.validate(state, mode="closeout")
 

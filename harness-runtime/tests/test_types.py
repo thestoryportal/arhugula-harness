@@ -242,6 +242,8 @@ def test_harness_context_declares_all_c_rt_04_fields() -> None:
         # `ProtectedResultStore | None` (leaf lifecycle module, no import
         # cycle — same precedent as EngineOutputStore above).
         "protected_result_store",
+        # Stage-5 CP evaluator/optimizer verdict conversion binding.
+        "evaluator_verdict_reader",
     }
     actual = set(HarnessContext.model_fields.keys())
     assert actual == expected, f"missing: {expected - actual}; extra: {actual - expected}"

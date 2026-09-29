@@ -14,10 +14,13 @@ U-CP-27): `test_step_4_operator_preference_filter`. Re-added at U-CP-27 landing.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+
 import pytest
 from harness_core import DeploymentSurface, PersonaTier, WorkloadClass
 from harness_cp.engine_class import EngineClass
 from harness_cp.engine_class_candidate import ENGINE_CLASS_CANDIDATES, EngineClassCandidate
+from harness_cp.state_ledger_canonicalization import _canonicalize_outcome_bytes
 from harness_cp.workload_binding_engine_class_selection import (
     HITLInvocation,
     WorkloadBindingError,
@@ -37,6 +40,36 @@ def _input(
         deployment_surface=surface,
         persona_tier=tier,
     )
+
+
+class _AscendingCandidates(frozenset[EngineClass]):
+    def __iter__(self) -> Iterator[EngineClass]:
+        return iter(sorted(super().__iter__(), key=lambda value: value.value))
+
+
+class _DescendingCandidates(frozenset[EngineClass]):
+    def __iter__(self) -> Iterator[EngineClass]:
+        return iter(sorted(super().__iter__(), key=lambda value: value.value, reverse=True))
+
+
+def test_equal_candidate_sets_have_one_ledger_key_payload() -> None:
+    """Selection provenance must not depend on set iteration order."""
+    result = select_engine_class(
+        _input(
+            WorkloadClass.RESEARCH,
+            DeploymentSurface.SELF_HOSTED_SERVER,
+            PersonaTier.SOLO_DEVELOPER,
+        )
+    )
+    assert len(result.candidate_set) > 1
+    ascending = result.model_copy(
+        update={"candidate_set": _AscendingCandidates(result.candidate_set)}
+    )
+    descending = result.model_copy(
+        update={"candidate_set": _DescendingCandidates(result.candidate_set)}
+    )
+    assert ascending.candidate_set == descending.candidate_set
+    assert _canonicalize_outcome_bytes(ascending) == _canonicalize_outcome_bytes(descending)
 
 
 def test_select_engine_class_four_step() -> None:

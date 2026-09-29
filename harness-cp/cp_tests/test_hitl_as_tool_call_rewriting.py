@@ -15,7 +15,7 @@ Acceptance-criterion coverage:
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from typing import Any
 
 from harness_core import PersonaTier
@@ -29,6 +29,7 @@ from harness_cp.hitl_as_tool_call_rewriting import (
 )
 from harness_cp.hitl_response_palette import HITLResponse
 from harness_cp.persona_engine_hitl_matrix import SynchronyClass
+from harness_cp.state_ledger_canonicalization import _canonicalize_outcome_bytes
 from harness_cp.validator_fail_transient_staircase import CrossTrustBoundaryState
 
 
@@ -118,6 +119,32 @@ def _rewrite(state: CrossTrustBoundaryState) -> frozenset[HITLResponse]:
     )
     assert rc.response_palette is not None
     return rc.response_palette
+
+
+class _ReversePalette(frozenset[HITLResponse]):
+    """Valid palette whose iteration reverses the semantic value order."""
+
+    def __iter__(self) -> Iterator[HITLResponse]:
+        return iter(sorted(super().__iter__(), key=lambda item: item.value, reverse=True))
+
+
+def test_rewritten_palette_json_is_canonical_across_set_iteration_order() -> None:
+    """Equal palette sets have one ledger-key payload, even if iteration differs."""
+    rewritten = rewrite_tool_call_to_hitl(
+        "Read",
+        "core-mcp",
+        PersonaTier.TEAM_BINDING,
+        _action(),
+        SynchronyClass.DURABLE_ASYNC,
+        CrossTrustBoundaryState.CROSS_FAMILY_ACTIVE,
+        hitl_required=True,
+    )
+    values = {HITLResponse.REJECT, HITLResponse.RESPOND}
+    reverse = rewritten.model_copy(update={"response_palette": _ReversePalette(values)})
+    ordinary = rewritten.model_copy(update={"response_palette": frozenset(values)})
+    assert reverse.response_palette == ordinary.response_palette
+    assert reverse.model_dump(mode="json")["response_palette"] == ["reject", "respond"]
+    assert _canonicalize_outcome_bytes(reverse) == _canonicalize_outcome_bytes(ordinary)
 
 
 def test_palette_full_when_no_cross_trust() -> None:

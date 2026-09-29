@@ -44,7 +44,7 @@ import json
 import os
 import sys
 import tempfile
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol, cast, runtime_checkable
@@ -391,12 +391,13 @@ def validate_mtc_audit_signing_config(config: RuntimeConfig) -> None:
             )
         # [LAW:effects-at-boundaries] Config resolution stays pure; loaded keys are checked later.
         signing = config.audit_signing
+        map_name = "key_arns"
+        active_map: Mapping[str, str] = {}
         if signing.backend is AuditSigningBackendKind.AWS_KMS:
-            map_name, active_map = "key_arns", signing.key_arns
+            active_map = signing.key_arns
         elif signing.backend is AuditSigningBackendKind.LOCAL_ED25519:
-            map_name, active_map = "local_key_paths", signing.local_key_paths
-        else:
-            map_name, active_map = "key_arns", {}
+            map_name = "local_key_paths"
+            active_map = signing.local_key_paths
         resolved_key = active_map.get(record_key_id)
         if resolved_key is None:
             reason = (

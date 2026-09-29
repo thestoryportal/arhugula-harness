@@ -635,7 +635,7 @@ def _non_test_occurrences(symbol: str) -> tuple[list[str], list[str]]:
     for package in sorted(_REPO_ROOT.glob("harness-*")):
         for module in sorted(package.rglob("*.py")):
             parts = module.relative_to(_REPO_ROOT).parts
-            if "tests" in parts or ".venv" in parts:
+            if "tests" in parts or "cp_tests" in parts or ".venv" in parts:
                 continue
             rel = module.relative_to(_REPO_ROOT).as_posix()
             for line in module.read_text(encoding="utf-8").splitlines():

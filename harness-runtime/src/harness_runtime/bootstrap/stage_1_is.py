@@ -14,25 +14,29 @@ Step 4's index path is a runtime convention (no `PathClass.INDEX`); the path
 class registry's 4 members are SKILLS / PROMPTS / ROUTING_MANIFEST / STATE_LEDGER
 per C-IS-01 §1.
 
-**Class 1 fork — STATE_LEDGER path treatment (filed inline at U-RT-43 landing).**
+**Class 1 fork — STATE_LEDGER path treatment (filed inline at U-RT-43 landing;
+RESOLVED — see the executable comment above the `materialize_state_ledger` call
+below, which is the current, canonical behavior).**
 `materialize_path_registry` (U-RT-10) creates EVERY resolved path as a
-DIRECTORY via `Path.mkdir(parents=True, exist_ok=True)`. But
-`materialize_state_ledger` (U-RT-12) → `initialize_jsonl_event_ledger`
-expects the STATE_LEDGER path to be a FILE (writes `.jsonl` content). At
-integration these two composers conflict: path_registry produces a dir
-where state_ledger expects a file.
-
-Workaround at U-RT-43: between steps 1 and 2, if the STATE_LEDGER
-resolved path exists as an empty directory, remove it so state_ledger's
-own touch logic can create the file. Class 1 file at
-`.harness/class_1_tension_u_rt_43_state_ledger_path_dir_vs_file.md`;
-resolution candidates:
+DIRECTORY via `Path.mkdir(parents=True, exist_ok=True)`. At the time this fork
+was filed, `materialize_state_ledger` (U-RT-12) → `initialize_jsonl_event_ledger`
+instead expected the STATE_LEDGER path to be a FILE (writes `.jsonl` content),
+so path_registry produced a dir where state_ledger expected a file. Class 1
+file at `.harness/class_1_tension_u_rt_43_state_ledger_path_dir_vs_file.md`
+recorded three resolution candidates:
 - (A) IS spec amendment: STATE_LEDGER resolves to a DIRECTORY containing
   `state.jsonl` (state_ledger composer appends `/state.jsonl`); least
   schema change.
 - (B) `materialize_path_registry` differentiates file-class vs dir-class
   members of PathClass; state_ledger remains file-typed.
-- (C) Status quo + this workaround documented as canonical.
+- (C) Status quo: keep STATE_LEDGER file-typed, and between steps 1 and 2
+  remove an empty directory `path_registry` created so state_ledger's own
+  touch logic can create the file.
+
+Option (A) is what landed, per the IS spec v1.3 §1 amendment (2026-05-20): the
+rmdir workaround this docstring previously described as canonical was removed.
+STATE_LEDGER (and ROUTING_MANIFEST) now resolve to directories with no
+conflict between the two composers.
 """
 
 from __future__ import annotations

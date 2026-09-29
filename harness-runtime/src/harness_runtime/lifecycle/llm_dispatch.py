@@ -5568,7 +5568,7 @@ def materialize_llm_dispatcher_stage(
             # [LAW:single-enforcer] The built map is the actual stage-3a admission result.
             corpus = routing_corpus(
                 embedding_routing_candidates,
-                set(providers) & ({"ollama"} | set(external_cli_provider_names)),
+                {name for name in ("ollama", *external_cli_provider_names) if name in providers},
             )
             embed = make_fastembed_embedding(
                 model_dir=embedding_model_dir, cache_dir=embedding_cache_dir

@@ -49,6 +49,7 @@ def test_sibling_ledger_entry_matches_f2_shape() -> None:
         "procedural_tier_snapshot_ref",
         "branch_metadata",
         "rotation_correlation_id",
+        "recovery_audit",
     }
 
 

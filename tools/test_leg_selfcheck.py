@@ -132,6 +132,87 @@ def test_count_check_still_compares_unattributed_claims_within_one_file():
     assert _hard(across) == []
 
 
+def test_versioned_spec_counts_do_not_collide_across_change_notes_or_sections(
+    tmp_path, monkeypatch
+):
+    """A delta-only spec carries counts for many versions and contract sections.
+
+    Claims under different headings are different subjects. Even within one
+    change note, an unattributed count can describe a different subject.
+    """
+    monkeypatch.setattr(ls, "ROOT", tmp_path)
+    rel = "design-substrate/Spec_Runtime_v1_2.md"
+    path = tmp_path / rel
+    path.parent.mkdir()
+    lines = [
+        "# Specification — Runtime v1.2",
+        "## Change-note (v1.1 → v1.2)",
+        "This version changes 3 sites.",
+        "## Change-note (v1.0 → v1.1)",
+        "This earlier version changes 9 sites.",
+        "## §14.1 Contract A",
+        "Contract A has 5 sites.",
+        "## §14.2 Contract B",
+        "Contract B has 7 sites.",
+    ]
+    path.write_text("\n".join(lines) + "\n")
+    claims = [lines[i] for i in (2, 4, 6, 8)]
+    positions = {rel: [(i + 1, lines[i]) for i in (2, 4, 6, 8)]}
+    report = ls.Report()
+    ls.check_counts({rel: claims}, report, positions=positions)
+    assert _hard(report) == [], _hard(report)
+    assert any(
+        "unattributed aggregate-spec claims NOT count-checked" in f.message
+        for f in report.findings
+        if f.severity == ls.ADVISORY
+    )
+
+    lines[2] = "This version changes 3 sites and a separate contract has 4 sites."
+    path.write_text("\n".join(lines) + "\n")
+    positions[rel][0] = (3, lines[2])
+    claims[0] = lines[2]
+    report = ls.Report()
+    ls.check_counts({rel: claims}, report, positions=positions)
+    assert _hard(report) == [], _hard(report)
+
+    lines[2] = "U-RT-155 has 3 sites."
+    lines[4] = "U-RT-155 has 4 sites."
+    path.write_text("\n".join(lines) + "\n")
+    positions = {rel: [(i + 1, lines[i]) for i in (2, 4, 6, 8)]}
+    claims = [lines[i] for i in (2, 4, 6, 8)]
+    report = ls.Report()
+    ls.check_counts({rel: claims}, report, positions=positions)
+    assert any("U-RT-155" in message for message in _hard(report)), _hard(report)
+
+
+def test_aggregate_spec_unit_heading_stops_at_later_nonunit_heading(tmp_path, monkeypatch):
+    """A later section heading cannot inherit an earlier unit's count subject."""
+    monkeypatch.setattr(ls, "ROOT", tmp_path)
+    rel = "design-substrate/Spec_Runtime_v1_2.md"
+    path = tmp_path / rel
+    path.parent.mkdir()
+    lines = [
+        "## U-RT-155 Contract A",
+        "This unit has 3 sites.",
+        "## §14.2 Contract B",
+        "This contract has 4 sites.",
+    ]
+    path.write_text("\n".join(lines) + "\n")
+    positions = {rel: [(2, lines[1]), (4, lines[3])]}
+    report = ls.Report()
+    ls.check_counts({rel: [lines[1], lines[3]]}, report, positions=positions)
+    assert _hard(report) == [], _hard(report)
+    assert ls.enclosing_row_at(rel, 4) is None
+
+    # Without the intervening heading, two counts under one U-id are mirrors.
+    lines = ["## U-RT-155 Contract A", "This unit has 3 sites.", "It has 4 sites."]
+    path.write_text("\n".join(lines) + "\n")
+    positions = {rel: [(2, lines[1]), (3, lines[2])]}
+    report = ls.Report()
+    ls.check_counts({rel: [lines[1], lines[2]]}, report, positions=positions)
+    assert any("U-RT-155" in m for m in _hard(report)), _hard(report)
+
+
 def test_count_check_is_silent_when_every_mirror_agrees():
     report = _report_for_counts(
         {
@@ -500,6 +581,13 @@ def test_count_check_skips_source_files_so_it_cannot_read_its_own_fixtures():
     assert _hard(_report_for_counts({"design-substrate/Spec_A.md": disagreeing})) != []
     assert _hard(_report_for_counts({"tools/test_leg_selfcheck.py": disagreeing})) == []
     assert _hard(_report_for_counts({"harness-cp/src/x.py": disagreeing})) == []
+
+
+def test_cp_tests_helpers_and_conftests_are_fixture_paths():
+    """CP's tests live in `cp_tests`: its non-`test_` helpers and conftests are fixtures too."""
+    assert ls.is_fixture_path("harness-cp/cp_tests/fixtures.py")
+    assert ls.is_fixture_path("harness-cp/cp_tests/integration/conftest.py")
+    assert not ls.is_fixture_path("harness-cp/src/harness_cp/cp_tests_view.py")
 
 
 def test_every_content_check_skips_fixture_files():

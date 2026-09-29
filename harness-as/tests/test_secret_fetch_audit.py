@@ -58,6 +58,7 @@ def test_compose_audit_entry_six_field_shape() -> None:
         "procedural_tier_snapshot_ref",
         "branch_metadata",
         "rotation_correlation_id",
+        "recovery_audit",
     }
 
 

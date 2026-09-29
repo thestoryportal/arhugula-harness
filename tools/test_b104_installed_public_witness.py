@@ -1803,6 +1803,154 @@ def test_a_malformed_stat_is_uncertainty(tmp_path: Path) -> None:
         w.group_members(w.ProcessView(tmp_path), 100)
 
 
+def _unlocked(stat: str) -> str:
+    """The stat line procfs prints for a task whose signal handlers are already released: its
+    `lock_task_sighand` fails, so the process group reads -1 (array.c), whatever group it had."""
+    fields = stat[stat.rindex(")") + 2 :].split(" ")
+    fields[2] = "-1"
+    return stat[: stat.rindex(")") + 2] + " ".join(fields)
+
+
+#: The stat line of task 101 once it is released: its state reads dead and its group -1.
+RELEASED = "101 (stub) X 1 -1 -1 0"
+UNCERTAIN_MEMBERSHIP = w.UncertainMembershipError
+
+
+def _released_then(monkeypatch: pytest.MonkeyPatch, stat: Path, reread: str | OSError) -> None:
+    """`stat` reads as `RELEASED` once, then every fresh read answers `reread`.
+
+    The fakes model a scanner that meets a released task and reads again; they do not prove
+    any kernel reaches that sequence. The file on disk holds `RELEASED` too, so a reader that
+    bypassed `Path.read_text` would meet a persistent -1 and have to refuse.
+    """
+    stat.write_text(RELEASED)
+    answers: list[str | OSError] = [RELEASED, reread]
+    real = Path.read_text
+
+    def read_text(path: Path, *args: Any, **kwargs: Any) -> str:
+        if path != stat:
+            return real(path, *args, **kwargs)
+        answer = answers.pop(0) if len(answers) > 1 else answers[0]  # the last answer persists
+        if isinstance(answer, OSError):
+            raise answer
+        return answer
+
+    monkeypatch.setattr(Path, "read_text", read_text)
+
+
+def _assert_members(root: Path, expected: list[int] | type[Exception]) -> None:
+    if isinstance(expected, list):
+        assert w.group_members(w.ProcessView(root), 100) == expected
+    else:
+        # [LAW:no-silent-failure] an unresolved -1 refuses; it is never absence or deadness
+        with pytest.raises(expected):
+            w.group_members(w.ProcessView(root), 100)
+
+
+# [LAW:parse-dont-validate] -1 is not a group: one fresh read must resolve it or the scan refuses.
+@pytest.mark.parametrize(
+    ("reread", "expected"),
+    [
+        ("101 (stub) S 1 100 100 0", [101]),
+        ("101 (stub) S 1 200 200 0", []),
+        (FileNotFoundError(errno.ENOENT, "gone"), []),
+        (RELEASED, UNCERTAIN_MEMBERSHIP),
+        (OSError(errno.EIO, "I/O error"), UNCERTAIN_MEMBERSHIP),
+        ("101 no closing paren", UNCERTAIN_MEMBERSHIP),
+    ],
+    ids=[
+        "same-group-new-leader",
+        "other-group",
+        "vanished",
+        "persistent",
+        "unreadable",
+        "malformed",
+    ],
+)
+def test_an_unlocked_group_is_uncertainty_until_one_fresh_read_resolves_it(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    reread: str | OSError,
+    expected: list[int] | type[Exception],
+) -> None:
+    _fake_process(tmp_path, 100, 100, {100: "Z"})
+    _fake_process(tmp_path, 101, 100, {101: "S"})  # alive under the leader that now holds tid 101
+    _released_then(monkeypatch, tmp_path / "101" / "stat", reread)
+
+    _assert_members(tmp_path, expected)
+
+
+# [LAW:parse-dont-validate] a thread's -1 is no proof it is dead: the same one-fresh-read rule.
+@pytest.mark.parametrize(
+    ("reread", "expected"),
+    [
+        ("101 (stub) S 1 100 100 0", [101]),
+        (RELEASED, UNCERTAIN_MEMBERSHIP),
+        (FileNotFoundError(errno.ENOENT, "gone"), []),
+        ("101 (stub) Z 1 100 100 0", []),
+    ],
+    ids=["resolved-live", "persistent", "vanished", "resolved-dead"],
+)
+def test_an_unlocked_thread_is_uncertainty_until_one_fresh_read_resolves_it(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    reread: str | OSError,
+    expected: list[int] | type[Exception],
+) -> None:
+    _fake_process(tmp_path, 101, 100, {101: "S"})  # its only listed thread is its leader's
+    _released_then(monkeypatch, tmp_path / "101" / "task" / "101" / "stat", reread)
+
+    _assert_members(tmp_path, expected)
+
+
+# An exec from a non-leader thread exchanges tids with the zombie leader and releases it
+# (`de_thread`), even after the group SIGKILL. A scan that reads the leader tid before the
+# exchange and the exec'ing thread's old tid after it sees only a zombie and a vanished tid
+# while the new leader lives. The fakes model that exchange as a contract; they prove no
+# kernel's timing.
+@pytest.mark.parametrize(
+    ("final_leader", "expected"),
+    [
+        ("101 (stub) R 1 100 100 0", [101]),
+        ("101 (stub) Z 1 100 100 0", []),
+        (FileNotFoundError(errno.ENOENT, "gone"), []),
+    ],
+    ids=["replacement-leader-live", "leader-dead", "leader-vanished"],
+)
+def test_a_member_is_dead_only_when_its_leader_tid_reads_dead_after_every_other_tid(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    final_leader: str | OSError,
+    expected: list[int],
+) -> None:
+    _fake_process(tmp_path, 101, 100, {101: "Z", 102: "Z"})  # its stat names the zombie leader
+    task = tmp_path / "101" / "task"
+    leader, other = task / "101" / "stat", task / "102" / "stat"
+    other.unlink()  # the exec'ing thread's old tid now names the released old leader
+    reads: list[Path] = []
+    real_read, real_listdir = Path.read_text, os.listdir
+
+    def read_text(path: Path, *args: Any, **kwargs: Any) -> str:
+        reads.append(path)
+        if path == leader and other in reads:  # the exchange preceded the other tid's read
+            if isinstance(final_leader, OSError):
+                raise final_leader
+            return final_leader
+        return real_read(path, *args, **kwargs)
+
+    def listdir(path: str | Path = ".") -> list[str]:
+        return ["101", "102"] if Path(path) == task else real_listdir(path)
+
+    monkeypatch.setattr(Path, "read_text", read_text)
+    monkeypatch.setattr(os, "listdir", listdir)
+
+    assert w.group_members(w.ProcessView(tmp_path), 100) == expected
+    # [LAW:no-ambient-temporal-coupling] deadness needs a leader-tid read after the other tid's
+    leader_reads = [i for i, path in enumerate(reads) if path == leader]
+    other_reads = [i for i, path in enumerate(reads) if path == other]
+    assert leader_reads and other_reads and leader_reads[-1] > other_reads[-1], reads
+
+
 def test_a_member_whose_main_thread_exited_while_a_worker_lives_is_a_survivor(
     tmp_path: Path, alias: Alias
 ) -> None:
@@ -1876,6 +2024,32 @@ def test_an_unreadable_member_is_never_counted_gone(
 
     record = w.finish(child, time.monotonic() + 10)
     assert record["group_survivors"] is None  # unreadable before the kill: unknown, not "none"
+    assert alias.to(child.proc.pid) == [signal.SIGKILL]
+    assert leader_reaped(child.proc.pid)
+
+
+def test_a_member_whose_group_stays_unlocked_keeps_the_group_owned_until_it_resolves(
+    tmp_path: Path, alias: Alias, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    marker = tmp_path / "descendant.pid"
+    child = alias.spawn([sys.executable, "-c", DESCENDANT, str(marker)], tmp_path, "unlocked")
+    assert child.wait_exit(20)
+    member_stat = Path(f"/proc/{int(marker.read_text())}/stat")
+    real = Path.read_text
+
+    def read_text(path: Path, *args: Any, **kwargs: Any) -> str:
+        text = real(path, *args, **kwargs)
+        return _unlocked(text) if path == member_stat else text  # every read, however fresh
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "read_text", read_text)
+        # [LAW:no-silent-failure] unresolved membership refuses: nothing is reaped or released
+        with pytest.raises(w.UncertainMembershipError):
+            w.kill_group(child)
+    assert kernel_state(child.proc.pid) == "exited", "an unlocked member was taken as gone"
+
+    record = w.finish(child, time.monotonic() + 10)  # visibility resolved: the retry only proves
+    assert record["group_survivors"] is None  # unlocked before the kill: unknown, not "none"
     assert alias.to(child.proc.pid) == [signal.SIGKILL]
     assert leader_reaped(child.proc.pid)
 

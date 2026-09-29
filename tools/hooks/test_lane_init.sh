@@ -997,10 +997,10 @@ for SH in $SHELLS; do
   # boundary stops the FATAL failure, but only the `(N)` arm keeps zsh from printing
   # `no matches found` into the lane shell on every first init.
   FRESH=$(cd "$FRESHWT" && env -u HARNESS_LANE_ID -u HARNESS_LANE_INDEX \
-    ARC_METRICS_QUEUE_DIR="$ROOT/freshq" "$SH" -c "source tools/hooks/lane-init.sh >/dev/null 2>/tmp/li-fresh-err.$$
+    ARC_METRICS_QUEUE_DIR="$ROOT/freshq" "$SH" -c "source tools/hooks/lane-init.sh >/dev/null 2>\"$ROOT/li-fresh-err.$$\"
 printf 'rc=%s idx=%s' \"\$?\" \"\${HARNESS_LANE_INDEX:-unset}\"")
-  FRESH="$FRESH globerr=$(grep -qF 'no matches found' "/tmp/li-fresh-err.$$" && echo YES || echo no)"
-  rm -f "/tmp/li-fresh-err.$$"
+  FRESH="$FRESH globerr=$(grep -qF 'no matches found' "$ROOT/li-fresh-err.$$" && echo YES || echo no)"
+  rm -f "$ROOT/li-fresh-err.$$"
   # claims counted OUTSIDE the subshell: NODIR keeps "registry vanished" distinct from "no claim".
   FRESH="$FRESH claims=$([ -d "$ROOT/freshq/lanes" ] && ls "$ROOT/freshq/lanes" | wc -l | tr -d ' ' || echo NODIR)"
   [ "$FRESH" = "rc=0 idx=0 globerr=no claims=1" ] \
@@ -1295,11 +1295,11 @@ cp "$INIT" "$SCRIPT_DIR/lib.sh" "$SCRIPT_DIR/loop_lib.sh" "$EXECREL/tools/hooks/
 for SH in $SHELLS; do
   rm -rf "$EXECREL/.harness" "$EXECREL/relq"
   EXEC_REL=$(cd "$EXECREL" && env -u HARNESS_LANE_ID -u HARNESS_LANE_INDEX \
-    ARC_METRICS_QUEUE_DIR=relq "$SH" tools/hooks/lane-init.sh >/dev/null 2>"/tmp/li-rel-err.$$"
+    ARC_METRICS_QUEUE_DIR=relq "$SH" tools/hooks/lane-init.sh >/dev/null 2>"$ROOT/li-rel-err.$$"
 printf 'rc=%s' "$?")
-  EXEC_REL="$EXEC_REL refusals=$(grep -c '^lane-init:' "/tmp/li-rel-err.$$")"
+  EXEC_REL="$EXEC_REL refusals=$(grep -c '^lane-init:' "$ROOT/li-rel-err.$$")"
   EXEC_REL="$EXEC_REL claims=$([ -d "$EXECREL/relq/lanes" ] && ls "$EXECREL/relq/lanes" | wc -l | tr -d ' ' || echo NODIR)"
-  rm -f "/tmp/li-rel-err.$$"
+  rm -f "$ROOT/li-rel-err.$$"
   [ "$EXEC_REL" = "rc=1 refusals=1 claims=NODIR" ] \
     && ok "$SH: an EXECUTED refusal of a relative queue dir is TERMINAL and publishes no claim" \
     || bad "$SH: executed relative-queue refusal was not terminal: '$EXEC_REL' (want rc=1 refusals=1 claims=NODIR)"

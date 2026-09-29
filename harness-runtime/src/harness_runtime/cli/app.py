@@ -280,10 +280,11 @@ async def _daemon_client_dispatch(
                 )
             ):
                 primary_error.add_note(f"daemon MCP teardown failed: {exc}")
+            elif isinstance(primary_error, Exception):
+                # Let the original exception and its cause propagate from the try.
+                primary_error.add_note(f"daemon MCP teardown failed: {exc}")
             elif isinstance(exc, DaemonResultError):
                 raise
-            elif isinstance(primary_error, (DaemonStartupError, DaemonResultError)):
-                raise primary_error from exc
             else:
                 cause: Exception = exc
                 while isinstance(cause, ExceptionGroup):

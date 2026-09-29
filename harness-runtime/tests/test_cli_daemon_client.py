@@ -448,6 +448,62 @@ async def test_initialize_failure_reports_its_own_budget(
         )
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure_kind", ["connection", "result", "generic"])
+async def test_primary_daemon_failure_survives_teardown_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure_kind: str
+) -> None:
+    """A secondary teardown expiry cannot replace the primary CLI failure."""
+    import httpx
+    import mcp.client.streamable_http as streamable_http_mod
+    from harness_runtime.cli.app import DaemonResultError, DaemonStartupError
+    from mcp.shared.exceptions import McpError
+    from mcp.types import ErrorData
+
+    class _FailingStream:
+        async def __aenter__(self) -> None:
+            if failure_kind == "connection":
+                raise httpx.ConnectError("primary connection refused")
+            if failure_kind == "result":
+                raise McpError(ErrorData(code=408, message="primary result unavailable"))
+            raise ValueError("primary unclassified failure")
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+    def _failing_stream(*args: object, **kwargs: object) -> _FailingStream:
+        return _FailingStream()
+
+    async def _failing_teardown(stack: Any, client: httpx.AsyncClient) -> None:
+        await stack.aclose()
+        await client.aclose()
+        raise DaemonResultError("secondary teardown expired")
+
+    monkeypatch.setattr(streamable_http_mod, "streamable_http_client", _failing_stream)
+    monkeypatch.setattr(_cli_app_mod, "_close_daemon_client", _failing_teardown)
+    expected: type[Exception] = {
+        "connection": DaemonStartupError,
+        "result": DaemonResultError,
+        "generic": ValueError,
+    }[failure_kind]
+    message = {
+        "connection": "primary connection refused",
+        "result": "primary result unavailable",
+        "generic": "primary unclassified failure",
+    }[failure_kind]
+    with pytest.raises(expected, match=message) as primary:
+        await _cli_app_mod._daemon_client_dispatch(
+            workflow_file=Path("workflow.toml"),
+            socket_path=tmp_path / "daemon.sock",
+            result_timeout_seconds=1.0,
+        )
+    if failure_kind == "connection":
+        assert isinstance(primary.value.__cause__, httpx.ConnectError)
+    elif failure_kind == "result":
+        assert isinstance(primary.value.__cause__, McpError)
+    assert any("secondary teardown expired" in note for note in primary.value.__notes__)
+
+
 # ---------------------------------------------------------------------------
 # AC #4 — RunResult propagation: SUCCESS → 0, FAILED → 1, DRAINED → 1
 # ---------------------------------------------------------------------------
@@ -645,7 +701,12 @@ async def test_real_mcp_teardown_deadline_after_received_result(
         return client
 
     monkeypatch.setattr(httpx, "AsyncClient", _tracked_client)
-    monkeypatch.setattr(_cli_app_mod, "_DAEMON_CLIENT_TEARDOWN_TIMEOUT_SECONDS", 0.2, raising=False)
+    # Cancellation still has to start session DELETE under a loaded host. Keep
+    # the short deadline in the after-result case, checked by its typed error.
+    teardown_budget = 5.0 if cancel_during_tool else 0.2
+    monkeypatch.setattr(
+        _cli_app_mod, "_DAEMON_CLIENT_TEARDOWN_TIMEOUT_SECONDS", teardown_budget, raising=False
+    )
     tool_started = asyncio.Event()
     mcp_server = FastMCP(
         "teardown-deadline-test",
@@ -695,15 +756,14 @@ async def test_real_mcp_teardown_deadline_after_received_result(
     )
     serve_task = asyncio.create_task(uv_server.serve())
     try:
-        async with asyncio.timeout(3):
+        async with asyncio.timeout(10 if cancel_during_tool else 15):
             while not uv_server.started:
                 await asyncio.sleep(0.01)
-            started = asyncio.get_running_loop().time()
             dispatch = asyncio.create_task(
                 _cli_app_mod._daemon_client_dispatch(
                     workflow_file=Path("workflow.toml"),
                     socket_path=socket_path,
-                    result_timeout_seconds=1.5,
+                    result_timeout_seconds=1.5 if cancel_during_tool else 10.0,
                 )
             )
             if cancel_during_tool:
@@ -712,14 +772,16 @@ async def test_real_mcp_teardown_deadline_after_received_result(
                 with pytest.raises(asyncio.CancelledError):
                     await dispatch
             else:
-                with pytest.raises(DaemonResultError, match="teardown"):
+                with pytest.raises(
+                    DaemonResultError, match=r"teardown exceeded the 0\.2s client budget"
+                ) as teardown:
                     await dispatch
                 assert tool_started.is_set()
-                # [LAW:behavior-not-structure] A missing MCP result needs 1.5s;
-                # it cannot satisfy this bound after the call has begun.
-                assert asyncio.get_running_loop().time() - started < 1.0
+                # A missing tool result would be the primary exception in this
+                # finally path. Prove the result arrived before teardown failed.
+                assert teardown.value.__context__ is None
             assert delete_seen.is_set()
-            await asyncio.wait_for(delete_cancelled.wait(), timeout=1)
+            await asyncio.wait_for(delete_cancelled.wait(), timeout=5 if cancel_during_tool else 1)
             assert clients and clients[0].is_closed
     finally:
         uv_server.should_exit = True

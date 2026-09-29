@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import tomllib
 from pathlib import Path
 from typing import Any
 
@@ -23,12 +24,26 @@ def _rel(path: Path) -> str:
     return path.relative_to(REPO_ROOT).as_posix()
 
 
+def configured_test_roots(repo_root: Path) -> list[Path]:
+    """pytest's configured `testpaths` under `repo_root`, each of which must exist.
+
+    [LAW:one-source-of-truth] the roots come from the pytest configuration, never a guessed
+    `tests` name; [LAW:no-silent-failure] a missing root would silently drop its evidence.
+    """
+    pyproject = tomllib.loads((repo_root / "pyproject.toml").read_text(encoding="utf-8"))
+    roots = [repo_root / path for path in pyproject["tool"]["pytest"]["ini_options"]["testpaths"]]
+    missing = [root.relative_to(repo_root).as_posix() for root in roots if not root.is_dir()]
+    if missing:
+        raise FileNotFoundError(f"configured test roots are missing: {missing}")
+    return roots
+
+
 def _iter_test_files() -> list[Path]:
-    files: list[Path] = []
-    for package in overlay.PACKAGES:
-        tests_dir = REPO_ROOT / package / "tests"
-        if tests_dir.is_dir():
-            files.extend(sorted(tests_dir.rglob("test_*.py")))
+    files = [
+        path
+        for root in configured_test_roots(REPO_ROOT)
+        for path in sorted(root.rglob("test_*.py"))
+    ]
     files.extend(sorted((REPO_ROOT / "tools").glob("test_*.py")))
     return files
 

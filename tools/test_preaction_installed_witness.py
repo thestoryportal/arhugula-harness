@@ -9,6 +9,7 @@ approval.
 from __future__ import annotations
 
 import copy
+import errno
 import hashlib
 import json
 import os
@@ -1520,6 +1521,71 @@ def test_the_installed_report_pins_every_owner_the_verdict_relies_on(
     assert json.loads((tmp_path / "report.json").read_text())["b104_helpers_sha256"] == digest(
         "b104_installed_public_witness.py"
     )
+
+
+@pytest.mark.parametrize(
+    ("failing", "other_kills"),
+    [(0, []), (1, [[signal.SIGKILL]])],
+    ids=["tool-server", "phase"],
+)
+def test_run_leaves_a_group_whose_acquisition_and_first_cleanup_failed_to_its_outer_finalizer(
+    tmp_path: Path,
+    alias: Alias,
+    monkeypatch: pytest.MonkeyPatch,
+    failing: int,
+    other_kills: list[list[int]],
+) -> None:
+    """F1: the installed `run`'s own later finalizers settle what its scenario cleanup could not.
+
+    `failing` is the order in which the group was opened: the tool server first, then a phase.
+    `other_kills` are the signals every other opened group receives: none when the tool
+    server fails before any phase starts, and the server's one settling SIGKILL when a phase
+    fails.
+    """
+    monkeypatch.setattr(pw, "MCP_SERVER_SOURCE", STUB_TOOL_SERVER)
+
+    def lives(*_args: object) -> list[str]:
+        return ["sleep", "60"]
+
+    def candidate(*_args: object) -> tuple[Path, Path, Path]:
+        return tmp_path, tmp_path, Path(sys.executable)
+
+    def no_wheels(*_args: object) -> dict[str, list[str]]:
+        return {"wheels": []}
+
+    def no_placement(*_args: object) -> dict[str, str]:
+        return {}
+
+    monkeypatch.setattr(pw, "child_argv_installed", lives)
+    monkeypatch.setattr(pw.PROVER, "checked_candidate", candidate)
+    monkeypatch.setattr(pw.PROVER, "checked_provenance", no_wheels)
+    monkeypatch.setattr(pw.HELPERS, "checked_scenario_root", no_placement)
+    opened: list[int] = []
+    failures: list[int] = []
+
+    def no_descriptor_left(pid: int) -> None:
+        if pid not in opened:
+            opened.append(pid)
+        if not failures and opened.index(pid) == failing:
+            failures.append(pid)
+            raise OSError(errno.EMFILE, "injected: no descriptor left")
+
+    alias.before_pidfd_open = no_descriptor_left  # this group's acquisition fails once
+    alias.refuse_next_kill = True  # and so does the first cleanup kill, which is its own
+    receipt, output = tmp_path / "receipt.json", tmp_path / "out" / "report.json"
+    receipt.write_text("{}")
+    output.parent.mkdir()
+
+    with pytest.raises(PermissionError) as raised:
+        pw.run(tmp_path, tmp_path, "0" * 40, receipt, tmp_path / "scenario", output)
+
+    # [LAW:no-silent-failure] the cleanup failure is raised with the original failure as context
+    assert isinstance(raised.value.__context__, OSError)
+    assert raised.value.__context__.errno == errno.EMFILE
+    [group] = failures
+    assert alias.to(group) == [signal.SIGKILL, signal.SIGKILL]  # refused, then delivered once
+    assert [alias.to(pid) for pid in opened if pid != group] == other_kills
+    assert [pid for pid in opened if not leader_reaped(pid)] == [], "a group outlived run"
 
 
 def test_a_phase_run_record_is_parsed_into_typed_facts_or_refused() -> None:

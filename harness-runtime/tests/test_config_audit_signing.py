@@ -8,6 +8,9 @@ credential or network is touched.
 
 from __future__ import annotations
 
+from collections.abc import Mapping, MutableMapping
+from typing import cast
+
 import pytest
 from harness_cp.aws_kms_signing_backend import (
     AwsKmsSigningBackend,
@@ -487,6 +490,11 @@ def test_malformed_signature_is_typed_failure_and_counts_toward_breaker() -> Non
         guarded.sign(message=b"m", key_id="k", key_period=0)
 
 
+def _attempt_runtime_mapping_write(mapping: Mapping[str, str], key: str, value: str) -> None:
+    # The field is read-only in its type; this tests the runtime setter's refusal.
+    cast(MutableMapping[str, str], mapping)[key] = value
+
+
 def test_local_selector_validation_and_immutable_mapping(tmp_path) -> None:
     import copy
     import pickle
@@ -506,13 +514,13 @@ def test_local_selector_validation_and_immutable_mapping(tmp_path) -> None:
     ):
         assert copied.local_key_paths == {"key": str(path)}
         with pytest.raises(TypeError, match="immutable after validation"):
-            copied.local_key_paths["other"] = str(path)
+            _attempt_runtime_mapping_write(copied.local_key_paths, "other", str(path))
     with pytest.raises(TypeError, match="immutable after validation"):
         config.local_key_paths.__init__({"other": str(path)})
     assert config.local_key_paths == {"key": str(path)}
     assert AuditSigningConfig().local_key_paths == {}
     with pytest.raises(TypeError, match="immutable after validation"):
-        AuditSigningConfig().local_key_paths["x"] = str(path)
+        _attempt_runtime_mapping_write(AuditSigningConfig().local_key_paths, "x", str(path))
     assert isinstance(config.backend, AuditSigningBackendKind)
     assert config.backend is AuditSigningBackendKind.LOCAL_ED25519
 
@@ -589,7 +597,7 @@ def test_local_public_map_schema_and_backend_restriction(tmp_path) -> None:
     assert config.local_public_key_paths == {"retired": str(public)}
     assert config.model_dump()["local_public_key_paths"] == {"retired": str(public)}
     with pytest.raises(TypeError, match="immutable after validation"):
-        config.local_public_key_paths["another"] = str(public)
+        _attempt_runtime_mapping_write(config.local_public_key_paths, "another", str(public))
     for kwargs in (
         {"backend": "none", "local_public_key_paths": {"old": str(public)}},
         {

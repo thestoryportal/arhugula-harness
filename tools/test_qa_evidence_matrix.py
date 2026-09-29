@@ -3,6 +3,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import qa_evidence_matrix
@@ -90,3 +92,31 @@ def test_violations_reports_missing_test_evidence_and_cxa_endpoint() -> None:
     assert not any("C-XX-01" in item for item in reported)
     assert "FAKE-AXIS -> OTHER-AXIS has a missing CXA endpoint" in reported
     assert len(reported) == 2
+
+
+def test_cp_test_evidence_stays_indexed() -> None:
+    """CP's tests live in `cp_tests`; their contract citations must still count as evidence."""
+    index = qa_evidence_matrix._test_contract_index()
+
+    assert any(
+        path.startswith("harness-cp/cp_tests/") for files in index.values() for path in files
+    )
+
+
+def _pyproject(root: Path, *testpaths: str) -> None:
+    listed = ", ".join(f'"{path}"' for path in testpaths)
+    (root / "pyproject.toml").write_text(f"[tool.pytest.ini_options]\ntestpaths = [{listed}]\n")
+
+
+def test_configured_test_roots_are_the_pytest_testpaths(tmp_path: Path) -> None:
+    (tmp_path / "harness-aa" / "cp_tests").mkdir(parents=True)
+    _pyproject(tmp_path, "harness-aa/cp_tests")
+
+    assert qa_evidence_matrix.configured_test_roots(tmp_path) == [tmp_path / "harness-aa/cp_tests"]
+
+
+def test_a_missing_configured_test_root_is_refused(tmp_path: Path) -> None:
+    _pyproject(tmp_path, "harness-aa/tests")
+
+    with pytest.raises(FileNotFoundError, match="harness-aa/tests"):
+        qa_evidence_matrix.configured_test_roots(tmp_path)

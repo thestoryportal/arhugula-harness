@@ -48,6 +48,7 @@ from harness_cp.cross_family_fallback_chain import (
     ProviderFamily,
 )
 from harness_cp.engine_class import EngineClass
+from harness_cp.gate_level_rule import GateLevel, max_gate_level
 from harness_cp.hitl_placement import HITLPlacement, HITLPlacementKind
 from harness_cp.per_step_override_evaluator import StepEffectiveBinding
 from harness_cp.topology_pattern import TopologyPattern
@@ -58,6 +59,7 @@ from harness_cp.workflow_driver import (
     StepKindDispatcherNotBoundError,
     _append_step_ledger_entry,
     execute_workflow,
+    resolve_parent_gate_level,
 )
 from harness_cp.workflow_driver_errors import (
     EngineClassNotYetMaterializedError,
@@ -1751,13 +1753,20 @@ def test_reconstruct_final_state_on_explicit_pause_override_path() -> None:
     from harness_cp.workflow_driver import _execute_workflow_body
     from opentelemetry import trace as _otel_trace
 
-    ctx = _esr_resume_ctx(2)
+    # Deliberately disagree with the ledger fallback: only the explicit override resumes at 2.
+    ctx = _esr_resume_ctx(0)
     ctx.engine_output_store = _FakeOutputStore(
         {0: ("step-0", {"draft": "v0"}), 1: ("step-1", {"feedback": "v1"})}
     )
+    manifest = _manifest(engine_class=EngineClass.EVENT_SOURCED_REPLAY)
     span = _otel_trace.get_tracer("test").start_span("test-envelope")
+    # Mirror the root wrapper's gate composition and empty inherited HITL placements.
+    effective_parent_gate_level = max_gate_level(
+        resolve_parent_gate_level(manifest), GateLevel.AUTO
+    )
+    assert effective_parent_gate_level is GateLevel.AUTO
     result, _steps_executed = _execute_workflow_body(
-        manifest_entry=_manifest(engine_class=EngineClass.EVENT_SOURCED_REPLAY),
+        manifest_entry=manifest,
         steps=[_step(0), _step(1), _step(2)],
         run_id="run-1",
         ctx=cast(DriverContext, ctx),
@@ -1765,6 +1774,8 @@ def test_reconstruct_final_state_on_explicit_pause_override_path() -> None:
         step_dispatchers=_registry(cast(StepDispatcher, _EchoDispatcher())),
         span=span,
         run_idempotency_key="rik-1",  # the fake store ignores the key
+        effective_parent_gate_level=effective_parent_gate_level,
+        inherited_hitl_placements=(),
         resume_at_step_index_override=2,  # the explicit-pause / #680 resume path
         reconstruct_final_state=True,
         descent_depth=0,
@@ -1773,6 +1784,9 @@ def test_reconstruct_final_state_on_explicit_pause_override_path() -> None:
     assert result.status is RunStatus.SUCCESS
     assert result.final_state is not None
     assert set(result.final_state.keys()) == {"step-0", "step-1", "step-2"}
+    assert _steps_executed == 1
+    assert result.final_state["step-0"] == {"draft": "v0"}
+    assert result.final_state["step-1"] == {"feedback": "v1"}
 
 
 # ---------------------------------------------------------------------------

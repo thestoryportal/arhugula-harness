@@ -931,24 +931,50 @@ def _proc_list(path: Path) -> list[str]:
 
 
 def _stat(path: Path) -> tuple[str, int] | None:
-    """(state, process group) of a /proc stat file, or `None` when it has vanished."""
-    text = _proc_read(path)
-    if text is None:
-        return None
-    try:
-        state, _ppid, pgrp = text[text.rindex(")") + 2 :].split()[:3]
-        return state, int(pgrp)
-    except ValueError as exc:
-        raise UncertainMembershipError(f"{path} is malformed, so membership is uncertain") from exc
+    """(state, process group) of a /proc stat file, or `None` when it has vanished.
+
+    A group of -1 is what procfs prints once the read reached a task already released: it says
+    nothing about the task the path names now. One fresh read of the same path resolves it, to a
+    real group and state or to disappearance; a second -1 is `UncertainMembershipError`.
+    """
+    for _read in range(2):
+        text = _proc_read(path)
+        if text is None:
+            return None
+        try:
+            state, _ppid, pgrp = text[text.rindex(")") + 2 :].split()[:3]
+            stat = state, int(pgrp)
+        except ValueError as exc:
+            raise UncertainMembershipError(
+                f"{path} is malformed, so membership is uncertain"
+            ) from exc
+        # [LAW:parse-dont-validate] -1 is no group and no liveness fact; only a real one leaves
+        if stat[1] != -1:
+            return stat
+    # [LAW:no-silent-failure] an unresolved -1 refuses; it never reads as absence or deadness
+    raise UncertainMembershipError(
+        f"{path} reads process group -1 twice, so membership is uncertain"
+    )
 
 
 def _has_live_thread(process: Path) -> bool:
-    """Until its whole thread group exits a process is alive, even behind a zombie main thread."""
+    """Until its whole thread group exits a process is alive, even behind a zombie main thread.
+
+    [LAW:single-enforcer] This scan alone proves a process has no live thread. An exec from
+    a non-leader thread (`de_thread`) can exchange tids with the zombie leader between two
+    reads, so the leader tid is read once more after every other tid: only that last read can
+    say dead.
+    """
     for tid in _proc_list(process / "task"):
         stat = _stat(process / "task" / tid / "stat")
         if stat is not None and (tid != process.name or stat[0] not in ("Z", "X")):
             return True
-    return False
+    # [LAW:no-ambient-temporal-coupling] For a member the group SIGKILL reached, at most one
+    # exchange can follow: in v6.9 SIGNAL_GROUP_EXIT makes any later exec refuse, and only one
+    # exec is in flight per group. This read, after every other, closes that one window. The
+    # pre-kill survivors scan and post-kill joiners have no such bound.
+    leader = _stat(process / "task" / process.name / "stat")
+    return leader is not None and leader[0] not in ("Z", "X")
 
 
 def group_members(view: ProcessView, pgid: int) -> list[int]:
@@ -993,13 +1019,20 @@ class ReservationLostError(RuntimeError):
 
 @dataclass(frozen=True)
 class Settlement:
-    """A settled group: after its one SIGKILL no process of it had any thread alive."""
+    """A settled group: after its one SIGKILL, the final scan saw no member with a live thread.
+
+    [LAW:comments-carry-meaning] That is an observation, not whole-group termination: it covers
+    the members the owner's genuine procfs view could see, under its main-thread, serial and
+    exclusive-reaper prerequisites. A process that joins the group after that scan, or a
+    descendant that escaped it, is outside this ownership.
+    """
 
     pgid: int
     returncode: int
-    #: Whether processes other than the leader were alive just before the settling kill, `None`
-    #: when that was unreadable. A report, never an absence proof: one scan can miss a member that
-    #: forks and exits while it runs.
+    #: Whether processes other than the leader were alive just before the settling kill. `None`
+    #: is membership uncertainty (an unreadable or malformed stat, or a -1 group no fresh read
+    #: resolved), reported fail-closed and never proof of a survivor. Neither value is absence
+    #: proof or settlement authority: one scan can miss a member that forks and exits in it.
     survivors: bool | None
 
     def record(self) -> dict[str, object]:

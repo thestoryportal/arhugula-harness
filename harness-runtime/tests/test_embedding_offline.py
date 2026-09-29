@@ -260,6 +260,45 @@ def test_profile_corpus_builds_configured_labels_without_real_model(
     )
 
 
+def test_profile_corpus_accepts_membership_only_provider_map(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from harness_cp import embedding_routing
+    from harness_runtime.lifecycle import embedding_resolution
+
+    class MembershipOnlyProviders:
+        def __init__(self) -> None:
+            self._values = {"ollama": object(), "claude_code": object()}
+
+        def __contains__(self, key: object) -> bool:
+            return key in self._values
+
+        def __getitem__(self, key: str) -> object:
+            return self._values[key]
+
+        def __len__(self) -> int:
+            return len(self._values)
+
+    observed: list[object] = []
+
+    def classifier(*, embed: object, corpus: object) -> object:
+        observed.append(corpus)
+        return lambda *_args: None
+
+    monkeypatch.setattr(embedding_resolution, "make_fastembed_embedding", lambda **_kw: object())
+    monkeypatch.setattr(embedding_routing, "make_embedding_classifier", classifier)
+    dispatcher = materialize_llm_dispatcher_stage(
+        MembershipOnlyProviders(),
+        object(),
+        routing_activation=True,
+        embedding_routing_candidates=PROFILE_CANDIDATES,
+        external_cli_provider_names=("claude_code",),
+    )
+    assert dispatcher.embedding_classifier is not None
+    assert len(observed) == 1
+    assert len(observed[0].exemplars) == 16
+
+
 def test_runtime_config_parses_profile_candidate_keys(tmp_path: Path) -> None:
     from harness_core.deployment_surface import DeploymentSurface
     from harness_core.workload_class import WorkloadClass

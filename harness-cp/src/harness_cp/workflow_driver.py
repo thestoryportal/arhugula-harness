@@ -9900,7 +9900,22 @@ def _execute_parallelization(
 
         # [LAW:no-ambient-temporal-coupling] Keep the deadline as state until the
         # already-recorded refusal has had its terminal decision.
-        deadline_struck = False
+        # B-104 Task 4c — a durable paused child refused before it ran is a terminal run
+        # failure even under `proceed` (never degraded into PARTIAL/SUCCESS). Factored so
+        # BOTH the deadline arm and the completed arm below check it, in that precedence,
+        # without duplicating the `_finish(...)` construction.
+        def _refused_result() -> tuple[RunResult, int] | None:
+            if not child_resume_refused_dispositions:
+                return None
+            _synthesize_undispatched_terminals()
+            return _finish(
+                RunStatus.FAILED,
+                fail_class=_refused_fail_class(
+                    "parallelization-child-resume-refused", child_resume_refused_dispositions
+                ),
+                salvage=False,
+            )
+
         try:
             results = _run_fanout_to_completion(
                 _proceed_fanout(), max_workers=max(1, len(branch_plan))
@@ -9926,45 +9941,44 @@ def _execute_parallelization(
             # named comment ("its stash-then-deadline interleaving exits HERE, before the
             # paused-child check below") — a deliberate, already-shipped trade-off this
             # port intentionally preserves, not a gap unique to PARALLELIZATION.
-            deadline_struck = True
-        # B-104 Task 4c — a durable paused child refused before it ran is a terminal run
-        # failure even under `proceed` (never degraded into PARTIAL/SUCCESS).
-        if child_resume_refused_dispositions:
-            _synthesize_undispatched_terminals()
-            return _finish(
-                RunStatus.FAILED,
-                fail_class=_refused_fail_class(
-                    "parallelization-child-resume-refused", child_resume_refused_dispositions
-                ),
-                salvage=False,
-            )
-        if deadline_struck:
+            refused = _refused_result()
+            if refused is not None:
+                return refused
             _synthesize_undispatched_terminals()
             return _finish(RunStatus.PARTIAL, fail_class=None, salvage=True)
-        if paused_child_dispositions:
-            # B-21 — a recursive child PAUSED under `proceed`. There is no resumable-pause
-            # boundary here (proceed degrades, it does not pause), so the suspended child
-            # cannot be carried for resume — FAIL HONESTLY rather than a SUCCESS/PARTIAL
-            # that silently dropped a suspended sub-workflow (the ORCHESTRATOR_WORKERS
-            # `proceed` post-barrier guard applied peer-shaped). A TERMINAL exit nothing
-            # resumes: the paused child itself has zero footprint (stash only) → the scan
-            # records its `completed` terminal-only.
+        else:
+            # `results` is bound here, and only here: this branch runs exactly when
+            # `_run_fanout_to_completion` returned without raising the deadline
+            # exception above. This encodes the completed-versus-deadline outcome as
+            # the try/except/else control-flow seam itself (structurally provable),
+            # not as a separate boolean flag correlated with `results`'s binding.
+            refused = _refused_result()
+            if refused is not None:
+                return refused
+            if paused_child_dispositions:
+                # B-21 — a recursive child PAUSED under `proceed`. There is no resumable-pause
+                # boundary here (proceed degrades, it does not pause), so the suspended child
+                # cannot be carried for resume — FAIL HONESTLY rather than a SUCCESS/PARTIAL
+                # that silently dropped a suspended sub-workflow (the ORCHESTRATOR_WORKERS
+                # `proceed` post-barrier guard applied peer-shaped). A TERMINAL exit nothing
+                # resumes: the paused child itself has zero footprint (stash only) → the scan
+                # records its `completed` terminal-only.
+                _synthesize_undispatched_terminals()
+                return _finish(
+                    RunStatus.FAILED,
+                    fail_class="parallelization-child-paused-not-resumable-under-proceed",
+                    salvage=True,
+                )
+            any_failed = any(isinstance(r, BaseException) for r in results)
+            # codex round-4 [P2] — a rejected (never-dispatched) branch has ZERO
+            # ledger footprint from `_proceed_branch`/`_proceed_worker` itself;
+            # synthesize its `cancelled` terminal here, mirroring the
+            # deadline-struck + paused-child exits above (idempotent no-op for
+            # branches that already recorded a disposition).
             _synthesize_undispatched_terminals()
-            return _finish(
-                RunStatus.FAILED,
-                fail_class="parallelization-child-paused-not-resumable-under-proceed",
-                salvage=True,
-            )
-        any_failed = any(isinstance(r, BaseException) for r in results)
-        # codex round-4 [P2] — a rejected (never-dispatched) branch has ZERO
-        # ledger footprint from `_proceed_branch`/`_proceed_worker` itself;
-        # synthesize its `cancelled` terminal here, mirroring the
-        # deadline-struck + paused-child exits above (idempotent no-op for
-        # branches that already recorded a disposition).
-        _synthesize_undispatched_terminals()
-        if any_failed:
-            return _finish(RunStatus.PARTIAL, fail_class=None, salvage=True)
-        return _finish(RunStatus.SUCCESS, fail_class=None, salvage=False)
+            if any_failed:
+                return _finish(RunStatus.PARTIAL, fail_class=None, salvage=True)
+            return _finish(RunStatus.SUCCESS, fail_class=None, salvage=False)
 
     # === cascade-cancel | pause: cancel-on-failure (TaskGroup structured cancel) ===
     # Both halt the fan-out on the first branch failure with in-flight effects run
@@ -14544,7 +14558,22 @@ def _execute_orchestrator_workers(
 
         # [LAW:no-ambient-temporal-coupling] Keep the deadline as state until the
         # already-recorded refusal has had its terminal decision.
-        deadline_struck = False
+        # B-104 Task 4c — a durable paused child refused before it ran is a terminal run
+        # failure even under `proceed` (never degraded into PARTIAL/SUCCESS). Factored so
+        # BOTH the deadline arm and the completed arm below check it, in that precedence,
+        # without duplicating the `_finish(...)` construction.
+        def _refused_result() -> tuple[RunResult, int] | None:
+            if not child_resume_refused_dispositions:
+                return None
+            _synthesize_undispatched_terminals()
+            return _finish(
+                RunStatus.FAILED,
+                fail_class=_refused_fail_class(
+                    "orchestrator-workers-child-resume-refused", child_resume_refused_dispositions
+                ),
+                salvage=False,
+            )
+
         try:
             results = _run_fanout_to_completion(
                 _proceed_fanout(), max_workers=max(1, len(branch_plan))
@@ -14563,46 +14592,45 @@ def _execute_orchestrator_workers(
             # the paused-child check below) records `completed` terminal-only —
             # in-flight-cut workers already recorded `timed_out` at their own
             # CancelledError handler.
-            deadline_struck = True
-        # B-104 Task 4c — a durable paused child refused before it ran is a terminal run
-        # failure even under `proceed` (never degraded into PARTIAL/SUCCESS).
-        if child_resume_refused_dispositions:
-            _synthesize_undispatched_terminals()
-            return _finish(
-                RunStatus.FAILED,
-                fail_class=_refused_fail_class(
-                    "orchestrator-workers-child-resume-refused", child_resume_refused_dispositions
-                ),
-                salvage=False,
-            )
-        if deadline_struck:
+            refused = _refused_result()
+            if refused is not None:
+                return refused
             _synthesize_undispatched_terminals()
             return _finish(RunStatus.PARTIAL, fail_class=None, salvage=True)
-        if paused_child_dispositions:
-            # B-HIERARCHICAL-PAUSE — a recursive child PAUSED under `proceed`. There is
-            # no resumable-pause boundary here (proceed degrades, it does not pause), so
-            # the suspended child cannot be carried for resume — FAIL HONESTLY rather than
-            # a SUCCESS/PARTIAL that silently dropped a suspended sub-workflow.
-            # B-18-FENCE-LEDGER-FIDELITY-OW — a TERMINAL exit nothing resumes: the
-            # paused child itself has zero footprint (stash only) → the scan records
-            # its `completed` terminal-only (arm 4; dispatch-boundary — its child
-            # paused mid-flight), never `cancelled`.
+        else:
+            # `results` is bound here, and only here: this branch runs exactly when
+            # `_run_fanout_to_completion` returned without raising the deadline
+            # exception above. This encodes the completed-versus-deadline outcome as
+            # the try/except/else control-flow seam itself (structurally provable),
+            # not as a separate boolean flag correlated with `results`'s binding.
+            refused = _refused_result()
+            if refused is not None:
+                return refused
+            if paused_child_dispositions:
+                # B-HIERARCHICAL-PAUSE — a recursive child PAUSED under `proceed`. There is
+                # no resumable-pause boundary here (proceed degrades, it does not pause), so
+                # the suspended child cannot be carried for resume — FAIL HONESTLY rather than
+                # a SUCCESS/PARTIAL that silently dropped a suspended sub-workflow.
+                # B-18-FENCE-LEDGER-FIDELITY-OW — a TERMINAL exit nothing resumes: the
+                # paused child itself has zero footprint (stash only) → the scan records
+                # its `completed` terminal-only (arm 4; dispatch-boundary — its child
+                # paused mid-flight), never `cancelled`.
+                _synthesize_undispatched_terminals()
+                return _finish(
+                    RunStatus.FAILED,
+                    fail_class="orchestrator-workers-child-paused-not-resumable-under-proceed",
+                    salvage=True,
+                )
+            any_failed = any(isinstance(r, BaseException) for r in results)
+            # codex round-4 [P2] — a rejected (never-dispatched) branch has ZERO
+            # ledger footprint from `_proceed_branch`/`_proceed_worker` itself;
+            # synthesize its `cancelled` terminal here, mirroring the
+            # deadline-struck + paused-child exits above (idempotent no-op for
+            # branches that already recorded a disposition).
             _synthesize_undispatched_terminals()
-            return _finish(
-                RunStatus.FAILED,
-                fail_class="orchestrator-workers-child-paused-not-resumable-under-proceed",
-                salvage=True,
-            )
-        any_failed = any(isinstance(r, BaseException) for r in results)
-        # codex round-4 [P2] — a rejected (never-dispatched) branch has ZERO
-        # ledger footprint from `_proceed_branch`/`_proceed_worker` itself;
-        # synthesize its `cancelled` terminal here, mirroring the
-        # deadline-struck + paused-child exits above (idempotent no-op for
-        # branches that already recorded a disposition).
-        _synthesize_undispatched_terminals()
-        if any_failed:
-            return _finish(RunStatus.PARTIAL, fail_class=None, salvage=True)
-        return _finish(RunStatus.SUCCESS, fail_class=None, salvage=False)
+            if any_failed:
+                return _finish(RunStatus.PARTIAL, fail_class=None, salvage=True)
+            return _finish(RunStatus.SUCCESS, fail_class=None, salvage=False)
 
     # === cascade-cancel | pause: cancel-on-failure (TaskGroup structured cancel) ===
     # Both halt the fan-out on the first worker failure with in-flight effects run

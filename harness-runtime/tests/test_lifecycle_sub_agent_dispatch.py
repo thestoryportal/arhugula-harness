@@ -44,7 +44,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
-from harness_as.sandbox_tier import SandboxTier
+from harness_as.sandbox_tier import BlastRadiusTier, SandboxTier
 from harness_core import PersonaTier, StepID, WorkloadClass
 from harness_cp.cp_shared_types import AgentRole, ModelBinding
 from harness_cp.cross_family_fallback_chain import (
@@ -212,6 +212,25 @@ def _step_context() -> StepExecutionContext:
         parent_idempotency_key="0" * 64,
         tenant_id=None,
         step_index=0,
+    )
+
+
+def _root_child_descent(
+    child_gate_level: GateLevel = GateLevel.AUTO,
+) -> SubAgentGateLevelDescent:
+    """A real, contract-valid gate-level descent. Default `child_gate_level`
+    reproduces the historical AUTO floor `execute_workflow_at_depth` used
+    before `child_workflow_runner.py` started forwarding
+    `descent.child_gate_level` (`[LAW:single-enforcer]`); a caller may pass a
+    stronger floor to prove the forwarding wiring itself."""
+    return SubAgentGateLevelDescent(
+        parent_gate_level=GateLevel.AUTO,
+        parent_sandbox_tier=SandboxTier.TIER_1_PROCESS,
+        child_blast_radius_ceiling=BlastRadiusTier.READ_ONLY,
+        child_sandbox_tier=SandboxTier.TIER_1_PROCESS,
+        child_gate_level=child_gate_level,
+        override_applied=False,
+        override_audit_ref=None,
     )
 
 
@@ -868,7 +887,7 @@ def test_child_runner_resume_workflow_id_mismatch_fails_closed() -> None:
             manifest_entry=cast(Any, None),
             steps=(),
             handoff_context=cast(Any, None),
-            descent=cast(Any, None),
+            descent=_root_child_descent(),
             default_model_binding=cast(Any, None),
             descent_depth=1,
             child_resume=PausedChildCapture(
@@ -909,7 +928,7 @@ def test_child_workflow_runner_opts_into_final_state_reconstruct(
         manifest_entry=cast(Any, None),
         steps=(),
         handoff_context=cast(Any, None),
-        descent=cast(Any, None),
+        descent=_root_child_descent(),
         default_model_binding=cast(Any, None),
         descent_depth=1,
         child_resume=None,  # first dispatch → skips the workflow-id guard
@@ -941,16 +960,21 @@ def test_child_workflow_runner_forwards_the_numeric_depth_to_execute_workflow(
         cast(Any, SimpleNamespace(step_dispatchers={})),
         durable_admission=RefuseDurableChildAdmission(),
     )
+    # A floor stronger than AUTO — this is the wiring witness (`[LAW:single-enforcer]`):
+    # the recorded descent's child_gate_level must reach execute_workflow_at_depth
+    # verbatim as parent_gate_floor, not just any non-crashing value.
+    descent = _root_child_descent(child_gate_level=GateLevel.ASK)
     runner(
         workflow_id="child-wf",
         manifest_entry=cast(Any, None),
         steps=(),
         handoff_context=cast(Any, None),
-        descent=cast(Any, SimpleNamespace(child_gate_level=None)),
+        descent=descent,
         default_model_binding=cast(Any, None),
         descent_depth=child_depth,
     )
     assert captured["descent_depth"] == child_depth
+    assert captured["parent_gate_floor"] is descent.child_gate_level
 
 
 # ---------------------------------------------------------------------------

@@ -56,8 +56,7 @@ def _canonical_nested(value: object) -> object:
         return _nfc(value)
     if isinstance(value, dict):
         return {
-            key: _canonical_nested(item)
-            for key, item in cast(dict[str, object], value).items()
+            key: _canonical_nested(item) for key, item in cast(dict[str, object], value).items()
         }
     if isinstance(value, list):
         return [_canonical_nested(item) for item in cast(list[object], value)]
@@ -123,9 +122,7 @@ def canonicalize(entry: StateLedgerEntry) -> bytes:
         payload["rotation_correlation_id"] = _nfc(entry.rotation_correlation_id)
     if entry.recovery_audit is not None:
         # [LAW:one-source-of-truth] Hash the same typed fields the JSONL codec persists.
-        payload["recovery_audit"] = _canonical_nested(
-            entry.recovery_audit.model_dump(mode="json")
-        )
+        payload["recovery_audit"] = _canonical_nested(entry.recovery_audit.model_dump(mode="json"))
     return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode(
         "utf-8"
     )
