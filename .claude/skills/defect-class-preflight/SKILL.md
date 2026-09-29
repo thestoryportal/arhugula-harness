@@ -290,9 +290,11 @@ merge-gate witness lens r1: K5, K7 and K8 of the four K-dispositions pinned only
 doc witness the mutation to reason is *negate the sentence*, not *delete the line* — and a
 claim-text needle that stops mid-sentence is the same defect one clause later: pin the WHOLE
 claim, matched against the file with its whitespace flattened so a wrapped sentence is one
-string (U-HE-39 r2: K7's "shadow mode only" clause sat outside a first-half needle). Where
-feasible, actually run the
-mutation probe (`just mutation-probe`) rather than reasoning it — and probe the fix
+string (U-HE-39 r2: K7's "shadow mode only" clause sat outside a first-half needle). A
+standalone selector test is vacuous for a production composer that never calls it:
+removing the composer call must fail a producer-path test, even when the selector unit
+test remains green. Where feasible, actually run the mutation probe
+(`just mutation-probe`) rather than reasoning it — and probe the fix
 BOTH ways (kill confirmed, then green restored).
 
 ### 5. Timeout / retry / budget arithmetic (93 findings)
