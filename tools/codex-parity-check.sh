@@ -18,6 +18,7 @@ uv run pytest -q \
   tools/test_ac_claim_precision.py \
   tools/test_agy_review.py \
   tools/test_codex_stop_gate.py \
+  tools/test_codex_pre_tool_use_policy.py \
   tools/test_codex_workflow_parity.py \
   tools/test_codex_worktree_gc.py \
   tools/test_arc_exit_report.py \
@@ -72,7 +73,11 @@ tools/test_concurrency_surface.py \
   tools/test_r820_managed_agents_live_e2e.py \
   tools/test_sandbox_host_readiness.py \
   tools/test_self_hosted_readiness.py \
-  tools/test_tools_test_coverage_guard.py
+  tools/test_tools_test_coverage_guard.py \
+  tools/test_ci_axis_roots.py \
+  tools/test_installed_witness_provenance.py \
+  tools/test_b104_installed_public_witness.py \
+  tools/test_preaction_installed_witness.py
 
 # tools/roadmap-audit/ is named explicitly alongside the other two dirs: pytest's
 # testpaths does not reach tools/, so a shell suite that is not listed here simply never

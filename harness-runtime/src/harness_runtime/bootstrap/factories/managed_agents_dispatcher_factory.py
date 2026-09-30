@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING
 
 from harness_core.deployment_surface import DeploymentSurface
 
+from harness_runtime.config.state_placement import StateKind, resolve_state_path
 from harness_runtime.lifecycle.effect_fence import RuntimeEffectFence
 from harness_runtime.lifecycle.managed_agents_dispatch import (
     ManagedAgentsStageMaterializeError,
@@ -75,6 +76,9 @@ async def materialize_managed_agents_dispatcher_stage(
             "(managed_agents_config.client is None)"
         )
 
+    # Derived OUTSIDE the construction guard so a placement refusal stays a typed
+    # `StateRootPlacementError` instead of being folded into the generic construction error.
+    fence_dir = resolve_state_path(StateKind.EFFECT_FENCE, config, ctx.verified_state_root)
     try:
         return ManagedAgentsStepDispatcher(
             client=managed_config.client,
@@ -85,9 +89,7 @@ async def materialize_managed_agents_dispatcher_stage(
             # is collision-free. The per-run gate (`effect_fencing` opt-in OR a durable run
             # engine class) decides whether a reserve fires, keeping non-durable runs
             # fence-free (the §14.22.7 lazy-claim-dir footprint).
-            effect_fence=RuntimeEffectFence(
-                fence_dir=config.repository_root / ".harness" / "effect-fence"
-            ),
+            effect_fence=RuntimeEffectFence(fence_dir=fence_dir),
             effect_fencing_explicit=config.effect_fencing,
         )
     except Exception as e:

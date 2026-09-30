@@ -49,18 +49,19 @@ the pre-v1.101 ledger summary is unchanged for it. Once engaged:
 read-only; this module writes nothing.
 
 **Key map form (plan acc 4 implementation discretion):** `--signing-key-map`
-is a JSON object keyed `"<algorithm>:<key_id>"`, each value an
-`AuditSigningConfig`-shaped backend spec consumed by
-`config.audit_signing.make_audit_signing_backend` — the operator-supplied
-form of the §21.2.2 row-1 PER-ROW resolver (NOT a single backend).
+is a JSON object keyed `"<algorithm>:<key_id>"`. KMS values are
+`AuditSigningConfig`-shaped backend specs; local verification values use
+`kind: local-ed25519-public` with a relative public PEM path and SPKI pin.
+The map supplies the §21.2.2 row-1 PER-ROW resolver.
 """
 
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, TypeGuard, cast
 
 from harness_core import PersonaTier
 from harness_cp.audit_walk_verification import (
@@ -301,14 +302,53 @@ def _read_sidecar(sidecar_path: Path) -> _SidecarContent:
     )
 
 
+def _is_object_keyed_mapping(value: object) -> TypeGuard[Mapping[object, object]]:
+    """True when `value` is a `dict`, narrowed only to the READ capability
+    the `isinstance` check actually proves.
+
+    A bare `isinstance(value, dict)` on an `object`-typed value narrows to
+    `dict[Unknown, Unknown]` (there is no runtime generic to recover), which
+    then makes `.items()` yield `Unknown` keys and values below. Every
+    Python value is an `object`, so reading any `dict`'s keys and values as
+    `object` is always sound — but a *mutable* `dict[object, object]` is a
+    stronger, unsound claim: the same object could still be aliased
+    elsewhere as, say, `dict[str, int]`, and a writable `dict[object,
+    object]` view would let a caller insert a non-`str` key or non-`int`
+    value through that alias. This function is only ever used to iterate an
+    already-decoded JSON value, never to write through it, so the guard
+    narrows to the read-only `Mapping[object, object]` — exactly the
+    capability the runtime check proves, nothing more — while the
+    `isinstance(value, dict)` runtime restriction (real `dict` values only)
+    is unchanged.
+    """
+    return isinstance(value, dict)
+
+
+def _as_str_keyed_mapping(value: object) -> dict[str, object] | None:
+    """Prove `value` is a JSON object with `str` keys, or return `None`.
+
+    `json.loads` on a JSON object always produces `str` keys, but nothing in
+    the type system says so until this function checks it: it is the single
+    parser both the top-level key map and each entry's spec route through,
+    so nothing downstream re-derives or assumes the shape via a cast.
+    [LAW:parse-dont-validate]
+    """
+    if not _is_object_keyed_mapping(value):
+        return None
+    result: dict[str, object] = {}
+    for key, item in value.items():
+        if not isinstance(key, str):
+            return None
+        result[key] = item
+    return result
+
+
 def _load_key_map(path: Path) -> tuple[dict[str, SigningBackend], dict[str, str]]:
     """Parse the operator key map into per-`(algorithm, key_id)` backends.
 
-    Also returns per-entry BACKING-MATERIAL fingerprints (the physical KMS
-    ARN the logical `key_id` maps to, falling back to the whole canonical
-    `key_arns` mapping) — codex round-2 P1 on this leg: the record-key
-    physical-distinctness check must compare backing material, not logical
-    `key_id` strings; two distinct ids aliasing one ARN share a key.
+    Also returns per-entry backing identities: canonical KMS ARN/ID or local
+    DER-SPKI digest. Record/row distinctness compares these physical identities,
+    not logical key IDs.
     """
     from harness_runtime.config.audit_signing import (
         SigningBackendSdkUnavailableError,
@@ -327,22 +367,30 @@ def _load_key_map(path: Path) -> tuple[dict[str, SigningBackend], dict[str, str]
         )
     except ImportError:  # boto3 optional — absent SDK surfaces as the typed error below
         boto_construction_errors = ()
+    from pydantic import ValidationError
+
+    from harness_runtime.config.local_ed25519_signing_backend import (
+        LocalEd25519PublicVerifier,
+        load_ed25519_public_key,
+        spki_identity,
+    )
     from harness_runtime.lifecycle.audit_signing_fail_closed_validation import (
         canonical_kms_key_identity,
     )
     from harness_runtime.types import AuditSigningConfig
 
-    raw: object = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(raw, dict):
+    raw_value: object = json.loads(path.read_text(encoding="utf-8"))
+    key_map = _as_str_keyed_mapping(raw_value)
+    if key_map is None:
         raise ValueError("--signing-key-map must be a JSON object")
     backends: dict[str, SigningBackend] = {}
     materials: dict[str, str] = {}
-    if not raw:
+    if not key_map:
         # An empty mapping is the row-3 input NOT supplied in substance — at
         # MTC it would otherwise let a zero-row walk emit a false VERIFIED
         # (codex round-6 P1).
         raise ValueError("--signing-key-map contains no entries")
-    for map_key, spec in cast("dict[str, object]", raw).items():
+    for map_key, spec in key_map.items():
         if ":" not in map_key:
             raise ValueError(f"key-map key {map_key!r} must be '<algorithm>:<key_id>'")
         algo_prefix = map_key.split(":", 1)[0]
@@ -355,8 +403,61 @@ def _load_key_map(path: Path) -> tuple[dict[str, SigningBackend], dict[str, str]
             raise ValueError(
                 f"key-map key {map_key!r}: {algo_prefix!r} is not an admissible SignatureAlgorithm"
             ) from exc
-        config = AuditSigningConfig.model_validate(spec)
         key_id = map_key.split(":", 1)[1]
+        spec_map = _as_str_keyed_mapping(spec)
+        if spec_map is not None and spec_map.get("kind") == "local-ed25519-public":
+            # [LAW:parse-dont-validate] One inspect-only boundary stamps a
+            # contained public path and matching SPKI pin before constructing
+            # a verifier. Private material never enters this branch.
+            if algo_prefix != "ed25519" or not key_id:
+                raise ValueError(f"key-map entry {map_key!r}: invalid public key identity")
+            if set(spec_map) != {"kind", "public_key_path", "spki_sha256"}:
+                raise ValueError(
+                    f"key-map entry {map_key!r}: public entry has missing/extra fields"
+                )
+            relative = spec_map["public_key_path"]
+            pin = spec_map["spki_sha256"]
+            if (
+                not isinstance(relative, str)
+                or not relative
+                or Path(relative).is_absolute()
+                or ".." in Path(relative).parts
+            ):
+                raise ValueError(
+                    f"key-map entry {map_key!r}: public_key_path must stay inside the map directory"
+                )
+            if (
+                not isinstance(pin, str)
+                or len(pin) != 84
+                or not pin.startswith("ed25519-spki-sha256:")
+                or any(c not in "0123456789abcdef" for c in pin[20:])
+            ):
+                raise ValueError(
+                    f"key-map entry {map_key!r}: spki_sha256 must be an Ed25519 DER-SPKI identity"
+                )
+            public_key = load_ed25519_public_key(key_id, str(path.absolute().parent / relative))
+            identity = spki_identity(public_key)
+            if identity != pin:
+                raise ValueError(
+                    f"key-map entry {map_key!r}: public key disagrees with spki_sha256"
+                )
+            backends[map_key] = LocalEd25519PublicVerifier(key_id, public_key)
+            materials[map_key] = identity
+            continue
+        # [LAW:single-enforcer] Refuse private specs at the raw map boundary,
+        # before model errors can echo paths from malformed entries.
+        if spec_map is not None and spec_map.get("backend") == "local-ed25519":
+            raise ValueError(
+                f"key-map entry {map_key!r}: private local key specs are not accepted by inspect"
+            )
+        try:
+            config = AuditSigningConfig.model_validate(spec)
+        except ValidationError as exc:
+            # [LAW:no-silent-failure] Keep the failure reason, never Pydantic's raw input.
+            error_types = sorted({error["type"] for error in exc.errors(include_input=False)})
+            raise ValueError(
+                f"key-map entry {map_key!r}: invalid backend config ({', '.join(error_types)})"
+            ) from None
         if key_id not in config.key_arns:
             # Validated BEFORE construction: a malformed entry whose
             # declared key ID its own backend config cannot resolve would

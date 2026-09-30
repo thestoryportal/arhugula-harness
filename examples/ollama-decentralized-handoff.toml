@@ -1,0 +1,50 @@
+# Three-stage local decentralized-handoff workflow; run with
+# examples/ollama.handoff.local.toml.example copied as harness.handoff.toml (it
+# enables inter_step_data_flow, so stage 2 and 3 receive the prior stage's output as an
+# "Upstream step output" message ahead of their own prompt). One stage owns the
+# work at a time; each declared step is a stage-expert and the declared order is
+# the handoff sequence. Only local Ollama is bound; the fallback chain is empty,
+# so no hosted provider can be reached.
+version = 1
+
+[workflow]
+workflow_id = "example-ollama-decentralized-handoff"
+workload_class = "pipeline-automation"
+persona_tier = "solo-developer"
+engine_class = "pure-pattern-no-engine"
+topology_pattern = "decentralized-handoff"
+layer_budgets = []
+hitl_placements = []
+per_step_overrides = {}
+fallback_chain = { primary = { provider = "ollama", model = "llama3.2:3b", family = "local_open_weight" }, same_family = [], cross_family = [] }
+
+[default_model_binding]
+provider = "ollama"
+model = "llama3.2:3b"
+
+[[steps]]
+step_id = "stage-draft"
+step_kind = "inference-step"
+
+[steps.step_payload]
+messages = [{ role = "user", content = "Draft one short sentence announcing a small software release." }]
+tools = []
+params = { options = { num_predict = 32 } }
+
+[[steps]]
+step_id = "stage-review"
+step_kind = "inference-step"
+
+[steps.step_payload]
+messages = [{ role = "user", content = "Using the upstream output above, reply with one short sentence naming one improvement to it." }]
+tools = []
+params = { options = { num_predict = 32 } }
+
+[[steps]]
+step_id = "stage-finalize"
+step_kind = "inference-step"
+
+[steps.step_payload]
+messages = [{ role = "user", content = "Using the upstream output above, reply with the improved one-sentence release announcement." }]
+tools = []
+params = { options = { num_predict = 32 } }

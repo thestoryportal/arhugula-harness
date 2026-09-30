@@ -22,6 +22,7 @@ Substrate (provider/tracer/OD fakes + the get_tracer-capable tracer) lifted by v
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterator, Sequence
 from pathlib import Path
 from typing import Any, cast
@@ -70,6 +71,20 @@ _SURFACE = DeploymentSurface.LOCAL_DEVELOPMENT
 _WORKFLOW_ID = "wf-b-eo-pause-resume-e2e"
 _GENERATE = "generate"
 _EVALUATE = "evaluate"
+
+
+def _ollama_verdict(accepted: bool) -> dict[str, Any]:
+    # [LAW:behavior-not-structure] Match the provider output seen by the reader.
+    return {
+        "done": True,
+        "done_reason": "stop",
+        "message": {
+            "role": "assistant",
+            "content": json.dumps({"accepted": accepted}),
+            "tool_calls": None,
+        },
+    }
+
 
 _CHAIN = FallbackChain(
     primary=ProviderCandidate(
@@ -208,7 +223,7 @@ class _EoRecordingDispatcher:
         sid = str(step.step_id)
         _RESUME_DISPATCHED.append(sid)
         if sid == _EVALUATE:
-            return {"accepted": True, "fresh": True}
+            return _ollama_verdict(True)
         return {"draft": 99, "fresh": True}
 
 
@@ -293,31 +308,34 @@ async def test_api_resume_evaluator_optimizer_pause_restart_proof_round_trip(
     # ---- "Pause" — capture a real EO PauseSnapshot via a bootstrapped protocol.
     capture_ctx = await run_bootstrap(config, workload_class=_WORKLOAD)
     assert capture_ctx.pause_resume_protocol is not None
-    snapshot = await capture_ctx.pause_resume_protocol.capture_pause_snapshot(
-        workflow_id=_WORKFLOW_ID,
-        run_id="run-eo-resume-e2e",
-        # The failed iteration-1 generate's DECLARED ordinal (0), NOT its entry_index (2):
-        # `step_index` must be a valid `steps` position for the runtime api.resume guard
-        # (`0 <= step_index < len(steps)`); the cursor carries the full resume position.
-        step_index=0,
-        pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
-        evaluator_optimizer_resume=EvaluatorOptimizerResumeState(
-            completed_steps=(
-                EvaluatorOptimizerStepResumeState(
-                    entry_index=0,
-                    declared_step_index=0,
-                    step_id=_GENERATE,
-                    output={"draft": 1, "recovered": True},
-                ),
-                EvaluatorOptimizerStepResumeState(
-                    entry_index=1,
-                    declared_step_index=1,
-                    step_id=_EVALUATE,
-                    output={"accepted": False, "recovered": True},
+    snapshot = (
+        await capture_ctx.pause_resume_protocol.capture_pause_snapshot(
+            workflow_id=_WORKFLOW_ID,
+            run_id="run-eo-resume-e2e",
+            # The failed iteration-1 generate's DECLARED ordinal (0), NOT its entry_index (2):
+            # `step_index` must be a valid `steps` position for the runtime api.resume guard
+            # (`0 <= step_index < len(steps)`); the cursor carries the full resume position.
+            step_index=0,
+            pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
+            evaluator_optimizer_resume=EvaluatorOptimizerResumeState(
+                completed_steps=(
+                    EvaluatorOptimizerStepResumeState(
+                        entry_index=0,
+                        declared_step_index=0,
+                        step_id=_GENERATE,
+                        output={"draft": 1, "recovered": True},
+                    ),
+                    EvaluatorOptimizerStepResumeState(
+                        entry_index=1,
+                        declared_step_index=1,
+                        step_id=_EVALUATE,
+                        output=_ollama_verdict(False),
+                    ),
                 ),
             ),
-        ),
-    )
+            descent_depth=0,
+        )
+    ).snapshot
 
     # ---- "Restart" — persist + reload across a process boundary (JSON round-trip).
     rehydrated = PauseSnapshot.model_validate_json(snapshot.model_dump_json())
@@ -341,3 +359,65 @@ async def test_api_resume_evaluator_optimizer_pause_restart_proof_round_trip(
     assert _RESUME_DISPATCHED == [_GENERATE, _EVALUATE], (
         f"resume must recover the completed prefix; dispatched={_RESUME_DISPATCHED}"
     )
+
+
+@pytest.mark.parametrize(
+    "malformed",
+    [
+        {
+            "done": True,
+            "done_reason": "stop",
+            "message": {"role": "assistant", "content": '{"accepted":'},
+        },
+        None,
+    ],
+    ids=["malformed-json", "non-mapping"],
+)
+@pytest.mark.asyncio
+async def test_api_resume_malformed_ollama_prefix_is_mismatch_without_dispatch(
+    tmp_path: Path,
+    _patched_runtime: None,
+    malformed: Any,
+) -> None:
+    """A malformed recovered reply is a mismatch, never an escaping exception."""
+    _RESUME_DISPATCHED.clear()
+    config = _config_opt_in(tmp_path)
+    capture_ctx = await run_bootstrap(config, workload_class=_WORKLOAD)
+    assert capture_ctx.pause_resume_protocol is not None
+    snapshot = (
+        await capture_ctx.pause_resume_protocol.capture_pause_snapshot(
+            workflow_id=_WORKFLOW_ID,
+            run_id="run-eo-malformed-prefix",
+            step_index=0,
+            descent_depth=0,
+            pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
+            evaluator_optimizer_resume=EvaluatorOptimizerResumeState(
+                completed_steps=(
+                    EvaluatorOptimizerStepResumeState(
+                        entry_index=0,
+                        declared_step_index=0,
+                        step_id=_GENERATE,
+                        output={"draft": 1},
+                    ),
+                    EvaluatorOptimizerStepResumeState.model_construct(
+                        entry_index=1,
+                        declared_step_index=1,
+                        step_id=_EVALUATE,
+                        output=malformed,
+                    ),
+                ),
+            ),
+        )
+    ).snapshot
+    # A non-Mapping recovered output cannot pass the persisted schema. Exercise the
+    # in-memory CP boundary directly; the valid Mapping case retains the JSON round-trip.
+    rehydrated = (
+        PauseSnapshot.model_validate_json(snapshot.model_dump_json())
+        if isinstance(malformed, dict)
+        else snapshot
+    )
+    result = await resume(_EoWorkflow(), pause_snapshot=rehydrated, config=config)
+    assert result.status == "failed"
+    assert result.failure_cause is not None
+    assert "malformed-verdict-in-prefix" in str(result.failure_cause)
+    assert _RESUME_DISPATCHED == []

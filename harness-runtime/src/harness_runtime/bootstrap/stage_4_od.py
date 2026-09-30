@@ -44,6 +44,7 @@ from harness_runtime.lifecycle.audit_signing_fail_closed_validation import (
     initialize_mtc_audit_signing_record,
     resolve_audit_signing_fail_closed,
     validate_mtc_audit_signing_config,
+    validate_record_key_distinctness,
 )
 from harness_runtime.lifecycle.audit_writer import (
     AUDIT_SIDECAR_FILENAME,
@@ -86,7 +87,9 @@ async def execute(
     # guarantees a resolved-ON bootstrap has a valid key env var. `None` here
     # is a normal outcome at fail-closed=OFF (the carrier is never raised on
     # that path).
-    ctx.protected_result_store = materialize_protected_result_store_stage(config)
+    ctx.protected_result_store = materialize_protected_result_store_stage(
+        config, ctx.verified_state_root
+    )
     # B-65-A (Runtime spec v1.103 §14.8.11 AC 7) — the BOOTSTRAP half of the
     # "GC sweep at bootstrap/shutdown" fallback: reaps entries a PRIOR
     # crashed/killed process abandoned past their TTL before any of THIS
@@ -138,6 +141,7 @@ async def execute(
     # the persona predicate directly: stage 4 always materializes the audit
     # writer below, so MTC ⇒ the token map WILL bind.
     ctx.audit_signing_backend = make_audit_signing_backend(config.audit_signing)
+    validate_record_key_distinctness(config, ctx.audit_signing_backend)
     validate_audit_signing_for_span_stage(
         config,
         signing_backend=ctx.audit_signing_backend,
@@ -166,6 +170,7 @@ async def execute(
     cutover_record = initialize_mtc_audit_signing_record(
         config,
         signing_backend=ctx.audit_signing_backend,
+        verified_state_root=ctx.verified_state_root,
         audit_sidecar_path=(
             stage_1_ledger_writer.handle.canonical_path.parent / AUDIT_SIDECAR_FILENAME
         ),

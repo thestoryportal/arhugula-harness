@@ -85,6 +85,7 @@ from harness_core.cross_process_lock_deadline import (
     CrossProcessLockDeadline,
     flock_until_deadline,
 )
+from harness_core.journal_record_ref import JournalRecordRef
 from harness_cp.pause_resume_protocol_types import PauseSnapshot
 from pydantic import ValidationError
 
@@ -94,6 +95,7 @@ __all__ = [
     "PAUSE_JOURNAL_FILENAME_SUFFIX",
     "PAUSE_JOURNAL_LOCK_SUFFIX",
     "PAUSE_JOURNAL_SUBDIR",
+    "JournalRecordAtRef",
     "JournalWorkflowPauseStore",
     "PauseJournalReadCause",
     "PauseJournalReadResult",
@@ -262,6 +264,52 @@ class PauseJournalReadResult(NamedTuple):
 
     latest_record_digest: str | None
     """sha256 of the latest RAW journal line, or ``None`` when there is none."""
+
+    depth: int | None = None
+    """B-104 Task 4d — the ancestry depth recorded on THIS SAME latest line (root 0, child
+    1, grandchild 2), taken from the one read that supplied :attr:`snapshot`, never from a
+    later lookup. ``None`` means unknown: no snapshot, a legacy line with no depth, or a
+    malformed depth. Unknown is never inferred to be root, and it never alters
+    :attr:`cause`, :attr:`record_count` or :attr:`latest_record_digest`."""
+
+
+def _depth_is_wellformed(depth: object) -> bool:
+    """A journaled ancestry depth is a nonnegative int, or `None` (unknown/legacy).
+
+    [LAW:single-enforcer] The one definition, shared by the writer and both readers.
+    `bool` is refused (`type(...) is int`): `True` must never read as depth 1.
+    """
+    return depth is None or (type(depth) is int and depth >= 0)
+
+
+def _recorded_depth(line: str) -> int | None:
+    """The depth recorded on one journal line, or `None` when absent or malformed."""
+    try:
+        record: object = json.loads(line)
+    except ValueError:
+        return None
+    if not isinstance(record, dict):
+        return None
+    depth: object = cast("dict[str, object]", record).get("depth")
+    return depth if _depth_is_wellformed(depth) and isinstance(depth, int) else None
+
+
+class JournalRecordAtRef(NamedTuple):
+    """A verified exact journal position and its recorded ancestry depth."""
+
+    snapshot: PauseSnapshot
+    depth: int | None
+
+
+def _raw_journal_identity(raw: bytes) -> tuple[list[bytes], str | None]:
+    """Use inspect §13.7's raw nonblank-line count and latest-line digest.
+
+    The returned sequence carries the count and positional lookup together, so
+    callers cannot accidentally count decoded lines but hash raw ones.
+    """
+    # [LAW:one-source-of-truth] Match the inspect enumeration's byte-level identity.
+    lines = [line for line in raw.splitlines() if line.strip()]
+    return lines, hashlib.sha256(lines[-1]).hexdigest() if lines else None
 
 
 #: Subdirectory under the resolved ``STATE_LEDGER`` directory that holds the
@@ -547,9 +595,9 @@ class JournalWorkflowPauseStore:
         # re-derivation — hence the import rather than a local copy.
         self._tenant_scope = normalize_tenant_scope(tenant_id)
 
-    def capture(self, snapshot: PauseSnapshot) -> None:
-        """Append one ``PauseSnapshot`` record to the workflow's file, durably."""
-        self._append(snapshot)
+    def capture(self, snapshot: PauseSnapshot, *, depth: int | None) -> JournalRecordRef:
+        """Append a snapshot and return its exact identity under the journal lock."""
+        return self._append(snapshot, depth=depth)
 
     def read_latest(self, workflow_id: str) -> PauseSnapshot | None:
         """Return the workflow's latest journaled ``PauseSnapshot``, or ``None``.
@@ -588,54 +636,20 @@ class JournalWorkflowPauseStore:
         """
         path = self._journal_file(workflow_id)
         try:
-            text = path.read_text(encoding="utf-8")
+            raw = path.read_bytes()
         except FileNotFoundError:
             return PauseJournalReadResult(
                 snapshot=None,
                 cause=PauseJournalReadCause.ABSENT,
                 retryable=False,
-                # `B-102` impl half (Runtime spec v1.108 §30's `absent` row):
-                # INDETERMINATE across processes on exactly the argument
-                # `empty-journal` already carried — a `capture()` dispatched but
-                # not yet having created its journal file reports `absent`, and
-                # that capture may complete immediately after this read.
-                # `B-97`(b)'s append lock SHRINKS the window; it does not close
-                # it, because the reader deliberately takes no lock. Reported
-                # unconditionally, exactly as `empty-journal` is: the store
-                # cannot know whether a second writer is reachable, and the spec
-                # term is *"MUST NOT PRESENT it as decisive loss where a second
-                # writer is reachable"* — so the honest value is the one that
-                # never over-claims.
                 indeterminate=True,
                 record_count=0,
                 latest_record_digest=None,
             )
         except IsADirectoryError:
-            # Not "no record" — the path is occupied by something unusable.
             return PauseJournalReadResult(
                 snapshot=None,
                 cause=PauseJournalReadCause.READ_ERROR,
-                retryable=False,
-                indeterminate=False,
-                record_count=0,
-                latest_record_digest=None,
-            )
-        except UnicodeDecodeError:
-            # An undecodable byte is persistent on-disk corruption, NOT an I/O
-            # blip: routing it transient would send the operator loop into an
-            # unbounded retry with no diagnostic (spec v1.107 §30's stated
-            # divergence from the council record's literal mapping).
-            #
-            # `B-102`'s indeterminacy reaches the PARSE-failure branch ONLY,
-            # NEVER this DECODE-failure branch (Runtime spec v1.108 §30's
-            # `corrupt-latest` row): the invalid bytes are persistent on disk, an
-            # append leaves them in place, and every re-read fails identically —
-            # so routing this indeterminate would send the operator into exactly
-            # the futile re-read loop the decode-routing rule exists to prevent.
-            # UNCONDITIONALLY PERMANENT.
-            return PauseJournalReadResult(
-                snapshot=None,
-                cause=PauseJournalReadCause.CORRUPT_LATEST,
                 retryable=False,
                 indeterminate=False,
                 record_count=0,
@@ -650,7 +664,7 @@ class JournalWorkflowPauseStore:
                 record_count=0,
                 latest_record_digest=None,
             )
-        lines = [line for line in text.splitlines() if line.strip()]
+        lines, digest = _raw_journal_identity(raw)
         if not lines:
             return PauseJournalReadResult(
                 snapshot=None,
@@ -660,24 +674,65 @@ class JournalWorkflowPauseStore:
                 record_count=0,
                 latest_record_digest=None,
             )
-        latest = lines[-1]
-        digest = hashlib.sha256(latest.encode("utf-8")).hexdigest()
+        try:
+            # Preserve the existing whole-file UTF-8 refusal while deriving the
+            # count and digest from raw bytes before any decode attempt.
+            raw.decode("utf-8")
+            latest = lines[-1].decode("utf-8")
+        except UnicodeDecodeError:
+            # [LAW:no-silent-failure] Keep the raw identity even when decoding fails.
+            return PauseJournalReadResult(
+                snapshot=None,
+                cause=PauseJournalReadCause.CORRUPT_LATEST,
+                retryable=False,
+                indeterminate=False,
+                record_count=len(lines),
+                latest_record_digest=digest,
+            )
         snapshot, cause = self._parse_snapshot_attributed(latest, workflow_id)
         return PauseJournalReadResult(
             snapshot=snapshot,
             cause=cause,
             retryable=False,
-            # `B-102` impl half — the PARSE-failure branch of `corrupt-latest`
-            # ONLY (Runtime spec v1.108 §30). A torn trailing line is exactly
-            # what an in-flight append looks like from a reader, so a read
-            # landing mid-append attributes `corrupt-latest` to a record that is
-            # about to become well-formed. `workflow-mismatch` stays decisive:
-            # the handle names a different workflow, which no concurrent append
-            # changes.
             indeterminate=cause is PauseJournalReadCause.CORRUPT_LATEST,
             record_count=len(lines),
             latest_record_digest=digest,
+            depth=_recorded_depth(latest) if snapshot is not None else None,
         )
+
+    def read_exact(self, ref: JournalRecordRef) -> JournalRecordAtRef | None:
+        """Read only the position named by ``ref``; never fall back to latest.
+
+        This read is unlocked like ``read_latest_attributed``. The journal is
+        append-only, so a later append cannot move a completed earlier line.
+        An in-flight or malformed target fails closed.
+        """
+        if ref.tenant != self._tenant_scope:
+            return None
+        try:
+            raw = self._journal_file(ref.workflow_id).read_bytes()
+        except OSError:
+            return None
+        lines, _ = _raw_journal_identity(raw)
+        if ref.record_count > len(lines):
+            return None
+        line = lines[ref.record_count - 1]
+        if hashlib.sha256(line).hexdigest() != ref.latest_digest:
+            return None
+        try:
+            text = line.decode("utf-8")
+            record = json.loads(text)
+        except (UnicodeDecodeError, ValueError):
+            return None
+        snapshot, cause = self._parse_snapshot_attributed(text, ref.workflow_id)
+        if cause is not None or snapshot is None:
+            return None
+        if snapshot.run_id != ref.run_id or snapshot.snapshot_hash != ref.snapshot_hash:
+            return None
+        depth = record.get("depth")
+        if not _depth_is_wellformed(depth):
+            return None
+        return JournalRecordAtRef(snapshot=snapshot, depth=depth)
 
     # -- durable journal I/O ------------------------------------------------
 
@@ -705,7 +760,7 @@ class JournalWorkflowPauseStore:
         with cross_process_journal_lock(journal_path):
             yield
 
-    def _append(self, snapshot: PauseSnapshot) -> None:
+    def _append(self, snapshot: PauseSnapshot, *, depth: int | None) -> JournalRecordRef:
         """Append one JSONL record to the workflow's file, durably.
 
         The record is ``fsync``-ed to stable storage before returning so a host
@@ -772,10 +827,10 @@ class JournalWorkflowPauseStore:
         is also what makes the torn-append self-heal above sound: it was
         single-writer-only reasoning before.
 
-        The lock is a LEAF (nothing inside the hold acquires another
-        cross-process lock), so it cannot participate in a lock-ordering cycle
-        with the IS ledger locks that guard the enclosing ``STATE_LEDGER``
-        directory, whatever order a caller composes them in.
+        Claim admission takes the lease lock before this journal lock. Lease
+        publication holds this journal lock alone; recovery may probe the lease
+        from journal only with a nonblocking attempt. Callers must preserve that
+        order so a waiting lock cannot form a cycle.
 
         ``is_new_file`` survives ONLY as the guard on ``needs_leading_newline``
         (a brand-new file must not receive a spurious leading newline, since
@@ -789,9 +844,12 @@ class JournalWorkflowPauseStore:
         **The read path deliberately does NOT take this lock** — see
         :meth:`read_latest_attributed`.
         """
+        if not _depth_is_wellformed(depth):
+            raise ValueError("journal depth must be a nonnegative integer or None")
         record = {
             "workflow_id": snapshot.workflow_id,
             "pause_snapshot": snapshot.model_dump(mode="json"),
+            "depth": depth,
         }
         line = json.dumps(record, sort_keys=True)
         path = self._journal_file(snapshot.workflow_id)
@@ -815,6 +873,18 @@ class JournalWorkflowPauseStore:
             # UNCONDITIONAL, and AFTER the file exists — durably links this
             # workflow's journal dirent into `pause-journal`.
             self._fsync_dir(journal_dir)
+            # [LAW:no-ambient-temporal-coupling] Freeze identity before another writer can append.
+            lines, digest = _raw_journal_identity(path.read_bytes())
+            if not lines or lines[-1] != line.encode("utf-8") or digest is None:
+                raise OSError("journal append identity does not match the written record")
+            return JournalRecordRef(
+                tenant=self._tenant_scope,
+                workflow_id=snapshot.workflow_id,
+                run_id=snapshot.run_id,
+                record_count=len(lines),
+                latest_digest=digest,
+                snapshot_hash=snapshot.snapshot_hash,
+            )
 
     @staticmethod
     def _last_byte_is_not_newline(path: Path) -> bool:

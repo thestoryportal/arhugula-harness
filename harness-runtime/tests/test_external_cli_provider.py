@@ -3,9 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import os
+import shutil
+import signal
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -17,6 +22,7 @@ from harness_runtime.lifecycle.external_cli_provider import (
     ExternalCLIOutputError,
     ExternalCLIProcessTimeout,
     RecordingSubprocessRunner,
+    _ClaudeCodeSubprocessRunner,
     construct_antigravity_cli_adapter,
     construct_claude_code_cli_adapter,
     construct_codex_cli_adapter,
@@ -121,15 +127,207 @@ async def test_claude_dispatch_uses_argv_and_stdin_for_text_only_prompt() -> Non
         "--input-format",
         "text",
         "--no-session-persistence",
+        "--safe-mode",
+        "--strict-mcp-config",
         "--tools",
         "",
         "--permission-mode",
         "dontAsk",
+        "--permission-prompts",
+        "none",
         "--model",
         "sonnet",
     )
     assert stdin == "Reply OK"
     assert timeout == 42.0
+
+
+def _fake_claude(
+    tmp_path: Path, *, sleeper: bool = False, startup_marker: Path | None = None
+) -> tuple[str, Path]:
+    script = tmp_path / "fake-claude"
+    records = tmp_path / "records.jsonl"
+    startup_line = (
+        f"with open({str(startup_marker)!r}, 'w') as stream: stream.write('{{\"started\": 1}}')\n"
+        if startup_marker is not None
+        else ""
+    )
+    script.write_text(
+        f"#!{sys.executable}\n"
+        "import json, os, pathlib, stat, sys, time\n" + startup_line + "cwd = pathlib.Path.cwd()\n"
+        "record = {'argv': sys.argv[1:], 'stdin': sys.stdin.read(), "
+        "'cwd': str(cwd), 'mode': stat.S_IMODE(cwd.stat().st_mode), "
+        "'entries': sorted(p.name for p in cwd.iterdir()), "
+        "'env_keys': sorted(os.environ)}\n"
+        f"with open({str(records)!r}, 'a') as stream: "
+        "stream.write(json.dumps(record) + '\\n')\n"
+        + ("time.sleep(300)\n" if sleeper else "")
+        + "print(json.dumps({'loggedIn': True} if sys.argv[1:3] == "
+        "['auth', 'status'] else {'result': 'OK'}))\n"
+    )
+    script.chmod(0o700)
+    return str(script), records
+
+
+@pytest.mark.asyncio
+async def test_default_claude_runner_isolates_auth_and_inference(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    command, records = _fake_claude(tmp_path)
+    for key in (
+        "ANTHROPIC_API_KEY",
+        "AWS_SECRET_ACCESS_KEY",
+        "GITHUB_TOKEN",
+        "SSH_AUTH_SOCK",
+        "HARNESS_SECRET",
+        "DBUS_SESSION_BUS_ADDRESS",
+    ):
+        monkeypatch.setenv(key, "secret-sentinel")
+    monkeypatch.setenv("LC_TEST", "locale-sentinel")
+    adapter = await construct_claude_code_cli_adapter(
+        ExternalCLIProviderConfig(
+            provider="claude_code",
+            kind="claude-code",
+            command=command,
+            timeout_seconds=2.0,
+        )
+    )
+    prompt = "Prompt bytes Ω\n"
+    assert (await adapter.dispatch_text(model="sonnet", prompt=prompt)).text == "OK"
+    calls = [json.loads(line) for line in records.read_text().splitlines()]
+    assert len(calls) == 2
+    auth, inference = calls
+    assert auth["argv"] == ["auth", "status", "--json"]
+    assert auth["stdin"] == ""
+    assert inference["stdin"] == prompt
+    assert prompt not in inference["argv"]
+    assert inference["argv"] == [
+        "--print",
+        "--output-format",
+        "json",
+        "--input-format",
+        "text",
+        "--no-session-persistence",
+        "--safe-mode",
+        "--strict-mcp-config",
+        "--tools",
+        "",
+        "--permission-mode",
+        "dontAsk",
+        "--permission-prompts",
+        "none",
+        "--model",
+        "sonnet",
+    ]
+    assert auth["cwd"] != inference["cwd"]
+    allowed = {
+        "PATH",
+        "HOME",
+        "USER",
+        "LOGNAME",
+        "LANG",
+        "TZ",
+        "TMPDIR",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME",
+        "XDG_STATE_HOME",
+        "XDG_CACHE_HOME",
+        "CLAUDE_CONFIG_DIR",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "NO_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "no_proxy",
+        "SSL_CERT_FILE",
+        "REQUESTS_CA_BUNDLE",
+        "NODE_EXTRA_CA_CERTS",
+    }
+    for call in calls:
+        assert call["mode"] == 0o700
+        assert call["entries"] == []
+        assert not Path(call["cwd"]).exists()
+        assert not Path(call["cwd"]).is_relative_to(Path.cwd())
+        assert "LC_TEST" in call["env_keys"]
+        assert all(key in allowed or key.startswith("LC_") for key in call["env_keys"])
+        assert set(call["env_keys"]).isdisjoint(
+            {
+                "ANTHROPIC_API_KEY",
+                "AWS_SECRET_ACCESS_KEY",
+                "GITHUB_TOKEN",
+                "SSH_AUTH_SOCK",
+                "HARNESS_SECRET",
+                "DBUS_SESSION_BUS_ADDRESS",
+            }
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancel", [False, True])
+async def test_claude_scratch_cwd_removed_after_timeout_or_cancel(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    cancel: bool,
+) -> None:
+    startup_marker = tmp_path / "started.json" if not cancel else None
+    command, records = _fake_claude(tmp_path, sleeper=True, startup_marker=startup_marker)
+    if startup_marker is not None:
+        # The marker precedes the fake CLI's stdin read. Start the timeout only
+        # after child startup, then inspect its full private-cwd record.
+        _wait_for_group_spawn(monkeypatch, startup_marker, record_timeout=120)
+    runner = _ClaudeCodeSubprocessRunner()
+    task = asyncio.create_task(
+        runner.run((command,), stdin="", timeout_seconds=15.0 if cancel else 3.0)
+    )
+    if cancel:
+        try:
+            async with asyncio.timeout(10):
+                while True:
+                    if task.done():
+                        await task
+                    if records.exists():
+                        try:
+                            call = json.loads(records.read_text().splitlines()[0])
+                        except (IndexError, json.JSONDecodeError):
+                            pass  # The fake may have opened the file but not completed the line.
+                        else:
+                            break
+                    await asyncio.sleep(0.01)
+        except BaseException:
+            if not task.done():
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+            raise
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    else:
+        with pytest.raises(ExternalCLIProcessTimeout):
+            await task
+        call = json.loads(records.read_text().splitlines()[0])
+    assert call["mode"] == 0o700
+    assert call["entries"] == []
+    assert not Path(call["cwd"]).exists()
+
+
+@pytest.mark.asyncio
+async def test_other_default_runner_retains_scrubbed_env_and_inherited_cwd(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    command, records = _fake_claude(tmp_path)
+    monkeypatch.setenv("HARNESS_SECRET", "secret-sentinel")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "secret-sentinel")
+    result = await AsyncioSubprocessRunner().run((command,), stdin="", timeout_seconds=2.0)
+    assert result.exit_code == 0
+    call = json.loads(records.read_text().splitlines()[0])
+    assert call["cwd"] == str(Path.cwd())
+    assert "HARNESS_SECRET" in call["env_keys"]
+    assert "ANTHROPIC_API_KEY" not in call["env_keys"]
 
 
 @pytest.mark.asyncio
@@ -235,6 +433,41 @@ async def test_codex_dispatch_uses_ephemeral_jsonl_stdin_and_extracts_agent_mess
         "--skip-git-repo-check",
         "--sandbox",
         "read-only",
+        "--ignore-user-config",
+        "--disable",
+        "shell_tool",
+        "--disable",
+        "unified_exec",
+        "--disable",
+        "code_mode_host",
+        "--disable",
+        "apps",
+        "--disable",
+        "plugins",
+        "--disable",
+        "remote_plugin",
+        "--disable",
+        "browser_use",
+        "--disable",
+        "view_image",
+        "--disable",
+        "computer_use",
+        "--disable",
+        "image_generation",
+        "--disable",
+        "multi_agent",
+        "--disable",
+        "skill_search",
+        "--disable",
+        "tool_suggest",
+        "--disable",
+        "in_app_browser",
+        "--disable",
+        "in_app_local_automation",
+        "--disable",
+        "hooks",
+        "-c",
+        'web_search="disabled"',
         "-m",
         "gpt-5",
         "-",
@@ -605,6 +838,7 @@ class _AlreadyReapedFakeProcess:
 
     def __init__(self) -> None:
         self.returncode: int | None = 0
+        self.pid = os.getpgrp()  # Synthetic child: force the safe direct-child fallback.
         self.kill_calls = 0
         self.wait_calls = 0
         self.parked_in_communicate = False
@@ -1033,3 +1267,321 @@ async def test_generic_command_auth_check_without_auth_args_raises_before_any_sp
         )
 
     assert runner.calls == []
+
+
+# [LAW:behavior-not-structure] These fixtures observe OS process-group behavior
+# through a provider-free executable, not a mocked CLI implementation.
+def _group_cli(
+    tmp_path: Path, *, normal: bool = False, startup_delay: float = 0.0
+) -> tuple[str, Path]:
+    script = tmp_path / "fake-group-cli"
+    records = tmp_path / "group-record.json"
+    script.write_text(
+        f"#!{sys.executable}\n"
+        "import json, os, subprocess, sys, time\n"
+        # Timeout cases delay startup beyond their timeout to prove the spawn gate matters.
+        f"time.sleep({startup_delay!r})\n"
+        "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(300)'], "
+        "stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
+        f"with open({str(records)!r}, 'w') as stream: "
+        "json.dump({'pid': os.getpid(), 'pgid': os.getpgrp(), "
+        "'sid': os.getsid(0), 'grandchild': child.pid, "
+        "'grandchild_pgid': os.getpgid(child.pid)}, stream)\n"
+        + ("print('OK', flush=True)\n" if normal else "time.sleep(300)\n")
+    )
+    script.chmod(0o700)
+    return str(script), records
+
+
+async def _recorded_group(records: Path, *, record_timeout: float = 5) -> dict[str, int]:
+    async with asyncio.timeout(record_timeout):
+        while True:
+            if records.exists():
+                try:
+                    return json.loads(records.read_text())
+                except json.JSONDecodeError:
+                    pass  # The fake may have opened the file before json.dump completed.
+            await asyncio.sleep(0.01)
+
+
+def _wait_for_group_spawn(
+    monkeypatch: pytest.MonkeyPatch, records: Path, *, record_timeout: float = 5
+) -> None:
+    real_spawn = asyncio.create_subprocess_exec
+    real_killpg = os.killpg
+
+    async def spawn_after_record(*argv: Any, **kwargs: Any) -> asyncio.subprocess.Process:
+        process = await real_spawn(*argv, **kwargs)
+        try:
+            await _recorded_group(records, record_timeout=record_timeout)
+        except BaseException:
+            try:
+                real_killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            await process.wait()
+            raise
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", spawn_after_record)
+
+
+def _not_running(pid: int) -> bool:
+    try:
+        state = Path(f"/proc/{pid}/stat").read_text().split(") ", 1)[1].split()[0]
+    except (FileNotFoundError, ProcessLookupError):
+        # procfs can report ESRCH if the PID task is released after open.
+        return True
+    return state in {"Z", "X"}
+
+
+async def _assert_group_stopped(record: dict[str, int]) -> None:
+    async with asyncio.timeout(5):
+        while not all(_not_running(record[key]) for key in ("pid", "grandchild")):
+            await asyncio.sleep(0.01)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("runner_type", [AsyncioSubprocessRunner, _ClaudeCodeSubprocessRunner])
+async def test_default_runner_uses_private_group_and_reaps_detached_grandchild_on_success(
+    tmp_path: Path, runner_type: type[AsyncioSubprocessRunner], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    command, records = _group_cli(tmp_path, normal=True)
+    real_killpg = os.killpg
+    targets: list[int] = []
+
+    def recording_killpg(pgid: int, sig: int) -> None:
+        targets.append(pgid)
+        real_killpg(pgid, sig)
+
+    monkeypatch.setattr(os, "killpg", recording_killpg)
+    async with asyncio.timeout(10):
+        result = await runner_type().run((command,), stdin="", timeout_seconds=3)
+    record = await _recorded_group(records)
+    assert result.exit_code == 0 and result.stdout == "OK\n"
+    assert record["pgid"] == record["pid"] == record["sid"]
+    assert record["grandchild_pgid"] == record["pgid"] != os.getpgrp()
+    assert targets == [record["pgid"]]
+    await _assert_group_stopped(record)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("exit_kind", ["timeout", "cancel", "observer"])
+async def test_default_runner_reaps_entire_group_on_interrupted_exit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, exit_kind: str
+) -> None:
+    command, records = _group_cli(tmp_path, startup_delay=0.35 if exit_kind == "timeout" else 0.0)
+    if exit_kind in {"timeout", "observer"}:
+        _wait_for_group_spawn(monkeypatch, records)
+    real_killpg = os.killpg
+    targets: list[int] = []
+
+    def recording_killpg(pgid: int, sig: int) -> None:
+        targets.append(pgid)
+        real_killpg(pgid, sig)
+
+    monkeypatch.setattr(os, "killpg", recording_killpg)
+    runner = AsyncioSubprocessRunner()
+    async with asyncio.timeout(10):
+        if exit_kind == "timeout":
+            with pytest.raises(ExternalCLIProcessTimeout):
+                await runner.run((command,), stdin="", timeout_seconds=0.2)
+        elif exit_kind == "cancel":
+            task = asyncio.create_task(runner.run((command,), stdin="", timeout_seconds=5))
+            await _recorded_group(records)
+            task.cancel("original cancellation")
+            with pytest.raises(asyncio.CancelledError, match="original cancellation"):
+                await task
+        else:
+            failure = RuntimeError("observer failed")
+
+            def observer() -> None:
+                raise failure
+
+            with pytest.raises(RuntimeError) as caught:
+                await runner.run((command,), stdin="", timeout_seconds=5, on_wire=observer)
+            assert caught.value is failure
+    record = await _recorded_group(records)
+    assert targets == [record["pgid"]]
+    assert targets[0] != os.getpgrp()
+    await _assert_group_stopped(record)
+
+
+@pytest.mark.asyncio
+async def test_second_cancellation_waits_for_group_cleanup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import harness_runtime.lifecycle.external_cli_provider as provider
+
+    command, records = _group_cli(tmp_path)
+    real_terminate = provider._terminate_group
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def held_terminate(process: asyncio.subprocess.Process) -> str | None:
+        entered.set()
+        await release.wait()
+        return await real_terminate(process)
+
+    monkeypatch.setattr(provider, "_terminate_group", held_terminate)
+    task = asyncio.create_task(
+        AsyncioSubprocessRunner().run((command,), stdin="", timeout_seconds=5)
+    )
+    record = await _recorded_group(records)
+    task.cancel("first")
+    async with asyncio.timeout(5):
+        await entered.wait()
+        task.cancel("second")
+        await asyncio.sleep(0)
+        assert not task.done()
+        release.set()
+        with pytest.raises(asyncio.CancelledError, match="first"):
+            await task
+    await _assert_group_stopped(record)
+
+
+@pytest.mark.asyncio
+async def test_failed_spawn_has_no_group_signal_and_no_claude_scratch(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import harness_runtime.lifecycle.external_cli_provider as provider
+
+    targets: list[int] = []
+    monkeypatch.setattr(os, "killpg", lambda pgid, sig: targets.append(pgid))
+    real_mkdtemp = provider.tempfile.mkdtemp
+    dirs: list[str] = []
+
+    def recorded_mkdtemp(*args: Any, **kwargs: Any) -> str:
+        cwd = real_mkdtemp(*args, **kwargs)
+        dirs.append(cwd)
+        return cwd
+
+    monkeypatch.setattr(provider.tempfile, "mkdtemp", recorded_mkdtemp)
+    with pytest.raises(ExternalCLICommandError):
+        await _ClaudeCodeSubprocessRunner().run(
+            (str(tmp_path / "missing-cli"),), stdin="", timeout_seconds=1
+        )
+    assert targets == []
+    assert len(dirs) == 1 and not Path(dirs[0]).exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("exit_kind", ["success", "timeout", "cancel"])
+async def test_scratch_removal_failure_preserves_outcome(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    exit_kind: str,
+) -> None:
+    import harness_runtime.lifecycle.external_cli_provider as provider
+
+    command, records = _group_cli(
+        tmp_path,
+        normal=exit_kind == "success",
+        startup_delay=0.35 if exit_kind == "timeout" else 0.0,
+    )
+    if exit_kind == "timeout":
+        _wait_for_group_spawn(monkeypatch, records)
+    real_rmtree = shutil.rmtree
+
+    def failing_rmtree(path: str) -> None:
+        real_rmtree(path)
+        raise OSError("secret-stderr-sentinel")
+
+    monkeypatch.setattr(provider.shutil, "rmtree", failing_rmtree)
+    runner = _ClaudeCodeSubprocessRunner()
+    async with asyncio.timeout(10):
+        if exit_kind == "success":
+            result = await runner.run((command,), stdin="", timeout_seconds=3)
+            assert result.exit_code == 0
+        elif exit_kind == "timeout":
+            with pytest.raises(ExternalCLIProcessTimeout) as caught:
+                await runner.run((command,), stdin="", timeout_seconds=0.2)
+            assert provider._SCRATCH_UNCERTAIN in caught.value.__notes__
+        else:
+            task = asyncio.create_task(runner.run((command,), stdin="", timeout_seconds=5))
+            await _recorded_group(records)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError) as caught:
+                await task
+            assert provider._SCRATCH_UNCERTAIN in caught.value.__notes__
+    assert provider._SCRATCH_UNCERTAIN in caplog.text
+    assert "secret-stderr-sentinel" not in caplog.text
+    await _assert_group_stopped(await _recorded_group(records))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("exit_kind", ["timeout", "cancel"])
+async def test_refused_group_signal_keeps_outcome_and_reports_uncertainty(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    exit_kind: str,
+) -> None:
+    import harness_runtime.lifecycle.external_cli_provider as provider
+
+    command, records = _group_cli(tmp_path, startup_delay=0.35 if exit_kind == "timeout" else 0.0)
+    if exit_kind == "timeout":
+        _wait_for_group_spawn(monkeypatch, records)
+    real_killpg = os.killpg
+
+    def denied_killpg(pgid: int, sig: int) -> None:
+        raise PermissionError("secret-stderr-sentinel")
+
+    monkeypatch.setattr(os, "killpg", denied_killpg)
+    runner = AsyncioSubprocessRunner()
+    try:
+        async with asyncio.timeout(10):
+            if exit_kind == "timeout":
+                with pytest.raises(ExternalCLIProcessTimeout) as caught:
+                    await runner.run((command,), stdin="", timeout_seconds=0.2)
+            else:
+                task = asyncio.create_task(runner.run((command,), stdin="", timeout_seconds=5))
+                await _recorded_group(records)
+                task.cancel()
+                with pytest.raises(asyncio.CancelledError) as caught:
+                    await task
+        assert provider._CLEANUP_UNCERTAIN in caught.value.__notes__
+        assert provider._CLEANUP_UNCERTAIN in caplog.text
+        assert "secret-stderr-sentinel" not in caplog.text
+    finally:
+        if records.exists():
+            real_killpg(json.loads(records.read_text())["pgid"], 9)
+    await _assert_group_stopped(await _recorded_group(records))
+
+
+@pytest.mark.asyncio
+async def test_default_runner_child_has_its_own_session_without_descendants() -> None:
+    result = await AsyncioSubprocessRunner().run(
+        (
+            sys.executable,
+            "-c",
+            "import json, os; print(json.dumps({'pid': os.getpid(), "
+            "'pgid': os.getpgrp(), 'sid': os.getsid(0)}))",
+        ),
+        stdin="",
+        timeout_seconds=2,
+    )
+    child = json.loads(result.stdout)
+    assert result.exit_code == 0
+    assert child["pid"] == child["pgid"] == child["sid"]
+    assert child["pgid"] != os.getpgrp()
+
+
+@pytest.mark.asyncio
+async def test_observer_timeout_error_remains_the_observer_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    command, records = _group_cli(tmp_path)
+    _wait_for_group_spawn(monkeypatch, records)
+    failure = TimeoutError("observer's own timeout")
+
+    def observer() -> None:
+        raise failure
+
+    with pytest.raises(TimeoutError) as caught:
+        await AsyncioSubprocessRunner().run(
+            (command,), stdin="", timeout_seconds=5, on_wire=observer
+        )
+    assert caught.value is failure
+    await _assert_group_stopped(await _recorded_group(records))

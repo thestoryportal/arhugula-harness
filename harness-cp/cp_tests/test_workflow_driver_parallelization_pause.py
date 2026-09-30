@@ -1,0 +1,3639 @@
+"""B-FANOUT-PAUSE-PARALLELIZATION (R-FS-1) — resumable `cascade_policy=pause` for the
+PARALLELIZATION (peer fan-out) topology.
+
+Materializes the cleared CP spec §25.15.1 `pause → PAUSED` row ("composes with
+C-CP-26 PauseResumeProtocol + C-RT-35 `api.resume`") for PARALLELIZATION, flipping
+the interim `parallelization-pause-resume-not-yet-materialized` FAILED to a genuine
+resumable PAUSED — the `_execute_orchestrator_workers` (U-CP-88 / B-FANOUT-PAUSE)
+shape applied PARALLELIZATION-shaped: NO orchestrator `steps[0]`, every step is a
+PEER branch (indexed over `steps`), so the resume state is `PeerFanOutResumeState`
+(branches + branch_count), NOT the orchestrator-bearing `FanOutResumeState`.
+
+The honest bar (no false-`PAUSED`): a PAUSED is returned ONLY when a
+`pause_resume_protocol` is bound so a `PeerFanOutResumeState`-bearing `PauseSnapshot`
+can actually be captured, and `api.resume` (via the real `execute_workflow(
+pause_snapshot_input=...)` entry-point resume detection — the exact path the runtime
+`api.resume` drives) genuinely re-enters the strategy: terminal branches are SKIPPED
+(§25.15.2 obligation 7, outputs recovered), the not-yet-dispatched ones re-dispatched.
+
+Prerequisite: B-PARALLELIZATION-CASCADE (closed) built the cascade_policy harvest
+this resume builds on (PARALLELIZATION had NO cascade machinery before that arc).
+
+Authority: `Spec_Control_Plane_v1_44.md` §1 (PeerFanOutResumeState) + §2 (§25.15.1
+PARALLELIZATION materialization note); `pause_resume_protocol_types.py` C-CP-26.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import threading
+from typing import Any, cast
+
+import pytest
+from harness_core import PersonaTier, StepID, WorkloadClass
+from harness_core.identity import EntryID
+from harness_core.workflow_event_class import WorkflowEventClass
+from harness_cp.cp_shared_types import ModelBinding
+from harness_cp.cross_family_fallback_chain import (
+    FallbackChain,
+    ProviderCandidate,
+    ProviderFamily,
+)
+from harness_cp.engine_class import EngineClass
+from harness_cp.handoff_context import StateSummary
+from harness_cp.hitl_placement import HITLResult
+from harness_cp.hitl_response_palette import HITLResponse
+from harness_cp.pause_resume_protocol import (
+    PauseResumeProtocol,
+    _compute_snapshot_hash,
+    _strip_default_fanout_resume_fields,
+)
+from harness_cp.pause_resume_protocol_types import (
+    EffectFencePausedBranchResumeState,
+    EffectFenceResolution,
+    EffectFenceResumeState,
+    EvaluatorOptimizerResumeState,
+    FanOutBranchResumeState,
+    FanOutResumeState,
+    HandoffResumeState,
+    PausedChildBranchResumeState,
+    PausedChildCapture,
+    PauseSnapshot,
+    PeerFanOutResumeState,
+    ResumeContext,
+    WorkflowPauseReason,
+)
+from harness_cp.per_step_override_evaluator import StepEffectiveBinding
+from harness_cp.sub_agent_dispatch_capacity_authority import DefaultCapacityAuthority
+from harness_cp.topology_pattern import TopologyPattern
+from harness_cp.workflow_driver import (
+    DriverContext,
+    StepDispatcher,
+    StepDispatcherRegistry,
+    StepKindDispatcherNotBoundError,
+    _DriverStrategyStatus,
+    _resume_carrier_topology_mismatch,
+    _synthesis_resume_material_diff,
+    compute_effect_fence_uniform_fallback_eligible_key,
+    compute_hitl_uniform_fallback_eligible_run_id,
+    execute_workflow,
+)
+from harness_cp.workflow_driver_types import (
+    RunStatus,
+    StepKind,
+    SubAgentChildPausedError,
+    WorkflowStep,
+)
+from harness_cp.workflow_manifest_entry import WorkflowManifestEntry
+from harness_is.state_ledger_entry_schema import Actor, ActorClass, Identifier
+
+_DEFAULT_BINDING = ModelBinding(provider="anthropic", model="claude-haiku-4-5")
+_CHAIN = FallbackChain(
+    primary=ProviderCandidate(
+        provider="anthropic", model="claude-haiku-4-5", family=ProviderFamily.ANTHROPIC
+    ),
+    same_family=(),
+    cross_family=(),
+    terminal=None,
+)
+_ACTOR = Actor(actor_class=ActorClass.AGENT, actor_id="test-par-pause")
+_PAUSE_TIER = PersonaTier.TEAM_BINDING  # → cascade_policy = pause
+_ANCHOR = "0" * 64  # constant MVP pause-context anchor (no material diff on resume)
+
+
+def _manifest(
+    workflow_id: str = "wf-pp", persona_tier: PersonaTier = _PAUSE_TIER
+) -> WorkflowManifestEntry:
+    return WorkflowManifestEntry(
+        workflow_id=workflow_id,
+        workload_class=WorkloadClass.PIPELINE_AUTOMATION,
+        persona_tier=persona_tier,
+        engine_class=EngineClass.PURE_PATTERN_NO_ENGINE,
+        topology_pattern=TopologyPattern.PARALLELIZATION,
+        layer_budgets=(),
+        fallback_chain=_CHAIN,
+        hitl_placements=(),
+        per_step_overrides={},
+    )
+
+
+def _steps(n_branches: int) -> list[WorkflowStep]:
+    """A PEER fan-out — every step IS a branch (NO orchestrator `steps[0]`)."""
+    return [
+        WorkflowStep(
+            step_id=StepID(f"branch-{i}"),
+            step_kind=StepKind.DECLARATIVE_STEP,
+            step_payload={"index": i},
+        )
+        for i in range(n_branches)
+    ]
+
+
+class _RecordingLedger:
+    actor: Actor
+
+    def __init__(self) -> None:
+        self.actor = _ACTOR
+        self.appends: list[tuple[Any, Any]] = []
+
+    def append(self, payload: Any, write_key: Any) -> Any:
+        self.appends.append((payload, write_key))
+        return "appended"
+
+    @property
+    def is_genesis(self) -> bool:
+        return len(self.appends) == 0
+
+    @property
+    def entry_count(self) -> int:
+        return len(self.appends)
+
+
+class _Emitter:
+    def __init__(self) -> None:
+        self.emits: list[WorkflowEventClass] = []
+
+    def emit(self, event_class: WorkflowEventClass) -> None:
+        self.emits.append(event_class)
+
+
+def _pause_context_reader() -> tuple[StateSummary, str]:
+    """MVP constant-sentinel reader: empty StateSummary + a constant anchor →
+    resume detects no material diff → admits."""
+    return (
+        StateSummary(
+            relevant_entries=(),
+            summary_text="",
+            summary_hash="0" * 64,
+            idempotency_key=Identifier(""),
+            external_references=(),
+        ),
+        _ANCHOR,
+    )
+
+
+def _protocol() -> PauseResumeProtocol:
+    return PauseResumeProtocol(
+        state_ledger_writer=object(),
+        state_ledger_reader=object(),
+        pause_context_reader=_pause_context_reader,
+    )
+
+
+class _CtxP:
+    """Driver context WITH a bound `pause_resume_protocol` (the pause/resume opt-in)
+    so the peer fan-out `pause` branch can capture a snapshot + return PAUSED, and
+    `execute_workflow(pause_snapshot_input=...)` entry-point resume detection can
+    validate + admit a resume. `procedural_tier_snapshot_resolver` absent → the
+    R-003 sidecar stays None."""
+
+    def __init__(self, *, ledger: Any, emitter: _Emitter) -> None:
+        from opentelemetry.trace import NoOpTracerProvider
+
+        self.ledger_writer = ledger
+        self.lifecycle_emitter = emitter
+        self.drained_flag = asyncio.Event()
+        self.pause_requested_flag = asyncio.Event()
+        self.pause_resume_protocol = _protocol()
+        self.ledger_reader = None
+        self.tracer_provider = NoOpTracerProvider()
+        self.validator_framework = None
+        self.tenant_id = None
+
+
+class _Registry:
+    def __init__(self, dispatcher: StepDispatcher) -> None:
+        self._dispatcher = dispatcher
+
+    def lookup(self, step_kind: StepKind) -> StepDispatcher:
+        if step_kind is not StepKind.DECLARATIVE_STEP:
+            raise StepKindDispatcherNotBoundError(step_kind)
+        return self._dispatcher
+
+
+def _registry(dispatcher: StepDispatcher) -> StepDispatcherRegistry:
+    return cast(StepDispatcherRegistry, _Registry(dispatcher))
+
+
+class _CountingDispatcher:
+    """Echoes `{role, echoed}`; records every dispatched step_id (so a resume can
+    assert which branches were re-dispatched vs terminal-skipped). A step_id in
+    `fail_step_ids` raises (the cascade trigger)."""
+
+    def __init__(self, *, fail_step_ids: set[str] | None = None) -> None:
+        self._fail = fail_step_ids or set()
+        self.dispatched: list[str] = []
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        step_id = str(step.step_id)
+        self.dispatched.append(step_id)
+        if step_id in self._fail:
+            raise RuntimeError(f"simulated branch failure at {step_id}")
+        return {"role": step_id, "echoed": dict(step.step_payload)}
+
+
+class _SynthDispatcher:
+    """B-FANOUT-PAUSE-SYNTHESIS — handles BOTH peer branches (`DECLARATIVE_STEP`,
+    echoing `{role, echoed}`) AND the terminal `POST_JOIN_SYNTHESIS` step (returning a
+    DISTINCT `{synthesized, from}` marker so a test can prove the run's aggregate is the
+    SYNTHESIZED output, NOT the deterministic `{branch_outputs}` fold). Records every
+    dispatched step_id so the synthesis-dispatched-exactly-once + branches-re-dispatched
+    claims are checkable."""
+
+    def __init__(self) -> None:
+        self.dispatched: list[str] = []
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        step_id = str(step.step_id)
+        self.dispatched.append(step_id)
+        if step.step_kind is StepKind.POST_JOIN_SYNTHESIS:
+            siblings = tuple(
+                sid for sid, _ in (getattr(step_context, "sibling_outputs", None) or ())
+            )
+            return {"synthesized": True, "from": siblings}
+        return {"role": step_id, "echoed": dict(step.step_payload)}
+
+
+class _SynthRegistry:
+    """Routes BOTH `DECLARATIVE_STEP` (branches) and `POST_JOIN_SYNTHESIS` (the
+    post-barrier synthesis) to one `_SynthDispatcher`."""
+
+    def __init__(self, dispatcher: StepDispatcher) -> None:
+        self._dispatcher = dispatcher
+
+    def lookup(self, step_kind: StepKind) -> StepDispatcher:
+        if step_kind not in (StepKind.DECLARATIVE_STEP, StepKind.POST_JOIN_SYNTHESIS):
+            raise StepKindDispatcherNotBoundError(step_kind)
+        return self._dispatcher
+
+
+def _synthesis_step(step_id: str = "synthesis") -> WorkflowStep:
+    return WorkflowStep(
+        step_id=StepID(step_id),
+        step_kind=StepKind.POST_JOIN_SYNTHESIS,
+        step_payload={"messages": [], "params": {"max_tokens": 64}},
+    )
+
+
+class _GatedFailDispatcher:
+    """Forces a DETERMINISTIC all-terminal pause: branch-0 completes cleanly and
+    sets a gate; branch-1 waits on that gate THEN fails. So both branches reach a
+    terminal disposition (branch-0 `completed`+output / branch-1 ran-and-errored
+    `completed`/no-output) BEFORE the barrier resolves — no not-yet-dispatched
+    (cancelled) branch, no timing race."""
+
+    def __init__(self) -> None:
+        self._gate = threading.Event()
+        self.dispatched: list[str] = []
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        step_id = str(step.step_id)
+        self.dispatched.append(step_id)
+        if step_id == "branch-0":
+            self._gate.set()
+            return {"role": "branch-0", "echoed": dict(step.step_payload)}
+        # branch-1: wait until branch-0 has completed, then fail (the trigger).
+        assert self._gate.wait(timeout=10.0), "branch-0 never completed"
+        raise RuntimeError("simulated branch-1 failure (after branch-0 completed)")
+
+
+def _run(
+    *,
+    steps: list[WorkflowStep],
+    dispatcher: StepDispatcher,
+    ctx: DriverContext,
+    pause_snapshot_input: PauseSnapshot | None = None,
+    workflow_id: str = "wf-pp",
+    persona_tier: PersonaTier = _PAUSE_TIER,
+    resume_context: Any = None,
+    effect_fence_uniform_fallback_eligible_key: str | None = None,
+) -> Any:
+    return execute_workflow(
+        _manifest(workflow_id, persona_tier),
+        steps,
+        run_id="run-1",
+        ctx=ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=_registry(dispatcher),
+        pause_snapshot_input=pause_snapshot_input,
+        resume_context=resume_context,
+        effect_fence_uniform_fallback_eligible_key=effect_fence_uniform_fallback_eligible_key,
+    )
+
+
+def _captured_snapshot(
+    *, peer_fan_out_resume: PeerFanOutResumeState, workflow_id: str = "wf-pp"
+) -> PauseSnapshot:
+    """A hash-valid peer fan-out snapshot, captured through the real protocol (NOT a
+    hand-mutated model) — the exact shape a prior `pause` halt would produce."""
+    return asyncio.run(
+        _protocol().capture_pause_snapshot(
+            workflow_id=workflow_id,
+            run_id="run-1",
+            step_index=0,
+            pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
+            peer_fan_out_resume=peer_fan_out_resume,
+            descent_depth=0,
+        )
+    ).snapshot
+
+
+# ---------------------------------------------------------------------------
+# Capture — a real peer fan-out pause returns PAUSED + a peer-aware snapshot
+# ---------------------------------------------------------------------------
+
+
+def test_pause_with_protocol_returns_paused_with_peer_snapshot() -> None:
+    """TEAM persona → pause, protocol bound: branch-1 fails (after branch-0
+    completes) → the run PAUSES (not the interim FAILED) with a hash-valid
+    `PauseSnapshot` carrying a `PeerFanOutResumeState` (NO orchestrator; the
+    terminal branches + branch-0's recovered output)."""
+    ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    result = _run(steps=_steps(2), dispatcher=_GatedFailDispatcher(), ctx=ctx)
+
+    assert result.status is RunStatus.PAUSED
+    assert result.fail_class is None
+    snap = result.pause_snapshot
+    assert snap is not None
+    # PARALLELIZATION sets `peer_fan_out_resume`, NEVER the orchestrator-bearing one.
+    assert snap.fan_out_resume is None
+    pr = snap.peer_fan_out_resume
+    assert pr is not None
+    assert pr.branch_count == 2
+    by_index = {b.branch_index: b for b in pr.branches}
+    # branch-0 completed cleanly → terminal + its output recovered into the snapshot.
+    assert by_index[0].terminal_status == "completed"
+    assert by_index[0].step_id == "branch-0"  # identity captured for resume validation
+    assert by_index[0].output == {"role": "branch-0", "echoed": {"index": 0}}
+    # branch-1 ran-and-errored → terminal `completed` (dispatch-boundary), no output.
+    assert by_index[1].terminal_status == "completed"
+    assert by_index[1].step_id == "branch-1"
+    assert by_index[1].output is None
+    # The snapshot is hash-valid (covers peer_fan_out_resume).
+    assert snap.snapshot_hash == _compute_snapshot_hash(
+        workflow_id=snap.workflow_id,
+        run_id=snap.run_id,
+        step_index=snap.step_index,
+        state_summary=snap.state_summary,
+        peer_fan_out_resume=pr,
+    )
+
+
+def test_pause_emits_resumption_not_workflow_start_on_resume() -> None:
+    """The resume envelope emits RESUMPTION (the terminal branches already ran in
+    the original envelope), not a second WORKFLOW_START."""
+    emitter = _Emitter()
+    ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=emitter))
+    snapshot = _captured_snapshot(
+        peer_fan_out_resume=PeerFanOutResumeState(
+            branches=(
+                FanOutBranchResumeState(
+                    branch_index=0,
+                    step_id="branch-0",
+                    terminal_status="completed",
+                    output={"role": "branch-0"},
+                ),
+            ),  # branch-1 absent → re-dispatchable
+            branch_count=2,
+        )
+    )
+    _run(steps=_steps(2), dispatcher=_CountingDispatcher(), ctx=ctx, pause_snapshot_input=snapshot)
+    assert WorkflowEventClass.RESUMPTION in emitter.emits
+    assert WorkflowEventClass.WORKFLOW_START not in emitter.emits
+
+
+# ---------------------------------------------------------------------------
+# Resume — the real `execute_workflow(pause_snapshot_input=...)` witness
+# ---------------------------------------------------------------------------
+
+
+def test_resume_skips_terminal_recovers_outputs_and_redispatches_rest() -> None:
+    """THE WITNESS — through the real `execute_workflow(pause_snapshot_input=...)`
+    entry-point resume detection (the path `api.resume` drives):
+      (1) the terminal branch (branch-0) is NOT re-dispatched (obligation 7),
+      (2) the not-yet-dispatched branch (branch-1) IS re-dispatched,
+      (3) the aggregate fuses the RECOVERED branch-0 output + the FRESH branch-1
+          output → SUCCESS."""
+    snapshot = _captured_snapshot(
+        peer_fan_out_resume=PeerFanOutResumeState(
+            branches=(
+                FanOutBranchResumeState(
+                    branch_index=0,
+                    step_id="branch-0",
+                    terminal_status="completed",
+                    output={"role": "branch-0", "recovered": True},
+                ),
+            ),  # branch-1 ABSENT → left re-dispatchable
+            branch_count=2,
+        )
+    )
+    dispatcher = _CountingDispatcher()
+    ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    result = _run(steps=_steps(2), dispatcher=dispatcher, ctx=ctx, pause_snapshot_input=snapshot)
+
+    assert result.status is RunStatus.SUCCESS
+    # (1): the terminal branch-0 was NOT re-dispatched.
+    assert "branch-0" not in dispatcher.dispatched
+    # (2): only the re-dispatchable branch-1 ran on resume.
+    assert dispatcher.dispatched == ["branch-1"]
+    # (3): the aggregate's branch_outputs fuse recovered (branch-0) + fresh (branch-1).
+    assert result.final_state is not None
+    assert result.final_state["branch_outputs"]["branch-0"] == {
+        "role": "branch-0",
+        "recovered": True,
+    }
+    assert result.final_state["branch_outputs"]["branch-1"] == {
+        "role": "branch-1",
+        "echoed": {"index": 1},
+    }
+
+
+def test_resume_all_terminal_with_a_failed_branch_is_partial_not_silent_success() -> None:
+    """Real pause → real resume round-trip (the GatedFail all-terminal pause): both
+    branches terminal at pause (branch-0 completed, branch-1 FAILED) → resume
+    re-dispatches NOTHING and surfaces **PARTIAL** (degraded), NOT a bare silent
+    SUCCESS dropping the failure — the silent-degradation class this arc forecloses.
+    branch-0's output is recovered; the failed branch-1 contributes nothing + is not
+    re-fired (obligation 7 + at-most-once)."""
+    pause_ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    paused = _run(steps=_steps(2), dispatcher=_GatedFailDispatcher(), ctx=pause_ctx)
+    assert paused.status is RunStatus.PAUSED
+    snapshot = paused.pause_snapshot
+    assert snapshot is not None
+
+    resume_dispatcher = _CountingDispatcher()
+    resume_ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    result = _run(
+        steps=_steps(2),
+        dispatcher=resume_dispatcher,
+        ctx=resume_ctx,
+        pause_snapshot_input=snapshot,
+    )
+    # A recovered branch FAILED → degraded → PARTIAL (not silent SUCCESS).
+    assert result.status is RunStatus.PARTIAL
+    # Both branches were terminal at pause → NOTHING re-dispatched on resume.
+    assert resume_dispatcher.dispatched == []
+    # The salvaged aggregate is on partial_state; branch-0 recovered, branch-1 gone.
+    assert result.partial_state is not None
+    assert "branch-0" in result.partial_state["branch_outputs"]
+    assert "branch-1" not in result.partial_state["branch_outputs"]
+
+
+# ---------------------------------------------------------------------------
+# Negative controls + integrity + backward-compat
+# ---------------------------------------------------------------------------
+
+
+def test_snapshot_hash_covers_peer_fan_out_resume_tamper_rejected() -> None:
+    """Integrity: a snapshot whose recovered branch output is TAMPERED (without
+    re-hashing) is REJECTED at resume → FAILED + CP-FAIL-PAUSE-SNAPSHOT-CORRUPTION
+    (no silent-tamper gap on the data the resumed aggregate trusts)."""
+    good = _captured_snapshot(
+        peer_fan_out_resume=PeerFanOutResumeState(
+            branches=(
+                FanOutBranchResumeState(
+                    branch_index=0,
+                    step_id="branch-0",
+                    terminal_status="completed",
+                    output={"amount": 100},
+                ),
+            ),
+            branch_count=2,
+        )
+    )
+    # Tamper the recovered output, keeping the STALE hash → corruption.
+    tampered = good.model_copy(
+        update={
+            "peer_fan_out_resume": good.peer_fan_out_resume.model_copy(  # type: ignore[union-attr]
+                update={
+                    "branches": (
+                        FanOutBranchResumeState(
+                            branch_index=0,
+                            step_id="branch-0",
+                            terminal_status="completed",
+                            output={"amount": 999999},
+                        ),
+                    )
+                }
+            )
+        }
+    )
+    ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    result = _run(
+        steps=_steps(2), dispatcher=_CountingDispatcher(), ctx=ctx, pause_snapshot_input=tampered
+    )
+    assert result.status is RunStatus.FAILED
+    assert result.fail_class == "CP-FAIL-PAUSE-SNAPSHOT-CORRUPTION"
+
+
+def test_negative_control_empty_branches_loses_recovery() -> None:
+    """Persistence is load-bearing: a snapshot whose `branches` is EMPTY (no
+    recovered branch-0 output) re-dispatches BOTH branches and branch-0's output is
+    the FRESH one — proving the recovered output in the snapshot is what populates
+    the aggregate, not an incidental re-run."""
+    snapshot = _captured_snapshot(
+        peer_fan_out_resume=PeerFanOutResumeState(
+            branches=(),  # nothing recovered → both branches re-dispatchable
+            branch_count=2,
+        )
+    )
+    dispatcher = _CountingDispatcher()
+    ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    result = _run(steps=_steps(2), dispatcher=dispatcher, ctx=ctx, pause_snapshot_input=snapshot)
+    assert result.status is RunStatus.SUCCESS
+    # BOTH branches re-dispatched (no terminal skip); branch-0's output is the FRESH
+    # echo (no "recovered" marker), proving the recovered-output path is the only
+    # source of a recovered value (vs. this incidental re-run).
+    assert set(dispatcher.dispatched) == {"branch-0", "branch-1"}
+    assert result.final_state is not None
+    assert result.final_state["branch_outputs"]["branch-0"] == {
+        "role": "branch-0",
+        "echoed": {"index": 0},
+    }
+
+
+def test_resume_with_matching_synthesis_fresh_dispatches_succeeds() -> None:
+    """B-FANOUT-PAUSE-SYNTHESIS full-chain (PARALLELIZATION) — a synthesis-bearing peer
+    fan-out PAUSE is now RESUMABLE. The snapshot carries the synthesis identity
+    (`synthesis_step_id="synthesis"`); resume material-diffs it against the re-supplied
+    terminal synthesis (match), recovers/re-dispatches the branches, then FRESH-dispatches
+    the synthesis post-barrier (it never ran on a pause → effect-free, first-and-only).
+    The load-bearing assertions: the aggregate is the SYNTHESIZED output (NOT the
+    deterministic `{branch_outputs}` fold), and the synthesis dispatched EXACTLY ONCE."""
+    ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    snapshot = _captured_snapshot(
+        peer_fan_out_resume=PeerFanOutResumeState(
+            branches=(), branch_count=2, synthesis_step_id="synthesis"
+        )
+    )
+    dispatcher = _SynthDispatcher()
+    result = execute_workflow(
+        _manifest(),
+        [*_steps(2), _synthesis_step()],
+        run_id="run-1",
+        ctx=ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=cast(StepDispatcherRegistry, _SynthRegistry(dispatcher)),
+        pause_snapshot_input=snapshot,
+    )
+    assert result.status is RunStatus.SUCCESS
+    # The aggregate is the SYNTHESIZED output, NOT the deterministic fold — a fold-fallback
+    # bug (synthesis silently skipped) would yield `{"branch_outputs": ...}` and pass a bare
+    # "resume succeeds" test. `from` carries the branch-index-ordered sibling step_ids.
+    assert result.final_state == {"synthesized": True, "from": (0, 1)}
+    # The synthesis dispatched EXACTLY ONCE (first-and-only — no replay, no double-dispatch).
+    assert dispatcher.dispatched.count("synthesis") == 1
+    # Both branches were re-dispatched (nothing recovered in this snapshot).
+    assert {s for s in dispatcher.dispatched if s.startswith("branch")} == {
+        "branch-0",
+        "branch-1",
+    }
+
+
+def test_resume_synthesis_added_fails_closed() -> None:
+    """B-FANOUT-PAUSE-SYNTHESIS material-diff (ADDED) — a snapshot captured WITHOUT a
+    synthesis (`synthesis_step_id=None`) but resumed against a body that NOW carries a
+    terminal synthesis fails closed: the synthesis was added between pause and resume, so a
+    fresh dispatch would compose an aggregate the original run never produced. Fail-closed
+    BEFORE any branch/synthesis dispatch (the original [P1] reject posture preserved as a
+    typed material-diff)."""
+    ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    snapshot = _captured_snapshot(
+        peer_fan_out_resume=PeerFanOutResumeState(branches=(), branch_count=2)
+    )
+    result = _run(
+        steps=[*_steps(2), _synthesis_step()],
+        dispatcher=_CountingDispatcher(),
+        ctx=ctx,
+        pause_snapshot_input=snapshot,
+    )
+    assert result.status is RunStatus.FAILED
+    assert result.fail_class is not None
+    assert result.fail_class.startswith("post-join-synthesis-resume-material-diff:")
+
+
+def test_resume_synthesis_removed_fails_closed() -> None:
+    """B-FANOUT-PAUSE-SYNTHESIS material-diff (REMOVED) — a snapshot that CAPTURED a
+    synthesis (`synthesis_step_id="synthesis"`) but resumed against a body with NO terminal
+    synthesis fails closed rather than silently yielding the deterministic fold. This is the
+    silent-DROP case a check nested inside the placement block would structurally miss (the
+    resumed body has no synthesis position to trigger it)."""
+    ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    snapshot = _captured_snapshot(
+        peer_fan_out_resume=PeerFanOutResumeState(
+            branches=(), branch_count=2, synthesis_step_id="synthesis"
+        )
+    )
+    result = _run(
+        steps=_steps(2),  # NO synthesis step on resume
+        dispatcher=_CountingDispatcher(),
+        ctx=ctx,
+        pause_snapshot_input=snapshot,
+    )
+    assert result.status is RunStatus.FAILED
+    assert result.fail_class is not None
+    assert result.fail_class.startswith("post-join-synthesis-resume-material-diff:")
+
+
+def test_resume_synthesis_changed_step_id_fails_closed() -> None:
+    """B-FANOUT-PAUSE-SYNTHESIS material-diff (CHANGED) — a snapshot that captured
+    `synthesis_step_id="synthesis-a"` but resumed against a body whose terminal synthesis is
+    `synthesis-b` fails closed: a same-position rename is a body change, so fresh-dispatching
+    the renamed synthesis would compose a divergent aggregate."""
+    ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    snapshot = _captured_snapshot(
+        peer_fan_out_resume=PeerFanOutResumeState(
+            branches=(), branch_count=2, synthesis_step_id="synthesis-a"
+        )
+    )
+    result = _run(
+        steps=[*_steps(2), _synthesis_step("synthesis-b")],
+        dispatcher=_CountingDispatcher(),
+        ctx=ctx,
+        pause_snapshot_input=snapshot,
+    )
+    assert result.status is RunStatus.FAILED
+    assert result.fail_class is not None
+    assert result.fail_class.startswith("post-join-synthesis-resume-material-diff:")
+
+
+def test_synthesis_absent_peer_snapshot_byte_compat_hash() -> None:
+    """B-FANOUT-PAUSE-SYNTHESIS byte-compat (PeerFanOutResumeState) — a synthesis-ABSENT
+    peer snapshot (`synthesis_step_id=None`) hashes byte-identically to the pre-arc shape:
+    `_compute_snapshot_hash` DROPS the `synthesis_step_id` key from the canonical
+    serialization when None, so every old durable PARALLELIZATION snapshot still validates.
+    `PeerFanOutResumeState` had NO drop before this field, so this guards the freshly-added
+    drop."""
+    import hashlib
+    import json
+
+    state_summary, _ = _pause_context_reader()
+    peer = PeerFanOutResumeState(branches=(), branch_count=2)  # synthesis_step_id defaults None
+    got = _compute_snapshot_hash(
+        workflow_id="wf-pp",
+        run_id="run-1",
+        step_index=0,
+        state_summary=state_summary,
+        peer_fan_out_resume=peer,
+    )
+    # The pre-arc canonical serialization — peer carrier with NO `synthesis_step_id` key.
+    canonical = {
+        "workflow_id": "wf-pp",
+        "run_id": "run-1",
+        "step_index": 0,
+        "state_summary": state_summary.model_dump(mode="json"),
+        "peer_fan_out_resume": {"branches": [], "branch_count": 2},
+    }
+    expected = hashlib.sha256(
+        json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    assert got == expected
+
+
+def test_synthesis_material_diff_helper_covers_both_carriers() -> None:
+    """B-FANOUT-PAUSE-SYNTHESIS — direct unit coverage of `_synthesis_resume_material_diff`
+    over BOTH resume carriers and all identity-diff directions. Includes the HIERARCHICAL
+    case: a HIERARCHICAL child re-enters via `execute_workflow(pause_snapshot_input=...)`
+    against a `FanOutResumeState`-bearing child snapshot, so the FanOut branch of this helper
+    IS the child-level guard."""
+
+    def _peer(synthesis_step_id: str | None) -> PauseSnapshot:
+        return _captured_snapshot(
+            peer_fan_out_resume=PeerFanOutResumeState(
+                branches=(), branch_count=1, synthesis_step_id=synthesis_step_id
+            )
+        )
+
+    def _fanout(synthesis_step_id: str | None) -> PauseSnapshot:
+        fan = FanOutResumeState(
+            orchestrator_output={},
+            orchestrator_step_id="orch",
+            branches=(),
+            worker_count=1,
+            synthesis_step_id=synthesis_step_id,
+        )
+        return asyncio.run(
+            _protocol().capture_pause_snapshot(
+                workflow_id="wf-pp",
+                run_id="run-1",
+                step_index=0,
+                pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
+                fan_out_resume=fan,
+                descent_depth=0,
+            )
+        ).snapshot
+
+    no_synth = _steps(1)
+    with_synth = [*_steps(1), _synthesis_step("synthesis")]
+    with_other = [*_steps(1), _synthesis_step("other")]
+    _ORCH = _DriverStrategyStatus.ORCHESTRATOR_WORKERS
+    _PAR = _DriverStrategyStatus.PARALLELIZATION
+    # Each builder is read under the strategy whose carrier it populates: `_peer` (a
+    # PeerFanOutResumeState snapshot) under PARALLELIZATION, `_fanout` (a FanOutResumeState
+    # snapshot) under ORCHESTRATOR_WORKERS. HIERARCHICAL_DELEGATION reuses the FanOut carrier,
+    # so `_fanout` under HIERARCHICAL is the child-level guard.
+    for build, strat in ((_peer, _PAR), (_fanout, _ORCH)):
+        # both-present match → None (OK)
+        assert _synthesis_resume_material_diff(build("synthesis"), with_synth, strat) is None
+        # both-absent → None (a non-synthesis fan-out resume, unchanged)
+        assert _synthesis_resume_material_diff(build(None), no_synth, strat) is None
+        # added (captured None, resumed present) → fail
+        assert _synthesis_resume_material_diff(build(None), with_synth, strat) is not None
+        # removed (captured present, resumed absent) → fail
+        assert _synthesis_resume_material_diff(build("synthesis"), no_synth, strat) is not None
+        # changed step_id → fail
+        assert _synthesis_resume_material_diff(build("synthesis"), with_other, strat) is not None
+    # HIERARCHICAL_DELEGATION reads the FanOut carrier (the child-level guard path).
+    assert (
+        _synthesis_resume_material_diff(
+            _fanout("synthesis"), with_synth, _DriverStrategyStatus.HIERARCHICAL_DELEGATION
+        )
+        is None
+    )
+    # CARRIER/TOPOLOGY MISMATCH (out-of-family Codex [P1]) — a synthesis-bearing snapshot
+    # captured under one carrier but resumed under the OTHER topology fails closed: the
+    # strategy's EXPECTED carrier is absent → captured None → differs from the present
+    # resumed synthesis. A `peer` snapshot resumed as ORCHESTRATOR_WORKERS, and a `fanout`
+    # snapshot resumed as PARALLELIZATION — both reject (would otherwise run the fan-out fresh).
+    assert _synthesis_resume_material_diff(_peer("synthesis"), with_synth, _ORCH) is not None
+    assert _synthesis_resume_material_diff(_fanout("synthesis"), with_synth, _PAR) is not None
+
+
+def test_strip_none_synthesis_step_id_recurses_into_nested_child_snapshots() -> None:
+    """B-FANOUT-PAUSE-SYNTHESIS byte-compat (NESTED, out-of-family Codex [P1]) — the hash
+    drop must RECURSE: a HIERARCHICAL `paused_child_branches` cursor serializes a child
+    `PauseSnapshot` (with its own `fan_out_resume`) inside the parent carrier's `model_dump`,
+    so a nested `synthesis_step_id: null` must be stripped too — a top-level-only drop would
+    change the recomputed hash of valid pre-existing HIERARCHICAL parent snapshots. This
+    asserts the recursion strips None at EVERY depth while KEEPING a synthesis-bearing id."""
+    tree: dict[str, Any] = {
+        "synthesis_step_id": None,  # top-level (parent carrier)
+        "branches": [],
+        "paused_child_branches": [
+            {
+                "branch_index": 0,
+                "step_id": "worker-0",
+                "child_snapshot": {
+                    "run_id": "child",
+                    "fan_out_resume": {
+                        "synthesis_step_id": None,  # nested child carrier — the [P1] leak
+                        "branches": [],
+                    },
+                    "peer_fan_out_resume": {
+                        "synthesis_step_id": "kept-grandchild",  # non-None → KEPT
+                    },
+                },
+            }
+        ],
+    }
+    _strip_default_fanout_resume_fields(tree)
+    assert "synthesis_step_id" not in tree
+    child = tree["paused_child_branches"][0]["child_snapshot"]
+    assert "synthesis_step_id" not in child["fan_out_resume"]
+    # a present (synthesis-bearing) id at ANY depth is hash-covered → KEPT.
+    assert child["peer_fan_out_resume"]["synthesis_step_id"] == "kept-grandchild"
+
+
+def test_strip_preserves_user_synthesis_step_id_in_recovered_output() -> None:
+    """B-FANOUT-PAUSE-SYNTHESIS — the strip is PATH-AWARE (out-of-family Codex [P2]): it
+    touches ONLY the carrier's OWN structural `synthesis_step_id`, NOT a user-data key that
+    happens to be named `synthesis_step_id` inside recovered output (`orchestrator_output` /
+    `branches[].output`). Such a user key MUST stay hash-covered — a blanket recursive walk
+    would strip it (breaking byte-compat for old snapshots + leaving it uncovered for new
+    ones). Witness: a recovered `orchestrator_output` with `synthesis_step_id: None` changes
+    the snapshot hash (it is covered), while the carrier's own default-None field does not."""
+    state_summary, _ = _pause_context_reader()
+
+    def _hash(orchestrator_output: dict[str, Any]) -> str:
+        fan = FanOutResumeState(
+            orchestrator_output=orchestrator_output,
+            orchestrator_step_id="orch",
+            branches=(),
+            worker_count=1,
+        )
+        return _compute_snapshot_hash(
+            workflow_id="wf-pp",
+            run_id="run-1",
+            step_index=0,
+            state_summary=state_summary,
+            fan_out_resume=fan,
+        )
+
+    # A user-data `synthesis_step_id` key in recovered output is HASH-COVERED → its presence
+    # changes the hash (the path-aware strip never reaches into orchestrator_output).
+    assert _hash({"synthesis_step_id": None, "data": 1}) != _hash({"data": 1})
+    # And it survives in the strip output (not silently removed).
+    dumped = FanOutResumeState(
+        orchestrator_output={"synthesis_step_id": None, "data": 1},
+        orchestrator_step_id="orch",
+        branches=(),
+        worker_count=1,  # carrier synthesis_step_id defaults None
+    ).model_dump(mode="json")
+    _strip_default_fanout_resume_fields(dumped)
+    assert "synthesis_step_id" not in dumped  # the CARRIER's own field is stripped
+    assert "synthesis_step_id" in dumped["orchestrator_output"]  # the USER key is preserved
+
+
+def test_strip_none_orchestrator_effect_fence_resume_recurses_into_nested_child_snapshots() -> None:
+    """B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-EFFECT-BEARING byte-compat (NESTED) — the new
+    `orchestrator_effect_fence_resume` is a PauseSnapshot-level field, so a HIERARCHICAL
+    `paused_child_branches[].child_snapshot` serializes it (as null) inside the parent carrier's
+    `model_dump`. The recursive strip drops it when None at EVERY depth, so a pre-arc nested
+    HIERARCHICAL snapshot re-hashes byte-identically; a non-null carrier (a real nested orchestrator
+    fence pause) is KEPT (hash-covered). Mirrors the synthesis nested-strip [P1] for the new field."""
+    tree: dict[str, Any] = {
+        "branches": [],
+        "paused_child_branches": [
+            {
+                "branch_index": 0,
+                "step_id": "worker-0",
+                "child_snapshot": {
+                    "run_id": "child",
+                    "orchestrator_effect_fence_resume": None,  # nested PauseSnapshot field — drop
+                    "fan_out_resume": {"branches": []},
+                },
+            },
+            {
+                "branch_index": 1,
+                "step_id": "worker-1",
+                "child_snapshot": {
+                    "run_id": "grandchild",
+                    # a REAL nested orchestrator fence pause → non-None → hash-COVERED → KEPT.
+                    "orchestrator_effect_fence_resume": {
+                        "idempotency_key": "k",
+                        "step_id": "orch",
+                        "step_kind": "tool-step",
+                    },
+                },
+            },
+        ],
+    }
+    _strip_default_fanout_resume_fields(tree)
+    c0 = tree["paused_child_branches"][0]["child_snapshot"]
+    assert "orchestrator_effect_fence_resume" not in c0  # None → stripped (byte-compat)
+    c1 = tree["paused_child_branches"][1]["child_snapshot"]
+    assert c1["orchestrator_effect_fence_resume"]["idempotency_key"] == "k"  # non-None → KEPT
+
+
+def test_orchestrator_effect_fence_resume_absent_does_not_change_hash() -> None:
+    """Top-level byte-compat — passing `orchestrator_effect_fence_resume=None` (or omitting it)
+    yields the SAME hash as a pre-arc snapshot (the conditional include in `_compute_snapshot_hash`),
+    so every pre-existing snapshot validates unchanged."""
+    state_summary, _ = _pause_context_reader()
+    base = dict(workflow_id="wf-pp", run_id="run-1", step_index=0, state_summary=state_summary)
+    assert _compute_snapshot_hash(**base) == _compute_snapshot_hash(
+        **base, orchestrator_effect_fence_resume=None
+    )
+
+
+def _captured_with(**carrier: Any) -> PauseSnapshot:
+    """A hash-valid snapshot carrying exactly one topology resume carrier (or none),
+    captured through the real protocol — the exact shape a prior `pause` halt under that
+    topology would produce. `**carrier` is one of `fan_out_resume=` / `peer_fan_out_resume=`
+    / `handoff_resume=` / `evaluator_optimizer_resume=` / `effect_fence_resume=`, or empty
+    (a plain linear `step_index`-only pause)."""
+    return asyncio.run(
+        _protocol().capture_pause_snapshot(
+            workflow_id="wf-pp",
+            run_id="run-1",
+            step_index=0,
+            pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
+            **carrier,
+            descent_depth=0,
+        )
+    ).snapshot
+
+
+def _a_fan_out(synthesis_step_id: str | None = None) -> FanOutResumeState:
+    return FanOutResumeState(
+        orchestrator_output={},
+        orchestrator_step_id="orch",
+        branches=(),
+        worker_count=1,
+        synthesis_step_id=synthesis_step_id,
+    )
+
+
+def _manifest_topology(
+    topology: TopologyPattern, workflow_id: str = "wf-pp"
+) -> WorkflowManifestEntry:
+    """`_manifest` with an arbitrary topology — for the carrier/topology-mismatch
+    by-execution tests that resume a foreign carrier under each resuming strategy."""
+    return WorkflowManifestEntry(
+        workflow_id=workflow_id,
+        workload_class=WorkloadClass.PIPELINE_AUTOMATION,
+        persona_tier=_PAUSE_TIER,
+        engine_class=EngineClass.PURE_PATTERN_NO_ENGINE,
+        topology_pattern=topology,
+        layer_budgets=(),
+        fallback_chain=_CHAIN,
+        hitl_placements=(),
+        per_step_overrides={},
+    )
+
+
+def _run_topology(
+    *,
+    topology: TopologyPattern,
+    steps: list[WorkflowStep],
+    dispatcher: StepDispatcher,
+    ctx: DriverContext,
+    pause_snapshot_input: PauseSnapshot,
+) -> Any:
+    return execute_workflow(
+        _manifest_topology(topology),
+        steps,
+        run_id="run-1",
+        ctx=ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=_registry(dispatcher),
+        pause_snapshot_input=pause_snapshot_input,
+    )
+
+
+def test_resume_carrier_topology_mismatch_predicate_full_matrix() -> None:
+    """B-FANOUT-RESUME-CARRIER-TOPOLOGY-MISMATCH — the general carrier↔strategy predicate
+    fails closed for EVERY populated topology resume carrier resumed under a strategy that
+    does NOT read it, and admits the matching carrier. This generalizes the
+    B-FANOUT-PAUSE-SYNTHESIS synthesis-only guard to all carriers, synthesis-bearing or NOT
+    (the v1.58 §1 "non-synthesis ... unchanged" carve-out is now closed)."""
+    _LIN = _DriverStrategyStatus.LINEAR_INLINE
+    _PAR = _DriverStrategyStatus.PARALLELIZATION
+    _ORCH = _DriverStrategyStatus.ORCHESTRATOR_WORKERS
+    _HIER = _DriverStrategyStatus.HIERARCHICAL_DELEGATION
+    _HAND = _DriverStrategyStatus.DECENTRALIZED_HANDOFF
+    _EO = _DriverStrategyStatus.EVALUATOR_OPTIMIZER
+    all_strategies = frozenset({_LIN, _PAR, _ORCH, _HIER, _HAND, _EO})
+
+    # (carrier-bearing snapshot, the strategies that READ it). Every other strategy = mismatch.
+    cases: list[tuple[PauseSnapshot, frozenset[_DriverStrategyStatus]]] = [
+        (_captured_with(fan_out_resume=_a_fan_out()), frozenset({_ORCH, _HIER})),
+        (
+            _captured_with(peer_fan_out_resume=PeerFanOutResumeState(branches=(), branch_count=1)),
+            frozenset({_PAR}),
+        ),
+        (
+            _captured_with(handoff_resume=HandoffResumeState(completed_stages=(), stage_count=1)),
+            frozenset({_HAND}),
+        ),
+        (
+            _captured_with(
+                evaluator_optimizer_resume=EvaluatorOptimizerResumeState(completed_steps=())
+            ),
+            frozenset({_EO}),
+        ),
+        (
+            _captured_with(effect_fence_resume=EffectFenceResumeState(idempotency_key="k")),
+            frozenset({_LIN}),
+        ),
+    ]
+    for snap, readers in cases:
+        for strat in all_strategies:
+            diff = _resume_carrier_topology_mismatch(snap, strat)
+            if strat in readers:
+                assert diff is None, (snap, strat)
+            else:
+                assert diff is not None and diff.startswith("resume-carrier-topology-mismatch:")
+
+    # A carrier-less snapshot (a plain linear step_index resume) is NEVER a mismatch.
+    bare = _captured_with()
+    for strat in all_strategies:
+        assert _resume_carrier_topology_mismatch(bare, strat) is None
+
+    # The generalization subsumes the synthesis-bearing case (the only one guarded before
+    # this arc): a fan-out+synthesis snapshot resumed as PARALLELIZATION still fails closed
+    # on carrier-populated alone, independent of the synthesis identity.
+    synth_fan = _captured_with(fan_out_resume=_a_fan_out("synthesis"))
+    assert _resume_carrier_topology_mismatch(synth_fan, _PAR) is not None
+    assert _resume_carrier_topology_mismatch(synth_fan, _ORCH) is None
+
+
+def test_resume_foreign_carrier_under_parallelization_fails_closed_zero_dispatch() -> None:
+    """B-FANOUT-RESUME-CARRIER-TOPOLOGY-MISMATCH integration (by-execution) — resuming the
+    PARALLELIZATION strategy against a snapshot that populated a DIFFERENT topology's carrier
+    fails closed BEFORE any dispatch (zero branches re-run), proving the guard prevents the
+    fresh-run re-dispatch of effect-bearing branches. Covers every foreign (non-peer)
+    carrier, incl. the previously-unguarded NON-synthesis fan-out carrier."""
+    foreign: list[PauseSnapshot] = [
+        _captured_with(fan_out_resume=_a_fan_out()),  # ORCHESTRATOR carrier (non-synthesis)
+        _captured_with(handoff_resume=HandoffResumeState(completed_stages=(), stage_count=1)),
+        _captured_with(
+            evaluator_optimizer_resume=EvaluatorOptimizerResumeState(completed_steps=())
+        ),
+        _captured_with(effect_fence_resume=EffectFenceResumeState(idempotency_key="k")),
+    ]
+    for snap in foreign:
+        dispatcher = _CountingDispatcher()
+        ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+        result = _run(steps=_steps(2), dispatcher=dispatcher, ctx=ctx, pause_snapshot_input=snap)
+        assert result.status is RunStatus.FAILED
+        assert result.fail_class is not None
+        assert result.fail_class.startswith("resume-carrier-topology-mismatch:")
+        assert dispatcher.dispatched == []  # at-most-once: nothing re-dispatched fresh
+
+
+def test_resume_peer_carrier_under_foreign_topology_fails_closed_zero_dispatch() -> None:
+    """The reverse angle — a PARALLELIZATION (`peer_fan_out_resume`) snapshot resumed under
+    every OTHER strategy fails closed BEFORE any dispatch. Proves the entry guard fires for
+    EACH resuming strategy (not only PARALLELIZATION reading a foreign carrier), so the
+    generalization is exercised end-to-end for orchestrator / hierarchical / handoff /
+    evaluator-optimizer / linear resumes too."""
+    peer_snap = _captured_with(
+        peer_fan_out_resume=PeerFanOutResumeState(branches=(), branch_count=1)
+    )
+    for topology in (
+        TopologyPattern.ORCHESTRATOR_WORKERS,
+        TopologyPattern.HIERARCHICAL_DELEGATION,
+        TopologyPattern.DECENTRALIZED_HANDOFF,
+        TopologyPattern.EVALUATOR_OPTIMIZER,
+        TopologyPattern.SINGLE_THREADED_LINEAR,
+    ):
+        dispatcher = _CountingDispatcher()
+        ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+        result = _run_topology(
+            topology=topology,
+            steps=_steps(2),
+            dispatcher=dispatcher,
+            ctx=ctx,
+            pause_snapshot_input=peer_snap,
+        )
+        assert result.status is RunStatus.FAILED, topology
+        assert result.fail_class is not None, topology
+        assert result.fail_class.startswith("resume-carrier-topology-mismatch:"), topology
+        assert dispatcher.dispatched == [], topology
+
+
+def test_resume_branch_count_mismatch_fails_closed() -> None:
+    """Material-diff guard: a snapshot captured with branch_count=3 but resumed
+    against a 2-branch body fails CLOSED (the recovered ordinals no longer map to
+    these steps — a changed body) rather than re-dispatching a mismatched set."""
+    snapshot = _captured_snapshot(
+        peer_fan_out_resume=PeerFanOutResumeState(branches=(), branch_count=3)
+    )
+    ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    result = _run(
+        steps=_steps(2), dispatcher=_CountingDispatcher(), ctx=ctx, pause_snapshot_input=snapshot
+    )
+    assert result.status is RunStatus.FAILED
+    assert result.fail_class is not None
+    assert "branch-count-mismatch" in result.fail_class
+
+
+def test_resume_branch_identity_mismatch_fails_closed() -> None:
+    """A valid (same branch_count) snapshot whose recovered branch `step_id` does
+    NOT match the re-supplied body (a branch rename / reorder) fails CLOSED rather
+    than silently attributing the recovered output to the wrong step. The hash is
+    valid (captured for the renamed id), so this is caught by the in-strategy
+    identity guard, not the snapshot_hash."""
+    snapshot = _captured_snapshot(
+        peer_fan_out_resume=PeerFanOutResumeState(
+            branches=(
+                FanOutBranchResumeState(
+                    branch_index=0,
+                    step_id="renamed-branch",  # the body has "branch-0" at index 0
+                    terminal_status="completed",
+                    output={"stale": True},
+                ),
+            ),
+            branch_count=2,
+        )
+    )
+    ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    result = _run(
+        steps=_steps(2), dispatcher=_CountingDispatcher(), ctx=ctx, pause_snapshot_input=snapshot
+    )
+    assert result.status is RunStatus.FAILED
+    assert result.fail_class is not None
+    assert "branch-identity-mismatch" in result.fail_class
+
+
+def test_resume_redispatch_failing_branch_re_pauses_with_unioned_branches() -> None:
+    """A re-dispatched branch failing AGAIN under `pause` re-PAUSES with a snapshot
+    whose `branches` UNION the prior-recovered + this-round-terminal sets. branch-0
+    recovered; branch-1 fails on re-dispatch → the new snapshot carries BOTH
+    (branch-0's recovered output carried forward + branch-1 newly terminal)."""
+    snapshot = _captured_snapshot(
+        peer_fan_out_resume=PeerFanOutResumeState(
+            branches=(
+                FanOutBranchResumeState(
+                    branch_index=0,
+                    step_id="branch-0",
+                    terminal_status="completed",
+                    output={"role": "branch-0", "recovered": True},
+                ),
+            ),  # branch-1 + branch-2 absent → re-dispatchable
+            branch_count=3,
+        )
+    )
+    dispatcher = _CountingDispatcher(fail_step_ids={"branch-1"})
+    ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    result = _run(steps=_steps(3), dispatcher=dispatcher, ctx=ctx, pause_snapshot_input=snapshot)
+
+    # A re-dispatched branch failed under pause (protocol bound) → re-PAUSED.
+    assert result.status is RunStatus.PAUSED
+    new_snap = result.pause_snapshot
+    assert new_snap is not None and new_snap.peer_fan_out_resume is not None
+    by_index = {b.branch_index: b for b in new_snap.peer_fan_out_resume.branches}
+    # UNION: the prior-recovered branch-0 (carried forward, output preserved) +
+    # the newly-terminal branch-1 (failed this round).
+    assert 0 in by_index and 1 in by_index
+    assert by_index[0].output == {"role": "branch-0", "recovered": True}
+    assert by_index[1].output is None  # ran-and-errored → no output
+    # branch-0 was NOT re-dispatched (terminal-skipped); branch-1 WAS (and failed).
+    assert "branch-0" not in dispatcher.dispatched
+    assert "branch-1" in dispatcher.dispatched
+
+
+def test_pause_captures_in_flight_sibling_completed_output() -> None:
+    """A sibling IN-FLIGHT when the barrier cancels it (because another branch
+    failed) runs to completion under the shield; its successful OUTPUT must be
+    captured into the snapshot (else resume skips it as terminal + drops the
+    output). branch-0 is mid-dispatch (a brief sleep) when branch-1 fails →
+    branch-0 completes under the shield → its output is recovered."""
+    import time
+
+    class _InFlightCompletesDispatcher:
+        def __init__(self) -> None:
+            self._started = threading.Event()
+
+        def dispatch(
+            self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+        ) -> dict[str, Any]:
+            sid = str(step.step_id)
+            if sid == "branch-0":
+                self._started.set()
+                time.sleep(0.05)  # in-flight when branch-1 fails; completes under the shield
+                return {"role": "branch-0", "in_flight_completed": True}
+            assert self._started.wait(timeout=10.0), "branch-0 never started"
+            raise RuntimeError("branch-1 fails while branch-0 is in-flight")
+
+    ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    result = _run(steps=_steps(2), dispatcher=_InFlightCompletesDispatcher(), ctx=ctx)
+
+    assert result.status is RunStatus.PAUSED
+    snap = result.pause_snapshot
+    assert snap is not None and snap.peer_fan_out_resume is not None
+    by_index = {b.branch_index: b for b in snap.peer_fan_out_resume.branches}
+    # branch-0 was cancelled-but-completed → terminal `completed` WITH its output
+    # captured; without it `output` would be None and resume would drop it.
+    assert by_index[0].terminal_status == "completed"
+    assert by_index[0].output == {"role": "branch-0", "in_flight_completed": True}
+
+
+def test_peer_snapshot_hash_byte_identical_backward_compat() -> None:
+    """Backward-compat: a snapshot with NO `peer_fan_out_resume` (and no
+    `fan_out_resume`) hashes byte-identically to the pre-B-FANOUT-PAUSE formula
+    (each key is added to the canonical dict ONLY when present) → existing durable
+    snapshots still validate."""
+    summary = _pause_context_reader()[0]
+    with_field = _compute_snapshot_hash(
+        workflow_id="wf",
+        run_id="r",
+        step_index=0,
+        state_summary=summary,
+        peer_fan_out_resume=None,
+    )
+    legacy_canonical_hash = _compute_snapshot_hash(
+        workflow_id="wf", run_id="r", step_index=0, state_summary=summary
+    )
+    assert with_field == legacy_canonical_hash
+
+
+def test_peer_snapshot_survives_json_roundtrip() -> None:
+    """Durable-store fidelity: the peer fan-out snapshot round-trips through
+    model_dump(mode="json") → model_validate (the JournalWorkflowPauseStore path)
+    with `peer_fan_out_resume` intact AND the hash still valid."""
+    snapshot = _captured_snapshot(
+        peer_fan_out_resume=PeerFanOutResumeState(
+            branches=(
+                FanOutBranchResumeState(
+                    branch_index=0,
+                    step_id="branch-0",
+                    terminal_status="completed",
+                    output={"k": "v"},
+                ),
+                FanOutBranchResumeState(
+                    branch_index=1, step_id="branch-1", terminal_status="timed_out", output=None
+                ),
+            ),
+            branch_count=3,
+        )
+    )
+    restored = PauseSnapshot.model_validate(snapshot.model_dump(mode="json"))
+    assert restored == snapshot
+    assert restored.peer_fan_out_resume is not None
+    assert restored.snapshot_hash == _compute_snapshot_hash(
+        workflow_id=restored.workflow_id,
+        run_id=restored.run_id,
+        step_index=restored.step_index,
+        state_summary=restored.state_summary,
+        peer_fan_out_resume=restored.peer_fan_out_resume,
+    )
+
+
+# ---------------------------------------------------------------------------
+# B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE — a peer branch whose OWN dispatch raises the
+# runtime effect fence COMPOSES that ambiguous-pause THROUGH the fan-out barrier:
+# the run PAUSES with `effect_fence_paused_branches` populated, and resume re-enters
+# the branch with the operator's key-bound `EffectFenceResolution`. The real-fence
+# witness is the REAL `_execute_parallelization` TaskGroup+shield concurrency
+# machinery; the error is name-matched (harness-cp cannot import harness-runtime, the
+# same test-local pattern as the linear `test_workflow_driver_effect_fence_pause.py`).
+# ---------------------------------------------------------------------------
+
+
+class EffectFenceAmbiguousUncommittedError(Exception):
+    """Test-local stand-in for the runtime `effect_fence.EffectFenceAmbiguousUncommittedError`
+    (C-RT-31 §14.22). The driver name-matches `type(exc).__name__` (harness-cp cannot import
+    harness-runtime), so a same-named local class with the `idempotency_key` attribute is the
+    faithful CP-side witness — exercised through the REAL fan-out concurrency machinery."""
+
+    def __init__(self, *, idempotency_key: str) -> None:
+        self.idempotency_key = idempotency_key
+        super().__init__(f"ambiguous (key={idempotency_key!r})")
+
+
+class _FenceAmbiguousBranchDispatcher:
+    """Deterministic all-terminal-or-fence-paused peer fan-out: branch-0 completes cleanly
+    and sets a gate; branch-1 waits on that gate THEN raises the effect-fence ambiguous error.
+    So branch-0 reaches a terminal `completed`+output BEFORE branch-1's fence-pause halts the
+    barrier (no not-yet-dispatched / cancelled branch, no timing race). On RESUME (branch-0
+    terminal-skipped) it records each dispatched step's threaded `effect_fence_resolution`."""
+
+    def __init__(self, *, fence_key: str = "fence-key-branch-1") -> None:
+        self._gate = threading.Event()
+        self._fence_key = fence_key
+        self.dispatched: list[str] = []
+        self.seen_resolution: dict[str, Any] = {}
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        step_id = str(step.step_id)
+        self.dispatched.append(step_id)
+        self.seen_resolution[step_id] = getattr(step_context, "effect_fence_resolution", None)
+        if step_id == "branch-0":
+            self._gate.set()
+            return {"role": "branch-0", "echoed": dict(step.step_payload)}
+        # branch-1: wait until branch-0 has completed, then raise the fence-ambiguous error.
+        assert self._gate.wait(timeout=10.0), "branch-0 never completed"
+        raise EffectFenceAmbiguousUncommittedError(idempotency_key=self._fence_key)
+
+
+class _ResumeRecordingDispatcher:
+    """Resume-side recording dispatcher: records each dispatched step's threaded
+    `step_context.effect_fence_resolution` then SUCCEEDS (no gate, no raise) — to witness
+    that the driver THREADS the key-bound directive onto the re-entered fence-paused branch."""
+
+    def __init__(self) -> None:
+        self.dispatched: list[str] = []
+        self.seen_resolution: dict[str, Any] = {}
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        step_id = str(step.step_id)
+        self.dispatched.append(step_id)
+        self.seen_resolution[step_id] = getattr(step_context, "effect_fence_resolution", None)
+        return {"role": step_id, "echoed": dict(step.step_payload)}
+
+
+def test_peer_branch_effect_fence_ambiguous_composes_through_barrier_to_pause() -> None:
+    """REAL-FENCE WITNESS (PAUSE half): a peer branch whose OWN dispatch raises the
+    effect-fence ambiguous error does NOT become a `completed` cascade branch — it
+    composes through the REAL `_execute_parallelization` TaskGroup+shield to a genuine
+    PAUSE carrying `effect_fence_paused_branches` (branch-1 + its held reserve key),
+    DISJOINT from the terminal `branches` (branch-0 recovered). Proves the name-matched
+    catch fires through the concurrency machinery (not ExceptionGroup-swallowed)."""
+    ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    result = _run(steps=_steps(2), dispatcher=_FenceAmbiguousBranchDispatcher(), ctx=ctx)
+
+    assert result.status is RunStatus.PAUSED
+    assert result.fail_class is None
+    snap = result.pause_snapshot
+    assert snap is not None
+    # Labeled EFFECT_FENCE_AMBIGUOUS so the operator surface knows to supply a resolution.
+    assert snap.pause_reason is WorkflowPauseReason.EFFECT_FENCE_AMBIGUOUS
+    pr = snap.peer_fan_out_resume
+    assert pr is not None
+    assert pr.branch_count == 2
+    # branch-1 is the disjoint effect-fence-paused disposition (NOT a terminal branch).
+    assert {b.branch_index for b in pr.branches} == {0}  # only branch-0 terminal
+    efp = pr.effect_fence_paused_branches
+    assert len(efp) == 1
+    assert efp[0] == EffectFencePausedBranchResumeState(
+        branch_index=1,
+        step_id="branch-1",
+        step_kind="declarative-step",
+        idempotency_key="fence-key-branch-1",
+    )
+    # The snapshot is hash-valid (the carrier rides the snapshot hash, dropped-when-empty).
+    restored = PauseSnapshot.model_validate(snap.model_dump(mode="json"))
+    assert restored == snap
+
+
+def test_peer_branch_effect_fence_resume_threads_key_bound_resolution() -> None:
+    """REAL-FENCE WITNESS (resume half): resuming an effect-fence-paused peer fan-out
+    re-enters ONLY the fence-paused branch (branch-0 terminal-skipped), threading the
+    operator's `EffectFenceResolution` key-bound to THAT branch's held reserve. The
+    dispatcher APPLYING the resolution (RE_FIRE/SKIP/ABORT) is proven by the runtime
+    `test_effect_fence.py` witnesses; this is the CP producer half."""
+    # First: pause at branch-1, populating the carrier with the key.
+    paused = _run(
+        steps=_steps(2),
+        dispatcher=_FenceAmbiguousBranchDispatcher(),
+        ctx=cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())),
+    )
+    snap = paused.pause_snapshot
+    assert snap is not None and snap.peer_fan_out_resume is not None
+    efp = snap.peer_fan_out_resume.effect_fence_paused_branches
+    assert len(efp) == 1
+    key = efp[0].idempotency_key
+
+    # Resume: a holder carrying SKIP_AS_FIRED + a recording dispatcher; branch-1 re-dispatched.
+    resume_ctx = ResumeContext(effect_fence_resolution=EffectFenceResolution.SKIP_AS_FIRED)
+    rec = _ResumeRecordingDispatcher()
+    ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
+    # B-70 impl leg (CP spec v1.107 §1.1) — the uniform fallback now applies only
+    # when this location is the SOLE unaddressed member; this snapshot has exactly
+    # one fence-paused location, so its own key is trivially eligible.
+    result = _run(
+        steps=_steps(2),
+        dispatcher=rec,
+        ctx=cast(DriverContext, ctx_obj),
+        pause_snapshot_input=snap,
+        resume_context=resume_ctx,
+        effect_fence_uniform_fallback_eligible_key=key,
+    )
+
+    assert result.status is RunStatus.SUCCESS
+    # branch-0 terminal-skipped on resume; only branch-1 re-dispatched WITH the directive.
+    assert "branch-0" not in rec.dispatched
+    assert "branch-1" in rec.dispatched
+    threaded = rec.seen_resolution["branch-1"]
+    assert threaded is not None
+    assert threaded.resolution is EffectFenceResolution.SKIP_AS_FIRED
+    assert threaded.idempotency_key == key
+    # Non-consuming: re-reading resume_ctx.effect_fence_resolution still returns the value.
+    assert resume_ctx.effect_fence_resolution is EffectFenceResolution.SKIP_AS_FIRED
+
+
+class EffectFenceAbortedError(Exception):
+    """Test-local stand-in for the runtime `effect_fence.EffectFenceAbortedError` — raised when
+    the operator resolved an effect-fence pause with ABORT and the tool dispatcher applies it."""
+
+
+class _AbortOnResolutionDispatcher:
+    """Resume-side dispatcher that RAISES the test-local `EffectFenceAbortedError` when it sees an
+    ABORT directive threaded on the re-entered branch (simulating the runtime fence applying the
+    operator's ABORT) — so the driver's ABORT → terminal FAILED routing is witnessed."""
+
+    def __init__(self) -> None:
+        self.dispatched: list[str] = []
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        step_id = str(step.step_id)
+        self.dispatched.append(step_id)
+        directive = getattr(step_context, "effect_fence_resolution", None)
+        if directive is not None and directive.resolution is EffectFenceResolution.ABORT:
+            raise EffectFenceAbortedError(f"operator aborted {step_id}")
+        return {"role": step_id, "echoed": dict(step.step_payload)}
+
+
+def test_peer_branch_effect_fence_resume_abort_is_terminal_failed_not_repause() -> None:
+    """Codex [P1] regression: resuming an effect-fence-paused peer fan-out with an ABORT
+    resolution yields a TERMINAL `RunStatus.FAILED` (the operator gave up), NOT a re-pause —
+    even on the TEAM (cascade_policy=pause) tier where an ordinary branch failure WOULD pause."""
+    paused = _run(
+        steps=_steps(2),
+        dispatcher=_FenceAmbiguousBranchDispatcher(),
+        ctx=cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())),
+    )
+    snap = paused.pause_snapshot
+    assert snap is not None and snap.peer_fan_out_resume is not None
+    key = snap.peer_fan_out_resume.effect_fence_paused_branches[0].idempotency_key
+
+    resume_ctx = ResumeContext(effect_fence_resolution=EffectFenceResolution.ABORT)
+    rec = _AbortOnResolutionDispatcher()
+    ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
+    # B-70 impl leg (CP spec v1.107 §1.1) — the uniform fallback now applies only
+    # when this location is the SOLE unaddressed member; this snapshot has exactly
+    # one fence-paused location, so its own key is trivially eligible.
+    result = _run(
+        steps=_steps(2),
+        dispatcher=rec,
+        ctx=cast(DriverContext, ctx_obj),
+        pause_snapshot_input=snap,
+        resume_context=resume_ctx,
+        effect_fence_uniform_fallback_eligible_key=key,
+    )
+
+    assert result.status is RunStatus.FAILED
+    assert "parallelization-effect-fence-aborted" in (result.fail_class or "")
+    assert result.pause_snapshot is None  # terminal — NOT a re-pause
+    assert "branch-1" in rec.dispatched  # the aborted branch DID re-dispatch
+
+
+class _TwoFenceBranchDispatcher:
+    """Both peer branches raise the effect-fence ambiguous error with DISTINCT keys,
+    synchronized on a barrier so both are in-flight BEFORE either raises — the
+    PARALLELIZATION analogue of `_OrchestratorTwoFenceDispatcher` (fanout_pause.py),
+    producing TWO `effect_fence_paused_branches` in one pause (the multi-location
+    safety-invariant precondition)."""
+
+    def __init__(self) -> None:
+        self._barrier = threading.Barrier(2, timeout=10.0)
+        self.dispatched: list[str] = []
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        step_id = str(step.step_id)
+        self.dispatched.append(step_id)
+        self._barrier.wait()
+        raise EffectFenceAmbiguousUncommittedError(idempotency_key=f"fence-key-{step_id}")
+
+
+def _peer_two_fence_pause() -> PauseSnapshot:
+    """Drive a real PARALLELIZATION pause with BOTH peer branches effect-fence-paused;
+    return the snapshot (the per-branch-distinct precondition)."""
+    paused = _run(
+        steps=_steps(2),
+        dispatcher=_TwoFenceBranchDispatcher(),
+        ctx=cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())),
+    )
+    assert paused.status is RunStatus.PAUSED
+    snap = paused.pause_snapshot
+    assert snap is not None and snap.peer_fan_out_resume is not None
+    assert len(snap.peer_fan_out_resume.effect_fence_paused_branches) == 2
+    return snap
+
+
+class _AmbiguousUnlessDirectiveLeakedDispatcher:
+    """Resume-side witness for the no-map-two-unaddressed case: RAISES the ambiguous
+    fence error again if NO directive reached this branch (the expected safe outcome —
+    re-pause INERT, proving neither branch was misattributed a judgment)."""
+
+    def __init__(self) -> None:
+        self.dispatched: list[str] = []
+        self.seen_resolution: dict[str, Any] = {}
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        step_id = str(step.step_id)
+        self.dispatched.append(step_id)
+        directive = getattr(step_context, "effect_fence_resolution", None)
+        self.seen_resolution[step_id] = directive
+        if directive is None:
+            raise EffectFenceAmbiguousUncommittedError(idempotency_key=f"fence-key-{step_id}")
+        return {"role": step_id, "echoed": dict(step.step_payload)}
+
+
+def test_peer_no_map_two_unaddressed_branches_both_repause_inert() -> None:
+    """merge-gate test-witness finding: the ORCHESTRATOR_WORKERS + fan-out multi-location
+    safety witness (test_workflow_driver_fanout_pause.py) had no PARALLELIZATION peer
+    sibling, even though both strategies share the exact same `_resolve_effect_fence_gated`
+    helper. With NO map and BOTH peers fence-paused, `effect_fence_uniform_fallback_
+    eligible_key` is `None` (2 unaddressed locations) — NEITHER peer receives a directive;
+    both re-pause INERT rather than one being misattributed the uniform judgment intended
+    for at most one of them."""
+    snap = _peer_two_fence_pause()
+    resume_ctx = ResumeContext(
+        effect_fence_resolution=EffectFenceResolution.RE_FIRE
+    )  # single field only, no map
+    eligible_key = compute_effect_fence_uniform_fallback_eligible_key(snap, resume_ctx)
+    assert eligible_key is None  # 2 unaddressed locations -> no sole eligible member
+    rec = _AmbiguousUnlessDirectiveLeakedDispatcher()
+    ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
+    result = _run(
+        steps=_steps(2),
+        dispatcher=rec,
+        ctx=cast(DriverContext, ctx_obj),
+        pause_snapshot_input=snap,
+        resume_context=resume_ctx,
+        effect_fence_uniform_fallback_eligible_key=eligible_key,
+    )
+
+    assert result.status is RunStatus.PAUSED  # NOT SUCCESS — neither peer fired
+    assert rec.seen_resolution["branch-0"] is None
+    assert rec.seen_resolution["branch-1"] is None
+    snap2 = result.pause_snapshot
+    assert snap2 is not None and snap2.peer_fan_out_resume is not None
+    assert {b.idempotency_key for b in snap2.peer_fan_out_resume.effect_fence_paused_branches} == {
+        b.idempotency_key for b in snap.peer_fan_out_resume.effect_fence_paused_branches
+    }
+
+
+def test_peer_branch_effect_fence_resume_changed_kind_fails_closed() -> None:
+    """Codex [P1] R2 regression: an effect-fence-paused peer captured at one kind, then re-supplied
+    at the SAME step_id but a CHANGED step_kind on resume, FAILS CLOSED — threading the resolution
+    into a different-kind dispatcher would not reach the tool fence (the original effect would be
+    silently abandoned). The live-pause analogue of the crash-resume changed-kind guard."""
+    paused = _run(
+        steps=_steps(2),
+        dispatcher=_FenceAmbiguousBranchDispatcher(),
+        ctx=cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())),
+    )
+    snap = paused.pause_snapshot
+    assert snap is not None and snap.peer_fan_out_resume is not None
+
+    # Resume with branch-1 CHANGED from declarative-step → inference-step (same step_id).
+    changed = [
+        WorkflowStep(
+            step_id=StepID("branch-0"),
+            step_kind=StepKind.DECLARATIVE_STEP,
+            step_payload={"index": 0},
+        ),
+        WorkflowStep(
+            step_id=StepID("branch-1"), step_kind=StepKind.INFERENCE_STEP, step_payload={"index": 1}
+        ),
+    ]
+    resume_ctx = ResumeContext(effect_fence_resolution=EffectFenceResolution.SKIP_AS_FIRED)
+    ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
+    result = _run(
+        steps=changed,
+        dispatcher=_ResumeRecordingDispatcher(),
+        ctx=cast(DriverContext, ctx_obj),
+        pause_snapshot_input=snap,
+        resume_context=resume_ctx,
+    )
+
+    assert result.status is RunStatus.FAILED
+    assert "effect-fence-paused-kind-changed" in (result.fail_class or "")
+
+
+def test_peer_effect_fence_resume_under_proceed_tier_fails_closed() -> None:
+    """Codex [P2] R3 regression: an effect-fence pause captured under a strict (pause) tier, then
+    RESUMED under a manifest/persona that now resolves to CascadePolicy.PROCEED, FAILS CLOSED — the
+    PROCEED path has no pause/resolution handling, so honoring the resume there would degrade the
+    operator's ABORT / the at-most-once re-pause to a silent PARTIAL. The fence resume requires a
+    strict tier."""
+    paused = _run(
+        steps=_steps(2),
+        dispatcher=_FenceAmbiguousBranchDispatcher(),
+        ctx=cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())),
+    )
+    snap = paused.pause_snapshot
+    assert snap is not None and snap.peer_fan_out_resume is not None
+
+    resume_ctx = ResumeContext(effect_fence_resolution=EffectFenceResolution.SKIP_AS_FIRED)
+    ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
+    result = _run(
+        steps=_steps(2),
+        dispatcher=_ResumeRecordingDispatcher(),
+        ctx=cast(DriverContext, ctx_obj),
+        pause_snapshot_input=snap,
+        persona_tier=PersonaTier.SOLO_DEVELOPER,  # → CascadePolicy.PROCEED,
+        resume_context=resume_ctx,
+    )
+
+    assert result.status is RunStatus.FAILED
+    assert "effect-fence-resume-requires-strict-tier" in (result.fail_class or "")
+    assert result.pause_snapshot is None  # NOT a silent PARTIAL
+
+
+# ---------------------------------------------------------------------------
+# B-FANOUT-EFFECT-FENCE-PER-BRANCH-RESOLUTION (PARALLELIZATION) — two peers fence-pause in
+# one barrier; resume resolves them DIFFERENTLY via the `effect_fence_resolutions` per-key map.
+# The symmetric witness of the ORCHESTRATOR_WORKERS case (same shared resolver, peer site).
+# ---------------------------------------------------------------------------
+
+
+class _TwoFenceAmbiguousBranchDispatcher:
+    """Both peers raise the effect-fence ambiguous error with DISTINCT keys, synchronized on a
+    barrier so BOTH are in-flight before either raises → TWO `effect_fence_paused_branches` in
+    one pause (the per-branch-distinct precondition)."""
+
+    def __init__(self) -> None:
+        self._barrier = threading.Barrier(2, timeout=10.0)
+        self.dispatched: list[str] = []
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        step_id = str(step.step_id)
+        self.dispatched.append(step_id)
+        self._barrier.wait()
+        raise EffectFenceAmbiguousUncommittedError(idempotency_key=f"fence-key-{step_id}")
+
+
+def test_peer_per_branch_distinct_resolutions() -> None:
+    """REAL-FENCE WITNESS (PARALLELIZATION, per-branch-DISTINCT): two peers fence-pause in one
+    barrier; resume resolves branch-0 SKIP_AS_FIRED + branch-1 RE_FIRE via the per-key
+    `effect_fence_resolutions` map — each peer re-dispatched through the REAL
+    `_execute_parallelization` with ITS OWN key-bound resolution."""
+    paused = _run(
+        steps=_steps(2),
+        dispatcher=_TwoFenceAmbiguousBranchDispatcher(),
+        ctx=cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())),
+    )
+    assert paused.status is RunStatus.PAUSED
+    snap = paused.pause_snapshot
+    assert snap is not None and snap.peer_fan_out_resume is not None
+    efp = snap.peer_fan_out_resume.effect_fence_paused_branches
+    assert len(efp) == 2
+    key_by_index = {b.branch_index: b.idempotency_key for b in efp}
+
+    resume_ctx = ResumeContext(
+        effect_fence_resolutions={
+            key_by_index[0]: EffectFenceResolution.SKIP_AS_FIRED,
+            key_by_index[1]: EffectFenceResolution.RE_FIRE,
+        }
+    )
+    rec = _ResumeRecordingDispatcher()
+    ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
+    result = _run(
+        steps=_steps(2),
+        dispatcher=rec,
+        ctx=cast(DriverContext, ctx_obj),
+        pause_snapshot_input=snap,
+        resume_context=resume_ctx,
+    )
+
+    assert result.status is RunStatus.SUCCESS
+    b0 = rec.seen_resolution["branch-0"]
+    b1 = rec.seen_resolution["branch-1"]
+    assert b0 is not None and b0.resolution is EffectFenceResolution.SKIP_AS_FIRED
+    assert b0.idempotency_key == key_by_index[0]
+    assert b1 is not None and b1.resolution is EffectFenceResolution.RE_FIRE
+    assert b1.idempotency_key == key_by_index[1]
+
+
+class _PeerAbortGuardDispatcher:
+    """Resume-side abort-guard witness (PARALLELIZATION): an ABORT directive raises
+    EffectFenceAbortedError; a RE_FIRE / SKIP directive FIRES (records in `fired`); a None directive
+    (a suppressed sibling) RE-RAISES the ambiguous fence (re-pause, no fire)."""
+
+    def __init__(self) -> None:
+        self.dispatched: list[str] = []
+        self.fired: list[str] = []
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        step_id = str(step.step_id)
+        self.dispatched.append(step_id)
+        directive = getattr(step_context, "effect_fence_resolution", None)
+        if directive is None:
+            raise EffectFenceAmbiguousUncommittedError(idempotency_key=f"fence-key-{step_id}")
+        if directive.resolution is EffectFenceResolution.ABORT:
+            raise EffectFenceAbortedError(f"operator aborted {step_id}")
+        self.fired.append(step_id)
+        return {"role": step_id, "echoed": dict(step.step_payload)}
+
+
+def test_peer_mixed_abort_map_suppresses_sibling_refire() -> None:
+    """Codex [P1] (PARALLELIZATION): a mixed map {branch-0: ABORT, branch-1: RE_FIRE} must NOT fire
+    the RE_FIRE sibling before the ABORT fails the run — ABORT stays run-level-terminal. The RE_FIRE
+    sibling's directive is SUPPRESSED (re-pauses INERT, no fire); the run FAILs."""
+    paused = _run(
+        steps=_steps(2),
+        dispatcher=_TwoFenceAmbiguousBranchDispatcher(),
+        ctx=cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())),
+    )
+    snap = paused.pause_snapshot
+    assert snap is not None and snap.peer_fan_out_resume is not None
+    key_by_index = {
+        b.branch_index: b.idempotency_key
+        for b in snap.peer_fan_out_resume.effect_fence_paused_branches
+    }
+    resume_ctx = ResumeContext(
+        effect_fence_resolutions={
+            key_by_index[0]: EffectFenceResolution.ABORT,
+            key_by_index[1]: EffectFenceResolution.RE_FIRE,
+        }
+    )
+    rec = _PeerAbortGuardDispatcher()
+    ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
+    result = _run(
+        steps=_steps(2),
+        dispatcher=rec,
+        ctx=cast(DriverContext, ctx_obj),
+        pause_snapshot_input=snap,
+        resume_context=resume_ctx,
+    )
+
+    assert result.status is RunStatus.FAILED
+    assert "parallelization-effect-fence-aborted" in (result.fail_class or "")
+    assert result.pause_snapshot is None
+    assert "branch-1" not in rec.fired  # the RE_FIRE sibling was SUPPRESSED — did NOT fire
+
+
+# ---------------------------------------------------------------------------
+# B-FANOUT-EFFECT-FENCE-PER-BRANCH-SCOPED-ABORT (PARALLELIZATION) — the per-branch-SCOPED abort
+# (`ABORT_BRANCH`): fail JUST one peer, let the vouched-for siblings FIRE, fold survivors per
+# cascade_policy. The exact inverse of the run-level `ABORT` (which suppresses ALL siblings).
+# ---------------------------------------------------------------------------
+
+
+def test_peer_scoped_abort_fires_vouched_sibling() -> None:
+    """CRUX contrasting baseline (the inverse of test_peer_mixed_abort_map_suppresses_sibling_refire):
+    a mixed map {branch-0: ABORT_BRANCH, branch-1: RE_FIRE} fails JUST branch-0 (never re-dispatched
+    → at-most-once: its ambiguous effect is never re-fired) and FIRES the vouched-for RE_FIRE sibling
+    → the run folds the survivor → PARTIAL (NOT the run-FAILED that run-level ABORT forces)."""
+    paused = _run(
+        steps=_steps(2),
+        dispatcher=_TwoFenceAmbiguousBranchDispatcher(),
+        ctx=cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())),
+    )
+    snap = paused.pause_snapshot
+    assert snap is not None and snap.peer_fan_out_resume is not None
+    key_by_index = {
+        b.branch_index: b.idempotency_key
+        for b in snap.peer_fan_out_resume.effect_fence_paused_branches
+    }
+    resume_ctx = ResumeContext(
+        effect_fence_resolutions={
+            key_by_index[0]: EffectFenceResolution.ABORT_BRANCH,
+            key_by_index[1]: EffectFenceResolution.RE_FIRE,
+        }
+    )
+    rec = _PeerAbortGuardDispatcher()
+    ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
+    result = _run(
+        steps=_steps(2),
+        dispatcher=rec,
+        ctx=cast(DriverContext, ctx_obj),
+        pause_snapshot_input=snap,
+        resume_context=resume_ctx,
+    )
+
+    assert result.status is RunStatus.PARTIAL  # survivor folded, NOT the run-level-ABORT FAILED
+    # PARTIAL carries fail_class=None like every degraded PARTIAL (the aborted peer is a degraded
+    # terminal non-contributor; run-result provenance is FAILED-only — see the all-abort test).
+    assert result.fail_class is None
+    assert "branch-1" in rec.fired  # the vouched-for RE_FIRE sibling FIRED (NOT suppressed)
+    assert "branch-0" not in rec.dispatched  # the scoped-abort peer was NEVER re-dispatched
+
+
+def test_peer_all_scoped_abort_fails_not_vacuous_partial() -> None:
+    """All-abort guard (advisor watchpoint #1): when EVERY fence-paused peer is scoped-aborted there
+    is NO surviving contributor → the run is FAILED, NOT the vacuous PARTIAL the degraded check would
+    otherwise return with zero survivors. Neither peer is re-dispatched."""
+    paused = _run(
+        steps=_steps(2),
+        dispatcher=_TwoFenceAmbiguousBranchDispatcher(),
+        ctx=cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())),
+    )
+    snap = paused.pause_snapshot
+    assert snap is not None and snap.peer_fan_out_resume is not None
+    key_by_index = {
+        b.branch_index: b.idempotency_key
+        for b in snap.peer_fan_out_resume.effect_fence_paused_branches
+    }
+    resume_ctx = ResumeContext(
+        effect_fence_resolutions={
+            key_by_index[0]: EffectFenceResolution.ABORT_BRANCH,
+            key_by_index[1]: EffectFenceResolution.ABORT_BRANCH,
+        }
+    )
+    rec = _PeerAbortGuardDispatcher()
+    ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
+    result = _run(
+        steps=_steps(2),
+        dispatcher=rec,
+        ctx=cast(DriverContext, ctx_obj),
+        pause_snapshot_input=snap,
+        resume_context=resume_ctx,
+    )
+
+    assert result.status is RunStatus.FAILED  # NO survivor → FAILED, not a vacuous PARTIAL
+    assert "parallelization-effect-fence-branch-aborted" in (result.fail_class or "")
+    assert rec.dispatched == []  # neither scoped-abort peer was re-dispatched
+
+
+def test_peer_scoped_abort_iterative_repause() -> None:
+    """Iterative re-pause (advisor watchpoint #4): a map answering ONLY branch-0 (ABORT_BRANCH) while
+    branch-1 is left unresolved → branch-0 finalizes as a TERMINAL branch (next resume SKIPS it) and
+    branch-1 re-pauses INERT (carried forward as still-fence-paused) — the operator can resolve the
+    rest in a later resume."""
+    paused = _run(
+        steps=_steps(2),
+        dispatcher=_TwoFenceAmbiguousBranchDispatcher(),
+        ctx=cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())),
+    )
+    snap = paused.pause_snapshot
+    assert snap is not None and snap.peer_fan_out_resume is not None
+    key_by_index = {
+        b.branch_index: b.idempotency_key
+        for b in snap.peer_fan_out_resume.effect_fence_paused_branches
+    }
+    resume_ctx = ResumeContext(
+        effect_fence_resolutions={key_by_index[0]: EffectFenceResolution.ABORT_BRANCH}
+    )
+    rec = _PeerAbortGuardDispatcher()
+    ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
+    result = _run(
+        steps=_steps(2),
+        dispatcher=rec,
+        ctx=cast(DriverContext, ctx_obj),
+        pause_snapshot_input=snap,
+        resume_context=resume_ctx,
+    )
+
+    assert result.status is RunStatus.PAUSED
+    snap2 = result.pause_snapshot
+    assert snap2 is not None and snap2.peer_fan_out_resume is not None
+    # branch-0 (scoped-aborted) is now a TERMINAL branch — a later resume SKIPS it (never re-fires).
+    assert 0 in {b.branch_index for b in snap2.peer_fan_out_resume.branches}
+    # branch-1 (unresolved) re-paused INERT — still fence-paused, carried forward.
+    assert {b.branch_index for b in snap2.peer_fan_out_resume.effect_fence_paused_branches} == {1}
+    assert "branch-0" not in rec.dispatched  # the scoped-abort peer was NEVER re-dispatched
+
+
+def test_peer_mixed_run_abort_and_scoped_abort_deterministic() -> None:
+    """advisor [P1] (precedence): a mixed map {branch-0: ABORT, branch-1: ABORT_BRANCH} — run-level
+    ABORT dominates (the run FAILs), but the scoped-abort branch-1 MUST be recorded DETERMINISTICALLY
+    (excluded from re-dispatch), NOT nulled by the run-level-ABORT suppression and re-dispatched into
+    the ABORT race. Witnesses the interception-BEFORE-suppression ordering: branch-1 is NEVER
+    dispatched (before the fix it re-dispatched with a None directive)."""
+    paused = _run(
+        steps=_steps(2),
+        dispatcher=_TwoFenceAmbiguousBranchDispatcher(),
+        ctx=cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())),
+    )
+    snap = paused.pause_snapshot
+    assert snap is not None and snap.peer_fan_out_resume is not None
+    key_by_index = {
+        b.branch_index: b.idempotency_key
+        for b in snap.peer_fan_out_resume.effect_fence_paused_branches
+    }
+    resume_ctx = ResumeContext(
+        effect_fence_resolutions={
+            key_by_index[0]: EffectFenceResolution.ABORT,
+            key_by_index[1]: EffectFenceResolution.ABORT_BRANCH,
+        }
+    )
+    rec = _PeerAbortGuardDispatcher()
+    ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
+    result = _run(
+        steps=_steps(2),
+        dispatcher=rec,
+        ctx=cast(DriverContext, ctx_obj),
+        pause_snapshot_input=snap,
+        resume_context=resume_ctx,
+    )
+
+    assert result.status is RunStatus.FAILED  # run-level ABORT dominates
+    assert "parallelization-effect-fence-aborted" in (result.fail_class or "")
+    assert "branch-0" in rec.dispatched  # the ABORT branch re-dispatched → raised → FAILED
+    assert "branch-1" not in rec.dispatched  # the scoped-abort branch deterministically EXCLUDED
+
+
+def test_peer_scoped_abort_under_cascade_cancel_fails() -> None:
+    """Codex [P1] (CASCADE_CANCEL tier): a scoped-abort resumed under MULTI_TENANT_COMPLIANCE
+    (CascadePolicy.CASCADE_CANCEL) must FAIL — NOT a SUCCESS hiding the aborted branch. Per-branch
+    isolation is incompatible with cascade-cancel-everything; the cascade-cancel block returns before
+    the §25.15.1 degraded fold, so the scoped-abort guard must fire on this tier too."""
+    paused = _run(
+        steps=_steps(2),
+        dispatcher=_TwoFenceAmbiguousBranchDispatcher(),
+        ctx=cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())),
+    )
+    snap = paused.pause_snapshot
+    assert snap is not None and snap.peer_fan_out_resume is not None
+    key_by_index = {
+        b.branch_index: b.idempotency_key
+        for b in snap.peer_fan_out_resume.effect_fence_paused_branches
+    }
+    resume_ctx = ResumeContext(
+        effect_fence_resolutions={
+            key_by_index[0]: EffectFenceResolution.ABORT_BRANCH,
+            key_by_index[1]: EffectFenceResolution.RE_FIRE,
+        }
+    )
+    rec = _PeerAbortGuardDispatcher()
+    ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
+    result = _run(
+        steps=_steps(2),
+        dispatcher=rec,
+        ctx=cast(DriverContext, ctx_obj),
+        pause_snapshot_input=snap,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,  # → CascadePolicy.CASCADE_CANCEL,
+        resume_context=resume_ctx,
+    )
+
+    assert result.status is RunStatus.FAILED  # NOT a SUCCESS hiding the scoped-abort
+    assert "parallelization-effect-fence-branch-aborted" in (result.fail_class or "")
+
+
+def test_peer_scoped_abort_under_proceed_rejected_requires_strict_tier() -> None:
+    """Codex [P2] (PROCEED tier): an effect-fence pause resumed under SOLO_DEVELOPER
+    (CascadePolicy.PROCEED) is rejected FAIL-CLOSED with `...-requires-strict-tier` — and the
+    scoped-abort durable recording is SKIPPED (it would otherwise persist a `completed` terminal for
+    a resume that is then rejected → corrupt state). Fail-closed precedes durable writes."""
+    paused = _run(
+        steps=_steps(2),
+        dispatcher=_TwoFenceAmbiguousBranchDispatcher(),
+        ctx=cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())),
+    )
+    snap = paused.pause_snapshot
+    assert snap is not None and snap.peer_fan_out_resume is not None
+    key_by_index = {
+        b.branch_index: b.idempotency_key
+        for b in snap.peer_fan_out_resume.effect_fence_paused_branches
+    }
+    resume_ctx = ResumeContext(
+        effect_fence_resolutions={key_by_index[0]: EffectFenceResolution.ABORT_BRANCH}
+    )
+    rec = _PeerAbortGuardDispatcher()
+    ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
+    result = _run(
+        steps=_steps(2),
+        dispatcher=rec,
+        ctx=cast(DriverContext, ctx_obj),
+        pause_snapshot_input=snap,
+        persona_tier=PersonaTier.SOLO_DEVELOPER,  # → CascadePolicy.PROCEED,
+        resume_context=resume_ctx,
+    )
+
+    assert result.status is RunStatus.FAILED
+    assert "effect-fence-resume-requires-strict-tier" in (result.fail_class or "")
+    assert "branch-0" not in rec.dispatched  # no dispatch (rejected before the barrier)
+
+
+# ---------------------------------------------------------------------------
+# B-21 — a PEER branch whose recursive SUB_AGENT_DISPATCH child itself PAUSES
+# ---------------------------------------------------------------------------
+# `PeerFanOutResumeState` has NO `paused_child_branches`-equivalent field, unlike
+# `FanOutResumeState` (ORCHESTRATOR_WORKERS / HIERARCHICAL_DELEGATION). The runtime
+# `SUB_AGENT_DISPATCH` dispatcher is topology-agnostic (`sub_agent_dispatch.py`
+# raises `SubAgentChildPausedError` on any parent whose worker's child sub-workflow
+# returns `RunStatus.PAUSED`, regardless of the parent's `TopologyPattern`), so a
+# PARALLELIZATION peer branch that is a `SUB_AGENT_DISPATCH` step whose child PAUSES
+# hits the SAME error `_execute_orchestrator_workers` already handles — but
+# `_execute_parallelization` has no `except SubAgentChildPausedError` capture, so it
+# falls into the generic `except Exception` branch: the peer branch is recorded
+# terminal `completed` (dispatch-boundary, no output) and the child's `PauseSnapshot`
+# is silently DROPPED — the run reports a resumable PAUSED whose snapshot cannot
+# actually recover the suspended grandchild. Mirrors
+# `test_hierarchical_child_pause_resume_does_not_reexecute_grandchild`
+# (`test_workflow_driver_fanout_pause.py`) PARALLELIZATION-shaped.
+
+_peer_grandchild0_dispatches = [0]
+
+
+class _PeerGrandchildDispatcher:
+    """Child fan-out grandchild dispatcher: grandchild-0 completes (incrementing a
+    module counter + setting a gate); grandchild-1 waits then FAILS → the child fan-out
+    PAUSES with grandchild-0 terminal+recovered. Deterministic (the `_GatedFailDispatcher`
+    shape)."""
+
+    def __init__(self) -> None:
+        self._gate = threading.Event()
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        sid = str(step.step_id)
+        if sid == "child-orch":
+            return {"role": "child-orch"}
+        if sid == "grandchild-0":
+            _peer_grandchild0_dispatches[0] += 1
+            self._gate.set()
+            return {"role": "grandchild-0", "done": True}
+        assert self._gate.wait(timeout=10.0), "grandchild-0 never completed"
+        raise RuntimeError("grandchild-1 fails (after grandchild-0 completed) → child pauses")
+
+
+def _peer_child_manifest(workflow_id: str = "wf-child-peer") -> WorkflowManifestEntry:
+    """The recursive child's OWN manifest — `ORCHESTRATOR_WORKERS`, NOT PARALLELIZATION
+    (this module's `_manifest` always sets `topology_pattern=PARALLELIZATION`, so the
+    child needs its own constructor, mirroring `test_workflow_driver_fanout_pause.py`'s
+    `_manifest(..., _topology=...)` parameter this module's `_manifest` doesn't carry)."""
+    return WorkflowManifestEntry(
+        workflow_id=workflow_id,
+        workload_class=WorkloadClass.PIPELINE_AUTOMATION,
+        persona_tier=_PAUSE_TIER,
+        engine_class=EngineClass.PURE_PATTERN_NO_ENGINE,
+        topology_pattern=TopologyPattern.ORCHESTRATOR_WORKERS,
+        layer_budgets=(),
+        fallback_chain=_CHAIN,
+        hitl_placements=(),
+        per_step_overrides={},
+    )
+
+
+def _peer_child_steps() -> list[WorkflowStep]:
+    return [
+        WorkflowStep(
+            step_id=StepID("child-orch"),
+            step_kind=StepKind.DECLARATIVE_STEP,
+            step_payload={"role": "child-orch"},
+        ),
+        WorkflowStep(
+            step_id=StepID("grandchild-0"),
+            step_kind=StepKind.DECLARATIVE_STEP,
+            step_payload={"index": 0},
+        ),
+        WorkflowStep(
+            step_id=StepID("grandchild-1"),
+            step_kind=StepKind.DECLARATIVE_STEP,
+            step_payload={"index": 1},
+        ),
+    ]
+
+
+class _PeerFaithfulSubAgentDispatcher:
+    """A faithful double of `RuntimeSubAgentDispatcher` for the B-21 seam: dispatches a
+    REAL child `execute_workflow`, reading `step_context.child_resume` to
+    thread the child's resume snapshot, and RAISING `SubAgentChildPausedError`
+    (carrying the child's `PauseSnapshot`) when the child returns PAUSED — exactly what
+    the runtime dispatcher does at `sub_agent_dispatch.py`, and exactly the double
+    `test_workflow_driver_fanout_pause.py` uses for the ORCHESTRATOR_WORKERS analogue."""
+
+    def __init__(self, *, child_dispatcher: _PeerGrandchildDispatcher) -> None:
+        self._child_dispatcher = child_dispatcher
+        self.child_calls = 0
+        self.received_resume: list[Any] = []
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        self.child_calls += 1
+        child_resume = getattr(getattr(step_context, "child_resume", None), "child_snapshot", None)
+        self.received_resume.append(child_resume)
+        child_ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+        child_result = execute_workflow(
+            _peer_child_manifest("wf-child-peer"),
+            _peer_child_steps(),
+            run_id="child-run",
+            ctx=child_ctx,
+            default_model_binding=_DEFAULT_BINDING,
+            step_dispatchers=_registry(self._child_dispatcher),
+            pause_snapshot_input=child_resume,
+        )
+        if child_result.status is RunStatus.PAUSED:
+            assert child_result.pause_snapshot is not None
+            raise SubAgentChildPausedError(
+                capture=PausedChildCapture(
+                    child_workflow_id="wf-child-peer",
+                    child_snapshot=child_result.pause_snapshot,
+                    child_record_ref=None,
+                )
+            )
+        return dict(child_result.final_state or child_result.partial_state or {})
+
+
+class _PeerParentRegistry:
+    """Routes `DECLARATIVE_STEP` (a plain peer branch) and `SUB_AGENT_DISPATCH` (the
+    recursive peer branch) to their respective doubles."""
+
+    def __init__(self, *, sub_agent: _PeerFaithfulSubAgentDispatcher) -> None:
+        self._sub_agent = sub_agent
+        self._echo = _CountingDispatcher()
+
+    def lookup(self, step_kind: StepKind) -> StepDispatcher:
+        if step_kind is StepKind.SUB_AGENT_DISPATCH:
+            return cast(StepDispatcher, self._sub_agent)
+        if step_kind is StepKind.DECLARATIVE_STEP:
+            return cast(StepDispatcher, self._echo)
+        raise StepKindDispatcherNotBoundError(step_kind)
+
+
+def _peer_parent_steps() -> list[WorkflowStep]:
+    return [
+        WorkflowStep(
+            step_id=StepID("branch-0"),
+            step_kind=StepKind.DECLARATIVE_STEP,
+            step_payload={"index": 0},
+        ),
+        WorkflowStep(
+            step_id=StepID("branch-1-sub"),
+            step_kind=StepKind.SUB_AGENT_DISPATCH,
+            step_payload={"child_workflow_id": "wf-child-peer"},
+        ),
+    ]
+
+
+def test_parallelization_child_pause_resume_does_not_reexecute_grandchild() -> None:
+    """THE discriminating witness (B-21) — a grandchild completed INSIDE the child
+    before the pause is NOT re-executed when the parent resumes — the child re-enters
+    at ITS cursor (counter == 1), NOT a fresh re-dispatch (which would make counter ==
+    2). Also proves the carrier gap directly: `peer_fan_out_resume.paused_child_branches`
+    must exist + carry exactly one entry keyed at `branch-1-sub`, DISJOINT from
+    `branches` (a paused child is NOT a terminal branch — recording it terminal would
+    make resume skip it + drop the child's snapshot, the pre-fix behavior).
+
+    First run: PARALLELIZATION peer branch-0 completes; peer branch-1-sub is a
+    SUB_AGENT_DISPATCH whose REAL child fan-out PAUSES (grandchild-0 completes,
+    grandchild-1 fails) → the peer branch raises `SubAgentChildPausedError` → the
+    parent captures the child's snapshot + PAUSES. Resume: the parent re-dispatches
+    branch-1-sub WITH the child snapshot → the child re-enters at its cursor →
+    grandchild-0 is terminal-skipped (counter STAYS 1)."""
+    _peer_grandchild0_dispatches[0] = 0
+    child_dispatcher = _PeerGrandchildDispatcher()
+    sub_agent = _PeerFaithfulSubAgentDispatcher(child_dispatcher=child_dispatcher)
+    parent_registry = cast(StepDispatcherRegistry, _PeerParentRegistry(sub_agent=sub_agent))
+
+    # ---- First run: parent pauses on the recursive child PAUSE.
+    # NOTE: calls `execute_workflow` directly (not the `_run` helper) — `_run` wraps
+    # its `dispatcher` arg in `_Registry`, which only special-cases `DECLARATIVE_STEP`;
+    # `parent_registry` here is ALREADY a multi-kind `StepDispatcherRegistry`.
+    ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    paused = execute_workflow(
+        _manifest("wf-pp"),
+        _peer_parent_steps(),
+        run_id="run-1",
+        ctx=ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=parent_registry,
+    )
+
+    assert paused.status is RunStatus.PAUSED, f"parent must pause; got {paused.status}"
+    assert _peer_grandchild0_dispatches[0] == 1, "grandchild-0 ran exactly once on the first pass"
+    snap = paused.pause_snapshot
+    assert snap is not None and snap.peer_fan_out_resume is not None
+    pr = snap.peer_fan_out_resume
+    # The paused child is NOT a terminal branch — its ordinal must be ABSENT from
+    # `branches` (the pre-fix behavior records it there as `completed`/no-output,
+    # silently dropping the child snapshot).
+    assert 1 not in {b.branch_index for b in pr.branches}
+    pcb = pr.paused_child_branches
+    assert len(pcb) == 1, "the SUB_AGENT branch's child paused → exactly one paused-child branch"
+    assert pcb[0].branch_index == 1
+    assert pcb[0].step_id == "branch-1-sub"
+    assert pcb[0].child_snapshot.fan_out_resume is not None
+    # Hash covers the nested child cursor (a tampered child snapshot fails parent resume).
+    assert snap.snapshot_hash == _compute_snapshot_hash(
+        workflow_id=snap.workflow_id,
+        run_id=snap.run_id,
+        step_index=snap.step_index,
+        state_summary=snap.state_summary,
+        peer_fan_out_resume=pr,
+    )
+
+    # ---- Resume: the parent re-dispatches branch-1-sub WITH the child's snapshot.
+    sub_agent2 = _PeerFaithfulSubAgentDispatcher(child_dispatcher=child_dispatcher)
+    parent_registry2 = cast(StepDispatcherRegistry, _PeerParentRegistry(sub_agent=sub_agent2))
+    resume_ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    resumed = execute_workflow(
+        _manifest("wf-pp"),
+        _peer_parent_steps(),
+        run_id="run-1",
+        ctx=resume_ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=parent_registry2,
+        pause_snapshot_input=snap,
+    )
+
+    assert resumed.status is RunStatus.SUCCESS, f"resumed run must succeed; got {resumed.status}"
+    assert sub_agent2.child_calls == 1, "branch-1-sub re-dispatched exactly once on resume"
+    assert sub_agent2.received_resume == [
+        snap.peer_fan_out_resume.paused_child_branches[0].child_snapshot
+    ]
+    assert _peer_grandchild0_dispatches[0] == 1, (
+        "grandchild-0 NOT re-executed on resume (child re-enters at its cursor); "
+        "a broken re-entry (fresh re-dispatch) would make this 2"
+    )
+
+
+def test_peer_child_pause_byte_compat_hash_matches_pre_b21_snapshot() -> None:
+    """B-21 byte-compat: a PARALLELIZATION pause snapshot with NO paused-child branches
+    (the pre-B-21 shape) hashes byte-identically whether or not the new default-empty
+    `paused_child_branches` field is constructed explicitly — `_compute_snapshot_hash`
+    must DROP it from the canonical serialization when empty (mirrors
+    `test_synthesis_absent_fanout_snapshot_byte_compat_hash`)."""
+    pr = PeerFanOutResumeState(
+        branches=(
+            FanOutBranchResumeState(
+                branch_index=0,
+                step_id="branch-0",
+                terminal_status="completed",
+                output={"role": "branch-0"},
+            ),
+        ),
+        branch_count=1,
+    )  # paused_child_branches defaults to () — the pre-B-21 shape
+    state_summary = StateSummary(
+        relevant_entries=(),
+        summary_text="",
+        summary_hash="0" * 64,
+        idempotency_key=Identifier(""),
+        external_references=(),
+    )
+    hash_without_field = _compute_snapshot_hash(
+        workflow_id="wf-pp",
+        run_id="run-1",
+        step_index=0,
+        state_summary=state_summary,
+        peer_fan_out_resume=pr,
+    )
+    # Rebuild with paused_child_branches EXPLICITLY empty — must hash IDENTICALLY (the
+    # drop-when-empty discipline, not a coincidental default).
+    pr_explicit = pr.model_copy(update={"paused_child_branches": ()})
+    hash_explicit_empty = _compute_snapshot_hash(
+        workflow_id="wf-pp",
+        run_id="run-1",
+        step_index=0,
+        state_summary=state_summary,
+        peer_fan_out_resume=pr_explicit,
+    )
+    assert hash_without_field == hash_explicit_empty
+
+
+def test_peer_child_pause_under_cascade_cancel_fails_honestly() -> None:
+    """B-21 — a recursive child PAUSE under CascadePolicy.CASCADE_CANCEL (MULTI_TENANT_
+    COMPLIANCE tier) is NOT resumable (cascade-cancel has no pause boundary): the run
+    FAILS (the branch's re-raise sets `branch_failed` → the existing CASCADE_CANCEL
+    post-barrier FAILED fold), never a SUCCESS silently dropping the suspended child."""
+    child_dispatcher = _PeerGrandchildDispatcher()
+    sub_agent = _PeerFaithfulSubAgentDispatcher(child_dispatcher=child_dispatcher)
+    parent_registry = cast(StepDispatcherRegistry, _PeerParentRegistry(sub_agent=sub_agent))
+    ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    result = execute_workflow(
+        _manifest("wf-pp", PersonaTier.MULTI_TENANT_COMPLIANCE),  # → CascadePolicy.CASCADE_CANCEL
+        _peer_parent_steps(),
+        run_id="run-1",
+        ctx=ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=parent_registry,
+    )
+    assert result.status is RunStatus.FAILED
+    assert "parallelization-cascade-cancel" in (result.fail_class or "")
+    assert result.pause_snapshot is None  # no false-resumable PAUSED
+
+
+class _PeerOrderedPausingSubAgentDispatcher:
+    """Two SUB_AGENT peer branches, each dispatching a REAL child fan-out that PAUSES.
+    `branch-0` raises its `SubAgentChildPausedError` FIRST (sets a gate); `branch-1`
+    waits the gate then raises — so branch-0's raise cancels branch-1 while branch-1's
+    own child pause is draining in-flight, exercising the CANCELLATION-RACE path
+    (mirrors `_OrderedPausingSubAgentDispatcher` in `test_workflow_driver_fanout_pause.py`
+    PARALLELIZATION-shaped: NO orchestrator step[0], both peers are SUB_AGENT_DISPATCH)."""
+
+    def __init__(self) -> None:
+        self._gate = threading.Event()
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        sid = str(step.step_id)
+        child_ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+        child_result = execute_workflow(
+            _peer_child_manifest(f"wf-child-{sid}"),
+            _peer_child_steps(),
+            run_id=f"child-run-{sid}",
+            ctx=child_ctx,
+            default_model_binding=_DEFAULT_BINDING,
+            step_dispatchers=_registry(_PeerGrandchildDispatcher()),
+        )
+        assert child_result.status is RunStatus.PAUSED and child_result.pause_snapshot is not None
+        if sid == "branch-0":
+            self._gate.set()  # let branch-1 proceed AFTER branch-0 has its pause ready
+        else:
+            # branch-1: wait until branch-0 raised (→ cancels this branch) so this
+            # branch's pause drains in-flight under the shield → CancelledError path.
+            assert self._gate.wait(timeout=10.0)
+        raise SubAgentChildPausedError(
+            capture=PausedChildCapture(
+                child_workflow_id=f"wf-child-{sid}",
+                child_snapshot=child_result.pause_snapshot,
+                child_record_ref=None,
+            )
+        )
+
+
+class _TwoPeerSubAgentRegistry:
+    def __init__(self, *, sub_agent: _PeerOrderedPausingSubAgentDispatcher) -> None:
+        self._sub_agent = sub_agent
+
+    def lookup(self, step_kind: StepKind) -> StepDispatcher:
+        if step_kind is StepKind.SUB_AGENT_DISPATCH:
+            return cast(StepDispatcher, self._sub_agent)
+        raise StepKindDispatcherNotBoundError(step_kind)
+
+
+def test_peer_cancellation_race_captures_both_paused_children() -> None:
+    """B-21 (Codex [P1] precedent) — when one paused-child peer raises and the TaskGroup
+    cancels a SIBLING whose own child also paused in-flight, the cancelled sibling's
+    child PAUSE lands in `inflight.exception()` (the shielded drain suppresses it +
+    re-raises CancelledError). Both paused children MUST survive into
+    `paused_child_branches` — the cancelled one is NOT recorded as a terminal `completed`
+    branch (which would drop its snapshot on resume)."""
+    sub_agent = _PeerOrderedPausingSubAgentDispatcher()
+    registry = cast(StepDispatcherRegistry, _TwoPeerSubAgentRegistry(sub_agent=sub_agent))
+    peer_steps = [
+        WorkflowStep(
+            step_id=StepID("branch-0"), step_kind=StepKind.SUB_AGENT_DISPATCH, step_payload={}
+        ),
+        WorkflowStep(
+            step_id=StepID("branch-1"), step_kind=StepKind.SUB_AGENT_DISPATCH, step_payload={}
+        ),
+    ]
+    ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    result = execute_workflow(
+        _manifest("wf-pp-race"),
+        peer_steps,
+        run_id="run-race",
+        ctx=ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=registry,
+    )
+    assert result.status is RunStatus.PAUSED
+    snap = result.pause_snapshot
+    assert snap is not None and snap.peer_fan_out_resume is not None
+    pcb_indices = {p.branch_index for p in snap.peer_fan_out_resume.paused_child_branches}
+    terminal_indices = {b.branch_index for b in snap.peer_fan_out_resume.branches}
+    assert pcb_indices == {0, 1}, (
+        f"a paused child was DROPPED in the cancellation race: paused={pcb_indices}, "
+        f"terminal={terminal_indices}"
+    )
+    assert terminal_indices.isdisjoint(pcb_indices)
+
+
+def test_peer_cancellation_race_nested_explicit_operator_does_not_relabel_hitl_pending() -> None:
+    """B-32 contrasting baseline — a nested child that paused for an ordinary
+    `cascade_policy=pause` branch failure (its OWN `pause_reason` is EXPLICIT_OPERATOR,
+    NOT a HITL gate) must NOT relabel the parent's pause HITL_PENDING. Presence of a
+    paused child alone is not evidence of a HITL gate (out-of-family Codex [P1]: an
+    earlier draft that keyed only on `paused_child_dispositions` non-emptiness mislabeled
+    exactly this fixture's parent pause HITL_PENDING). Same fixture as
+    `test_peer_cancellation_race_captures_both_paused_children` — both children pause via
+    an ordinary grandchild `RuntimeError` (`_PeerGrandchildDispatcher`), never a HITL gate."""
+    sub_agent = _PeerOrderedPausingSubAgentDispatcher()
+    registry = cast(StepDispatcherRegistry, _TwoPeerSubAgentRegistry(sub_agent=sub_agent))
+    peer_steps = [
+        WorkflowStep(
+            step_id=StepID("branch-0"), step_kind=StepKind.SUB_AGENT_DISPATCH, step_payload={}
+        ),
+        WorkflowStep(
+            step_id=StepID("branch-1"), step_kind=StepKind.SUB_AGENT_DISPATCH, step_payload={}
+        ),
+    ]
+    ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    result = execute_workflow(
+        _manifest("wf-pp-race-reason"),
+        peer_steps,
+        run_id="run-race-reason",
+        ctx=ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=registry,
+    )
+    assert result.status is RunStatus.PAUSED
+    snap = result.pause_snapshot
+    assert snap is not None
+    assert snap.pause_reason is WorkflowPauseReason.EXPLICIT_OPERATOR
+
+
+def _build_minimal_state_summary() -> StateSummary:
+    from harness_is.state_ledger_entry_schema import Identifier
+
+    return StateSummary(
+        relevant_entries=(),
+        summary_text="minimal",
+        summary_hash="0" * 64,
+        idempotency_key=Identifier("idem-hitl-child"),
+        external_references=(),
+    )
+
+
+def _hitl_pending_child_pause_snapshot(workflow_id: str) -> PauseSnapshot:
+    """A bare `PauseSnapshot` with `pause_reason=HITL_PENDING` — a real HITL gate fired
+    inside the child (per the `HITLPauseRequestedSignal` name-match path at
+    `workflow_driver.py:4472-4497`, which this hand-built snapshot stands in for
+    directly, sidestepping the nested-`execute_workflow`-inside-a-`asyncio.to_thread`-
+    dispatched-branch construction that this snapshot's caller runs under)."""
+    return PauseSnapshot(
+        workflow_id=workflow_id,
+        run_id=f"{workflow_id}-run",
+        step_index=0,
+        pause_reason=WorkflowPauseReason.HITL_PENDING,
+        state_summary=_build_minimal_state_summary(),
+        snapshot_hash="a" * 64,
+        created_at=1_700_000_000_000,
+        state_ledger_anchor="b" * 64,
+    )
+
+
+class _SinglePeerHITLPausingSubAgentDispatcher:
+    """A single PARALLELIZATION peer (branch_count=1, no siblings — no TaskGroup
+    cancellation-race to synchronize) whose recursive child pauses `HITL_PENDING`."""
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        raise SubAgentChildPausedError(
+            capture=PausedChildCapture(
+                child_workflow_id="wf-child-branch-0",
+                child_snapshot=_hitl_pending_child_pause_snapshot("wf-child-branch-0"),
+                child_record_ref=None,
+            )
+        )
+
+
+def test_peer_child_hitl_pending_pause_labels_parent_hitl_pending() -> None:
+    """B-32 positive case — a nested child whose OWN pause_reason genuinely IS
+    HITL_PENDING labels the PARENT's pause HITL_PENDING too. A single-branch round (no
+    siblings) isolates the pause_reason-propagation behavior from any TaskGroup
+    cancellation-race timing."""
+    registry = cast(
+        StepDispatcherRegistry,
+        _TwoPeerSubAgentRegistry(sub_agent=cast(Any, _SinglePeerHITLPausingSubAgentDispatcher())),
+    )
+    peer_steps = [
+        WorkflowStep(
+            step_id=StepID("branch-0"), step_kind=StepKind.SUB_AGENT_DISPATCH, step_payload={}
+        ),
+    ]
+    ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    result = execute_workflow(
+        _manifest("wf-pp-hitl-positive"),
+        peer_steps,
+        run_id="run-hitl-positive",
+        ctx=ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=registry,
+    )
+    assert result.status is RunStatus.PAUSED
+    snap = result.pause_snapshot
+    assert snap is not None
+    pcb_indices = {p.branch_index for p in snap.peer_fan_out_resume.paused_child_branches}
+    assert pcb_indices == {0}, f"expected branch-0 captured as a paused child: {pcb_indices}"
+    assert snap.pause_reason is WorkflowPauseReason.HITL_PENDING
+
+
+def test_nested_peer_paused_child_branches_dropped_from_hash_when_empty() -> None:
+    """B-21 (out-of-family Codex round 1 [P1]) — a NESTED `peer_fan_out_resume` carrier's
+    own empty `paused_child_branches` must be dropped from the canonical hash
+    serialization, not just the outermost carrier's — `PeerFanOutResumeState.
+    paused_child_branches` is brand-new at B-21, so stripping it at any depth can only
+    ever RESTORE byte-compat (no durable snapshot predates it)."""
+    nested_peer = PeerFanOutResumeState(branches=(), branch_count=1)
+    dumped = nested_peer.model_dump(mode="json")
+    assert dumped.get("paused_child_branches") == []  # model_dump always emits it
+    _strip_default_fanout_resume_fields(dumped, strip_paused_child_branches=True)
+    assert "paused_child_branches" not in dumped, (
+        "a NESTED peer_fan_out_resume's own empty paused_child_branches must be "
+        "stripped when strip_paused_child_branches=True"
+    )
+
+
+def test_nested_fan_out_paused_child_branches_not_stripped_preserves_680_hash_compat() -> None:
+    """B-21 (out-of-family Codex round 2 [P1]) — the ORCHESTRATOR_WORKERS/HIERARCHICAL_
+    DELEGATION `FanOutResumeState.paused_child_branches` field predates B-21 (shipped at
+    #680); its nested occurrences have ALWAYS serialized with an unstripped `[]`. The
+    default `strip_paused_child_branches=False` must NOT drop it — flipping this default
+    would change the recomputed hash of a pre-B-21 durable snapshot with a nested
+    fan_out_resume cursor, rejecting it as corrupt on a later resume."""
+    nested_fan_out = FanOutResumeState(
+        orchestrator_output={"role": "child-orch"},
+        orchestrator_step_id="child-orch",
+        branches=(),
+        worker_count=1,
+    )
+    dumped = nested_fan_out.model_dump(mode="json")
+    assert dumped.get("paused_child_branches") == []
+    _strip_default_fanout_resume_fields(dumped)  # default: strip_paused_child_branches=False
+    assert dumped.get("paused_child_branches") == [], (
+        "the pre-#680-shipped fan_out_resume nested shape must stay UNSTRIPPED (byte-compat "
+        "with every pre-B-21 durable snapshot) — only the brand-new peer carrier opts in"
+    )
+
+
+def test_peer_resume_rejects_paused_child_branch_kind_changed() -> None:
+    """B-21 (out-of-family Codex [P1]) — a paused-child snapshot can only have been
+    captured from a SUB_AGENT_DISPATCH branch (the only kind that raises
+    `SubAgentChildPausedError`). If the operator edits the resumed workflow body so that
+    ordinal's step_kind changed (same step_id, different kind), threading
+    `child_resume_snapshot` onto a dispatcher that ignores it would silently discard the
+    suspended child behind a bogus SUCCESS. Resume must fail closed instead."""
+    child_dispatcher = _PeerGrandchildDispatcher()
+    sub_agent = _PeerFaithfulSubAgentDispatcher(child_dispatcher=child_dispatcher)
+    parent_registry = cast(StepDispatcherRegistry, _PeerParentRegistry(sub_agent=sub_agent))
+    ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    paused = execute_workflow(
+        _manifest("wf-pp"),
+        _peer_parent_steps(),
+        run_id="run-1",
+        ctx=ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=parent_registry,
+    )
+    assert paused.status is RunStatus.PAUSED
+    snap = paused.pause_snapshot
+    assert snap is not None
+
+    # Resume with branch-1-sub's step_kind CHANGED to DECLARATIVE_STEP (same step_id).
+    changed_steps = [
+        _peer_parent_steps()[0],
+        WorkflowStep(
+            step_id=StepID("branch-1-sub"),
+            step_kind=StepKind.DECLARATIVE_STEP,
+            step_payload={"index": 1},
+        ),
+    ]
+    resume_ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    resumed = execute_workflow(
+        _manifest("wf-pp"),
+        changed_steps,
+        run_id="run-1",
+        ctx=resume_ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=_registry(_CountingDispatcher()),
+        pause_snapshot_input=snap,
+    )
+    assert resumed.status is RunStatus.FAILED
+    assert "paused-child-kind-changed" in (resumed.fail_class or "")
+
+
+def test_peer_resume_rejects_paused_child_workflow_id_swap() -> None:
+    """B-31 — a same-step_id, same-step_kind edit that swaps the SUB_AGENT_DISPATCH
+    payload's `child_workflow_id` must fail closed, not silently thread the snapshot's
+    child-resume onto a dispatcher now targeting a DIFFERENT child workflow."""
+    child_dispatcher = _PeerGrandchildDispatcher()
+    sub_agent = _PeerFaithfulSubAgentDispatcher(child_dispatcher=child_dispatcher)
+    parent_registry = cast(StepDispatcherRegistry, _PeerParentRegistry(sub_agent=sub_agent))
+    ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    paused = execute_workflow(
+        _manifest("wf-pp"),
+        _peer_parent_steps(),
+        run_id="run-1",
+        ctx=ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=parent_registry,
+    )
+    assert paused.status is RunStatus.PAUSED
+    snap = paused.pause_snapshot
+    assert snap is not None
+    assert snap.peer_fan_out_resume is not None
+    assert snap.peer_fan_out_resume.paused_child_branches[0].child_workflow_id == "wf-child-peer"
+
+    # Resume with branch-1-sub's step_payload edited to target a DIFFERENT child
+    # workflow — same step_id, same step_kind (so the kind/identity guards above pass).
+    changed_steps = [
+        _peer_parent_steps()[0],
+        WorkflowStep(
+            step_id=StepID("branch-1-sub"),
+            step_kind=StepKind.SUB_AGENT_DISPATCH,
+            step_payload={"child_workflow_id": "wf-child-SWAPPED"},
+        ),
+    ]
+    resume_ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    resumed = execute_workflow(
+        _manifest("wf-pp"),
+        changed_steps,
+        run_id="run-1",
+        ctx=resume_ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=_registry(_CountingDispatcher()),
+        pause_snapshot_input=snap,
+    )
+    assert resumed.status is RunStatus.FAILED
+    assert "paused-child-workflow-id-changed" in (resumed.fail_class or "")
+
+
+# ---------------------------------------------------------------------------
+# B-72 impl leg (CP spec v1.108 §1) — pre-dispatch gate-owning material-diff +
+# fence-abort suppression (out-of-family Codex [P1], round 4).
+# ---------------------------------------------------------------------------
+
+
+class HITLPauseRequestedSignal(BaseException):
+    """Test-local stand-in for the runtime `hitl_gate_composer.HITLPauseRequestedSignal`
+    — a `BaseException`, name-matched by the driver (harness-cp cannot import
+    harness-runtime), exactly like `EffectFenceAmbiguousUncommittedError` above."""
+
+
+class _PreDispatchGateDispatcher:
+    """A SUB_AGENT_DISPATCH dispatcher that raises the HITL pause signal on every
+    call BEFORE any child run is ever created — the pre-dispatch gate-owning shape.
+    branch-0 (DECLARATIVE_STEP) completes normally via the shared `_CountingDispatcher`."""
+
+    def lookup(self, step_kind: StepKind) -> StepDispatcher:
+        if step_kind is StepKind.SUB_AGENT_DISPATCH:
+            return cast(StepDispatcher, self)
+        return cast(StepDispatcher, _CountingDispatcher())
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        raise HITLPauseRequestedSignal()
+
+
+def test_peer_resume_rejects_pre_dispatch_gate_owning_kind_changed() -> None:
+    """out-of-family Codex [P1], round 4 — a same-`step_id` edit that swaps a
+    pre-dispatch gate-owning branch's `step_kind` must fail closed (mirrors the
+    B-21 paused-child-kind-changed guard the sibling disposition already has)."""
+    ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    paused = execute_workflow(
+        _manifest("wf-pp"),
+        _peer_parent_steps(),
+        run_id="run-1",
+        ctx=ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=cast(StepDispatcherRegistry, _PreDispatchGateDispatcher()),
+    )
+    assert paused.status is RunStatus.PAUSED
+    snap = paused.pause_snapshot
+    assert snap is not None
+    assert snap.peer_fan_out_resume is not None
+    assert len(snap.peer_fan_out_resume.pre_dispatch_gate_owning_branches) == 1
+    assert snap.peer_fan_out_resume.pre_dispatch_gate_owning_branches[0].branch_index == 1
+
+    # Resume with branch-1-sub's step_kind CHANGED to DECLARATIVE_STEP (same step_id).
+    changed_steps = [
+        _peer_parent_steps()[0],
+        WorkflowStep(
+            step_id=StepID("branch-1-sub"),
+            step_kind=StepKind.DECLARATIVE_STEP,
+            step_payload={"index": 1},
+        ),
+    ]
+    resume_ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    resumed = execute_workflow(
+        _manifest("wf-pp"),
+        changed_steps,
+        run_id="run-1",
+        ctx=resume_ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=_registry(_CountingDispatcher()),
+        pause_snapshot_input=snap,
+    )
+    assert resumed.status is RunStatus.FAILED
+    assert "pre-dispatch-gate-owning-kind-changed" in (resumed.fail_class or "")
+
+
+class _PreDispatchGateOnInferenceStepDispatcher:
+    """Regression witness for out-of-family Codex [P2], round 5: a `PRE_ACTION`-
+    gated `INFERENCE_STEP` branch ALSO raises `HITLPauseRequestedSignal`
+    pre-dispatch (not only `SUB_AGENT_DISPATCH`/`SUB_AGENT_BOUNDARY`) — round 4's
+    own first fix wrongly hardcoded `SUB_AGENT_DISPATCH` as a resume-side
+    constant, which would reject an UNCHANGED resume of this exact shape. The
+    first dispatch of `branch-1-inf` raises the pause signal; every subsequent
+    dispatch (the resume) succeeds — mirroring a real HITL gate that was
+    approved out-of-band between pause and resume."""
+
+    def __init__(self) -> None:
+        self._raised = False
+        self.dispatched: list[str] = []
+
+    def lookup(self, step_kind: StepKind) -> StepDispatcher:
+        return cast(StepDispatcher, self)
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        step_id = str(step.step_id)
+        self.dispatched.append(step_id)
+        if step_id == "branch-1-inf" and not self._raised:
+            self._raised = True
+            raise HITLPauseRequestedSignal()
+        return {"role": step_id, "echoed": dict(step.step_payload)}
+
+
+def test_peer_resume_accepts_unchanged_pre_action_gated_inference_step() -> None:
+    """out-of-family Codex [P2], round 5 — round 4's own fix wrongly assumed a
+    pre-dispatch gate-owning branch is ALWAYS `SUB_AGENT_DISPATCH`. `PRE_ACTION`
+    can ALSO gate an `INFERENCE_STEP`/`TOOL_STEP` branch, raising the SAME
+    name-matched signal; an UNCHANGED resume of that branch must succeed, not be
+    rejected as a false `pre-dispatch-gate-owning-kind-changed` material diff."""
+    steps = [
+        WorkflowStep(
+            step_id=StepID("branch-0"),
+            step_kind=StepKind.DECLARATIVE_STEP,
+            step_payload={"index": 0},
+        ),
+        WorkflowStep(
+            step_id=StepID("branch-1-inf"),
+            step_kind=StepKind.INFERENCE_STEP,
+            step_payload={"prompt": "hi"},
+        ),
+    ]
+    dispatcher = _PreDispatchGateOnInferenceStepDispatcher()
+    ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    paused = execute_workflow(
+        _manifest("wf-pp"),
+        steps,
+        run_id="run-1",
+        ctx=ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=cast(StepDispatcherRegistry, dispatcher),
+    )
+    assert paused.status is RunStatus.PAUSED
+    snap = paused.pause_snapshot
+    assert snap is not None
+    assert snap.peer_fan_out_resume is not None
+    pre_dispatch = snap.peer_fan_out_resume.pre_dispatch_gate_owning_branches
+    assert len(pre_dispatch) == 1
+    assert pre_dispatch[0].branch_index == 1
+    assert pre_dispatch[0].step_kind == StepKind.INFERENCE_STEP.value
+    assert pre_dispatch[0].child_workflow_id is None, (
+        "an INFERENCE_STEP branch has no child_workflow_id to capture — must "
+        "stay None, not spuriously read a payload key that doesn't exist"
+    )
+
+    resume_ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    resumed = execute_workflow(
+        _manifest("wf-pp"),
+        steps,
+        run_id="run-1",
+        ctx=resume_ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=cast(StepDispatcherRegistry, dispatcher),
+        pause_snapshot_input=snap,
+    )
+    assert resumed.status is RunStatus.SUCCESS, (
+        f"expected an UNCHANGED PRE_ACTION-gated INFERENCE_STEP resume to succeed "
+        f"(no material diff at all); got status={resumed.status!r} "
+        f"fail_class={resumed.fail_class!r}"
+    )
+
+
+def test_peer_resume_rejects_pre_dispatch_gate_owning_workflow_id_swap() -> None:
+    """out-of-family Codex [P1], round 4 — a same-`step_id`, same-`step_kind` edit
+    that swaps a pre-dispatch gate-owning SUB_AGENT_DISPATCH branch's target
+    `child_workflow_id` must fail closed, not silently deliver the operator's
+    stored `hitl_response` to a dispatch now targeting a DIFFERENT child workflow
+    (mirrors the B-31 paused-child-workflow-id-changed guard)."""
+    ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    paused = execute_workflow(
+        _manifest("wf-pp"),
+        _peer_parent_steps(),
+        run_id="run-1",
+        ctx=ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=cast(StepDispatcherRegistry, _PreDispatchGateDispatcher()),
+    )
+    assert paused.status is RunStatus.PAUSED
+    snap = paused.pause_snapshot
+    assert snap is not None
+    assert snap.peer_fan_out_resume is not None
+    assert (
+        snap.peer_fan_out_resume.pre_dispatch_gate_owning_branches[0].child_workflow_id
+        == "wf-child-peer"
+    )
+
+    # Resume with branch-1-sub's step_payload edited to target a DIFFERENT child
+    # workflow — same step_id, same step_kind (so the identity/kind guards pass).
+    changed_steps = [
+        _peer_parent_steps()[0],
+        WorkflowStep(
+            step_id=StepID("branch-1-sub"),
+            step_kind=StepKind.SUB_AGENT_DISPATCH,
+            step_payload={"child_workflow_id": "wf-child-SWAPPED"},
+        ),
+    ]
+    resume_ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    resumed = execute_workflow(
+        _manifest("wf-pp"),
+        changed_steps,
+        run_id="run-1",
+        ctx=resume_ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=_registry(_CountingDispatcher()),
+        pause_snapshot_input=snap,
+    )
+    assert resumed.status is RunStatus.FAILED
+    assert "pre-dispatch-gate-owning-workflow-id-changed" in (resumed.fail_class or "")
+
+
+def _pre_dispatch_and_fence_peer_steps() -> list[WorkflowStep]:
+    return [
+        WorkflowStep(
+            step_id=StepID("branch-0"),
+            step_kind=StepKind.DECLARATIVE_STEP,
+            step_payload={"index": 0},
+        ),
+        WorkflowStep(
+            step_id=StepID("branch-1-sub"),
+            step_kind=StepKind.SUB_AGENT_DISPATCH,
+            step_payload={"child_workflow_id": "wf-child-peer"},
+        ),
+        WorkflowStep(
+            step_id=StepID("branch-2"),
+            step_kind=StepKind.DECLARATIVE_STEP,
+            step_payload={"index": 2},
+        ),
+    ]
+
+
+class _PreDispatchAndFenceCaptureDispatcher:
+    """branch-0 completes and sets a gate; branch-1-sub (SUB_AGENT_DISPATCH) waits
+    on it then raises the HITL pause signal (pre-dispatch gate-owning); branch-2
+    waits on it then raises the effect-fence-ambiguous error — so BOTH non-branch-0
+    dispositions land in the SAME pause snapshot (no not-yet-dispatched race)."""
+
+    def __init__(self) -> None:
+        self._gate = threading.Event()
+
+    def lookup(self, step_kind: StepKind) -> StepDispatcher:
+        return cast(StepDispatcher, self)
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        step_id = str(step.step_id)
+        if step_id == "branch-0":
+            self._gate.set()
+            return {"role": "branch-0", "echoed": dict(step.step_payload)}
+        assert self._gate.wait(timeout=10.0), f"{step_id} timed out waiting for branch-0"
+        if step_id == "branch-1-sub":
+            raise HITLPauseRequestedSignal()
+        raise EffectFenceAmbiguousUncommittedError(idempotency_key="fence-key-branch-2")
+
+
+class _ResumeAwareGateDispatcher:
+    """Mimics the REAL HITL gate composer's Step-0 short-circuit: consumes
+    `step_context.hitl_delivery_holder` if present and non-`None` (bypasses the
+    gate, dispatches as if approved); otherwise re-raises the pause signal
+    (the unconsumed-resume-forward shape)."""
+
+    def __init__(self) -> None:
+        self.dispatched_without_cell: list[str] = []
+        self.dispatched_with_cell: list[str] = []
+
+    def lookup(self, step_kind: StepKind) -> StepDispatcher:
+        if step_kind is StepKind.SUB_AGENT_DISPATCH:
+            return cast(StepDispatcher, self)
+        return cast(StepDispatcher, _AbortOnEffectFenceDispatcher())
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        holder = getattr(step_context, "hitl_delivery_holder", None)
+        resolved = holder.consume_and_clear() if holder is not None else None
+        if resolved is not None:
+            self.dispatched_with_cell.append(str(step.step_id))
+            return {"role": "resumed-gate", "echoed": dict(step.step_payload)}
+        self.dispatched_without_cell.append(str(step.step_id))
+        raise HITLPauseRequestedSignal()
+
+
+class _AbortOnEffectFenceDispatcher:
+    """The resume-side branch-0 (terminal-skipped, never actually called) and
+    branch-2 (effect-fence-paused, re-dispatched with the operator's ABORT
+    resolution threaded) dispatcher — raises unconditionally on ANY call, which
+    is exactly the ABORT-tier behavior (the branch fails, the run fails)."""
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        raise RuntimeError("effect-fence ABORT — branch fails per operator resolution")
+
+
+def test_peer_resume_suppresses_pre_dispatch_hitl_delivery_during_fence_abort() -> None:
+    """out-of-family Codex [P1], round 4 — when one recovered peer is pre-dispatch
+    HITL-paused and ANOTHER is effect-fence-paused, a `ResumeContext` carrying
+    both a `hitl_response` AND a run-level effect-fence `ABORT` must NOT construct
+    a `HITLDeliveryCell` for the HITL-approved peer — it must re-pause INERT
+    (never dispatch with an approved cell) so it cannot fire ahead of the ABORT
+    failing the run, mirroring the existing effect-fence-peer ABORT suppression."""
+    ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    paused = execute_workflow(
+        _manifest("wf-pp"),
+        _pre_dispatch_and_fence_peer_steps(),
+        run_id="run-1",
+        ctx=ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=cast(StepDispatcherRegistry, _PreDispatchAndFenceCaptureDispatcher()),
+    )
+    assert paused.status is RunStatus.PAUSED
+    snap = paused.pause_snapshot
+    assert snap is not None
+    pfr = snap.peer_fan_out_resume
+    assert pfr is not None
+    assert [b.branch_index for b in pfr.pre_dispatch_gate_owning_branches] == [1]
+    assert [b.branch_index for b in pfr.effect_fence_paused_branches] == [2]
+
+    resume_dispatcher = _ResumeAwareGateDispatcher()
+    resume_ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    resumed = execute_workflow(
+        _manifest("wf-pp"),
+        _pre_dispatch_and_fence_peer_steps(),
+        run_id="run-1",
+        ctx=resume_ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=cast(StepDispatcherRegistry, resume_dispatcher),
+        pause_snapshot_input=snap,
+        resume_context=ResumeContext(
+            hitl_response=HITLResult(
+                response=HITLResponse.APPROVE,
+                timestamp="2026-07-25T00:00:00Z",
+                audit_ledger_entry_id=EntryID("e-b72-round4"),
+                response_summary_hash="b" * 64,
+            ),
+            effect_fence_resolution=EffectFenceResolution.ABORT,
+        ),
+    )
+    assert resume_dispatcher.dispatched_with_cell == [], (
+        "the HITL-approved pre-dispatch gate-owning peer must NEVER receive a "
+        "delivery cell while a run-level effect-fence ABORT is in play — it fired "
+        f"anyway: {resume_dispatcher.dispatched_with_cell!r}"
+    )
+    assert resume_dispatcher.dispatched_without_cell == ["branch-1-sub"], (
+        "the peer must still be RE-DISPATCHED (re-pausing INERT with no cell), not "
+        "silently skipped — a vacuous pass would look identical to a real suppression"
+    )
+    # branch-1-sub re-pauses (no cell consumed → raises the signal again) and
+    # branch-2's ABORT-triggered failure folds into a fresh resumable snapshot
+    # (a bound `pause_resume_protocol` is still present) — the run PAUSES again
+    # rather than corrupting or silently succeeding; the load-bearing assertions
+    # are the two above (no delivery cell fired, the peer WAS re-dispatched).
+    assert resumed.status is RunStatus.PAUSED
+    resumed_snap = resumed.pause_snapshot
+    assert resumed_snap is not None
+    assert resumed_snap.peer_fan_out_resume is not None
+    assert [
+        b.branch_index for b in resumed_snap.peer_fan_out_resume.pre_dispatch_gate_owning_branches
+    ] == [1]
+
+
+class _WarmupCohortLeaderGateDispatcher:
+    """out-of-family Codex [P1], round 6 — round-2 resume dispatcher: branch-1-sub
+    and branch-2-sub form a size-2 SUB_AGENT_DISPATCH `cohort_key` cohort, so
+    branch-1-sub (the lower ordinal) is the §25.19 warm-up Phase-1 leader and
+    branch-2-sub is deferred to Phase 2. The leader re-raises the pre-dispatch
+    HITL signal (still unresolved) on every call, which fails Phase 1 — and per
+    the driver's own documented contract ("a Phase-1 failure WITHHOLDS the
+    followers ... entirely") Phase 2 (the follower) is never even attempted this
+    round. `dispatched` records every call that actually reached `dispatch()`,
+    so the test can assert branch-2-sub was genuinely never touched, not merely
+    absent from the snapshot by coincidence."""
+
+    def __init__(self) -> None:
+        self.dispatched: list[str] = []
+
+    def lookup(self, step_kind: StepKind) -> StepDispatcher:
+        return cast(StepDispatcher, self)
+
+    def cohort_key(self, binding: StepEffectiveBinding, step: WorkflowStep) -> str | None:
+        return "warmup-cohort-k" if step.step_kind is StepKind.SUB_AGENT_DISPATCH else None
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        self.dispatched.append(str(step.step_id))
+        raise HITLPauseRequestedSignal()
+
+
+def test_peer_resume_carries_forward_pre_dispatch_gate_owner_withheld_by_warmup() -> None:
+    """out-of-family Codex [P1], round 6 — a repeated resume starting with TWO
+    recovered pre-dispatch gate-owning peers must not silently drop the one that
+    §25.19 warm-up scheduling withholds this round (the leader re-pauses before
+    the follower is ever dispatched). Property 4's SOLE-unaddressed-member
+    safety test walks `pre_dispatch_gate_owning_branches` — an undercounted
+    tuple would let a LATER resume wrongly treat the remaining branch as sole
+    and deliver the operator's uniform response to it."""
+    steps = [
+        WorkflowStep(
+            step_id=StepID("branch-0"),
+            step_kind=StepKind.DECLARATIVE_STEP,
+            step_payload={"index": 0},
+        ),
+        WorkflowStep(
+            step_id=StepID("branch-1-sub"),
+            step_kind=StepKind.SUB_AGENT_DISPATCH,
+            step_payload={"child_workflow_id": "wf-child-1"},
+        ),
+        WorkflowStep(
+            step_id=StepID("branch-2-sub"),
+            step_kind=StepKind.SUB_AGENT_DISPATCH,
+            step_payload={"child_workflow_id": "wf-child-2"},
+        ),
+    ]
+    ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    paused = execute_workflow(
+        _manifest("wf-pp"),
+        steps,
+        run_id="run-1",
+        ctx=ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=cast(StepDispatcherRegistry, _PreDispatchGateDispatcher()),
+    )
+    assert paused.status is RunStatus.PAUSED
+    snap = paused.pause_snapshot
+    assert snap is not None
+    assert snap.peer_fan_out_resume is not None
+    assert [b.branch_index for b in snap.peer_fan_out_resume.pre_dispatch_gate_owning_branches] == [
+        1,
+        2,
+    ], "round 1 (no warm-up cohort) must record BOTH SUB_AGENT_DISPATCH peers"
+
+    resume_dispatcher = _WarmupCohortLeaderGateDispatcher()
+    resume_ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    resumed = execute_workflow(
+        _manifest("wf-pp"),
+        steps,
+        run_id="run-1",
+        ctx=resume_ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=cast(StepDispatcherRegistry, resume_dispatcher),
+        pause_snapshot_input=snap,
+    )
+    assert resume_dispatcher.dispatched == ["branch-1-sub"], (
+        "branch-2-sub must be genuinely WITHHELD by the warm-up split this round "
+        f"(never reach dispatch()) — got {resume_dispatcher.dispatched!r}"
+    )
+    assert resumed.status is RunStatus.PAUSED
+    resumed_snap = resumed.pause_snapshot
+    assert resumed_snap is not None
+    resumed_pfr = resumed_snap.peer_fan_out_resume
+    assert resumed_pfr is not None
+    assert sorted(b.branch_index for b in resumed_pfr.pre_dispatch_gate_owning_branches) == [
+        1,
+        2,
+    ], (
+        "branch-2-sub (withheld, neither re-fired nor resolved this round) must be "
+        "CARRIED FORWARD from the recovered set, not silently dropped"
+    )
+    _carried = next(b for b in resumed_pfr.pre_dispatch_gate_owning_branches if b.branch_index == 2)
+    assert _carried.step_id == "branch-2-sub"
+    assert _carried.step_kind == StepKind.SUB_AGENT_DISPATCH.value
+    assert _carried.child_workflow_id == "wf-child-2"
+
+
+class _RoundOneCohortLeaderOnlyGateDispatcher:
+    """Round-1 dispatcher for the exclusion test below: branch-0-sub and
+    branch-1-sub form the ONLY two branches (no non-beneficiary peer competing
+    for Phase 1, so there is no race — Phase 1 contains exactly the one leader
+    task). The leader (branch-0-sub) raises the pre-dispatch signal
+    unconditionally; the follower (branch-1-sub) is therefore withheld and never
+    reaches `dispatch()` in round 1 at all — genuinely untouched, not merely
+    absent by luck."""
+
+    def __init__(self) -> None:
+        self.dispatched: list[str] = []
+
+    def lookup(self, step_kind: StepKind) -> StepDispatcher:
+        return cast(StepDispatcher, self)
+
+    def cohort_key(self, binding: StepEffectiveBinding, step: WorkflowStep) -> str | None:
+        return "exclusion-cohort-k"
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        self.dispatched.append(str(step.step_id))
+        raise HITLPauseRequestedSignal()
+
+
+class _RoundTwoResolveOneFireOtherDispatcher:
+    """merge-gate test-witness lens round 1 [BLOCK] — the carry-forward union's
+    EXCLUSION conjuncts (`not in terminal_dispositions` etc.) had zero coverage;
+    every prior test only exercised the INCLUSION side (a withheld ordinal being
+    kept). This round-2 dispatcher makes branch-0-sub RESOLVE via its delivered
+    `HITLDeliveryCell` (consuming it → COMPLETES, entering `terminal_dispositions`
+    this round) while branch-1-sub — dispatched for the very first time, since
+    round 1's warm-up split withheld it entirely — raises the pause signal
+    unconditionally (a fresh, not-yet-recovered gate owner). The resumed
+    snapshot must show branch-0 DROPPED and branch-1 present, proving the
+    exclusion side, not just the inclusion side, of the carry-forward filter."""
+
+    def __init__(self) -> None:
+        self.dispatched: list[str] = []
+
+    def lookup(self, step_kind: StepKind) -> StepDispatcher:
+        return cast(StepDispatcher, self)
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        step_id = str(step.step_id)
+        self.dispatched.append(step_id)
+        if step_id == "branch-0-sub":
+            holder = getattr(step_context, "hitl_delivery_holder", None)
+            resolved = holder.consume_and_clear() if holder is not None else None
+            if resolved is not None:
+                return {"role": "branch-0-sub", "resolved": True}
+            raise HITLPauseRequestedSignal()
+        raise HITLPauseRequestedSignal()
+
+
+def test_peer_resume_excludes_pre_dispatch_gate_owner_resolved_this_round() -> None:
+    """merge-gate test-witness lens round 1 [BLOCK] — the round-6 carry-forward fix
+    (`_pre_dispatch_gate_owning_carried_forward`) must EXCLUDE a recovered ordinal
+    that resolves this round (completed / paused-child / fence-paused), not just
+    include one that neither re-fires nor resolves. Without the exclusion
+    conjuncts, an unconditional `frozenset(_recovered_pre_dispatch_gate_owning)`
+    would pass the withheld-branch test identically (the resolved ordinal is
+    harmlessly re-added to a set that already contains it via its own live
+    disposition in THAT test) but would wrongly keep a RESOLVED branch in the
+    new snapshot forever here, corrupting property 4's unaddressed-set
+    accounting on every subsequent resume cycle.
+
+    Uses the SAME real §25.19 warm-up cohort split as the withheld-branch test
+    (deterministic — no thread races), but with only 2 branches total (no
+    non-beneficiary peer in Phase 1) so the leader's own Phase-1 TaskGroup has
+    exactly one task and the follower is unambiguously never dispatched in
+    round 1."""
+    steps = [
+        WorkflowStep(
+            step_id=StepID("branch-0-sub"),
+            step_kind=StepKind.SUB_AGENT_DISPATCH,
+            step_payload={"child_workflow_id": "wf-child-0"},
+        ),
+        WorkflowStep(
+            step_id=StepID("branch-1-sub"),
+            step_kind=StepKind.SUB_AGENT_DISPATCH,
+            step_payload={"child_workflow_id": "wf-child-1"},
+        ),
+    ]
+    ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    round1_dispatcher = _RoundOneCohortLeaderOnlyGateDispatcher()
+    paused = execute_workflow(
+        _manifest("wf-pp"),
+        steps,
+        run_id="run-1",
+        ctx=ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=cast(StepDispatcherRegistry, round1_dispatcher),
+    )
+    assert round1_dispatcher.dispatched == ["branch-0-sub"], (
+        "branch-1-sub must be genuinely WITHHELD by the warm-up split in round 1 "
+        f"(never reach dispatch()) — got {round1_dispatcher.dispatched!r}"
+    )
+    assert paused.status is RunStatus.PAUSED
+    snap = paused.pause_snapshot
+    assert snap is not None
+    assert snap.peer_fan_out_resume is not None
+    assert [b.branch_index for b in snap.peer_fan_out_resume.pre_dispatch_gate_owning_branches] == [
+        0
+    ], "round 1: branch-0-sub (the leader) is the SOLE recorded pre-dispatch gate owner"
+
+    # Round 2 (resume, same 2 branches, no branch-count change): branch-0-sub is
+    # `hitl_uniform_fallback_eligible` (the SOLE unaddressed member of round 1's
+    # incoming snapshot) so it receives a delivery cell and resolves cleanly.
+    # branch-1-sub, dispatched for the first time ever, raises the pause signal
+    # unconditionally — a brand-new, not-yet-recovered pre-dispatch gate owner.
+    resume_dispatcher = _RoundTwoResolveOneFireOtherDispatcher()
+    resume_ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    resume_context = ResumeContext(
+        hitl_response=HITLResult(
+            response=HITLResponse.APPROVE,
+            timestamp="2026-07-25T00:00:00Z",
+            audit_ledger_entry_id=EntryID("e-b72-exclusion"),
+            response_summary_hash="c" * 64,
+        )
+    )
+    eligible_run_id = compute_hitl_uniform_fallback_eligible_run_id(snap, resume_context)
+    assert eligible_run_id is not None, (
+        "branch-0-sub must be the resume-cycle-wide SOLE unaddressed gate-owning "
+        "member so it actually receives a delivery cell this round"
+    )
+    resumed = execute_workflow(
+        _manifest("wf-pp"),
+        steps,
+        run_id="run-1",
+        ctx=resume_ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=cast(StepDispatcherRegistry, resume_dispatcher),
+        pause_snapshot_input=snap,
+        resume_context=resume_context,
+        hitl_uniform_fallback_eligible_run_id=eligible_run_id,
+    )
+    assert sorted(resume_dispatcher.dispatched) == ["branch-0-sub", "branch-1-sub"], (
+        f"both branches must be re-dispatched this round — got {resume_dispatcher.dispatched!r}"
+    )
+    assert resumed.status is RunStatus.PAUSED, (
+        f"expected branch-1-sub's fresh pre-dispatch pause to re-pause the run; "
+        f"got status={resumed.status!r} fail_class={resumed.fail_class!r}"
+    )
+    resumed_snap = resumed.pause_snapshot
+    assert resumed_snap is not None
+    resumed_pfr = resumed_snap.peer_fan_out_resume
+    assert resumed_pfr is not None
+    assert sorted(b.branch_index for b in resumed_pfr.pre_dispatch_gate_owning_branches) == [1], (
+        "branch-0 RESOLVED this round (consumed its delivery cell, completed) and "
+        "must be EXCLUDED from the carried-forward set — only branch-1 (the fresh "
+        f"this-round pause) should remain; got "
+        f"{sorted(b.branch_index for b in resumed_pfr.pre_dispatch_gate_owning_branches)!r}"
+    )
+
+
+class _RoundTwoResolveOnePausedChildFireOtherDispatcher:
+    """B-81 close-out (2) — the paused-child-resolves-this-round exclusion arm: branch-0-sub
+    consumes its delivered `HITLDeliveryCell` and acts as a faithful `RuntimeSubAgentDispatcher`
+    double — dispatching a REAL nested child `execute_workflow` that itself PAUSES (the same
+    `_PeerGrandchildDispatcher` shape `_PeerFaithfulSubAgentDispatcher` uses above) and
+    re-raising `SubAgentChildPausedError`. branch-1-sub raises the pause signal synchronously
+    and typically completes first, so this exercise most often lands in the in-flight-
+    cancellation-race catch (the `isinstance(_inflight_exc, SubAgentChildPausedError)` branch)
+    rather than the direct `except SubAgentChildPausedError` catch at branch-0's own dispatch —
+    both write `paused_child_dispositions[branch_index]` identically (merge-gate test-witness
+    lens, PR #1119), so either path equally exercises the exclusion conjunct this test targets.
+    branch-1-sub, dispatched for the first time, raises the pause signal unconditionally — a
+    fresh gate owner. The resumed snapshot must show branch-0 landing in `paused_child_branches`
+    (NOT re-counted as a carried-forward pre-dispatch gate owner) and branch-1 as the sole
+    pre-dispatch gate owner."""
+
+    def __init__(self, *, child_dispatcher: _PeerGrandchildDispatcher) -> None:
+        self._child_dispatcher = child_dispatcher
+        self.dispatched: list[str] = []
+
+    def lookup(self, step_kind: StepKind) -> StepDispatcher:
+        return cast(StepDispatcher, self)
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        step_id = str(step.step_id)
+        self.dispatched.append(step_id)
+        if step_id == "branch-0-sub":
+            holder = getattr(step_context, "hitl_delivery_holder", None)
+            resolved = holder.consume_and_clear() if holder is not None else None
+            assert resolved is not None, "branch-0-sub must receive its delivery cell this round"
+            child_resume = getattr(
+                getattr(step_context, "child_resume", None), "child_snapshot", None
+            )
+            child_ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+            child_result = execute_workflow(
+                _peer_child_manifest("wf-child-0"),
+                _peer_child_steps(),
+                run_id="child-run-0",
+                ctx=child_ctx,
+                default_model_binding=_DEFAULT_BINDING,
+                step_dispatchers=_registry(self._child_dispatcher),
+                pause_snapshot_input=child_resume,
+            )
+            assert child_result.status is RunStatus.PAUSED, (
+                "the nested child must itself pause (grandchild-1 fails under "
+                f"cascade_policy=pause); got status={child_result.status!r}"
+            )
+            assert child_result.pause_snapshot is not None
+            raise SubAgentChildPausedError(
+                capture=PausedChildCapture(
+                    child_workflow_id="wf-child-0",
+                    child_snapshot=child_result.pause_snapshot,
+                    child_record_ref=None,
+                )
+            )
+        raise HITLPauseRequestedSignal()
+
+
+def test_peer_resume_excludes_pre_dispatch_gate_owner_paused_child_this_round() -> None:
+    """B-81 close-out (2) — the round-6 carry-forward fix's `paused_child_dispositions`
+    exclusion conjunct must actually discriminate: a recovered pre-dispatch gate-owning
+    branch whose delivered cell leads to a REAL nested child pause (not a clean complete)
+    must be excluded from `pre_dispatch_gate_owning_branches` and land in
+    `paused_child_branches` instead — the sibling arm to
+    `test_peer_resume_excludes_pre_dispatch_gate_owner_resolved_this_round`'s
+    `terminal_dispositions` exclusion.
+
+    Mutation-probe note: deleting the `and _bi not in paused_child_dispositions` conjunct
+    from `_pre_dispatch_gate_owning_carried_forward` should make branch-0 wrongly reappear
+    in `pre_dispatch_gate_owning_branches` alongside branch-1."""
+    _peer_grandchild0_dispatches[0] = 0
+    steps = [
+        WorkflowStep(
+            step_id=StepID("branch-0-sub"),
+            step_kind=StepKind.SUB_AGENT_DISPATCH,
+            step_payload={"child_workflow_id": "wf-child-0"},
+        ),
+        WorkflowStep(
+            step_id=StepID("branch-1-sub"),
+            step_kind=StepKind.SUB_AGENT_DISPATCH,
+            step_payload={"child_workflow_id": "wf-child-1"},
+        ),
+    ]
+    ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    round1_dispatcher = _RoundOneCohortLeaderOnlyGateDispatcher()
+    paused = execute_workflow(
+        _manifest("wf-pp"),
+        steps,
+        run_id="run-1",
+        ctx=ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=cast(StepDispatcherRegistry, round1_dispatcher),
+    )
+    assert paused.status is RunStatus.PAUSED
+    snap = paused.pause_snapshot
+    assert snap is not None
+    assert snap.peer_fan_out_resume is not None
+    assert [b.branch_index for b in snap.peer_fan_out_resume.pre_dispatch_gate_owning_branches] == [
+        0
+    ]
+
+    resume_dispatcher = _RoundTwoResolveOnePausedChildFireOtherDispatcher(
+        child_dispatcher=_PeerGrandchildDispatcher()
+    )
+    resume_ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    resume_context = ResumeContext(
+        hitl_response=HITLResult(
+            response=HITLResponse.APPROVE,
+            timestamp="2026-07-26T00:00:00Z",
+            audit_ledger_entry_id=EntryID("e-b81-paused-child"),
+            response_summary_hash="d" * 64,
+        )
+    )
+    eligible_run_id = compute_hitl_uniform_fallback_eligible_run_id(snap, resume_context)
+    assert eligible_run_id is not None
+    resumed = execute_workflow(
+        _manifest("wf-pp"),
+        steps,
+        run_id="run-1",
+        ctx=resume_ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=cast(StepDispatcherRegistry, resume_dispatcher),
+        pause_snapshot_input=snap,
+        resume_context=resume_context,
+        hitl_uniform_fallback_eligible_run_id=eligible_run_id,
+    )
+    assert sorted(resume_dispatcher.dispatched) == ["branch-0-sub", "branch-1-sub"]
+    assert resumed.status is RunStatus.PAUSED, (
+        f"expected the run to re-pause (branch-1's fresh gate + branch-0's paused child); "
+        f"got status={resumed.status!r} fail_class={resumed.fail_class!r}"
+    )
+    resumed_snap = resumed.pause_snapshot
+    assert resumed_snap is not None
+    resumed_pfr = resumed_snap.peer_fan_out_resume
+    assert resumed_pfr is not None
+    assert [b.branch_index for b in resumed_pfr.pre_dispatch_gate_owning_branches] == [1], (
+        "branch-0 PAUSED as a nested child this round and must be EXCLUDED from the "
+        "carried-forward pre-dispatch gate-owning set — only branch-1 (the fresh "
+        f"this-round pause) should remain; got "
+        f"{[b.branch_index for b in resumed_pfr.pre_dispatch_gate_owning_branches]!r}"
+    )
+    assert [b.branch_index for b in resumed_pfr.paused_child_branches] == [0], (
+        "branch-0 must land in paused_child_branches instead of being silently dropped"
+    )
+    assert resumed_pfr.paused_child_branches[0].child_workflow_id == "wf-child-0"
+
+
+class _RoundTwoResolveOneFenceAmbiguousFireOtherDispatcher:
+    """B-81 close-out (2) — the effect-fence-resolves-this-round exclusion arm: branch-0-sub
+    consumes its delivered `HITLDeliveryCell` and its OWN dispatch raises the runtime effect
+    fence's ambiguous-uncommitted error (name-matched; `EffectFenceAmbiguousUncommittedError`
+    test-local stand-in defined above). branch-1-sub, dispatched for the first time, raises
+    the pause signal unconditionally — a fresh gate owner."""
+
+    def __init__(self) -> None:
+        self.dispatched: list[str] = []
+
+    def lookup(self, step_kind: StepKind) -> StepDispatcher:
+        return cast(StepDispatcher, self)
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        step_id = str(step.step_id)
+        self.dispatched.append(step_id)
+        if step_id == "branch-0-sub":
+            holder = getattr(step_context, "hitl_delivery_holder", None)
+            resolved = holder.consume_and_clear() if holder is not None else None
+            assert resolved is not None, "branch-0-sub must receive its delivery cell this round"
+            raise EffectFenceAmbiguousUncommittedError(idempotency_key="fence-key-b81")
+        raise HITLPauseRequestedSignal()
+
+
+def test_peer_resume_excludes_pre_dispatch_gate_owner_effect_fence_paused_this_round() -> None:
+    """B-81 close-out (2) — the round-6 carry-forward fix's `effect_fence_paused_dispositions`
+    exclusion conjunct must actually discriminate: a recovered pre-dispatch gate-owning branch
+    whose delivered cell leads to an effect-fence-ambiguous dispatch (not a clean complete)
+    must be excluded from `pre_dispatch_gate_owning_branches` and land in
+    `effect_fence_paused_branches` instead.
+
+    Mutation-probe note: deleting the `and _bi not in effect_fence_paused_dispositions`
+    conjunct should make branch-0 wrongly reappear in `pre_dispatch_gate_owning_branches`
+    alongside branch-1."""
+    steps = [
+        WorkflowStep(
+            step_id=StepID("branch-0-sub"),
+            step_kind=StepKind.SUB_AGENT_DISPATCH,
+            step_payload={"child_workflow_id": "wf-child-0"},
+        ),
+        WorkflowStep(
+            step_id=StepID("branch-1-sub"),
+            step_kind=StepKind.SUB_AGENT_DISPATCH,
+            step_payload={"child_workflow_id": "wf-child-1"},
+        ),
+    ]
+    ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    round1_dispatcher = _RoundOneCohortLeaderOnlyGateDispatcher()
+    paused = execute_workflow(
+        _manifest("wf-pp"),
+        steps,
+        run_id="run-1",
+        ctx=ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=cast(StepDispatcherRegistry, round1_dispatcher),
+    )
+    assert paused.status is RunStatus.PAUSED
+    snap = paused.pause_snapshot
+    assert snap is not None
+    assert snap.peer_fan_out_resume is not None
+    assert [b.branch_index for b in snap.peer_fan_out_resume.pre_dispatch_gate_owning_branches] == [
+        0
+    ]
+
+    resume_dispatcher = _RoundTwoResolveOneFenceAmbiguousFireOtherDispatcher()
+    resume_ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    resume_context = ResumeContext(
+        hitl_response=HITLResult(
+            response=HITLResponse.APPROVE,
+            timestamp="2026-07-26T00:00:00Z",
+            audit_ledger_entry_id=EntryID("e-b81-fence-ambiguous"),
+            response_summary_hash="e" * 64,
+        )
+    )
+    eligible_run_id = compute_hitl_uniform_fallback_eligible_run_id(snap, resume_context)
+    assert eligible_run_id is not None
+    resumed = execute_workflow(
+        _manifest("wf-pp"),
+        steps,
+        run_id="run-1",
+        ctx=resume_ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=cast(StepDispatcherRegistry, resume_dispatcher),
+        pause_snapshot_input=snap,
+        resume_context=resume_context,
+        hitl_uniform_fallback_eligible_run_id=eligible_run_id,
+    )
+    assert sorted(resume_dispatcher.dispatched) == ["branch-0-sub", "branch-1-sub"]
+    assert resumed.status is RunStatus.PAUSED, (
+        f"expected the run to re-pause (branch-1's fresh gate + branch-0's fence-ambiguous "
+        f"pause); got status={resumed.status!r} fail_class={resumed.fail_class!r}"
+    )
+    resumed_snap = resumed.pause_snapshot
+    assert resumed_snap is not None
+    resumed_pfr = resumed_snap.peer_fan_out_resume
+    assert resumed_pfr is not None
+    assert [b.branch_index for b in resumed_pfr.pre_dispatch_gate_owning_branches] == [1], (
+        "branch-0 fence-ambiguous-paused this round and must be EXCLUDED from the "
+        "carried-forward pre-dispatch gate-owning set — only branch-1 (the fresh "
+        f"this-round pause) should remain; got "
+        f"{[b.branch_index for b in resumed_pfr.pre_dispatch_gate_owning_branches]!r}"
+    )
+    assert [b.branch_index for b in resumed_pfr.effect_fence_paused_branches] == [0], (
+        "branch-0 must land in effect_fence_paused_branches instead of being silently dropped"
+    )
+    assert resumed_pfr.effect_fence_paused_branches[0].idempotency_key == "fence-key-b81"
+
+
+# ---------------------------------------------------------------------------
+# B-39/B-48 Phase-0 lease-leak fix — PARALLELIZATION twins (round-6
+# concurrency-lens BLOCK named 4 symmetric sites; the ORCHESTRATOR_WORKERS
+# pair is witnessed in test_workflow_driver_fanout_pause.py — these two cover
+# `_cancel_fanout`/`_proceed_fanout`, which had zero coverage anywhere in the
+# repo before test-witness lens round 7 flagged the gap).
+# ---------------------------------------------------------------------------
+
+
+def _two_resumed_peer_targets_snapshot() -> PauseSnapshot:
+    """Two resumed durable-HITL peer targets (`branch-0`, `branch-1`) + one
+    genuinely fresh peer sibling (`branch-2`, absent from `paused_child_branches`)."""
+    return _captured_snapshot(
+        peer_fan_out_resume=PeerFanOutResumeState(
+            branches=(),
+            branch_count=3,
+            paused_child_branches=(
+                PausedChildBranchResumeState(
+                    branch_index=0,
+                    step_id="branch-0",
+                    child_workflow_id="wf-child-a",
+                    child_snapshot=_hitl_pending_child_pause_snapshot("wf-child-a"),
+                ),
+                PausedChildBranchResumeState(
+                    branch_index=1,
+                    step_id="branch-1",
+                    child_workflow_id="wf-child-b",
+                    child_snapshot=_hitl_pending_child_pause_snapshot("wf-child-b"),
+                ),
+            ),
+        ),
+        workflow_id="wf-b39-peer-two-resumed",
+    )
+
+
+def _two_resumed_peer_targets_steps() -> list[WorkflowStep]:
+    return [
+        WorkflowStep(
+            step_id=StepID("branch-0"),
+            step_kind=StepKind.SUB_AGENT_DISPATCH,
+            step_payload={"child_workflow_id": "wf-child-a"},
+        ),
+        WorkflowStep(
+            step_id=StepID("branch-1"),
+            step_kind=StepKind.SUB_AGENT_DISPATCH,
+            step_payload={"child_workflow_id": "wf-child-b"},
+        ),
+        WorkflowStep(
+            step_id=StepID("branch-2"), step_kind=StepKind.DECLARATIVE_STEP, step_payload={}
+        ),
+    ]
+
+
+class _FirstResumedPeerTargetFailsRegistry:
+    """`branch-0` (the FIRST resumed target in Phase-0 iteration order) RAISES
+    synchronously — the Phase-0 loop must never reach `branch-1` (the SECOND
+    resumed target)."""
+
+    def __init__(self) -> None:
+        self._echo = _CountingDispatcher()
+
+    def lookup(self, step_kind: StepKind) -> StepDispatcher:
+        if step_kind is StepKind.SUB_AGENT_DISPATCH:
+            return cast(StepDispatcher, self)
+        if step_kind is StepKind.DECLARATIVE_STEP:
+            return cast(StepDispatcher, self._echo)
+        raise StepKindDispatcherNotBoundError(step_kind)
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        msg = f"resumed-target dispatch failed at {step.step_id}"
+        raise RuntimeError(msg)
+
+
+def test_b39_peer_phase0_strike_on_first_of_two_resumed_targets_releases_the_second() -> None:
+    """Round-6 concurrency-lens BLOCK, PARALLELIZATION twin of the
+    ORCHESTRATOR_WORKERS test of the same shape: `_cancel_fanout`'s Phase-0
+    `except BaseException` release handler must release BOTH `_rest_plan`
+    (`branch-2`) AND any `_resumed_target_plan` entry strictly AFTER the one
+    that raised (`branch-1`) — not just `_rest_plan`.
+
+    Mutation probe: reverting to releasing only `_rest_plan` (dropping
+    `_resumed_target_plan[_resumed_index + 1:]` from the release set) leaves
+    `authority.available` short by `branch-1`'s admitted frames."""
+    authority = DefaultCapacityAuthority(frame_budget=12)
+    registry = cast(StepDispatcherRegistry, _FirstResumedPeerTargetFailsRegistry())
+    snapshot = _two_resumed_peer_targets_snapshot()
+    ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
+    ctx_obj.capacity_authority = authority  # type: ignore[attr-defined]
+    ctx = cast(DriverContext, ctx_obj)
+
+    result = execute_workflow(
+        _manifest("wf-b39-peer-two-resumed-fail"),
+        _two_resumed_peer_targets_steps(),
+        run_id="wf-b39-peer-two-resumed-fail-run",
+        ctx=ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=registry,
+        pause_snapshot_input=snapshot,
+    )
+
+    assert result.status is not RunStatus.SUCCESS
+    assert authority.available == 12, (
+        f"expected full frame-budget recovery (12); got {authority.available} — "
+        f"branch-1's admission leaked"
+    )
+
+
+class _CancelledOnFirstResumedPeerTargetRegistry:
+    """PROCEED twin: `_proceed_fanout`'s Phase-0 loop has an INNER
+    `except BaseException as _resumed_exc:` that captures an ORDINARY
+    failure as that branch's own result (never aborting), so only a
+    `CancelledError` (the explicit `except asyncio.CancelledError: raise`
+    ABOVE that inner catch-all) reaches the OUTER `except BaseException:`
+    that this fix's release wrapper guards."""
+
+    def __init__(self) -> None:
+        self._echo = _CountingDispatcher()
+
+    def lookup(self, step_kind: StepKind) -> StepDispatcher:
+        if step_kind is StepKind.SUB_AGENT_DISPATCH:
+            return cast(StepDispatcher, self)
+        if step_kind is StepKind.DECLARATIVE_STEP:
+            return cast(StepDispatcher, self._echo)
+        raise StepKindDispatcherNotBoundError(step_kind)
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        raise asyncio.CancelledError(f"deadline strike at {step.step_id}")
+
+
+def test_b39_peer_phase0_strike_on_first_of_two_resumed_targets_releases_the_second_under_proceed() -> (
+    None
+):
+    """Round-6 concurrency-lens BLOCK, PARALLELIZATION-PROCEED twin — the
+    `_proceed_fanout` symmetric site to the CANCEL-path test above.
+
+    Mutation probe: reverting `_proceed_fanout`'s release set to
+    `_rest_plan`-only leaves `authority.available` short by `branch-1`'s
+    admitted frames.
+
+    A `CancelledError` is a `BaseException`, not an `Exception` — it
+    propagates straight out of `execute_workflow` by design, so this test
+    catches it directly rather than reading a `RunResult.status`."""
+    authority = DefaultCapacityAuthority(frame_budget=12)
+    registry = cast(StepDispatcherRegistry, _CancelledOnFirstResumedPeerTargetRegistry())
+    snapshot = _two_resumed_peer_targets_snapshot()
+    ctx_obj = _CtxP(ledger=_RecordingLedger(), emitter=_Emitter())
+    ctx_obj.capacity_authority = authority  # type: ignore[attr-defined]
+    ctx = cast(DriverContext, ctx_obj)
+
+    with pytest.raises(asyncio.CancelledError):
+        execute_workflow(
+            _manifest("wf-b39-peer-two-resumed-fail-proceed", PersonaTier.SOLO_DEVELOPER),
+            _two_resumed_peer_targets_steps(),
+            run_id="wf-b39-peer-two-resumed-fail-proceed-run",
+            ctx=ctx,
+            default_model_binding=_DEFAULT_BINDING,
+            step_dispatchers=registry,
+            pause_snapshot_input=snapshot,
+        )
+
+    assert authority.available == 12, (
+        f"expected full frame-budget recovery (12); got {authority.available} — "
+        f"branch-1's admission leaked under the PROCEED-tier Phase-0 loop"
+    )

@@ -16,12 +16,8 @@ amendment; the L2-sync path of R-DESIGN §3 D2). ``fastembed`` is a lazy import
 the provider-free lanes never pull ``onnxruntime``; importing THIS module does
 not require ``fastembed`` — only constructing a real embedding does.
 
-**Reachability honesty (carries from L3):** even bound, Layer 2 routes no
-production traffic until ``R-300-second-provider`` makes DECLARATIVE conditional
-(DECLARATIVE always echoes today → ``route()`` short-circuits before EMBEDDING),
-exactly as the L3 router is inert at HEAD. At that activation the ``[embedding]``
-extra is promoted to a required dependency (forward note:
-``.harness/beyond-mvp-capability-boundary-ledger.md`` B-L2-EMBEDDING-ACTIVATION).
+With routing activation, the DECLARATIVE layer can decline to EMBEDDING. A real
+classifier therefore requires a locally verified model before FastEmbed is imported.
 
 Authority: ``Spec_Control_Plane_v1_36.md`` §2 C-CP-02 §2.1/§2.2/§2.4; ADR-F1
 v1.2; ``.harness/r-fs-1-r-routing-intelligence-design-v1.md`` §3/§6 (D2 L2-sync +
@@ -30,30 +26,137 @@ the L2 vendor gate); operator decision 2026-06-16 (Option B).
 
 from __future__ import annotations
 
+import hashlib
 import importlib
+import os
+import re
+import stat
+from collections.abc import Collection, Mapping
+from dataclasses import dataclass
+from pathlib import Path, PurePosixPath
 from typing import Any
 
+from harness_core.workload_class import WorkloadClass
 from harness_cp.embedding_routing import EmbeddingFn, EmbeddingRoutingCorpus
 
-# The default light embedding model — BAAI/bge-small-en-v1.5: 384-dim, ~133 MB,
-# ONNX/torch-free via fastembed, strong on short-text semantic similarity. The
-# specific model is impl-discretion (§2.4); an operator may bind another by
-# passing `model_name` (the classifier is model-agnostic via `EmbeddingFn`).
+# The pinned local realization is BAAI/bge-small-en-v1.5. Other model layouts
+# need their own file contract before they can pass the verifier.
 DEFAULT_EMBEDDING_MODEL = "BAAI/bge-small-en-v1.5"
+MODEL_FILES = frozenset(
+    {
+        "config.json",
+        "tokenizer.json",
+        "tokenizer_config.json",
+        "special_tokens_map.json",
+        "model_optimized.onnx",
+    }
+)
+MANIFEST_NAME = "SHA256SUMS"
 
 
-def make_fastembed_embedding(*, model_name: str = DEFAULT_EMBEDDING_MODEL) -> EmbeddingFn:
+class EmbeddingModelError(ValueError):
+    """The explicit local L2 model cannot be admitted at bootstrap."""
+
+
+@dataclass(frozen=True)
+class VerifiedLocalEmbedding:
+    model_dir: Path
+    cache_dir: Path
+
+
+def verify_local_embedding(
+    model_dir: Path | None, cache_dir: Path | None
+) -> VerifiedLocalEmbedding:
+    """Admit one complete, hash-matched model and a private, explicit cache."""
+    # [LAW:parse-dont-validate] Return paths only after the whole file boundary passes.
+    if model_dir is None or cache_dir is None:
+        raise EmbeddingModelError(
+            "routing activation requires embedding_model_dir and embedding_cache_dir"
+        )
+    if not model_dir.is_absolute() or not cache_dir.is_absolute():
+        raise EmbeddingModelError("embedding model and cache paths must be absolute")
+    try:
+        if model_dir.resolve(strict=True) != model_dir or not model_dir.is_dir():
+            raise EmbeddingModelError("embedding model directory is missing or symlinked")
+        manifest = model_dir / MANIFEST_NAME
+        metadata = manifest.lstat()
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > 65536:
+            raise EmbeddingModelError(
+                "embedding SHA256SUMS must be a regular file of at most 64 KiB"
+            )
+        entries: dict[str, str] = {}
+        for line in manifest.read_text(encoding="utf-8").splitlines():
+            match = re.fullmatch(r"([0-9a-f]{64})  (.+)", line)
+            if match is None:
+                raise EmbeddingModelError("malformed embedding SHA256SUMS entry")
+            expected, raw_name = match.groups()
+            name = PurePosixPath(raw_name)
+            if (
+                name.is_absolute()
+                or name.as_posix() != raw_name
+                or any(part in {".", ".."} for part in raw_name.split("/"))
+                or "\\" in raw_name
+                or raw_name == MANIFEST_NAME
+                or raw_name in entries
+            ):
+                raise EmbeddingModelError("unsafe or duplicate embedding SHA256SUMS entry")
+            entries[raw_name] = expected
+        if not MODEL_FILES.issubset(entries) or len(entries) > 64:
+            raise EmbeddingModelError("embedding SHA256SUMS does not cover the pinned model files")
+        actual: set[str] = set()
+        for path in model_dir.rglob("*"):
+            if path.is_symlink():
+                raise EmbeddingModelError("embedding model contains a symlink")
+            metadata = path.lstat()
+            if stat.S_ISDIR(metadata.st_mode):
+                continue
+            if not stat.S_ISREG(metadata.st_mode):
+                raise EmbeddingModelError("embedding model contains a non-regular file")
+            actual.add(path.relative_to(model_dir).as_posix())
+        if actual != set(entries) | {MANIFEST_NAME}:
+            raise EmbeddingModelError("embedding model files differ from SHA256SUMS")
+        for name, expected in entries.items():
+            sha = hashlib.sha256()
+            with (model_dir / name).open("rb") as file:
+                for block in iter(lambda: file.read(1024 * 1024), b""):
+                    sha.update(block)
+            if sha.hexdigest() != expected:
+                raise EmbeddingModelError(f"embedding SHA256 mismatch: {name}")
+        if (
+            cache_dir.is_relative_to(model_dir)
+            or cache_dir.parent.resolve(strict=True) != cache_dir.parent
+        ):
+            raise EmbeddingModelError(
+                "embedding cache must be outside the model under a real parent"
+            )
+        cache_dir.mkdir(mode=0o700, exist_ok=True)
+        cache_meta = cache_dir.lstat()
+        if (
+            not stat.S_ISDIR(cache_meta.st_mode)
+            or cache_meta.st_uid != os.geteuid()
+            or stat.S_IMODE(cache_meta.st_mode) != 0o700
+        ):
+            raise EmbeddingModelError("embedding cache must be a private owned directory")
+    except (OSError, UnicodeError) as exc:
+        raise EmbeddingModelError(f"embedding local model cannot be verified: {exc}") from exc
+    return VerifiedLocalEmbedding(model_dir=model_dir, cache_dir=cache_dir)
+
+
+def make_fastembed_embedding(
+    *,
+    model_dir: Path | None = None,
+    cache_dir: Path | None = None,
+) -> EmbeddingFn:
     """Build a sync ``EmbeddingFn`` backed by ``fastembed`` (the light-form
     realization; mirror of ``make_ollama_router``).
 
-    The model is constructed eagerly (downloading on first use is bounded to this
-    wiring-time call, not the routing hot path); the returned closure projects a
-    text into a dense vector. The numpy ndarray ``fastembed`` returns is
+    The model is constructed eagerly from a verified local directory; the
+    closure projects text into a dense vector. The numpy ndarray ``fastembed`` returns is
     converted to ``tuple[float, ...]`` HERE so numpy never crosses into the
     CP-pure classifier (the ``EmbeddingFn`` return type is ``Sequence[float]``).
 
-    Raises ``ImportError`` (with the install hint) when the ``[embedding]`` extra
-    is not installed — fail loud, never silently degrade routing.
+    Raises ``EmbeddingModelError`` for an invalid local model or cache and
+    ``ImportError`` (with an install hint) when the extra is absent.
 
     fastembed is imported **dynamically** (``importlib``) rather than via a static
     ``from fastembed import ...``: the static import would fail the strict pyright
@@ -63,6 +166,7 @@ def make_fastembed_embedding(*, model_name: str = DEFAULT_EMBEDDING_MODEL) -> Em
     preserving the fail-loud runtime behavior; ``Any`` confines the untyped
     surface to this realization (numpy never crosses into the CP-pure classifier).
     """
+    verified = verify_local_embedding(model_dir, cache_dir)
     try:
         fastembed: Any = importlib.import_module("fastembed")
     except ImportError as exc:  # pragma: no cover - exercised only without the extra
@@ -72,7 +176,13 @@ def make_fastembed_embedding(*, model_name: str = DEFAULT_EMBEDDING_MODEL) -> Em
             "(harness-runtime[embedding])"
         ) from exc
 
-    model: Any = fastembed.TextEmbedding(model_name=model_name)
+    # [LAW:single-enforcer] FastEmbed receives only the admitted local path and offline mode.
+    model: Any = fastembed.TextEmbedding(
+        model_name=DEFAULT_EMBEDDING_MODEL,
+        specific_model_path=str(verified.model_dir),
+        local_files_only=True,
+        cache_dir=str(verified.cache_dir),
+    )
 
     def _embed(text: str) -> tuple[float, ...]:
         # `model.embed([text])` yields one ndarray per input text.
@@ -82,26 +192,37 @@ def make_fastembed_embedding(*, model_name: str = DEFAULT_EMBEDDING_MODEL) -> Em
     return _embed
 
 
-def default_routing_corpus() -> EmbeddingRoutingCorpus:
-    """A representative trained per-workload-class corpus (C-CP-02 §2.1 — the L2
-    authoring deliverable).
+class RoutingCorpusConfigError(ValueError):
+    """The active L2 corpus does not match the constructed provider profile."""
 
-    Maps characteristic call-site utterances across the four ``WorkloadClass``
-    families to a sensible ``"provider:model"`` candidate (capability-aware,
-    cheapest-adequate per the C-CP-02 cost discipline). This is an **illustrative
-    default**: the candidates and exemplars are operator-tunable — an operator
-    retrains the corpus for their own provider bindings + workload mix; it
-    demonstrates + exercises the capability rather than fixing a routing policy.
-    """
-    # Candidate bindings (illustrative; capability-aware-cheapest-adequate):
-    #   hard reasoning / code  → a frontier model
-    #   creative / short-form  → a cheaper fast model
-    #   deterministic pipeline → a free local model
-    #   research / analysis    → a long-context frontier model
-    code = "anthropic:claude-opus-4-8"
-    creative = "anthropic:claude-haiku-4-5"
-    pipeline = "ollama:llama3.2:3b"
-    research = "openai:gpt-5.5"
+
+def routing_corpus(
+    candidates: Mapping[WorkloadClass, str] | None,
+    available_provider_names: Collection[str],
+) -> EmbeddingRoutingCorpus:
+    """Bind the fixed exemplar texts to the profile's admitted providers."""
+    # [LAW:parse-dont-validate] Admit all labels once before model construction.
+    if candidates is None or set(candidates) != set(WorkloadClass):
+        raise RoutingCorpusConfigError(
+            "embedding routing candidates must name exactly four workload classes"
+        )
+    for candidate in candidates.values():
+        provider, separator, model = candidate.partition(":")
+        if (
+            not separator
+            or not provider
+            or not model
+            or provider.strip() != provider
+            or model.strip() != model
+            or provider not in available_provider_names
+        ):
+            raise RoutingCorpusConfigError(
+                "embedding routing candidates require a constructed profile provider:model"
+            )
+    code = candidates[WorkloadClass.SOFTWARE_ENGINEERING]
+    creative = candidates[WorkloadClass.CONTENT_CREATION]
+    pipeline = candidates[WorkloadClass.PIPELINE_AUTOMATION]
+    research = candidates[WorkloadClass.RESEARCH]
     return EmbeddingRoutingCorpus.from_pairs(
         [
             # software-engineering

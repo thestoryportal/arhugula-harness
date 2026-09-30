@@ -1,35 +1,8 @@
-"""`B-165` — the DRIVER-THROUGH-COMPOSER round trip, in the production shape.
+"""B-165 driver-through-composer proof after CP v1.120 first-match selection.
 
-The two earlier `B-165` modules pin the chain in halves: `harness-cp/tests/
-test_b165_production_feed_duplicate_placements.py` shows production DELIVERS a context
-carrying two same-position placements plus the `B-71` basis, and `harness-runtime/tests/
-test_b165_same_position_placement_identity_witness.py` shows the composer COLLIDES on
-such a context. Out-of-family review asked three separate times for the halves to be
-joined, on the ground that a split chain can stay green while the shipped call path
-never reaches the collision — if stage-5 wiring stopped installing
-`RuntimeHITLGateComposer`, or installed it behind a different binding, neither half
-would notice.
-
-That objection is correct and this module answers it. Nothing here is hand-composed:
-
-* the manifest is a real `WorkflowManifestEntry` declaring TWO `PRE_ACTION` placements;
-* the driver is the real `execute_workflow`, run via `asyncio.to_thread` exactly as
-  production does;
-* the dispatcher is a real `RuntimeHITLGateComposer` wrapped in a real
-  `SyncDispatcherFacade` built by `materialize_sync_dispatcher_facade` — the same
-  async→sync bridge stage 5 uses (`bootstrap/stage_5_loop_init.py`), constructed on the
-  loop that hosts the `to_thread` call, as that factory requires;
-* the per-step `StepExecutionContext` is composed by the driver, never by this test.
-
-The remaining doubles are IO boundaries and nothing else: the operator prompt surface,
-the state-ledger writer, and the audit writer. Doubling an operator is not a shortcut —
-there is no other way to answer a human gate in a test.
-
-**What it asserts.** Every gated placement's F2 write is captured, and the two writes a
-single branch produces carry a BYTE-IDENTICAL `idempotency_key`. That is `B-165`: the
-identity does not distinguish two placements declared at one position, so the second
-entry is the one `append_ledger_entry`'s key-only dedup drops in production (witnessed
-against the real writer by test 6 of the runtime module).
+A real workflow driver carries duplicate PRE_ACTION declarations to the Runtime
+composer through the production sync facade. The composer selects one governing
+placement and emits one prompt and one ledger write for that branch.
 """
 
 from __future__ import annotations
@@ -238,16 +211,14 @@ class _Registry:
 # a key, a context, or a dispatcher registry by hand, so only a real change to the
 # shipped composition can red it.
 @pytest.mark.asyncio
-async def test_the_real_driver_through_the_real_composer_collides_on_one_identity(
+async def test_the_real_driver_through_the_real_composer_selects_one_placement(
     tmp_path: Any,
 ) -> None:
-    """The joined chain — driver → facade → composer — in the production shape.
+    """Real driver → facade → composer selects one of two declarations.
 
-    The three-times-repeated review objection was that the split halves could both stay
-    green while the shipped path never reached the collision. Here the shipped path IS
-    the path: `execute_workflow` composes the per-step context, hands it through the
-    same `SyncDispatcherFacade` bridge stage 5 builds, and a real
-    `RuntimeHITLGateComposer` consumes it.
+    The driver composes the per-step context; the Runtime gate consumes it through
+    the same synchronous facade stage 5 builds. One prompt and one writer call
+    establish the CP v1.120 policy on this shipped path.
     """
     cell = matrix_cell_for(
         persona_tier=PersonaTier.SOLO_DEVELOPER,
@@ -293,18 +264,11 @@ async def test_the_real_driver_through_the_real_composer_collides_on_one_identit
         f"expected SUCCESS, got {result.status} (fail_class={result.fail_class})"
     )
 
-    # BOTH declared placements were gated by the real composer, reached through the real
-    # driver — the half the CP module could not show.
-    assert len(surface.calls) == 2, (
-        f"both same-position placements must gate; operator asked {len(surface.calls)}x"
-    )
+    # Both declarations arrive through the real driver; one governs the action.
+    assert len(surface.calls) == 1, "first-match policy prompts once"
 
     keys = [str(key.idempotency_key) for _payload, key in ledger.appends]
-    assert len(keys) == 2, f"both placements must write; got {len(keys)}"
-    assert len(set(keys)) == 1, (
-        "B-165: the two placements collide onto ONE identity through the SHIPPED path — "
-        f"keys={keys}"
-    )
+    assert len(keys) == 1, f"one governing placement must write; got {len(keys)}"
 
 
 # mutation-probe: give `StepEffectiveBinding` a distinct `hitl_placement` per branch, or
@@ -313,13 +277,9 @@ async def test_the_real_driver_through_the_real_composer_collides_on_one_identit
 # then fail.
 @pytest.mark.asyncio
 async def test_the_composer_receives_a_real_binding_from_the_driver() -> None:
-    """Guards the specific regression review named: stage-5 wiring installing the
-    composer behind a DIFFERENT binding.
+    """The driver supplies a real effective binding to the Runtime composer.
 
-    The collision assertion above would survive a binding regression as long as the gate
-    still fired, so the binding shape is asserted separately rather than assumed. A
-    `StepEffectiveBinding` carrying a real persona_tier is what routes the composer to a
-    real matrix cell instead of the partial-binding sentinel.
+    This protects the matrix-cell decision used by the first-match witness.
     """
     seen: list[Any] = []
 
@@ -430,8 +390,8 @@ async def test_stage_5_installs_the_hitl_gate_composer_into_the_dispatcher_regis
     # the mutation with a constructor shim and every B-165 node still passed when stage 5
     # built the INFERENCE composer with `applicable_placements={SUB_AGENT_BOUNDARY}`.
     # A composer that does not accept PRE_ACTION filters both declared placements out of
-    # `matching` and never gates them, so the shipped path would not reach the collision
-    # at all while this test still reported the wiring intact — exactly the vacuity the
+    # `matching` and never gates them, so the shipped path would bypass the
+    # first-match gate while this test still reported the wiring intact — the vacuity the
     # chain walk above was supposed to close, one level in.
     assert HITLPlacementKind.PRE_ACTION in node.applicable_placements, (
         "the stage-5 INFERENCE composer must ACCEPT PRE_ACTION placements; got "

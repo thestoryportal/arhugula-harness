@@ -835,9 +835,62 @@ printf '%s' "$OUT" | grep -qE "(^|[^0-9])2 unreconciled subagent\\(s\\)" \
 #       serialize in, the prune re-reads INSIDE the locked region, so every appended
 #       row survives the rename. An UNLOCKED prune reads before the appends land and
 #       renames over them. Run three times consecutively.
-APPENDER="$SCRIPT_DIR/subagent-validate.sh"
+# Use a blocking writer for this lock/rename witness: the production hook has a
+# deliberate 2s acquisition budget and may skip an event under a slow 20000-row
+# prune. Counting that intentional skip as a lost ACCEPTED append is a false red.
+# The hook's bounded-skip behavior is covered separately by its own suite.
+# The hook's own second registry read marks the race window. A test-only
+# sitecustomize delays it there: under correct code it HOLDS the lock so writers
+# wait; an unlocked prune lets writers append to the old inode before rename.
+S9SITE="$SW/s9-site"; mkdir -p "$S9SITE"
+cat > "$S9SITE/sitecustomize.py" <<'PYSITE'
+import os
+import time
+from pathlib import Path
+
+_original_read_text = Path.read_text
+_registry_reads = 0
+
+
+def _s9_read_text(self, *args, **kwargs):
+    global _registry_reads
+    content = _original_read_text(self, *args, **kwargs)
+    if str(self) == os.environ.get("S9_REGISTRY"):
+        _registry_reads += 1
+        if _registry_reads == 2:
+            Path(os.environ["S9_MARKER"]).touch()
+            time.sleep(1.0)
+    return content
+
+
+Path.read_text = _s9_read_text
+PYSITE
+S9APP="$SW/s9-append.py"
+cat > "$S9APP" <<'PYAPP'
+import fcntl
+import json
+import sys
+import time
+from pathlib import Path
+
+registry, lock, ts, agent, marker = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3], sys.argv[4], Path(sys.argv[5])
+line = json.dumps({"ts": ts, "event": "start", "session": "s", "agent_id": agent,
+                   "transcript": "/t", "cwd": "/w"}, separators=(",", ":")) + "\n"
+deadline = time.monotonic() + 15.0
+while not marker.is_file():
+    if time.monotonic() >= deadline:
+        raise SystemExit("S9 prune re-read marker absent")
+    time.sleep(0.01)
+with lock.open("a+") as stream:
+    fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
+    # Open the registry INSIDE the lock, matching the production appender's inode rule.
+    with registry.open("a", encoding="utf-8") as out:
+        out.write(line)
+        out.flush()
+PYAPP
 for ROUND in 1 2 3; do
   sw_reset
+  MARKER="$SW/s9-read-$ROUND"; rm -f "$MARKER"
   # A large registry: 1 pruneable row + 20000 in-horizon rows, so the prune's re-read +
   # rewrite is a real window rather than an instant. Only `stop` events → no sweep clause.
   /usr/bin/python3 - "$SREG" "$OLD_TS" "$NOW_TS" 20000 <<'PY'
@@ -868,10 +921,9 @@ time.sleep(0.4)
   H9=$!
   for _ in $(seq 1 200); do [ -s "$SW/h9.out" ] && break; sleep 0.05; done
   for i in 1 2 3 4; do
-    printf '%s' "$(jq -nc --arg a "conc$i" '{"hook_event_name":"SubagentStart","agent_id":$a}')" \
-      | CLAUDE_PROJECT_DIR="$SPROJ" bash "$APPENDER" >/dev/null 2>&1 &
+    /usr/bin/python3 "$S9APP" "$SREG" "$SLOCK" "$NOW_TS" "conc$i" "$MARKER" >/dev/null 2>&1 &
   done
-  sw_run >/dev/null 2>&1 &
+  S9_REGISTRY="$SREG" S9_MARKER="$MARKER" PYTHONPATH="$S9SITE" sw_run >/dev/null 2>&1 &
   SWEEPER=$!
   wait "$H9" 2>/dev/null; wait "$SWEEPER" 2>/dev/null; wait
   GOT=$(sw_rows)

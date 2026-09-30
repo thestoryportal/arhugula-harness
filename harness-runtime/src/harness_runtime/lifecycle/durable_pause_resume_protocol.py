@@ -32,18 +32,21 @@ from typing import TYPE_CHECKING
 
 from harness_cp.pause_resume_protocol import PauseContextReader, PauseResumeProtocol
 from harness_cp.pause_resume_protocol_types import (
+    DurableCapturedPause,
     EffectFenceResumeState,
     EvaluatorOptimizerResumeState,
     FanOutResumeState,
     HandoffResumeState,
     OrchestratorEffectFencePausedResumeState,
-    PauseSnapshot,
     PeerFanOutResumeState,
     WorkflowPauseReason,
 )
 
 if TYPE_CHECKING:
+    from harness_core import JournalRecordRef
+
     from harness_runtime.lifecycle.journal_workflow_pause_store import (
+        JournalRecordAtRef,
         JournalWorkflowPauseStore,
     )
 
@@ -89,8 +92,14 @@ class DurablePauseResumeProtocol(PauseResumeProtocol):
         effect_fence_resume: EffectFenceResumeState | None = None,
         orchestrator_effect_fence_resume: OrchestratorEffectFencePausedResumeState | None = None,
         hitl_gate_config_hash: str | None = None,
-    ) -> PauseSnapshot:
+        descent_depth: int,
+    ) -> DurableCapturedPause:
         """Compose the snapshot via the parent, then durably persist it.
+
+        Returns the snapshot together with the exact ``JournalRecordRef`` of the record
+        THIS call appended (never a re-read of the journal's latest, never state kept on
+        this shared instance — parent and sibling children capture through one instance).
+        ``descent_depth`` (root 0, child 1, grandchild 2) is journaled with the record.
 
         The snapshot is journaled BEFORE it is returned to the driver, so a crash
         after capture (but before the caller serializes the ``RunResult``) still
@@ -108,7 +117,7 @@ class DurablePauseResumeProtocol(PauseResumeProtocol):
         the new kwarg would raise `TypeError` at the driver's capture call under
         durable config).
         """
-        snapshot = await super().capture_pause_snapshot(
+        captured = await super().capture_pause_snapshot(
             workflow_id,
             run_id,
             step_index,
@@ -120,6 +129,11 @@ class DurablePauseResumeProtocol(PauseResumeProtocol):
             effect_fence_resume=effect_fence_resume,
             orchestrator_effect_fence_resume=orchestrator_effect_fence_resume,
             hitl_gate_config_hash=hitl_gate_config_hash,
+            descent_depth=descent_depth,
         )
-        self._store.capture(snapshot)
-        return snapshot
+        record_ref = self._store.capture(captured.snapshot, depth=descent_depth)
+        return DurableCapturedPause(snapshot=captured.snapshot, record_ref=record_ref)
+
+    def read_exact(self, ref: JournalRecordRef) -> JournalRecordAtRef | None:
+        """Read-only accessor: the record at exactly `ref`, or `None` (never the latest)."""
+        return self._store.read_exact(ref)

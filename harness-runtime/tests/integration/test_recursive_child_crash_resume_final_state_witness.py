@@ -45,7 +45,7 @@ from typing import Any, cast
 
 import harness_runtime.lifecycle.child_workflow_runner as cwr
 import pytest
-from harness_as.sandbox_tier import SandboxTier
+from harness_as.sandbox_tier import BlastRadiusTier, SandboxTier
 from harness_core import PersonaTier, StepID, WorkloadClass
 from harness_cp.cp_shared_types import ModelBinding
 from harness_cp.cross_family_fallback_chain import (
@@ -66,6 +66,7 @@ from harness_cp.sub_agent_brief import (
     OutputSchemaKind,
     SubAgentBrief,
 )
+from harness_cp.sub_agent_gate_level_descent import SubAgentGateLevelDescent
 from harness_cp.topology_pattern import TopologyPattern
 from harness_cp.workflow_driver import (
     _compute_run_idempotency_key,
@@ -78,6 +79,7 @@ from harness_is.state_ledger_entry_schema import Identifier as _Identifier
 from harness_od.audit_ledger_types import SignatureAlgorithm
 from harness_runtime.lifecycle.audit_writer import RuntimeAuditLedgerWriter
 from harness_runtime.lifecycle.child_workflow_runner import compose_child_workflow_runner
+from harness_runtime.lifecycle.durable_child_admission import RefuseDurableChildAdmission
 from harness_runtime.lifecycle.engine_output_store import EngineOutputStore, engine_output_dir_for
 from harness_runtime.lifecycle.handoff import RuntimeHandoffRegistry
 from harness_runtime.lifecycle.state_ledger import LedgerWriter
@@ -105,6 +107,23 @@ _CHAIN = FallbackChain(
 _CHILD_RUN = "child-run-pinned-e1"
 _CHILD_WF = "child-wf"
 _ENTRY_VERSION = 1  # WorkflowManifestEntry default; the driver hashes str(entry_version).
+
+
+def _root_child_descent() -> SubAgentGateLevelDescent:
+    """A root child's real gate-level descent at the historical AUTO floor —
+    the `parent_gate_floor` `execute_workflow_at_depth` defaulted to before
+    `child_workflow_runner.py` started forwarding `descent.child_gate_level`
+    (`[LAW:single-enforcer]`). Every field is real and contract-valid; these
+    depth-1 witnesses exercise no override and no privilege escalation."""
+    return SubAgentGateLevelDescent(
+        parent_gate_level=GateLevel.AUTO,
+        parent_sandbox_tier=SandboxTier.TIER_1_PROCESS,
+        child_blast_radius_ceiling=BlastRadiusTier.READ_ONLY,
+        child_sandbox_tier=SandboxTier.TIER_1_PROCESS,
+        child_gate_level=GateLevel.AUTO,
+        override_applied=False,
+        override_audit_ref=None,
+    )
 
 
 def _run_key(run_id: str = _CHILD_RUN, workflow_id: str = _CHILD_WF) -> str:
@@ -343,15 +362,18 @@ def test_recursive_child_crash_resume_reconstructs_full_final_state(
 
     _pin_child_run_id(monkeypatch)
     ctx = _resume_ctx(store)
-    runner = compose_child_workflow_runner(cast(Any, ctx))
+    runner = compose_child_workflow_runner(
+        cast(Any, ctx), durable_admission=RefuseDurableChildAdmission()
+    )
     result = runner(
         workflow_id=_CHILD_WF,
         manifest_entry=_manifest(),
         steps=[_step(0), _step(1), _step(2)],
         handoff_context=cast(Any, None),  # not forwarded to execute_workflow
-        descent=cast(Any, None),  # not forwarded to execute_workflow
+        descent=_root_child_descent(),
+        descent_depth=1,  # a direct child-runner call is a depth-1 child of the root
         default_model_binding=_DEFAULT_BINDING,
-        pause_snapshot_input=None,  # CRASH-resume (not a pause-resume)
+        child_resume=None,  # CRASH-resume (not a pause-resume)
     )
 
     assert result.status is RunStatus.SUCCESS
@@ -389,15 +411,18 @@ def test_recursive_child_crash_resume_save_point_reconstructs_full_final_state(
 
     _pin_child_run_id(monkeypatch)
     ctx = _resume_ctx(store)
-    runner = compose_child_workflow_runner(cast(Any, ctx))
+    runner = compose_child_workflow_runner(
+        cast(Any, ctx), durable_admission=RefuseDurableChildAdmission()
+    )
     result = runner(
         workflow_id=_CHILD_WF,
         manifest_entry=_manifest(engine_class=EngineClass.SAVE_POINT_CHECKPOINT),
         steps=[_step(0), _step(1), _step(2)],
         handoff_context=cast(Any, None),
-        descent=cast(Any, None),
+        descent=_root_child_descent(),
+        descent_depth=1,  # a direct child-runner call is a depth-1 child of the root
         default_model_binding=_DEFAULT_BINDING,
-        pause_snapshot_input=None,  # CRASH-resume (not a pause-resume)
+        child_resume=None,  # CRASH-resume (not a pause-resume)
     )
 
     assert result.status is RunStatus.SUCCESS
@@ -449,15 +474,18 @@ def test_recursive_child_crash_resume_reconciler_clean_cas_auto_resumes(
 
     _pin_child_run_id(monkeypatch)
     ctx = _reconciler_resume_ctx(store, outcome_kind=ResumeOutcomeKind.RESUME_CLEAN)
-    runner = compose_child_workflow_runner(cast(Any, ctx))
+    runner = compose_child_workflow_runner(
+        cast(Any, ctx), durable_admission=RefuseDurableChildAdmission()
+    )
     result = runner(
         workflow_id=_CHILD_WF,
         manifest_entry=_manifest(engine_class=EngineClass.RECONCILER_LOOP),
         steps=[_step(0), _step(1), _step(2)],
         handoff_context=cast(Any, None),
-        descent=cast(Any, None),
+        descent=_root_child_descent(),
+        descent_depth=1,  # a direct child-runner call is a depth-1 child of the root
         default_model_binding=_DEFAULT_BINDING,
-        pause_snapshot_input=None,  # CRASH-resume
+        child_resume=None,  # CRASH-resume
     )
 
     # The U-CP-97 engine-layer reconverge actually FIRED (the binding is real, not vacuous).
@@ -494,15 +522,18 @@ def test_recursive_child_crash_resume_reconciler_f1_abort_fails_closed_at_most_o
 
     _pin_child_run_id(monkeypatch)
     ctx = _reconciler_resume_ctx(store, outcome_kind=ResumeOutcomeKind.ABORT_REVALIDATION_FAILED)
-    runner = compose_child_workflow_runner(cast(Any, ctx))
+    runner = compose_child_workflow_runner(
+        cast(Any, ctx), durable_admission=RefuseDurableChildAdmission()
+    )
     result = runner(
         workflow_id=_CHILD_WF,
         manifest_entry=_manifest(engine_class=EngineClass.RECONCILER_LOOP),
         steps=[_step(0), _step(1), _step(2)],
         handoff_context=cast(Any, None),
-        descent=cast(Any, None),
+        descent=_root_child_descent(),
+        descent_depth=1,  # a direct child-runner call is a depth-1 child of the root
         default_model_binding=_DEFAULT_BINDING,
-        pause_snapshot_input=None,  # CRASH-resume
+        child_resume=None,  # CRASH-resume
     )
 
     # The reconverge fired and ABORTed → the child fails closed BEFORE any step re-executes.
@@ -550,15 +581,18 @@ def test_recursive_child_crash_resume_e1_live_seed_reconstructs_full_final_state
     # resume ctx keyed on the SEED-derived run_key (no uuid pin — the seed IS the id).
     reader = _LedgerReader({_seeded_step_key(seed, 0): 1, _seeded_step_key(seed, 1): 1})
     ctx = _Ctx(ledger=_Ledger(), reader=reader, store=store, dispatchers=_Registry(_Echo()))
-    runner = compose_child_workflow_runner(cast(Any, ctx))
+    runner = compose_child_workflow_runner(
+        cast(Any, ctx), durable_admission=RefuseDurableChildAdmission()
+    )
     result = runner(
         workflow_id=_CHILD_WF,
         manifest_entry=_manifest(),
         steps=[_step(0), _step(1), _step(2)],
         handoff_context=cast(Any, None),
-        descent=cast(Any, None),
+        descent=_root_child_descent(),
+        descent_depth=1,  # a direct child-runner call is a depth-1 child of the root
         default_model_binding=_DEFAULT_BINDING,
-        pause_snapshot_input=None,  # CRASH-resume (not a pause-resume)
+        child_resume=None,  # CRASH-resume (not a pause-resume)
         child_run_id_seed=seed,  # E1-LIVE: the deterministic seed, NOT a pinned uuid
     )
 
@@ -583,15 +617,18 @@ def test_recursive_child_crash_resume_without_store_degrades_to_suffix_only(
     _ = tmp_path
     _pin_child_run_id(monkeypatch)
     ctx = _resume_ctx(store=None)  # NO store bound
-    runner = compose_child_workflow_runner(cast(Any, ctx))
+    runner = compose_child_workflow_runner(
+        cast(Any, ctx), durable_admission=RefuseDurableChildAdmission()
+    )
     result = runner(
         workflow_id=_CHILD_WF,
         manifest_entry=_manifest(),
         steps=[_step(0), _step(1), _step(2)],
         handoff_context=cast(Any, None),
-        descent=cast(Any, None),
+        descent=_root_child_descent(),
+        descent_depth=1,  # a direct child-runner call is a depth-1 child of the root
         default_model_binding=_DEFAULT_BINDING,
-        pause_snapshot_input=None,
+        child_resume=None,
     )
 
     assert result.status is RunStatus.SUCCESS
@@ -700,7 +737,9 @@ def test_maybe_ran_reconciler_child_f1_abort_parent_folds_fail_closed(tmp_path: 
         dispatchers=_Registry(_Echo()),
         engine_recovery_loop=loop,
     )
-    runner = compose_child_workflow_runner(cast(Any, child_ctx))
+    runner = compose_child_workflow_runner(
+        cast(Any, child_ctx), durable_admission=RefuseDurableChildAdmission()
+    )
 
     ledger_writer = _parent_ledger_writer(tmp_path)
     dispatcher = RuntimeSubAgentDispatcher(
@@ -854,7 +893,9 @@ def test_maybe_ran_nonleaf_child_grandchild_auto_resumes_at_most_once(tmp_path: 
     gc_ctx = _Ctx(
         ledger=_Ledger(), reader=gc_reader, store=gc_store, dispatchers=_Registry(gc_echo)
     )
-    gc_runner = compose_child_workflow_runner(cast(Any, gc_ctx))
+    gc_runner = compose_child_workflow_runner(
+        cast(Any, gc_ctx), durable_admission=RefuseDurableChildAdmission()
+    )
 
     # --- the real child->grandchild dispatcher seam ---
     gc_ledger_writer = _parent_ledger_writer(tmp_path)
@@ -895,7 +936,9 @@ def test_maybe_ran_nonleaf_child_grandchild_auto_resumes_at_most_once(tmp_path: 
             ),
         ),
     )
-    child_runner = compose_child_workflow_runner(cast(Any, child_ctx))
+    child_runner = compose_child_workflow_runner(
+        cast(Any, child_ctx), durable_admission=RefuseDurableChildAdmission()
+    )
 
     grandchild_step = WorkflowStep(
         step_id=StepID("step-1"),
@@ -910,9 +953,10 @@ def test_maybe_ran_nonleaf_child_grandchild_auto_resumes_at_most_once(tmp_path: 
         manifest_entry=_manifest(engine_class=EngineClass.EVENT_SOURCED_REPLAY),
         steps=[_step(0), grandchild_step],
         handoff_context=cast(Any, None),
-        descent=cast(Any, None),
+        descent=_root_child_descent(),
+        descent_depth=1,  # a direct child-runner call is a depth-1 child of the root
         default_model_binding=_DEFAULT_BINDING,
-        pause_snapshot_input=None,  # CRASH-resume
+        child_resume=None,  # CRASH-resume
         child_run_id_seed=_CHILD_RUN,
     )
 
@@ -927,3 +971,173 @@ def test_maybe_ran_nonleaf_child_grandchild_auto_resumes_at_most_once(tmp_path: 
     assert result.final_state is not None
     grandchild_final = result.final_state["step-1"]
     assert set(grandchild_final.keys()) == {"g-step-0", "g-step-1", "g-step-2"}
+
+
+@pytest.mark.asyncio
+async def test_recursive_child_real_runner_and_hitl_composer_preserve_pre_action_priority(
+    tmp_path: Path,
+) -> None:
+    """CP v1.120 §0.5: real runner/driver/composer gates descendants once per action.
+
+    The root's filtered gate outranks child and grandchild for ``fs.write``;
+    the child's unfiltered gate fills ``http.get`` gaps at both depths. The
+    different timeouts expose placement identity, not just prompt cardinality.
+    """
+    from collections.abc import Sequence
+    from datetime import UTC, datetime
+
+    from harness_cp.hitl_placement import HITLPlacement, HITLPlacementKind
+    from harness_cp.hitl_response_palette import HITLResponse
+    from harness_runtime.lifecycle.ask_user_question_surface import (
+        AskUserQuestionResult,
+        AskUserQuestionSurface,
+    )
+    from harness_runtime.lifecycle.hitl_gate_composer import RuntimeHITLGateComposer
+    from harness_runtime.lifecycle.sync_dispatcher_facade import (
+        materialize_sync_dispatcher_facade,
+    )
+    from opentelemetry.sdk.trace import TracerProvider
+
+    class _GateSurface:
+        def __init__(self) -> None:
+            self.timeouts: list[float | None] = []
+
+        async def ask(
+            self, prompt: str, options: Sequence[HITLResponse], timeout: float | None
+        ) -> AskUserQuestionResult:
+            _ = (prompt, options)
+            self.timeouts.append(timeout)
+            return AskUserQuestionResult(response=HITLResponse.APPROVE, latency_ms=1.0)
+
+    class _GateLedger:
+        def __init__(self) -> None:
+            self.appends: list[tuple[Any, Any]] = []
+
+        def append(self, payload: Any, key: Any) -> tuple[str, Any, Any]:
+            self.appends.append((payload, key))
+            return ("dummy-entry-hash", payload, key)
+
+    class _GateAudit:
+        def __init__(self) -> None:
+            self.appends: list[tuple[Any, Any]] = []
+
+        def append(self, *, tenant_id: Any, audit_entry: Any) -> tuple[str, Any]:
+            self.appends.append((tenant_id, audit_entry))
+            return ("dummy-write-result", audit_entry)
+
+    root_gate = HITLPlacement(
+        position=HITLPlacementKind.PRE_ACTION, tool_filter=("fs.write",), timeout=100
+    )
+    child_gate = HITLPlacement(position=HITLPlacementKind.PRE_ACTION, timeout=200)
+    grandchild_gate = HITLPlacement(position=HITLPlacementKind.PRE_ACTION, timeout=300)
+
+    def _gate_manifest(workflow_id: str, placement: HITLPlacement) -> WorkflowManifestEntry:
+        return WorkflowManifestEntry(
+            workflow_id=workflow_id,
+            workload_class=WorkloadClass.PIPELINE_AUTOMATION,
+            persona_tier=PersonaTier.SOLO_DEVELOPER,
+            engine_class=EngineClass.PURE_PATTERN_NO_ENGINE,
+            topology_pattern=TopologyPattern.SINGLE_THREADED_LINEAR,
+            layer_budgets=(),
+            fallback_chain=_CHAIN,
+            hitl_placements=(placement,),
+            per_step_overrides={},
+        )
+
+    def _tool_step(step_id: str, tool_id: str) -> WorkflowStep:
+        return WorkflowStep(
+            step_id=StepID(step_id),
+            step_kind=StepKind.TOOL_STEP,
+            step_payload={"tool_id": tool_id},
+        )
+
+    grandchild_payload = SubAgentDispatchPayload(
+        child_workflow_id="grandchild-gated",
+        child_manifest_entry=_gate_manifest("grandchild-gated", grandchild_gate),
+        child_steps=(
+            _tool_step("grandchild-write", "fs.write"),
+            _tool_step("grandchild-read", "http.get"),
+        ),
+        brief=_f1_brief(),
+    )
+    child_payload = SubAgentDispatchPayload(
+        child_workflow_id="child-gated",
+        child_manifest_entry=_gate_manifest("child-gated", child_gate),
+        child_steps=(
+            _tool_step("child-write", "fs.write"),
+            _tool_step("child-read", "http.get"),
+            WorkflowStep(
+                step_id=StepID("dispatch-grandchild"),
+                step_kind=StepKind.SUB_AGENT_DISPATCH,
+                step_payload=grandchild_payload.model_dump(),
+            ),
+        ),
+        brief=_f1_brief(),
+    )
+
+    ctx = _Ctx(
+        ledger=_Ledger(),
+        reader=_LedgerReader({}),
+        store=None,
+        dispatchers=_Registry(_Echo()),
+    )
+    runner = compose_child_workflow_runner(
+        cast(Any, ctx), durable_admission=RefuseDurableChildAdmission()
+    )
+    ledger_writer = _parent_ledger_writer(tmp_path)
+    subagent = RuntimeSubAgentDispatcher(
+        handoff_registry=RuntimeHandoffRegistry(),
+        topology_dispatcher=RuntimeTopologyDispatcher(),
+        tracer_provider=cast(Any, ctx.tracer_provider),
+        child_workflow_runner=cast(Any, runner),
+        ledger_writer=ledger_writer,
+        audit_writer=RuntimeAuditLedgerWriter(
+            ledger_writer=ledger_writer, time_source=lambda: datetime.now(UTC)
+        ),
+        audit_signing_key_id="test-signing-key",
+        audit_signing_algorithm=SignatureAlgorithm.ED25519,
+        time_source=lambda: datetime.now(UTC),
+        procedural_tier_snapshot_resolver=lambda: _Identifier("b" * 64),
+    )
+    surface = _GateSurface()
+    gate_ledger = _GateLedger()
+    gate_audit = _GateAudit()
+    composer = RuntimeHITLGateComposer(
+        inner=cast(Any, _Echo()),
+        applicable_placements=frozenset({HITLPlacementKind.PRE_ACTION}),
+        ask_user_question_surface=cast(AskUserQuestionSurface, surface),
+        ledger_writer=cast(Any, gate_ledger),
+        audit_writer=cast(Any, gate_audit),
+        tracer_provider=TracerProvider(),
+        audit_signing_key_id="recursive-gate-test",
+        audit_signing_algorithm=SignatureAlgorithm.ED25519,
+        procedural_tier_snapshot_resolver=lambda: _Identifier("c" * 64),
+    )
+    facade = materialize_sync_dispatcher_facade(cast(Any, composer), result_timeout_seconds=30.0)
+    ctx.step_dispatchers = cast(
+        Any,
+        _KindRegistry(
+            {
+                StepKind.TOOL_STEP: facade,
+                StepKind.SUB_AGENT_DISPATCH: subagent,
+            }
+        ),
+    )
+    root_context = _parent_step_context().model_copy(update={"hitl_placements": (root_gate,)})
+    root_step = WorkflowStep(
+        step_id=StepID("dispatch-child"),
+        step_kind=StepKind.SUB_AGENT_DISPATCH,
+        step_payload=child_payload.model_dump(),
+    )
+
+    result = await asyncio.to_thread(
+        subagent.dispatch,
+        _parent_binding(),
+        root_step,
+        step_context=root_context,
+    )
+
+    assert set(result) == {"child-write", "child-read", "dispatch-grandchild"}
+    assert surface.timeouts == [0.1, 0.2, 0.1, 0.2]
+    assert len(gate_ledger.appends) == 4
+    assert len(gate_audit.appends) == 4

@@ -3,17 +3,22 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
+import harness_runtime.lifecycle.hitl_tool_response_audit as tool_response_audit
 import pytest
 from harness_as.sandbox_tier import BlastRadiusTier, SandboxTier
 from harness_as.tool_contract import ToolContract
 from harness_core import PersonaTier
 from harness_core.deployment_surface import DeploymentSurface
 from harness_core.workload_class import WorkloadClass
-from harness_cp.cp_shared_types import ActorIdentity
+from harness_cp.cp_shared_types import ActorIdentity, MCPTrustTier
 from harness_cp.engine_class import EngineClass
+from harness_cp.gate_level_rule import GateLevel
 from harness_cp.hitl_response_palette import HITLResponse
 from harness_cp.pause_resume_protocol import PauseReason, ResumeOutcomeKind
 from harness_cp.persona_engine_hitl_matrix import SynchronyClass
@@ -31,6 +36,7 @@ from harness_runtime.bootstrap.factories.r_cxa_2_producer_loop_factory import (
 from harness_runtime.bootstrap.mutable_context import _MutableHarnessContext
 from harness_runtime.config.path_bindings import build_path_binding
 from harness_runtime.lifecycle.ask_user_question_surface import AskUserQuestionResult
+from harness_runtime.lifecycle.audit_writer import materialize_audit_writer_stage
 from harness_runtime.lifecycle.cp_is_wiring import materialize_cp_is_wiring_stage
 from harness_runtime.lifecycle.hitl_placement import RuntimeHITLPlacementRegistry
 from harness_runtime.lifecycle.hitl_tool_loop import (
@@ -99,6 +105,7 @@ class _AskSurface:
     ) -> None:
         self.order = order
         self.response = response
+        self.edited_proposal = '{"query":"edited"}'
         self.calls: list[tuple[str, tuple[HITLResponse, ...], float | None]] = []
 
     async def ask(
@@ -109,7 +116,13 @@ class _AskSurface:
     ) -> AskUserQuestionResult:
         self.order.append("gate")
         self.calls.append((prompt, options, timeout))
-        return AskUserQuestionResult(response=self.response, latency_ms=1.0)
+        return AskUserQuestionResult(
+            response=self.response,
+            latency_ms=1.0,
+            rejection_reason="operator rejected" if self.response is HITLResponse.REJECT else None,
+            response_text="operator replied" if self.response is HITLResponse.RESPOND else None,
+            edited_proposal=self.edited_proposal if self.response is HITLResponse.EDIT else None,
+        )
 
 
 class _ToolDispatcher:
@@ -131,6 +144,7 @@ def _context() -> HITLToolLoopContext:
         cell_synchrony_class=SynchronyClass.SYNC_BLOCKING,
         cross_trust_boundary_state=CrossTrustBoundaryState.NONE,
         actor=_ACTOR,
+        inherited_gate_floor=GateLevel.AUTO,
     )
 
 
@@ -150,6 +164,25 @@ class _FakeMCPHost:
 
     def __init__(self, registry: ToolRegistry) -> None:
         self.tool_registry = registry
+        self.trust_tier: MCPTrustTier | None = None
+
+
+def _signed_host_with_search() -> dict[str, Any]:
+    """An L1 host owning the `search` tool, so the model call resolves to ASK (not DENY)."""
+    registry = ToolRegistry()
+    registry.register(
+        ToolContract(
+            name="search",
+            description="search",
+            input_schema={"type": "object"},
+            output_schema={"type": "object"},
+            minimum_tier=SandboxTier.TIER_1_PROCESS,
+            blast_radius_tier=BlastRadiusTier.READ_ONLY,
+        )
+    )
+    host = _FakeMCPHost(registry)
+    host.trust_tier = MCPTrustTier.LEVEL_1_SIGNED_PINNED
+    return {"mcp-main": host}
 
 
 def _deferred_hosts() -> dict[str, Any]:
@@ -186,6 +219,7 @@ def _post_tool_dispatcher_context(
     ledger_writer = _ledger_writer(tmp_path)
     ctx = _MutableHarnessContext()
     ctx.ledger_writer = ledger_writer
+    ctx.audit_writer = materialize_audit_writer_stage(config, ledger_writer).writer
     ctx.cxa_stages["cp_is_wiring"] = materialize_cp_is_wiring_stage(
         config,
         ledger_writer,
@@ -211,6 +245,7 @@ def test_factory_binds_r_cxa_2_loops_to_context(tmp_path: Path) -> None:
 def test_bound_hitl_loop_emits_rewrite_before_tool_dispatch(tmp_path: Path) -> None:
     order: list[str] = []
     ctx, config, ask_surface, tool_dispatcher = _post_tool_dispatcher_context(tmp_path, order)
+    ctx.mcp_client_hosts = _signed_host_with_search()
     stage = materialize_r_cxa_2_producer_loop_stage(ctx, config)
 
     results = asyncio.run(stage.hitl_tool_loop.run_tool_calls([_call()], _context()))
@@ -230,7 +265,9 @@ def test_bound_hitl_loop_emits_rewrite_before_tool_dispatch(tmp_path: Path) -> N
     assert step_context.workflow_id == "wf-1"
     assert step_context.parent_idempotency_key.endswith(":provider-call-1")
     entries = read_ledger(stage.hitl_tool_loop.wiring.ledger_writer.handle)
-    assert [entry.action_id for entry in entries] == ["cp.hitl-tool-call-rewriting"]
+    assert entries[0].action_id == "cp.hitl-tool-call-rewriting"
+    assert str(entries[1].action_id).startswith("hitl:")
+    assert len(ctx.audit_writer.read_full_entries_for_tenant(None)) == 1
 
 
 def test_bound_engine_loop_emits_pause_and_resume_entries(tmp_path: Path) -> None:
@@ -301,7 +338,8 @@ def test_search_tools_call_answered_without_reaching_tool_dispatcher(tmp_path: P
             "input_schema": {"type": "object"},
         }
     ]
-    assert ask_surface.calls[0][0] == "HITL tool call search_tools on mcp-main"
+    # Asked under the in-process owner, not the model-supplied `mcp-main` label.
+    assert ask_surface.calls[0][0] == "HITL tool call search_tools on <in-process>"
 
 
 def test_search_tools_no_match_returns_empty_matches(tmp_path: Path) -> None:
@@ -375,3 +413,152 @@ def test_missing_tool_dispatcher_raises(tmp_path: Path) -> None:
 
     with pytest.raises(RCXA2ProducerLoopMaterializeError, match="tool_dispatcher"):
         materialize_r_cxa_2_producer_loop_stage(ctx, config)
+
+
+@pytest.mark.parametrize(
+    ("response", "dispatches", "conditional_attr", "expected_hash"),
+    [
+        (HITLResponse.APPROVE, True, None, None),
+        (
+            HITLResponse.EDIT,
+            True,
+            "audit.cp.edited_proposal_hash",
+            hashlib.sha256(b'{"query":"edited"}').hexdigest(),
+        ),
+        (
+            HITLResponse.REJECT,
+            False,
+            "audit.cp.rejection_reason_hash",
+            hashlib.sha256(b"operator rejected").hexdigest(),
+        ),
+        (
+            HITLResponse.RESPOND,
+            False,
+            "audit.cp.response_text_hash",
+            hashlib.sha256(b"operator replied").hexdigest(),
+        ),
+    ],
+)
+def test_operator_reply_is_persisted_in_od_before_disposition(
+    tmp_path: Path,
+    response: HITLResponse,
+    dispatches: bool,
+    conditional_attr: str | None,
+    expected_hash: str | None,
+) -> None:
+    order: list[str] = []
+    ctx, config, ask_surface, dispatcher = _post_tool_dispatcher_context(tmp_path, order)
+    ctx.mcp_client_hosts = _signed_host_with_search()
+    ask_surface.response = response
+    loop = materialize_r_cxa_2_producer_loop_stage(ctx, config).hitl_tool_loop
+
+    (result,) = asyncio.run(loop.run_tool_calls([_call()], _context()))
+
+    assert result.dispatched is dispatches
+    assert len(dispatcher.calls) == int(dispatches)
+    [entry] = ctx.audit_writer.read_full_entries_for_tenant(None)
+    attrs = entry.payload.audit_namespace_attrs
+    assert attrs["audit.cp.response"] == response.value
+    assert attrs["audit.cp.gate_level"] == GateLevel.ASK.value
+    assert attrs["audit.cp.action_id"].startswith("hitl:")
+    assert entry.payload.entry_core == attrs["audit.cp.action_id"]
+    if conditional_attr is not None:
+        assert attrs[conditional_attr] == expected_hash
+    else:
+        assert not any(
+            key.endswith("_hash") and key not in {"audit.cp.prior_event_hash"} for key in attrs
+        )
+    assert len(read_ledger(loop.wiring.ledger_writer.handle)) >= 2
+
+
+def test_tool_response_f2_uses_append_time_when_audit_clock_is_stale(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A stale audit record instant cannot become the F2 append timestamp."""
+    real_datetime = datetime
+
+    class _StaleAuditClock:
+        @staticmethod
+        def now(tz: object) -> datetime:
+            assert tz is UTC
+            return real_datetime.now(UTC) - timedelta(days=1)
+
+    monkeypatch.setattr(tool_response_audit, "datetime", _StaleAuditClock)
+    ctx, config, ask_surface, _dispatcher = _post_tool_dispatcher_context(tmp_path, [])
+    ctx.mcp_client_hosts = _signed_host_with_search()
+    ask_surface.response = HITLResponse.APPROVE
+    loop = materialize_r_cxa_2_producer_loop_stage(ctx, config).hitl_tool_loop
+
+    (result,) = asyncio.run(loop.run_tool_calls([_call()], _context()))
+
+    assert result.dispatched
+    [audit] = ctx.audit_writer.read_full_entries_for_tenant(None)
+    attrs = audit.payload.audit_namespace_attrs
+    matching = [
+        entry
+        for entry in read_ledger(loop.wiring.ledger_writer.handle)
+        if str(entry.action_id) == attrs["audit.cp.action_id"]
+    ]
+    assert len(matching) == 1
+    recorded_at = datetime.fromisoformat(attrs["audit.cp.timestamp"])
+    assert matching[0].timestamp > recorded_at + timedelta(hours=12)
+
+
+def test_empty_edit_is_audited_and_dispatched_as_empty_object(tmp_path: Path) -> None:
+    ctx, config, ask_surface, dispatcher = _post_tool_dispatcher_context(tmp_path, [])
+    ctx.mcp_client_hosts = _signed_host_with_search()
+    ask_surface.response = HITLResponse.EDIT
+    ask_surface.edited_proposal = "{}"
+    loop = materialize_r_cxa_2_producer_loop_stage(ctx, config).hitl_tool_loop
+
+    (result,) = asyncio.run(loop.run_tool_calls([_call()], _context()))
+
+    assert result.dispatched
+    assert len(dispatcher.calls) == 1
+    assert dispatcher.calls[0][1].step_payload["tool_args"] == {}
+    [entry] = ctx.audit_writer.read_full_entries_for_tenant(None)
+    assert (
+        entry.payload.audit_namespace_attrs["audit.cp.edited_proposal_hash"]
+        == hashlib.sha256(b"{}").hexdigest()
+    )
+
+
+@pytest.mark.parametrize("edited_proposal", [None, "", "   ", "not JSON", "[]", '{"x":NaN}'])
+def test_edit_without_valid_json_object_refuses_before_audit_or_dispatch(
+    tmp_path: Path, edited_proposal: str | None
+) -> None:
+    ctx, config, ask_surface, dispatcher = _post_tool_dispatcher_context(tmp_path, [])
+    ctx.mcp_client_hosts = _signed_host_with_search()
+    ask_surface.response = HITLResponse.EDIT
+    ask_surface.edited_proposal = edited_proposal
+    loop = materialize_r_cxa_2_producer_loop_stage(ctx, config).hitl_tool_loop
+
+    (result,) = asyncio.run(loop.run_tool_calls([_call()], _context()))
+
+    assert not result.dispatched
+    assert result.refusal is not None
+    assert result.refusal.reason.value == "malformed-gate-reply"
+    assert dispatcher.calls == []
+    assert ctx.audit_writer.read_full_entries_for_tenant(None) == []
+
+
+def test_od_write_failure_prevents_model_tool_dispatch(tmp_path: Path) -> None:
+    ctx, config, _surface, dispatcher = _post_tool_dispatcher_context(tmp_path, [])
+    ctx.mcp_client_hosts = _signed_host_with_search()
+    loop = materialize_r_cxa_2_producer_loop_stage(ctx, config).hitl_tool_loop
+    original = loop.response_auditor.audit_writer
+
+    class _FailingAuditWriter:
+        def append(self, **_kwargs: Any) -> None:
+            raise RuntimeError("audit unavailable")
+
+    broken = replace(
+        loop,
+        response_auditor=replace(
+            loop.response_auditor, audit_writer=cast(Any, _FailingAuditWriter())
+        ),
+    )
+    with pytest.raises(RuntimeError, match="audit unavailable"):
+        asyncio.run(broken.run_tool_calls([_call()], _context()))
+    assert dispatcher.calls == []
+    assert original.read_full_entries_for_tenant(None) == []

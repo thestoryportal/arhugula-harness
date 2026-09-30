@@ -15,7 +15,7 @@ from typing import Any
 DESIGN_RE = re.compile(
     r"\bdesign-substrate/|Spec_[A-Za-z_]+_v\d|Implementation_Plan_[A-Za-z_]+_v\d|ADR-[FD]\d"
 )
-IMPL_RE = re.compile(r"\bharness-[a-z]+/(?:src|tests)/|\btests/")
+IMPL_RE = re.compile(r"\bharness-[a-z]+/(?:src|tests|cp_tests)/|\btests/")
 DESTRUCTIVE_RE = re.compile(r"\b(?:git\s+reset\s+--hard|git\s+checkout\s+--|rm\s+-rf)\b")
 
 

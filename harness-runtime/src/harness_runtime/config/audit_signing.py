@@ -34,6 +34,7 @@ from harness_as.secret_fetch import SecretScope
 from harness_cp.aws_kms_signing_backend import AwsKmsSigningBackend
 from harness_cp.f5_signing_key_resolution import SIGNATURE_LENGTH_BY_ALGORITHM
 
+from harness_runtime.config.local_ed25519_signing_backend import LocalEd25519SigningBackend
 from harness_runtime.lifecycle.audit_signing_errors import (
     AUDIT_SIGNING_HARD_FAILURES,
     AuditSigningBreakerOpenError,
@@ -68,6 +69,9 @@ SIGNING_BREAKER_COOLDOWN_SECONDS: Final[float] = 30.0
 #: deployment-time composition-root arc").
 AWS_KMS_SIGNING_BREAKER_KEY: Final[SecretBackendBreakerKey] = construct_breaker_key(
     "aws-kms", SecretScope(name="audit-signing")
+)
+LOCAL_ED25519_SIGNING_BREAKER_KEY: Final[SecretBackendBreakerKey] = construct_breaker_key(
+    "local-ed25519", SecretScope(name="audit-signing")
 )
 
 
@@ -124,6 +128,18 @@ class BreakerGuardedSigningBackend:
         # double-count into the new window).
         self._epoch = 0
 
+    def key_identity(self, key_id: str) -> str:
+        # [LAW:composability] Preserve the local identity seam across the signing breaker.
+        if not isinstance(self._inner, LocalEd25519SigningBackend):
+            raise TypeError("key identity is available only for local Ed25519 signing")
+        return self._inner.key_identity(key_id)
+
+    def row_key_identity(self, key_id: str) -> str | None:
+        # [LAW:composability] Historical identity travels through the existing breaker seam.
+        if not isinstance(self._inner, LocalEd25519SigningBackend):
+            raise TypeError("row identity is available only for local Ed25519 signing")
+        return self._inner.row_key_identity(key_id)
+
     def _admit_or_raise(self) -> tuple[bool, int]:
         """Under the lock: admit this call and return
         `(is_half_open_probe, admission_epoch)`; raise when the breaker
@@ -141,7 +157,7 @@ class BreakerGuardedSigningBackend:
                     f"failures — failing fast for "
                     f"{max(0.0, self._cooldown_seconds - elapsed):.1f}s more "
                     f"rather than degrading to placeholder signatures or "
-                    f"stalling the audit hot path on a down KMS"
+                    f"stalling the audit hot path on an unavailable backend"
                 )
             self._half_open_probe_inflight = True
             return True, self._epoch
@@ -249,17 +265,21 @@ def make_audit_signing_backend(
     (`SigningBackendSdkUnavailableError`) — a deployment that asked for real
     signing never silently degrades.
 
-    `kms_client` is the hermetic-test injection seam (mirrors R-421's
-    `gcp_secret_accessor` parameter); production callers omit it and get the
-    import-guarded boto3 client with boto3's own credential chain.
+    `local-ed25519` loads host-owned private keys at construction without a
+    KMS client. `kms_client` is the hermetic-test injection seam for AWS KMS;
+    production AWS callers omit it and use boto3's credential chain.
     """
     if config.backend is AuditSigningBackendKind.NONE:
         return None
-    client = kms_client if kms_client is not None else _default_kms_client(config.aws_region)
-    # B-47 PR B2a — item (d): every consumer that receives this backend
-    # (span-processor token map, HITL/sub-agent composers, cost builders)
-    # gets the C9 breaker transparently by wrapping HERE, at the single
-    # construction point, per ADR-D8 §Decision item 5.
-    return BreakerGuardedSigningBackend(
-        AwsKmsSigningBackend(key_arns=config.key_arns, kms_client=client)
-    )
+    # [LAW:single-enforcer] Select and guard concrete signing backends here.
+    if config.backend is AuditSigningBackendKind.LOCAL_ED25519:
+        return BreakerGuardedSigningBackend(
+            LocalEd25519SigningBackend(config.local_key_paths, config.local_public_key_paths),
+            breaker_key=LOCAL_ED25519_SIGNING_BREAKER_KEY,
+        )
+    if config.backend is AuditSigningBackendKind.AWS_KMS:
+        client = kms_client if kms_client is not None else _default_kms_client(config.aws_region)
+        return BreakerGuardedSigningBackend(
+            AwsKmsSigningBackend(key_arns=config.key_arns, kms_client=client)
+        )
+    raise ValueError(f"unsupported audit-signing backend {config.backend!r}")

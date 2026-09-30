@@ -27,10 +27,12 @@ DESIGN_RE = re.compile(
     r".*Spec_[A-Za-z_]+_v\d|.*Implementation_Plan_[A-Za-z_]+_v\d|.*ADR-[FD]\d)"
 )
 IMPL_RE = re.compile(
-    r"^(harness-[a-z]+/(src|tests)/|tests/|tools/|\.codex/hooks/|\.github/workflows/|"
+    r"^(harness-[a-z]+/(src|tests|cp_tests)/|tests/|tools/|\.codex/hooks/|\.github/workflows/|"
     r"justfile$)"
 )
-CITE_RE = re.compile(r"^(harness-[a-z]+/src/|harness-[a-z]+/tests/|tools/semantic_overlay/)")
+CITE_RE = re.compile(
+    r"^(harness-[a-z]+/src/|harness-[a-z]+/(tests|cp_tests)/|tools/semantic_overlay/)"
+)
 # A clearance marker (CLAUDE.md §4.5) records a design-substrate version operationally
 # accepted for Phase-7 consumption — the signal that a design+impl PR is a RATIFIED
 # bundled-absorption arc (§11.4), not silent absorption. Its presence is what the

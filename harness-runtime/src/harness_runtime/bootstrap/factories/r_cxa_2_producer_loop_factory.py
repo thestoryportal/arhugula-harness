@@ -9,33 +9,37 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any, cast
+from typing import Any, NoReturn, cast
 
 from harness_as.sandbox_tier import BlastRadiusTier, SandboxTier
-from harness_core.identity import StepID
 from harness_cp.cp_shared_types import ActorIdentity, MCPTrustTier, ModelBinding
 from harness_cp.engine_class import EngineClass
-from harness_cp.gate_level_rule import GateLevel, GateLevelInput
+from harness_cp.gate_level_rule import GateLevel, GateLevelInput, gate_level, max_gate_level
 from harness_cp.handoff_context import StateSummary
 from harness_cp.hitl_response_palette import HITLResponse
 from harness_cp.per_step_override_evaluator import StepEffectiveBinding
-from harness_cp.workflow_driver_types import StepExecutionContext, StepKind, WorkflowStep
+from harness_cp.workflow_driver_types import StepExecutionContext
 from harness_is.state_ledger_entry_schema import Actor, ActorClass, Identifier
 
 from harness_runtime.bootstrap.mutable_context import _MutableHarnessContext
+from harness_runtime.config.state_placement import StateKind, resolve_state_path
 from harness_runtime.lifecycle.cp_is_wiring import RuntimeCpIsWiring
 from harness_runtime.lifecycle.engine_recovery_loop import RuntimeEngineRecoveryLoop
 from harness_runtime.lifecycle.hitl_placement import RuntimeHITLPlacementRegistry
-from harness_runtime.lifecycle.hitl_required_consumption import evaluate_hitl_required
 from harness_runtime.lifecycle.hitl_tool_loop import (
     HITLGateDecision,
+    HITLToolCallAssessment,
     HITLToolLoopContext,
     ModelToolCall,
     RuntimeHITLToolLoop,
+    model_tool_call_step,
 )
+from harness_runtime.lifecycle.hitl_tool_response_audit import RuntimeHITLToolResponseAuditor
 from harness_runtime.lifecycle.reconciler_pause_resume_substrate import (
     ReconcilerEnginePauseResumeSubstrate,
 )
+from harness_runtime.lifecycle.step_blast_radius import resolve_step_blast_radius
+from harness_runtime.lifecycle.step_mcp_trust_tier import resolve_tool_owner
 from harness_runtime.lifecycle.tool_search import (
     SEARCH_TOOLS_TOOL_NAME,
     compute_deferred_tool_index,
@@ -47,7 +51,9 @@ from harness_runtime.lifecycle.wal_segment_pause_resume_substrate import (
 from harness_runtime.types import RuntimeConfig, ToolName
 
 __all__ = [
+    "IN_PROCESS_TOOL_OWNER",
     "R_CXA_2_MODEL_TOOL_LOOP_PARENT_GATE_LEVEL",
+    "UNREGISTERED_TOOL_OWNER",
     "RCXA2ProducerLoopMaterializeError",
     "RCXA2ProducerLoopStage",
     "materialize_r_cxa_2_producer_loop_stage",
@@ -76,32 +82,58 @@ class RCXA2ProducerLoopStage:
     engine_recovery_loop: RuntimeEngineRecoveryLoop
 
 
+_HOST_LESS_SEARCH_TOOLS_TRUST = MCPTrustTier.LEVEL_3_ALLOW_WITH_AUDIT
+"""`search_tools` is answered in process with no owning MCP host, so it takes the same
+host-less no-floor default the composer's host-less gate sites use (U-RT-131)."""
+
+IN_PROCESS_TOOL_OWNER = "<in-process>"
+"""Owner of `search_tools`: answered in this process, never by an MCP host."""
+
+UNREGISTERED_TOOL_OWNER = "<unregistered>"
+"""Owner of a tool no configured host registers: it computes DENY and cannot dispatch.
+Angle brackets keep both labels out of the configured server-name space."""
+
+
 @dataclass(frozen=True, slots=True)
-class _GateLevelHITLRequiredEvaluator:
-    """Runtime default HITL-required evaluator for model-emitted tool calls."""
+class _HostTrustGateLevelEvaluator:
+    """Assess a model-emitted tool call from its owning host's REAL trust and blast.
 
-    per_tool_gate_level: GateLevel = GateLevel.AUTO
-    blast_radius_tier: BlastRadiusTier = BlastRadiusTier.READ_ONLY
-    # Post-U-CP-98 (CP spec v1.35 §19.1.2) this `mcp_trust_tier` is now a COMPOSED
-    # gate axis (`L0→DENY`). It is deliberately the conservative `LEVEL_0` —
-    # a model-emitted tool call with no resolved server trust defaults to untrusted
-    # → HITL-required. The change is behavior-preserving: the persona floor is ASK
-    # for all three tiers, so this evaluator already returned True for every input;
-    # the L0 floor (DENY) only re-grounds that True in MCP-trust. (Distinct from the
-    # composer's HOST-LESS gate sites, which feed the L3 no-floor default per
-    # U-RT-131 — those have no owning host; a model tool call references a server.)
-    mcp_trust_tier: MCPTrustTier = MCPTrustTier.LEVEL_0_REFUSE_REMOTE
+    One `resolve_tool_owner` lookup (the scan behind the tool-step composer's trust tier,
+    keyed like the dispatcher's routing index) gives both the trust and the owner name, so
+    the host that is scored is the host that is named and dispatched to; the model-supplied
+    `server` label is never consulted. Blast comes from `resolve_step_blast_radius` over the
+    shared synthetic `TOOL_STEP`. A tool no configured host registers, or whose host
+    declares no trust, has no trust to stand on and computes DENY (fail closed; an
+    unregistered tool could not dispatch anyway). A lookup that raises propagates: the loop
+    turns it into a typed no-prompt refusal.
+    """
 
-    def __call__(self, call: ModelToolCall, context: HITLToolLoopContext) -> bool:
-        _ = call
-        return evaluate_hitl_required(
+    lookup_ctx: Any
+    """Bootstrap context read for `mcp_client_hosts` when each call is evaluated."""
+
+    def __call__(self, call: ModelToolCall, context: HITLToolLoopContext) -> HITLToolCallAssessment:
+        if call.tool == SEARCH_TOOLS_TOOL_NAME:
+            owner = IN_PROCESS_TOOL_OWNER
+            trust: MCPTrustTier | None = _HOST_LESS_SEARCH_TOOLS_TRUST
+            blast = BlastRadiusTier.READ_ONLY  # a pure in-process index read, no effect
+        else:
+            resolved = resolve_tool_owner(call.tool, self.lookup_ctx)
+            if resolved is None:
+                return HITLToolCallAssessment(GateLevel.DENY, UNREGISTERED_TOOL_OWNER)
+            owner, trust = resolved.server_name, resolved.trust_tier
+            if trust is None:
+                return HITLToolCallAssessment(GateLevel.DENY, owner)
+            blast = resolve_step_blast_radius(model_tool_call_step(call, context), self.lookup_ctx)
+        computed = gate_level(
             GateLevelInput(
-                per_tool_gate_level=self.per_tool_gate_level,
+                per_tool_gate_level=GateLevel.AUTO,
                 persona_tier=context.persona_tier,
-                blast_radius_tier=self.blast_radius_tier,
-                mcp_trust_tier=self.mcp_trust_tier,
+                blast_radius_tier=blast,
+                mcp_trust_tier=trust,
             )
-        )
+        ).computed_gate_level
+        # [LAW:single-enforcer] The descended-step parent floor folds in here, once.
+        return HITLToolCallAssessment(max_gate_level(computed, context.inherited_gate_floor), owner)
 
 
 @dataclass(frozen=True, slots=True)
@@ -116,20 +148,27 @@ class _AskUserQuestionGateAdapter:
         *,
         call: ModelToolCall,
         context: HITLToolLoopContext,
+        palette: frozenset[HITLResponse],
     ) -> HITLGateDecision:
         _ = context
         result = await self.ask_user_question_surface.ask(
             prompt=f"HITL tool call {call.tool} on {call.server}",
-            options=tuple(sorted(HITLResponse)),
+            options=tuple(sorted(palette)),
             timeout=self.timeout_seconds,
         )
         edited_arguments = None
-        if result.response is HITLResponse.EDIT and result.edited_proposal:
-            edited_arguments = _parse_edited_arguments(result.edited_proposal)
+        if result.response is HITLResponse.EDIT and isinstance(result.edited_proposal, str):
+            try:
+                edited_arguments = _parse_edited_arguments(result.edited_proposal)
+            except ValueError:
+                # The loop admits EDIT only with a decoded argument object. Preserve
+                # a malformed reply for its typed refusal; never dispatch originals.
+                pass
         return HITLGateDecision(
             response=result.response,
             edited_arguments=edited_arguments,
             response_text=result.response_text,
+            rejection_reason=result.rejection_reason,
         )
 
 
@@ -166,15 +205,8 @@ class _RuntimeToolDispatcherModelCallAdapter:
     ) -> Mapping[str, Any]:
         if call.tool == SEARCH_TOOLS_TOOL_NAME:
             return self._dispatch_search_tools(call)
-        synthetic_step_id = f"{context.step_id}:tool:{call.tool_call_id}"
-        step = WorkflowStep(
-            step_id=StepID(synthetic_step_id),
-            step_kind=StepKind.TOOL_STEP,
-            step_payload={
-                "tool_id": call.tool,
-                "tool_args": dict(call.arguments),
-            },
-        )
+        step = model_tool_call_step(call, context)
+        synthetic_step_id = str(step.step_id)
         binding = StepEffectiveBinding(
             step_id=synthetic_step_id,
             model_binding=ModelBinding(provider=call.provider, model=call.model),
@@ -265,6 +297,11 @@ def materialize_r_cxa_2_producer_loop_stage(
             "through the existing C-RT-19 tool dispatcher"
         )
 
+    if ctx.audit_writer is None:
+        raise RCXA2ProducerLoopMaterializeError(
+            "ctx.audit_writer is None at stage 5; stage 4 OD must bind the audit writer"
+        )
+
     wiring = cast(RuntimeCpIsWiring, ctx.cxa_stages["cp_is_wiring"].wiring)
     placement_registry = cast(RuntimeHITLPlacementRegistry, ctx.hitl_registry)
     actor = _actor_identity_from_context(ctx)
@@ -272,8 +309,15 @@ def materialize_r_cxa_2_producer_loop_stage(
     hitl_tool_loop = RuntimeHITLToolLoop(
         wiring=wiring,
         placement_registry=placement_registry,
-        hitl_required=_GateLevelHITLRequiredEvaluator(),
+        assess=_HostTrustGateLevelEvaluator(ctx),
         gate=_AskUserQuestionGateAdapter(ctx.ask_user_question_surface),
+        response_auditor=RuntimeHITLToolResponseAuditor(
+            ledger_writer=wiring.ledger_writer,
+            audit_writer=cast(Any, ctx.audit_writer),
+            procedural_tier_snapshot_resolver=wiring.procedural_tier_snapshot_resolver,
+            tenant_id=config.tenant_id,
+            signing_backend=ctx.audit_signing_backend,
+        ),
         dispatcher=_RuntimeToolDispatcherModelCallAdapter(
             tool_dispatcher=ctx.tool_dispatcher,
             tenant_id=config.tenant_id,
@@ -301,11 +345,15 @@ def materialize_r_cxa_2_producer_loop_stage(
         wiring=wiring,
         substrate_by_engine_class={
             EngineClass.WAL_SEGMENT: WALSegmentEnginePauseResumeSubstrate(
-                journal_dir=config.repository_root / ".harness" / "engine-recovery-segments",
+                journal_dir=resolve_state_path(
+                    StateKind.ENGINE_RECOVERY_SEGMENTS, config, ctx.verified_state_root
+                ),
                 state_summary_provider=_default_engine_state_summary,
             ),
             EngineClass.RECONCILER_LOOP: ReconcilerEnginePauseResumeSubstrate(
-                journal_dir=config.repository_root / ".harness" / "engine-recovery-reconciler",
+                journal_dir=resolve_state_path(
+                    StateKind.ENGINE_RECOVERY_RECONCILER, config, ctx.verified_state_root
+                ),
                 state_summary_provider=_default_engine_state_summary,
             ),
         },
@@ -335,8 +383,12 @@ def _default_engine_state_summary() -> StateSummary:
     )
 
 
+def _reject_nonfinite_edit_constant(constant: str) -> NoReturn:
+    raise ValueError(f"non-finite JSON constant {constant!r} in HITL EDIT response")
+
+
 def _parse_edited_arguments(edited_proposal: str) -> Mapping[str, Any]:
-    parsed = json.loads(edited_proposal)
-    if not isinstance(parsed, Mapping):
+    parsed = json.loads(edited_proposal, parse_constant=_reject_nonfinite_edit_constant)
+    if not isinstance(parsed, dict):
         raise ValueError("HITL EDIT response must be a JSON object of tool arguments")
     return cast(Mapping[str, Any], parsed)

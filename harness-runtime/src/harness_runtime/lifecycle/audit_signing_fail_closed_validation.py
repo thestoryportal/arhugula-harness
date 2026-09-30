@@ -8,13 +8,12 @@ Discipline_v1_34.md` §21.2.3 rows 1-4) and the MTC tenant-bootstrap invariant
 row-4 cutover record when `audit_cutover_record_path` is configured but the
 file does not yet exist.
 
-Called from bootstrap stage 4 OD, AFTER the audit-signing backend is
-constructed (`make_audit_signing_backend`) — the record-key resolution +
-greenfield-signing steps need `backend.algorithm` / `backend.sign()` — and
-BEFORE the one-shot global tracer registration (mirrors the round-18
-rationale that already gates the sibling `validate_audit_signing_for_span_
-stage` call at the same site: a KMS config failure surfacing after
-`set_tracer_provider` poisons same-process bootstrap retry).
+The pure `validate_mtc_audit_signing_config` pass runs at bootstrap stage 4 OD
+BEFORE `make_audit_signing_backend`, private-key loading, and one-shot global
+tracer registration. Later record-key resolution and greenfield signing need
+`backend.algorithm` / `backend.sign()`, so they run after backend construction.
+A config refusal after `set_tracer_provider` would poison a same-process
+bootstrap retry; the pure pass preserves that ordering.
 
 **Scope boundary (deliberately narrow).** This module owns config-shape
 validation + greenfield record initialization ONLY. It does NOT touch the
@@ -30,8 +29,9 @@ inputs (absent backend, at every tier when the flag resolves ON; absent
 tenant/record inputs, at MTC only) surface as `IncompatibleConfigVersion`
 (`RT-FAIL-CONFIG-VERSION`) — the config predates the v1.101 contract,
 upgrade it. INVALID v2 VALUES (explicit `false` at MTC, a normalizer-refused
-tenant token, a record-key sharing row material or mismatching the mapping
-algorithm, a non-MTC opt-in missing its co-required record fields) surface
+tenant token, local-ed25519 selected at MTC, a record-key sharing row
+material or mismatching the mapping algorithm, a non-MTC opt-in missing
+its co-required record fields) surface
 as `AuditSigningConfigInvalidError` (`RT-FAIL-CONFIG`) — the config speaks v2 and
 is wrong. Each raise names every violation in its own class, not just the
 first found.
@@ -44,9 +44,10 @@ import json
 import os
 import sys
 import tempfile
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Protocol, cast, runtime_checkable
 
 from harness_core import PersonaTier
 from harness_core.cross_process_lock_deadline import CrossProcessLockTimeoutError
@@ -65,9 +66,10 @@ from harness_od.audit_ledger_types import SignatureAlgorithm
 from harness_od.multi_tenant_trace_separation_and_audit_ledger import signing_token
 from pydantic import ValidationError
 
+from harness_runtime.config.state_placement import require_inside_state_root
 from harness_runtime.lifecycle.audit_writer import AUDIT_WRITER_RESERVED_FILENAMES
 from harness_runtime.lifecycle.span_processor import REDACTION_TOKEN_SIGNING_KEY_ID
-from harness_runtime.types import AuditSigningBackendKind, RuntimeConfig
+from harness_runtime.types import AuditSigningBackendKind, RuntimeConfig, VerifiedStateRoot
 
 __all__ = [
     "AuditSigningConfigInvalidError",
@@ -78,6 +80,7 @@ __all__ = [
     "resolve_audit_signing_fail_closed",
     "validate_and_initialize_mtc_audit_signing",
     "validate_mtc_audit_signing_config",
+    "validate_record_key_distinctness",
 ]
 
 
@@ -194,6 +197,7 @@ def validate_and_initialize_mtc_audit_signing(
     config: RuntimeConfig,
     *,
     signing_backend: SigningBackend | None,
+    verified_state_root: VerifiedStateRoot | None,
     audit_sidecar_path: Path | None = None,
     ledger_has_audit_refs: Callable[[], bool] | None = None,
 ) -> None:
@@ -208,9 +212,11 @@ def validate_and_initialize_mtc_audit_signing(
     triggering this function's side-effecting record I/O first.
     """
     validate_mtc_audit_signing_config(config)
+    validate_record_key_distinctness(config, signing_backend)
     initialize_mtc_audit_signing_record(
         config,
         signing_backend=signing_backend,
+        verified_state_root=verified_state_root,
         audit_sidecar_path=audit_sidecar_path,
         ledger_has_audit_refs=ledger_has_audit_refs,
     )
@@ -321,6 +327,11 @@ def validate_mtc_audit_signing_config(config: RuntimeConfig) -> None:
 
     # --- Pass 2: INVALID v2 values -> AuditSigningConfigInvalidError.
     invalid: list[str] = []
+    if is_mtc and config.audit_signing.backend is AuditSigningBackendKind.LOCAL_ED25519:
+        invalid.append(
+            "audit_signing.backend='local-ed25519' is invalid at "
+            "persona_tier='multi-tenant-compliance' — MTC requires delegated signing"
+        )
     if is_mtc and config.audit_signing_fail_closed is False:
         invalid.append(
             "audit_signing_fail_closed=false is invalid at "
@@ -383,13 +394,28 @@ def validate_mtc_audit_signing_config(config: RuntimeConfig) -> None:
                 "— the record key must be physically distinct from every "
                 "row-signing key, including this deployment's own"
             )
-        resolved_arn = _resolve_record_key_arn(config, record_key_id)
-        if resolved_arn is None:
+        # [LAW:effects-at-boundaries] Config resolution stays pure; loaded keys are checked later.
+        signing = config.audit_signing
+        map_name = "key_arns"
+        active_map: Mapping[str, str] = {}
+        if signing.backend is AuditSigningBackendKind.AWS_KMS:
+            active_map = signing.key_arns
+        elif signing.backend is AuditSigningBackendKind.LOCAL_ED25519:
+            map_name = "local_key_paths"
+            active_map = signing.local_key_paths
+        resolved_key = active_map.get(record_key_id)
+        if resolved_key is None:
+            reason = (
+                " — a public-only ID in audit_signing.local_public_key_paths "
+                "cannot be an active record signing key"
+                if record_key_id in signing.local_public_key_paths
+                else ""
+            )
             invalid.append(
                 f"audit_cutover_record_key_id={record_key_id!r} does not "
-                "resolve to any entry in audit_signing.key_arns"
+                f"resolve to any entry in audit_signing.{map_name}{reason}"
             )
-        else:
+        elif signing.backend is AuditSigningBackendKind.AWS_KMS:
             # Out-of-family Codex [P1] finding: compare CANONICAL key
             # identities, not raw ARN strings — AWS KMS accepts both a
             # full ARN and its bare key UUID for the SAME physical key;
@@ -399,7 +425,7 @@ def validate_mtc_audit_signing_config(config: RuntimeConfig) -> None:
             # needs a live KMS `DescribeKey` call this module does not
             # make, matching `AwsKmsSigningBackend`'s own no-DescribeKey
             # posture) — it closes the common ARN-vs-bare-UUID spelling gap.
-            canonical_resolved = canonical_kms_key_identity(resolved_arn)
+            canonical_resolved = canonical_kms_key_identity(resolved_key)
             sharing = [
                 other_id
                 for other_id, other_arn in config.audit_signing.key_arns.items()
@@ -427,10 +453,88 @@ def validate_mtc_audit_signing_config(config: RuntimeConfig) -> None:
         raise IncompatibleConfigVersion(tuple(missing))
 
 
+@runtime_checkable
+class _LocalKeyIdentityCapable(Protocol):
+    def key_identity(self, key_id: str) -> str: ...
+
+
+@runtime_checkable
+class _LocalRowIdentityCapable(Protocol):
+    def row_key_identity(self, key_id: str) -> str | None: ...
+
+
+def validate_record_key_distinctness(
+    config: RuntimeConfig, signing_backend: SigningBackend | None
+) -> None:
+    """Reject a local record key reused by an active or historical row ID."""
+    if config.audit_signing.backend is not AuditSigningBackendKind.LOCAL_ED25519:
+        return
+    if _is_blank(config.audit_cutover_record_path) or _is_blank(config.audit_cutover_record_key_id):
+        return
+    if not isinstance(signing_backend, _LocalKeyIdentityCapable):
+        raise AuditSigningConfigInvalidError(("local Ed25519 signing backend has no key identity",))
+    record_key_id = config.audit_cutover_record_key_id
+    assert record_key_id is not None  # normalized by the preceding config validation
+    # [LAW:single-enforcer] Compare loaded public-key identities once at the backend boundary.
+    record_identity = signing_backend.key_identity(record_key_id)
+    sharing = sorted(
+        key_id
+        for key_id in config.audit_signing.local_key_paths
+        if key_id != record_key_id and signing_backend.key_identity(key_id) == record_identity
+    )
+    if config.audit_signing.local_public_key_paths:
+        if not isinstance(signing_backend, _LocalRowIdentityCapable):
+            raise AuditSigningConfigInvalidError(("local Ed25519 backend has no row identity",))
+        sharing = sorted(
+            set(sharing)
+            | {
+                key_id
+                for key_id in config.audit_signing.local_public_key_paths
+                if key_id != record_key_id
+                and signing_backend.row_key_identity(key_id) == record_identity
+            }
+        )
+    if sharing:
+        raise AuditSigningConfigInvalidError(
+            (
+                f"audit_cutover_record_key_id={record_key_id!r} resolves to the SAME "
+                f"backing key material as row-signing key(s) {sharing!r} — the record "
+                "key must be physically distinct from every row-signing key",
+            )
+        )
+
+
+def configured_cutover_record_path(
+    config: RuntimeConfig, verified_state_root: VerifiedStateRoot | None
+) -> Path | None:
+    """The ONE placement judgment for the configured cutover record path.
+
+    A configured record is a durable audit trust anchor: with `state_placement` declared it
+    must resolve inside the verified external state root, so a checkout clean or restore
+    cannot remove or rewind it while the external ledger survives. Bootstrap, the migration
+    author/retag modes and inspect's config-derived default all route through here
+    ([LAW:single-enforcer]); each takes the stamp explicitly. Blank means absent
+    (`_is_blank`, exactly as `validate_mtc_audit_signing_config`). With no placement the
+    path passes through unchanged (legacy). Never derives, moves, copies or re-mints a
+    record: an outside-root path refuses with `StateRootPlacementError` and the operator
+    migrates the original signed bytes while stopped.
+    """
+    raw = config.audit_cutover_record_path
+    if _is_blank(raw):
+        return None
+    return require_inside_state_root(
+        Path(cast("str", raw)),
+        config,
+        verified_state_root,
+        what="audit_cutover_record_path",
+    )
+
+
 def initialize_mtc_audit_signing_record(
     config: RuntimeConfig,
     *,
     signing_backend: SigningBackend | None,
+    verified_state_root: VerifiedStateRoot | None,
     audit_sidecar_path: Path | None = None,
     ledger_has_audit_refs: Callable[[], bool] | None = None,
 ) -> AuditCutoverRecord | None:
@@ -473,11 +577,10 @@ def initialize_mtc_audit_signing_record(
     # for validation purposes, at a non-MTC tier where nothing else
     # required it) slip through and create a record file literally named
     # `"   "` on disk.
-    record_path = (
-        None if _is_blank(config.audit_cutover_record_path) else config.audit_cutover_record_path
-    )
-    if record_path is None:
+    path = configured_cutover_record_path(config, verified_state_root)
+    if path is None:
         return None
+    record_path = str(path)
     record_key_id = (
         None
         if _is_blank(config.audit_cutover_record_key_id)
@@ -489,7 +592,6 @@ def initialize_mtc_audit_signing_record(
     assert record_key_id is not None and record_binding_id is not None  # config validated first
     assert signing_backend is not None  # config validated first (resolved_fail_closed at MTC)
 
-    path = Path(record_path)
     if audit_sidecar_path is not None:
         # Out-of-family Codex [P2] rounds 6+9: a record path resolving to
         # ANY audit-writer-owned file is rejected before any branch — the
@@ -562,7 +664,10 @@ def initialize_mtc_audit_signing_record(
                     )
                 ) from exc
             _reject_record_key_used_by_persisted_rows_locked(
-                config, sidecar_path=audit_sidecar_path, record_key_id=record_key_id
+                config,
+                sidecar_path=audit_sidecar_path,
+                record_key_id=record_key_id,
+                signing_backend=signing_backend,
             )
         if path.is_file():
             # Out-of-family Codex [P2] B-64 round-3: release the sidecar
@@ -655,7 +760,11 @@ def _sidecar_has_rows_locked(sidecar_path: Path) -> bool:
 
 
 def _reject_record_key_used_by_persisted_rows(  # pyright: ignore[reportUnusedFunction] — consumed cross-module by admin/record_migration.py (shared trust-anchor component)
-    config: RuntimeConfig, *, sidecar_path: Path, record_key_id: str
+    config: RuntimeConfig,
+    *,
+    sidecar_path: Path,
+    record_key_id: str,
+    signing_backend: SigningBackend | None,
 ) -> None:
     """Reject a record key that any PERSISTED sidecar row already signed
     under (out-of-family Codex [P1] round-6; spec text: the pinned id "MUST
@@ -677,7 +786,10 @@ def _reject_record_key_used_by_persisted_rows(  # pyright: ignore[reportUnusedFu
     try:
         with cross_process_read_lock(sidecar_path):
             _reject_record_key_used_by_persisted_rows_locked(
-                config, sidecar_path=sidecar_path, record_key_id=record_key_id
+                config,
+                sidecar_path=sidecar_path,
+                record_key_id=record_key_id,
+                signing_backend=signing_backend,
             )
     except (OSError, CrossProcessLockTimeoutError) as exc:
         # Lock acquisition itself failed — same typed fail-closed surface
@@ -695,14 +807,17 @@ def _reject_record_key_used_by_persisted_rows(  # pyright: ignore[reportUnusedFu
 
 
 def _reject_record_key_used_by_persisted_rows_locked(
-    config: RuntimeConfig, *, sidecar_path: Path, record_key_id: str
+    config: RuntimeConfig,
+    *,
+    sidecar_path: Path,
+    record_key_id: str,
+    signing_backend: SigningBackend | None,
 ) -> None:
     """Lock-free scan core of `_reject_record_key_used_by_persisted_rows`.
 
-    Compares logical key ids directly, plus canonical backing material when
-    the row's id resolves through `config.audit_signing.key_arns`. A
-    sidecar row that cannot be parsed is fail-closed: separation cannot be
-    PROVEN over unreadable history, so the record key is refused.
+    Compares logical IDs and loaded backing identities for local rows, or
+    canonical KMS IDs for KMS rows. Unparseable sidecar history is fail-closed:
+    separation cannot be proven, so the record key is refused.
 
     CALLER-HELD-LOCK INVARIANT (B-64): the caller holds a
     `cross_process_read_lock` (the wrapper above) or
@@ -711,8 +826,16 @@ def _reject_record_key_used_by_persisted_rows_locked(
     """
     if not sidecar_path.is_file():
         return
-    record_arn = _resolve_record_key_arn(config, record_key_id)
-    record_material = canonical_kms_key_identity(record_arn) if record_arn is not None else None
+    local = config.audit_signing.backend is AuditSigningBackendKind.LOCAL_ED25519
+    if local:
+        if not isinstance(signing_backend, _LocalKeyIdentityCapable) or not isinstance(
+            signing_backend, _LocalRowIdentityCapable
+        ):
+            raise AuditSigningConfigInvalidError(("local Ed25519 backend has no row identity",))
+        record_material = signing_backend.key_identity(record_key_id)
+    else:
+        record_arn = _resolve_record_key_arn(config, record_key_id)
+        record_material = canonical_kms_key_identity(record_arn) if record_arn is not None else None
     try:
         with sidecar_path.open("r", encoding="utf-8") as handle:
             for line_number, line in enumerate(handle, start=1):
@@ -756,32 +879,39 @@ def _reject_record_key_used_by_persisted_rows_locked(
                         )
                     )
                 same_logical = row_key_id == record_key_id
-                row_arn = _resolve_record_key_arn(config, row_key_id)
-                if row_arn is None:
-                    # Out-of-family Codex [P1] round-8: an unmapped historical
-                    # row key makes PHYSICAL distinctness unprovable — a
-                    # deployment could map the record key to the same KMS key
-                    # a since-removed logical row id used and pass. Fail
-                    # closed; the operator remedy is adding the historical
-                    # id's ARN to `audit_signing.key_arns` (a documentation
-                    # mapping — nothing signs under it). (Placeholder-era rows
-                    # carry `unsigned:*` only in the signature VALUE — their
-                    # key_id field is a real id, so no carve-out is needed.)
-                    raise AuditSigningConfigInvalidError(
-                        (
-                            f"persisted audit row (sidecar line {line_number}) was "
-                            f"signed under key id {row_key_id!r}, which has no "
-                            "entry in audit_signing.key_arns — physical "
-                            "distinctness from the pinned "
-                            f"audit_cutover_record_key_id={record_key_id!r} cannot "
-                            "be proven; add the historical key's ARN to key_arns "
-                            "so separation is verifiable",
+                if local:
+                    assert isinstance(signing_backend, _LocalRowIdentityCapable)
+                    row_material = signing_backend.row_key_identity(row_key_id)
+                    if row_material is None:
+                        raise AuditSigningConfigInvalidError(
+                            (
+                                f"persisted audit row (sidecar line {line_number}) was "
+                                f"signed under key id {row_key_id!r}, which has no "
+                                "entry in audit_signing.local_public_key_paths or "
+                                "active local_key_paths — physical distinctness "
+                                "cannot be proven; add the retired key's public "
+                                "PEM to local_public_key_paths",
+                            )
                         )
+                    same_material = row_material == record_material
+                else:
+                    row_arn = _resolve_record_key_arn(config, row_key_id)
+                    if row_arn is None:
+                        raise AuditSigningConfigInvalidError(
+                            (
+                                f"persisted audit row (sidecar line {line_number}) was "
+                                f"signed under key id {row_key_id!r}, which has no "
+                                "entry in audit_signing.key_arns — physical "
+                                "distinctness from the pinned "
+                                f"audit_cutover_record_key_id={record_key_id!r} cannot "
+                                "be proven; add the historical key's ARN to key_arns "
+                                "so separation is verifiable",
+                            )
+                        )
+                    same_material = (
+                        record_material is not None
+                        and canonical_kms_key_identity(row_arn) == record_material
                     )
-                same_material = (
-                    record_material is not None
-                    and canonical_kms_key_identity(row_arn) == record_material
-                )
                 if same_logical or same_material:
                     raise AuditSigningConfigInvalidError(
                         (

@@ -16,7 +16,7 @@ IS is the **consumer-most-upstream axis** per `Cross_Axis_Composition_Document_v
 
 | Artifact | Version | Role |
 |---|---|---|
-| `Spec_Information_Substrate_v1.md` | **v1.13 — canonical HEAD** — full per-version lineage relocated to `.harness/artifact-pointers/is.md` §1.2 axis archive (loaded on demand only; not part of the default session-start read path) | Contract authority — the `C-IS-*` contract family (see the canonical spec for the full enumeration) |
+| `Spec_Information_Substrate_v1.md` | **v1.16 — canonical HEAD** — full per-version lineage relocated to `.harness/artifact-pointers/is.md` §1.2 axis archive (loaded on demand only; not part of the default session-start read path) | Contract authority — the `C-IS-*` contract family (see the canonical spec for the full enumeration) |
 | `Implementation_Plan_Information_Substrate_v2_9.md` | **v2.9 — canonical HEAD** — full per-version lineage relocated to `.harness/artifact-pointers/is.md` §1.2 axis archive (loaded on demand only; not part of the default session-start read path) | Execution authority — 19 units (U-IS-01 – U-IS-17 + U-IS-19 + U-IS-20; U-IS-18 retired) |
 
 ### 1.3 Scope inclusion (per IS plan v2.1 §4 coverage matrix; preserved verbatim at v2.3)

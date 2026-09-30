@@ -99,6 +99,16 @@ class _RecordingAuditWriter:
         return "appended"
 
 
+class _StubSigningBackend:
+    algorithm = "ed25519"
+
+    def sign(self, *, message: bytes, key_id: str, key_period: int) -> bytes:
+        raise AssertionError("bootstrap validation must not sign")
+
+    def verify(self, *, message: bytes, signature: bytes, key_id: str, key_period: int) -> bool:
+        raise AssertionError("bootstrap validation must not verify")
+
+
 class _RedactionMapTestBackend:
     """Module-level TEST-ONLY `SigningBackend` double (real Ed25519).
 
@@ -748,6 +758,11 @@ async def test_stage_4_validates_signing_before_one_shot_tracer_registration(
             "materialize_tracer_provider_stage",
             lambda _cfg: tracer_calls.append(_cfg),
         ),
+        mock.patch.object(
+            stage_4_od,
+            "run_off_loop_detach_on_cancel",
+            mock.AsyncMock(return_value=None),
+        ),
     ):
         from harness_core.workload_class import WorkloadClass
 
@@ -906,3 +921,230 @@ def test_additional_key_ids_validated_independent_of_tokenizer_gate(tmp_path: Pa
             tokenizer_will_bind=False,
             additional_key_ids=("harness-runtime-dev",),
         )
+
+
+@pytest.mark.parametrize("missing_key", ["harness-runtime-dev", "harness-cost-attribution-v1"])
+def test_local_signing_requires_each_active_additional_key(
+    tmp_path: Path,
+    missing_key: str,
+) -> None:
+    from harness_runtime.lifecycle.span_processor import (
+        SpanProcessorBindError,
+        validate_audit_signing_for_span_stage,
+    )
+    from harness_runtime.types import AuditSigningBackendKind, AuditSigningConfig
+
+    key_ids = ("harness-runtime-dev", "harness-cost-attribution-v1")
+    active_paths = {key: str(tmp_path / f"{key}.pem") for key in key_ids if key != missing_key}
+    config = _config(tmp_path).model_copy(
+        update={
+            "audit_signing": AuditSigningConfig(
+                backend=AuditSigningBackendKind.LOCAL_ED25519,
+                local_key_paths=active_paths,
+                local_public_key_paths={missing_key: str(tmp_path / "retired.pub")},
+            )
+        }
+    )
+    with pytest.raises(SpanProcessorBindError, match=missing_key) as raised:
+        validate_audit_signing_for_span_stage(
+            config,
+            signing_backend=_StubSigningBackend(),
+            tokenizer_will_bind=False,
+            additional_key_ids=key_ids,
+        )
+    assert "local_key_paths" in str(raised.value)
+    assert "aws-kms" not in str(raised.value)
+
+
+def test_local_signing_active_map_covers_additional_keys_and_requires_backend(
+    tmp_path: Path,
+) -> None:
+    from harness_runtime.lifecycle.span_processor import (
+        SpanProcessorBindError,
+        validate_audit_signing_for_span_stage,
+    )
+    from harness_runtime.types import AuditSigningBackendKind, AuditSigningConfig
+
+    key_ids = ("harness-runtime-dev", "harness-cost-attribution-v1")
+    config = _config(tmp_path).model_copy(
+        update={
+            "audit_signing": AuditSigningConfig(
+                backend=AuditSigningBackendKind.LOCAL_ED25519,
+                local_key_paths={key: str(tmp_path / f"{key}.pem") for key in key_ids},
+            )
+        }
+    )
+    validate_audit_signing_for_span_stage(
+        config,
+        signing_backend=_StubSigningBackend(),
+        tokenizer_will_bind=False,
+        additional_key_ids=key_ids,
+    )
+    with pytest.raises(SpanProcessorBindError, match="never silently degrade"):
+        validate_audit_signing_for_span_stage(
+            config,
+            signing_backend=None,
+            tokenizer_will_bind=False,
+            additional_key_ids=key_ids,
+        )
+
+
+def test_local_redaction_token_requires_active_key_at_tokenizer_bind(tmp_path: Path) -> None:
+    from harness_runtime.lifecycle.span_processor import (
+        REDACTION_TOKEN_SIGNING_KEY_ID,
+        SpanProcessorBindError,
+        validate_audit_signing_for_span_stage,
+    )
+    from harness_runtime.types import AuditSigningBackendKind, AuditSigningConfig
+
+    key_ids = ("harness-runtime-dev", "harness-cost-attribution-v1")
+    config = _config(tmp_path, persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE).model_copy(
+        update={
+            "audit_signing": AuditSigningConfig(
+                backend=AuditSigningBackendKind.LOCAL_ED25519,
+                local_key_paths={key: str(tmp_path / f"{key}.pem") for key in key_ids},
+            )
+        }
+    )
+    with pytest.raises(SpanProcessorBindError, match=REDACTION_TOKEN_SIGNING_KEY_ID) as raised:
+        validate_audit_signing_for_span_stage(
+            config,
+            signing_backend=_StubSigningBackend(),
+            tokenizer_will_bind=True,
+            additional_key_ids=key_ids,
+        )
+    assert "local_key_paths" in str(raised.value)
+
+
+def test_none_backend_keeps_additional_key_semantics(tmp_path: Path) -> None:
+    from harness_runtime.lifecycle.span_processor import (
+        SpanProcessorBindError,
+        validate_audit_signing_for_span_stage,
+    )
+
+    config = _config(tmp_path)
+    validate_audit_signing_for_span_stage(
+        config,
+        signing_backend=None,
+        tokenizer_will_bind=False,
+        additional_key_ids=("harness-runtime-dev", "harness-cost-attribution-v1"),
+    )
+    with pytest.raises(SpanProcessorBindError, match="unconditionally"):
+        validate_audit_signing_for_span_stage(
+            config,
+            signing_backend=None,
+            tokenizer_will_bind=True,
+        )
+
+
+@pytest.mark.asyncio
+async def test_stage_4_rejects_missing_local_signing_key_before_tracer_registration(
+    tmp_path: Path,
+) -> None:
+    import unittest.mock as mock
+    from types import SimpleNamespace
+
+    from harness_core.workload_class import WorkloadClass
+    from harness_runtime.bootstrap import stage_4_od
+    from harness_runtime.bootstrap.mutable_context import _MutableHarnessContext
+    from harness_runtime.lifecycle.span_processor import SpanProcessorBindError
+    from harness_runtime.types import AuditSigningBackendKind, AuditSigningConfig
+
+    config = _config(tmp_path).model_copy(
+        update={
+            "audit_signing": AuditSigningConfig(
+                backend=AuditSigningBackendKind.LOCAL_ED25519,
+                local_key_paths={"harness-cost-attribution-v1": str(tmp_path / "cost.pem")},
+            )
+        }
+    )
+    ctx = _MutableHarnessContext()
+    ctx.ledger_writer = SimpleNamespace()
+    tracer_calls: list[object] = []
+    with (
+        mock.patch.object(
+            stage_4_od, "make_audit_signing_backend", lambda _cfg: _StubSigningBackend()
+        ),
+        mock.patch.object(
+            stage_4_od, "materialize_tracer_provider_stage", lambda _cfg: tracer_calls.append(_cfg)
+        ),
+    ):
+        with pytest.raises(SpanProcessorBindError, match="harness-runtime-dev"):
+            await stage_4_od.execute(ctx, config, WorkloadClass.SOFTWARE_ENGINEERING)
+    assert tracer_calls == []
+
+
+@pytest.mark.parametrize("alias_kind", ["active", "historical"])
+@pytest.mark.asyncio
+async def test_stage_4_rejects_local_record_alias_before_record_and_tracer(
+    tmp_path: Path, alias_kind: str
+) -> None:
+    import unittest.mock as mock
+    from types import SimpleNamespace
+
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import ed25519
+    from harness_core.workload_class import WorkloadClass
+    from harness_runtime.bootstrap import stage_4_od
+    from harness_runtime.bootstrap.mutable_context import _MutableHarnessContext
+    from harness_runtime.lifecycle.audit_signing_fail_closed_validation import (
+        AuditSigningConfigInvalidError,
+    )
+    from harness_runtime.types import AuditSigningBackendKind, AuditSigningConfig
+
+    key = ed25519.Ed25519PrivateKey.generate()
+    path = tmp_path / "ephemeral.pem"
+    path.write_bytes(
+        key.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption(),
+        )
+    )
+    path.chmod(0o600)
+    other = tmp_path / "other.pem"
+    other.write_bytes(
+        ed25519.Ed25519PrivateKey.generate().private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption(),
+        )
+    )
+    other.chmod(0o600)
+    historical_public = tmp_path / "historical.pub"
+    historical_public.write_bytes(
+        key.public_key().public_bytes(
+            serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo
+        )
+    )
+    historical_public.chmod(0o644)
+    active_path = path if alias_kind == "active" else other
+    record = tmp_path / "record.json"
+    config = _config(tmp_path).model_copy(
+        update={
+            "audit_signing": AuditSigningConfig(
+                backend=AuditSigningBackendKind.LOCAL_ED25519,
+                local_key_paths={
+                    "record": str(path),
+                    "harness-runtime-dev": str(active_path),
+                    "harness-cost-attribution-v1": str(active_path),
+                },
+                local_public_key_paths=(
+                    {"retired": str(historical_public)} if alias_kind == "historical" else {}
+                ),
+            ),
+            "audit_cutover_record_path": str(record),
+            "audit_cutover_record_key_id": "record",
+            "audit_ledger_binding_id": "ledger",
+        }
+    )
+    ctx = _MutableHarnessContext()
+    ctx.ledger_writer = SimpleNamespace()
+    tracer_calls: list[object] = []
+    with mock.patch.object(
+        stage_4_od, "materialize_tracer_provider_stage", lambda cfg: tracer_calls.append(cfg)
+    ):
+        with pytest.raises(AuditSigningConfigInvalidError, match="physically distinct"):
+            await stage_4_od.execute(ctx, config, WorkloadClass.SOFTWARE_ENGINEERING)
+    assert not record.exists()
+    assert tracer_calls == []

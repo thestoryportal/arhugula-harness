@@ -284,12 +284,18 @@ def test_two_lanes_disjoint_names_and_ports() -> None:
     # its own scratch registry; the real-registry claims taken above are the separate thing:
     # a reservation so no concurrent lane can take 348/349 while this runs.
     scratch = Path(tempfile.mkdtemp(prefix="compose-lanes-"))
+    # [LAW:effects-at-boundaries] Mirror the non-root Grafana user's file read access.
+    scratch.chmod(0o755)
+    password_file = scratch / "grafana-admin-password"
+    password_file.write_text("synthetic-test-value\n", encoding="utf-8")
+    password_file.chmod(0o644)
 
     def _lane_env(k: int) -> dict[str, str]:
         return {
             **env,
             "HARNESS_LANE_INDEX": str(k),
             "ARC_METRICS_QUEUE_DIR": str(scratch / f"lane-{k}"),
+            "R420_GRAFANA_ADMIN_PASSWORD_FILE": str(password_file),
         }
 
     def up(k: int) -> None:
@@ -335,6 +341,7 @@ def test_two_lanes_disjoint_names_and_ports() -> None:
                 "--format",
                 "json",
             ],
+            env=_lane_env(k),
             capture_output=True,
             text=True,
             check=True,
@@ -415,6 +422,7 @@ def test_two_lanes_disjoint_names_and_ports() -> None:
                         "down",
                         "--volumes",
                     ],
+                    env=_lane_env(k),
                     capture_output=True,
                     text=True,
                     timeout=300,

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+import os
+import subprocess
 import tomllib
 from pathlib import Path
 from typing import Any
@@ -36,18 +39,18 @@ def test_r420_compose_declares_local_collector_tempo_grafana_stack() -> None:
     assert collector["image"].startswith(
         "${R420_OTEL_COLLECTOR_IMAGE:-otel/opentelemetry-collector-contrib:"
     )
-    assert "${R420_PORT_OTEL_GRPC:-4317}:4317" in collector["ports"]
-    assert "${R420_PORT_OTEL_HTTP:-4318}:4318" in collector["ports"]
+    assert "127.0.0.1:${R420_PORT_OTEL_GRPC:-4317}:4317" in collector["ports"]
+    assert "127.0.0.1:${R420_PORT_OTEL_HTTP:-4318}:4318" in collector["ports"]
     assert collector["depends_on"] == {"tempo": {"condition": "service_started"}}
     assert "./otel-collector.yaml:/etc/otelcol-contrib/config.yaml:ro" in collector["volumes"]
 
     tempo = services["tempo"]
     assert tempo["image"].startswith("${R420_TEMPO_IMAGE:-grafana/tempo:")
-    assert "${R420_PORT_TEMPO:-3200}:3200" in tempo["ports"]
+    assert "127.0.0.1:${R420_PORT_TEMPO:-3200}:3200" in tempo["ports"]
 
     grafana = services["grafana"]
     assert grafana["image"].startswith("${R420_GRAFANA_IMAGE:-grafana/grafana:")
-    assert "${R420_PORT_GRAFANA:-3000}:3000" in grafana["ports"]
+    assert "127.0.0.1:${R420_PORT_GRAFANA:-3000}:3000" in grafana["ports"]
     assert grafana["depends_on"] == {"tempo": {"condition": "service_started"}}
 
 
@@ -136,3 +139,53 @@ def test_r420_harness_template_matches_static_self_hosted_readiness_gate() -> No
     assert mcp_client["client_name"] == "r420-echo"
     assert mcp_client["transport"] == "stdio"
     assert mcp_client["connection_url"].endswith("/deploy/self-hosted-local/mcp_echo_server.py")
+
+
+def test_r420_compose_resolves_private_ports_and_file_secret(tmp_path: Path) -> None:
+    # [LAW:verifiable-goals] Check the resolved Compose model used at stack start.
+    synthetic_secret = tmp_path / "synthetic-grafana-password"
+    synthetic_secret.write_bytes(b"x")
+    env = {key: value for key, value in os.environ.items() if not key.startswith("R420_PORT_")}
+    env.pop("R420_GRAFANA_ADMIN_PASSWORD_FILE", None)
+    command = [
+        "docker",
+        "compose",
+        "--env-file",
+        "/dev/null",
+        "-f",
+        str(STACK_DIR / "compose.yaml"),
+        "config",
+        "--format",
+        "json",
+    ]
+
+    missing = subprocess.run(command, env=env, capture_output=True, text=True, check=False)
+    assert missing.returncode != 0
+    assert "R420_GRAFANA_ADMIN_PASSWORD_FILE" in missing.stderr
+
+    env["R420_GRAFANA_ADMIN_PASSWORD_FILE"] = str(synthetic_secret)
+    resolved = subprocess.run(command, env=env, capture_output=True, text=True, check=False)
+    assert resolved.returncode == 0, resolved.stderr
+    model = json.loads(resolved.stdout)
+    services = model["services"]
+    published = {
+        (service, port["target"], port["published"], port.get("host_ip"))
+        for service, spec in services.items()
+        for port in spec.get("ports", [])
+    }
+    assert published == {
+        ("grafana", 3000, "3000", "127.0.0.1"),
+        ("tempo", 3200, "3200", "127.0.0.1"),
+        ("otel-collector", 4317, "4317", "127.0.0.1"),
+        ("otel-collector", 4318, "4318", "127.0.0.1"),
+    }
+    grafana = services["grafana"]
+    assert grafana["environment"]["GF_AUTH_ANONYMOUS_ENABLED"] == "false"
+    assert "GF_SECURITY_ADMIN_PASSWORD" not in grafana["environment"]
+    assert grafana["environment"]["GF_SECURITY_ADMIN_PASSWORD__FILE"] == (
+        "/run/secrets/grafana_admin_password"
+    )
+    assert grafana["secrets"] == [
+        {"source": "grafana_admin_password", "target": "/run/secrets/grafana_admin_password"}
+    ]
+    assert model["secrets"]["grafana_admin_password"]["file"] == str(synthetic_secret)

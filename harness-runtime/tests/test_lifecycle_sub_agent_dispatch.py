@@ -44,7 +44,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
-from harness_as.sandbox_tier import SandboxTier
+from harness_as.sandbox_tier import BlastRadiusTier, SandboxTier
 from harness_core import PersonaTier, StepID, WorkloadClass
 from harness_cp.cp_shared_types import AgentRole, ModelBinding
 from harness_cp.cross_family_fallback_chain import (
@@ -55,7 +55,12 @@ from harness_cp.cross_family_fallback_chain import (
 from harness_cp.engine_class import EngineClass
 from harness_cp.gate_level_rule import GateLevel
 from harness_cp.handoff_context import ActionKind, StateSummary
-from harness_cp.pause_resume_protocol_types import PauseSnapshot, WorkflowPauseReason
+from harness_cp.hitl_placement import HITLPlacement, HITLPlacementKind
+from harness_cp.pause_resume_protocol_types import (
+    PausedChildCapture,
+    PauseSnapshot,
+    WorkflowPauseReason,
+)
 from harness_cp.per_step_override_evaluator import StepEffectiveBinding
 from harness_cp.sub_agent_brief import (
     ClearTaskBoundaries,
@@ -71,6 +76,7 @@ from harness_cp.topology_subagent_namespace import (
 )
 from harness_cp.workflow_driver import StepDispatcher
 from harness_cp.workflow_driver_types import (
+    ChildResumeRefusedError,
     RunResult,
     RunStatus,
     StepExecutionContext,
@@ -85,6 +91,7 @@ from harness_is.state_ledger_entry_schema import Actor, ActorClass
 from harness_is.state_ledger_entry_schema import Identifier as _Identifier
 from harness_od.audit_ledger_types import SignatureAlgorithm
 from harness_runtime.lifecycle.audit_writer import RuntimeAuditLedgerWriter
+from harness_runtime.lifecycle.durable_child_admission import RefuseDurableChildAdmission
 from harness_runtime.lifecycle.handoff import RuntimeHandoffRegistry
 from harness_runtime.lifecycle.state_ledger import LedgerWriter
 from harness_runtime.lifecycle.sub_agent_dispatch import (
@@ -209,6 +216,25 @@ def _step_context() -> StepExecutionContext:
     )
 
 
+def _root_child_descent(
+    child_gate_level: GateLevel = GateLevel.AUTO,
+) -> SubAgentGateLevelDescent:
+    """A real, contract-valid gate-level descent. Default `child_gate_level`
+    reproduces the historical AUTO floor `execute_workflow_at_depth` used
+    before `child_workflow_runner.py` started forwarding
+    `descent.child_gate_level` (`[LAW:single-enforcer]`); a caller may pass a
+    stronger floor to prove the forwarding wiring itself."""
+    return SubAgentGateLevelDescent(
+        parent_gate_level=GateLevel.AUTO,
+        parent_sandbox_tier=SandboxTier.TIER_1_PROCESS,
+        child_blast_radius_ceiling=BlastRadiusTier.READ_ONLY,
+        child_sandbox_tier=SandboxTier.TIER_1_PROCESS,
+        child_gate_level=child_gate_level,
+        override_applied=False,
+        override_audit_ref=None,
+    )
+
+
 def _binding() -> StepEffectiveBinding:
     return StepEffectiveBinding(
         step_id="step-0",
@@ -249,8 +275,11 @@ class _MockChildWorkflowRunner:
         handoff_context: Any,
         descent: SubAgentGateLevelDescent,
         default_model_binding: ModelBinding,
-        pause_snapshot_input: Any = None,
+        descent_depth: int,
+        inherited_hitl_placements: tuple[HITLPlacement, ...] = (),
+        child_resume: Any = None,
         child_run_id_seed: str | None = None,
+        child_resume_authority: Any = None,
         resume_context: Any = None,
         hitl_uniform_fallback_eligible_run_id: str | None = None,
         effect_fence_uniform_fallback_eligible_key: str | None = None,
@@ -258,6 +287,8 @@ class _MockChildWorkflowRunner:
     ) -> RunResult:
         self.calls.append(
             {
+                "descent_depth": descent_depth,
+                "inherited_hitl_placements": inherited_hitl_placements,
                 "workflow_id": workflow_id,
                 "manifest_entry": manifest_entry,
                 "steps": tuple(steps),
@@ -266,10 +297,11 @@ class _MockChildWorkflowRunner:
                 "default_model_binding": default_model_binding,
                 # B-HIERARCHICAL-PAUSE — the child resume snapshot threaded on resume
                 # (None on a first dispatch).
-                "pause_snapshot_input": pause_snapshot_input,
+                "child_resume": child_resume,
                 # B-FANOUT-CRASH-RESUME-MAYBE-RAN-SUBAGENT — the deterministic child run_id
                 # seed (None when the child is non-recoverable / a non-fanout dispatch).
                 "child_run_id_seed": child_run_id_seed,
+                "child_resume_authority": child_resume_authority,
                 # B-39 Slice B — the operator's resume payload, forwarded verbatim.
                 "resume_context": resume_context,
                 # B-39 Slice B, codex round-2 [P1] fix — the property-4-safe uniform-
@@ -635,6 +667,43 @@ def test_dispatch_invokes_child_workflow_runner(tmp_path: Path) -> None:
     assert call["default_model_binding"] == _binding().model_binding
 
 
+def test_dispatch_real_runner_passes_ancestor_pre_action_prefix_to_cp(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The real dispatcher and runner must pass the ancestor prefix to CP.
+
+    Removing either forwarding step drops the child policy; a standalone CP
+    inherited-placement test cannot catch that production wiring failure.
+    """
+    from types import SimpleNamespace
+
+    import harness_runtime.lifecycle.child_workflow_runner as cwr
+
+    root = HITLPlacement(position=HITLPlacementKind.PRE_ACTION, tool_filter=("fs.write",))
+    parent = HITLPlacement(position=HITLPlacementKind.PRE_ACTION, tool_filter=("http.get",))
+    boundary = HITLPlacement(position=HITLPlacementKind.SUB_AGENT_BOUNDARY)
+    captured: dict[str, Any] = {}
+
+    def capture_child_entry(*_args: Any, **kwargs: Any) -> RunResult:
+        captured.update(kwargs)
+        return _success_result()
+
+    monkeypatch.setattr(cwr, "execute_workflow_at_depth", capture_child_entry)
+    dispatcher, _, _ = _dispatcher(tmp_path)
+    dispatcher.child_workflow_runner = cwr.compose_child_workflow_runner(
+        cast(Any, SimpleNamespace(step_dispatchers={})),
+        durable_admission=RefuseDurableChildAdmission(),
+    )
+    parent_context = _step_context().model_copy(
+        update={"hitl_placements": (root, parent, boundary)}
+    )
+
+    dispatcher.dispatch(_binding(), _step(), step_context=parent_context)
+
+    assert captured["inherited_hitl_placements"] == (root, parent)
+    assert captured["descent_depth"] == 1
+
+
 def test_child_runner_receives_handoff_context_and_descent(tmp_path: Path) -> None:
     """AC #7: child runner sees fully-composed HandoffContext + descent."""
     dispatcher, runner, _ = _dispatcher(tmp_path)
@@ -759,21 +828,34 @@ def test_paused_child_without_snapshot_fails_honestly(tmp_path: Path) -> None:
         dispatcher.dispatch(_binding(), _step(), step_context=_step_context())
 
 
+@pytest.mark.parametrize("parent_depth", [0, 1])
+def test_child_runner_receives_the_parent_depth_plus_one(tmp_path: Path, parent_depth: int) -> None:
+    """B-104 Task 4a — a root parent (depth 0) dispatches a depth-1 child; that child,
+    dispatching in turn, hands its own child depth 2. Never a defaulted 0."""
+    dispatcher, runner, _ = _dispatcher(tmp_path)
+    ctx = _step_context().model_copy(update={"descent_depth": parent_depth})
+    dispatcher.dispatch(_binding(), _step(), step_context=ctx)
+    assert runner.calls[-1]["descent_depth"] == parent_depth + 1
+
+
 def test_child_resume_snapshot_forwarded_to_runner(tmp_path: Path) -> None:
     """B-HIERARCHICAL-PAUSE — on resume, `step_context.child_resume_snapshot` is
-    forwarded to the child runner as `pause_snapshot_input` so the child re-enters at
+    forwarded to the child runner as `child_resume` so the child re-enters at
     its cursor. `None` on a normal (first) dispatch."""
     snap = _child_snapshot()
     dispatcher, runner, _ = _dispatcher(tmp_path)
 
-    # Normal dispatch → runner receives pause_snapshot_input=None.
+    # Normal dispatch → runner receives child_resume=None.
     dispatcher.dispatch(_binding(), _step(), step_context=_step_context())
-    assert runner.calls[-1]["pause_snapshot_input"] is None
+    assert runner.calls[-1]["child_resume"] is None
 
     # Resume dispatch → the step context carries the child snapshot → forwarded.
-    resume_ctx = _step_context().model_copy(update={"child_resume_snapshot": snap})
+    capture = PausedChildCapture(
+        child_workflow_id="child-wf", child_snapshot=snap, child_record_ref=None
+    )
+    resume_ctx = _step_context().model_copy(update={"child_resume": capture})
     dispatcher.dispatch(_binding(), _step(), step_context=resume_ctx)
-    assert runner.calls[-1]["pause_snapshot_input"] is snap
+    assert runner.calls[-1]["child_resume"] is capture
 
 
 def test_resume_context_forwarded_to_runner_for_downward_threading(tmp_path: Path) -> None:
@@ -834,16 +916,23 @@ def test_child_runner_resume_workflow_id_mismatch_fails_closed() -> None:
     from harness_runtime.lifecycle.child_workflow_runner import compose_child_workflow_runner
 
     snap = _child_snapshot()  # workflow_id="child-wf"
-    runner = compose_child_workflow_runner(cast(Any, SimpleNamespace(step_dispatchers=None)))
-    with pytest.raises(ValueError, match="child resume workflow-id mismatch"):
+    runner = compose_child_workflow_runner(
+        cast(Any, SimpleNamespace(step_dispatchers=None)),
+        durable_admission=RefuseDurableChildAdmission(),
+    )
+    # B-104 Task 4c correction: a typed, terminal refusal (was a generic ValueError).
+    with pytest.raises(ChildResumeRefusedError, match="child resume workflow-id mismatch"):
         runner(
             workflow_id="a-different-child-wf",
             manifest_entry=cast(Any, None),
             steps=(),
             handoff_context=cast(Any, None),
-            descent=cast(Any, None),
+            descent=_root_child_descent(),
             default_model_binding=cast(Any, None),
-            pause_snapshot_input=snap,
+            descent_depth=1,
+            child_resume=PausedChildCapture(
+                child_workflow_id="child-wf", child_snapshot=snap, child_record_ref=None
+            ),
         )
 
 
@@ -869,20 +958,63 @@ def test_child_workflow_runner_opts_into_final_state_reconstruct(
         captured.update(kwargs)
         return _success_result()
 
-    monkeypatch.setattr(cwr, "execute_workflow", _spy_execute_workflow)
-    runner = cwr.compose_child_workflow_runner(cast(Any, SimpleNamespace(step_dispatchers={})))
+    monkeypatch.setattr(cwr, "execute_workflow_at_depth", _spy_execute_workflow)
+    runner = cwr.compose_child_workflow_runner(
+        cast(Any, SimpleNamespace(step_dispatchers={})),
+        durable_admission=RefuseDurableChildAdmission(),
+    )
     result = runner(
         workflow_id="child-wf",
         manifest_entry=cast(Any, None),
         steps=(),
         handoff_context=cast(Any, None),
-        descent=cast(Any, None),
+        descent=_root_child_descent(),
         default_model_binding=cast(Any, None),
-        pause_snapshot_input=None,  # first dispatch → skips the workflow-id guard
+        descent_depth=1,
+        child_resume=None,  # first dispatch → skips the workflow-id guard
     )
     # The opt-in is forwarded → execute_workflow reconstructs the child's final_state.
     assert captured.get("reconstruct_final_state") is True
     assert result.status is RunStatus.SUCCESS
+
+
+@pytest.mark.parametrize("child_depth", [1, 2])
+def test_child_workflow_runner_forwards_the_numeric_depth_to_execute_workflow(
+    monkeypatch: pytest.MonkeyPatch, child_depth: int
+) -> None:
+    """B-104 Task 4a — the recursive entry re-enters `execute_workflow` at exactly the
+    depth the dispatcher computed (child 1, grandchild 2), so the capture beneath it
+    journals a true depth instead of the old boolean-derived guess."""
+    from types import SimpleNamespace
+
+    import harness_runtime.lifecycle.child_workflow_runner as cwr
+
+    captured: dict[str, Any] = {}
+
+    def _spy_execute_workflow(*_args: Any, **kwargs: Any) -> RunResult:
+        captured.update(kwargs)
+        return _success_result()
+
+    monkeypatch.setattr(cwr, "execute_workflow_at_depth", _spy_execute_workflow)
+    runner = cwr.compose_child_workflow_runner(
+        cast(Any, SimpleNamespace(step_dispatchers={})),
+        durable_admission=RefuseDurableChildAdmission(),
+    )
+    # A floor stronger than AUTO — this is the wiring witness (`[LAW:single-enforcer]`):
+    # the recorded descent's child_gate_level must reach execute_workflow_at_depth
+    # verbatim as parent_gate_floor, not just any non-crashing value.
+    descent = _root_child_descent(child_gate_level=GateLevel.ASK)
+    runner(
+        workflow_id="child-wf",
+        manifest_entry=cast(Any, None),
+        steps=(),
+        handoff_context=cast(Any, None),
+        descent=descent,
+        default_model_binding=cast(Any, None),
+        descent_depth=child_depth,
+    )
+    assert captured["descent_depth"] == child_depth
+    assert captured["parent_gate_floor"] is descent.child_gate_level
 
 
 # ---------------------------------------------------------------------------
@@ -1202,7 +1334,7 @@ def test_step8_failure_swallowed_on_failed_child_path(tmp_path: Path) -> None:
 
 
 def test_compose_child_workflow_runner_factory_is_constructible(tmp_path: Path) -> None:
-    """Smoke check: real `compose_child_workflow_runner(ctx)` builds a callable.
+    """Smoke check: real `compose_child_workflow_runner(ctx, durable_admission=RefuseDurableChildAdmission())` builds a callable.
 
     Validates the factory shape without invoking the runner (which would
     require a fully-bootstrapped HarnessContext + ctx.step_dispatchers
@@ -1218,7 +1350,9 @@ def test_compose_child_workflow_runner_factory_is_constructible(tmp_path: Path) 
     class _CtxStub:
         step_dispatchers: Any = None
 
-    runner = compose_child_workflow_runner(cast(Any, _CtxStub()))
+    runner = compose_child_workflow_runner(
+        cast(Any, _CtxStub()), durable_admission=RefuseDurableChildAdmission()
+    )
     assert callable(runner)
 
 

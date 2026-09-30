@@ -49,6 +49,7 @@ from harness_core import PersonaTier
 from harness_cp.cp_shared_types import ModelBinding
 from harness_cp.engine_class import EngineClass
 from harness_cp.gate_level_rule import GateLevel
+from harness_cp.hitl_placement import HITLPlacement
 from harness_cp.per_step_override_evaluator import StepEffectiveBinding
 from harness_cp.per_workload_class_topology import is_topology_permitted_for_workload
 from harness_cp.sub_agent_gate_level_descent import SubAgentGateLevelDescent
@@ -118,8 +119,11 @@ class _MockChildWorkflowRunner:
         handoff_context: Any,
         descent: SubAgentGateLevelDescent,
         default_model_binding: ModelBinding,
-        pause_snapshot_input: Any = None,
+        descent_depth: int,
+        inherited_hitl_placements: tuple[HITLPlacement, ...] = (),
+        child_resume: Any = None,
         child_run_id_seed: str | None = None,
+        child_resume_authority: Any = None,
         resume_context: Any = None,
         hitl_uniform_fallback_eligible_run_id: str | None = None,
         effect_fence_uniform_fallback_eligible_key: str | None = None,
@@ -134,7 +138,9 @@ class _MockChildWorkflowRunner:
         # B-39 Slice B, codex round-2 [P1] fix — accept the additive property-4-safe
         # uniform-fallback eligibility payload.
         _ = (
-            pause_snapshot_input,
+            descent_depth,
+            inherited_hitl_placements,
+            child_resume,
             child_run_id_seed,
             resume_context,
             hitl_uniform_fallback_eligible_run_id,

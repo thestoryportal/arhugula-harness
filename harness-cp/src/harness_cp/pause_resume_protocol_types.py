@@ -39,7 +39,8 @@ from enum import StrEnum
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Any
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, PrivateAttr
+from harness_core import JournalRecordRef
+from pydantic import AfterValidator, BaseModel, ConfigDict, PrivateAttr, model_validator
 
 from harness_cp.handoff_context import StateSummary
 
@@ -1071,6 +1072,99 @@ class PauseSnapshot(BaseModel):
     orchestrator (RE_FIRE → clear + fresh dispatch / ABORT → FAILED; SKIP_AS_FIRED rejected)."""
 
 
+def require_ref_binds_snapshot(record_ref: JournalRecordRef, snapshot: PauseSnapshot) -> None:
+    """Refuse a journal ref that does not name this snapshot's own record.
+
+    [LAW:single-enforcer] The one place the ref-to-snapshot binding is defined; both the
+    capture result and a paused `RunResult` enforce it here rather than each re-deriving it.
+    """
+    if (record_ref.workflow_id, record_ref.run_id, record_ref.snapshot_hash) != (
+        snapshot.workflow_id,
+        snapshot.run_id,
+        snapshot.snapshot_hash,
+    ):
+        raise ValueError(
+            "journal record ref does not identify this snapshot: ref names "
+            f"({record_ref.workflow_id!r}, {record_ref.run_id!r}, {record_ref.snapshot_hash}), "
+            f"snapshot is ({snapshot.workflow_id!r}, {snapshot.run_id!r}, "
+            f"{snapshot.snapshot_hash})"
+        )
+
+
+class EphemeralCapturedPause(BaseModel):
+    """A capture that was not journaled: there is no record to reference."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    snapshot: PauseSnapshot
+
+    @property
+    def record_ref(self) -> None:
+        return None
+
+
+class DurableCapturedPause(BaseModel):
+    """A capture plus the exact journal record its own append created.
+
+    The ref is a sibling of the snapshot, never a field inside it: the record digest
+    covers the journaled snapshot bytes, so a ref stored within them could not exist.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    snapshot: PauseSnapshot
+    record_ref: JournalRecordRef
+
+    @model_validator(mode="after")
+    def _ref_names_this_snapshot(self) -> DurableCapturedPause:
+        require_ref_binds_snapshot(self.record_ref, self.snapshot)
+        return self
+
+
+CapturedPause = EphemeralCapturedPause | DurableCapturedPause
+"""The protocol boundary's capture result: journaled (with its exact ref) or not."""
+
+
+def require_child_ref_binds(
+    record_ref: JournalRecordRef, child_snapshot: PauseSnapshot, child_workflow_id: str | None
+) -> None:
+    """Refuse a child ref that names another snapshot or another workflow than the child's.
+
+    [LAW:single-enforcer] Extends `require_ref_binds_snapshot` with the child workflow
+    identity; both the child-pause capture and the parent carrier enforce it here.
+    `child_workflow_id is None` is a legacy carrier that never recorded the identity.
+    """
+    require_ref_binds_snapshot(record_ref, child_snapshot)
+    if child_workflow_id is not None and record_ref.workflow_id != child_workflow_id:
+        raise ValueError(
+            f"journal record ref names workflow {record_ref.workflow_id!r}, "
+            f"not the dispatched child workflow {child_workflow_id!r}"
+        )
+
+
+class PausedChildCapture(BaseModel):
+    """A paused child as the dispatch boundary hands it to the parent fan-out.
+
+    One object instead of three parallel fields, so every disposition writer stores the
+    whole capture and none can keep the snapshot while dropping its ref. The ref is
+    `None` only for an ephemeral capture (no journal record exists).
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    child_workflow_id: str
+    child_snapshot: PauseSnapshot
+    child_record_ref: JournalRecordRef | None
+
+    @model_validator(mode="after")
+    def _ref_names_the_child(self) -> PausedChildCapture:
+        if self.child_record_ref is not None:
+            require_child_ref_binds(
+                self.child_record_ref, self.child_snapshot, self.child_workflow_id
+            )
+        return self
+
+
 class PausedChildBranchResumeState(BaseModel):
     """A worker branch whose recursive child sub-workflow returned `RunStatus.PAUSED`.
 
@@ -1123,6 +1217,36 @@ class PausedChildBranchResumeState(BaseModel):
     for byte-compat with snapshots captured before this field existed;
     `_strip_default_fanout_resume_fields` drops it when None so an old snapshot
     re-hashes byte-identically (the same discipline as `synthesis_step_id`)."""
+
+    child_record_ref: JournalRecordRef | None = None
+    """B-104 Task 4b — the exact journal record the child's durable capture appended,
+    carried BESIDE `child_snapshot` (never inside it, so the child's journaled bytes and
+    its `snapshot_hash` are untouched). `None` means an ephemeral capture or a snapshot
+    captured before this field existed. COVERED by the parent's `_compute_snapshot_hash`
+    when present; `_strip_default_fanout_resume_fields` drops it when `None`, so legacy
+    and ephemeral snapshots re-hash byte-identically at every nesting depth. Nothing reads
+    it until Task 4c."""
+
+    @model_validator(mode="after")
+    def _ref_names_the_child(self) -> PausedChildBranchResumeState:
+        if self.child_record_ref is not None:
+            require_child_ref_binds(
+                self.child_record_ref, self.child_snapshot, self.child_workflow_id
+            )
+        return self
+
+    def as_capture(self) -> PausedChildCapture:
+        """This carrier as the capture the resume path hands the child runner.
+
+        [LAW:one-source-of-truth] The one derivation of a resume-side capture; a legacy
+        carrier with no recorded `child_workflow_id` (necessarily also ref-less) takes the
+        workflow id from its own child snapshot.
+        """
+        return PausedChildCapture(
+            child_workflow_id=self.child_workflow_id or self.child_snapshot.workflow_id,
+            child_snapshot=self.child_snapshot,
+            child_record_ref=self.child_record_ref,
+        )
 
 
 class EffectFencePausedBranchResumeState(BaseModel):

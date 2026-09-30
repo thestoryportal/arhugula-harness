@@ -184,6 +184,8 @@ CLASSES: dict[str, str | tuple[str, ...]] = {
         r"witness|vacuous|stays green|cannot fail|only .*presence|never red"
         r"|does not red|remains green|unexercised"
         r"|leaves? (this|the) (test|suite) green"
+        r"|\btests?\b[^.!?]{0,60}\b(?:exercise|cover|call|touch)\w*\s+only\b"
+        r"[^.!?]{0,100}\bremain green\b"
     ),
     "5 timeout / retry / budget": r"timeout|retry|budget|backoff|deadline",
     "6 unreachable / dead branch": (

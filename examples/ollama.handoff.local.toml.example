@@ -1,0 +1,60 @@
+# Local Ollama config for the decentralized-handoff example. Identical to
+# ollama.local.toml.example except `inter_step_data_flow = true`, which lets each
+# stage receive the previous stage's output. Copy to harness.handoff.toml at the
+# checkout root and replace /absolute/path/to/your/workspace with its absolute path.
+# Use the shared ollama.local.toml.example for every other example: with the
+# channel on, a step is handed the most recently recorded step output, which peer
+# branches of a parallelization workflow are not meant to consume.
+[runtime]
+deployment_surface = "local-development"
+repository_root = "/absolute/path/to/your/workspace"
+default_topology = "single-threaded-linear"
+enabled_provider_names = ["ollama"]
+external_cli_providers = []
+mcp_clients = []
+ollama_host = "http://127.0.0.1:11434"
+ollama_optional = false
+inter_step_data_flow = true
+
+# Keep the first run independent of the optional memory subsystem.
+[runtime.memory]
+enabled = false
+
+# The exporter uses a loopback endpoint. A collector is optional for this first run.
+[runtime.otel]
+otlp_endpoint = "http://127.0.0.1:4317"
+
+# Stage 1 creates these directories. STATE_LEDGER is a directory; the ledger
+# file is created inside it as state.jsonl.
+[[runtime.path_bindings.raw_entries]]
+path_class = "SKILLS"
+workflow_class = "pipeline-automation"
+deployment_surface = "local-development"
+path = "/absolute/path/to/your/workspace/.agents/skills"
+
+[[runtime.path_bindings.raw_entries]]
+path_class = "PROMPTS"
+workflow_class = "pipeline-automation"
+deployment_surface = "local-development"
+path = "/absolute/path/to/your/workspace/.harness/onboarding/prompts"
+
+[[runtime.path_bindings.raw_entries]]
+path_class = "ROUTING_MANIFEST"
+workflow_class = "pipeline-automation"
+deployment_surface = "local-development"
+path = "/absolute/path/to/your/workspace/.harness/onboarding/routing-manifest"
+
+[[runtime.path_bindings.raw_entries]]
+path_class = "STATE_LEDGER"
+workflow_class = "pipeline-automation"
+deployment_surface = "local-development"
+path = "/absolute/path/to/your/workspace/.harness/onboarding/state-ledger"
+
+[runtime.routing_manifest]
+manifest_version = 1
+per_role_bindings = {}
+per_workload_overrides = {}
+retry_policies = {}
+fallback_chains = [
+    { primary = { provider = "ollama", model = "llama3.2:3b", family = "local_open_weight" }, same_family = [], cross_family = [] },
+]

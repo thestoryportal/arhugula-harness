@@ -194,7 +194,11 @@ def _config_joint_opt_in(tmp_path: Path) -> RuntimeConfig:
     return base.model_copy(
         update={
             "pause_resume_protocol_config": PauseResumeProtocolConfig.default(),
-            "webhook_delivery_composer_config": WebhookDeliveryComposerConfig.default(),
+            "webhook_delivery_composer_config": WebhookDeliveryComposerConfig(
+                webhook_id="local-binding-test",
+                endpoint_url="http://127.0.0.1:9/hitl",
+                timeout_seconds=1,
+            ),
         },
     )
 

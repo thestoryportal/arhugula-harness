@@ -572,6 +572,7 @@ async def test_r300_deterministic_cross_family_fallback_through_production_path(
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.e2e
 @pytest.mark.skipif(
     not (os.environ.get("ANTHROPIC_API_KEY") and os.environ.get("OPENAI_API_KEY")),
     reason="live cross-family fallback e2e requires ANTHROPIC_API_KEY + OPENAI_API_KEY",
@@ -669,6 +670,7 @@ def _prompt_manifest_config(tmp_path: Path, chain: Any, **opts: Any) -> Any:
     )
 
 
+@pytest.mark.e2e
 @pytest.mark.skipif(
     not os.environ.get("ANTHROPIC_API_KEY"),
     reason="paid live-injection confirmation requires ANTHROPIC_API_KEY",
@@ -714,6 +716,7 @@ async def test_r_pm_1_active_prompt_injection_honored_by_live_anthropic(
     )
 
 
+@pytest.mark.e2e
 @pytest.mark.skipif(
     not os.environ.get("OPENAI_API_KEY"),
     reason="paid live-injection confirmation requires OPENAI_API_KEY",

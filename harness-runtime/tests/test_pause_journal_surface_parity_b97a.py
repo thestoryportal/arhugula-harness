@@ -175,7 +175,7 @@ async def test_accessor_reads_the_tenant_scoped_record_and_not_a_co_tenants(
     """
     journal_dir = _journal_dir(tmp_path)
     JournalWorkflowPauseStore(journal_dir=journal_dir, tenant_id=_TENANT_A).capture(
-        _snapshot("run-a")
+        _snapshot("run-a"), depth=None
     )
 
     state = await read_paused_workflow_state(
@@ -196,7 +196,7 @@ async def test_the_untenanted_accessor_does_not_see_a_tenanted_record(tmp_path: 
     superset. `None` is its own segment-count form, so it collides with nothing."""
     journal_dir = _journal_dir(tmp_path)
     JournalWorkflowPauseStore(journal_dir=journal_dir, tenant_id=_TENANT_A).capture(
-        _snapshot("run-a")
+        _snapshot("run-a"), depth=None
     )
     with pytest.raises(PausedWorkflowStateUnavailableError):
         await read_paused_workflow_state(
@@ -226,7 +226,7 @@ async def test_both_surfaces_read_through_one_authority(
     journal_dir = _journal_dir(tmp_path)
     config = _config(tmp_path, tenant_id=_TENANT_A)
     JournalWorkflowPauseStore(journal_dir=journal_dir, tenant_id=_TENANT_A).capture(
-        _snapshot("run-a")
+        _snapshot("run-a"), depth=None
     )
 
     calls: list[tuple[str | None, str]] = []
@@ -347,12 +347,15 @@ async def test_the_factory_keys_the_capture_side_store_by_the_configured_tenant(
         "the durable branch was not taken — the probe would be vacuous"
     )
 
-    await protocol.capture_pause_snapshot(
-        workflow_id=_WORKFLOW_ID,
-        run_id="run-capture",
-        step_index=0,
-        pause_reason=WorkflowPauseReason.HITL_PENDING,
-    )
+    (
+        await protocol.capture_pause_snapshot(
+            workflow_id=_WORKFLOW_ID,
+            run_id="run-capture",
+            step_index=0,
+            pause_reason=WorkflowPauseReason.HITL_PENDING,
+            descent_depth=0,
+        )
+    ).snapshot
 
     # The capture landed at the TENANT-COMPOSITE key, and NOT at the untenanted
     # one a `tenant_id=None` factory would have produced.

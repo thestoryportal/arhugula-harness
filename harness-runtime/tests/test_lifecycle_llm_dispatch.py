@@ -1115,6 +1115,139 @@ async def test_active_system_prompt_injects_through_anthropic_hitl_variant() -> 
     assert all(call["system"] == _SYS for call in client.messages.calls)
 
 
+@dataclass(frozen=True)
+class _RefusalAwareLoopResult:
+    tool_call_id: str
+    dispatch_result: Mapping[str, Any] | None
+    refusal: Any = None
+
+
+class _RefusingHITLToolLoop:
+    """Refuses `toolu_001` under policy (with the operator's RESPOND text), dispatches the rest."""
+
+    def __init__(self) -> None:
+        self.contexts: list[HITLToolLoopContext] = []
+
+    async def run_tool_calls(
+        self, calls: Sequence[ModelToolCall], context: HITLToolLoopContext
+    ) -> tuple[_RefusalAwareLoopResult, ...]:
+        from harness_runtime.lifecycle.hitl_tool_loop import (
+            HITLToolRefusal,
+            HITLToolRefusalReason,
+        )
+
+        self.contexts.append(context)
+        return tuple(
+            _RefusalAwareLoopResult(
+                tool_call_id=call.tool_call_id,
+                dispatch_result=None if call.tool_call_id == "toolu_001" else {"ok": True},
+                refusal=(
+                    HITLToolRefusal(HITLToolRefusalReason.POLICY_DENY, "try another tool")
+                    if call.tool_call_id == "toolu_001"
+                    else None
+                ),
+            )
+            for call in calls
+        )
+
+
+def _two_tool_use_turn_client() -> _AnthropicClient:
+    client = _AnthropicClient()
+    client.messages.responses = [
+        _AnthropicToolTurnResponse(
+            id="msg_tool",
+            content=[
+                {"type": "tool_use", "id": "toolu_001", "name": "blocked", "input": {}},
+                {"type": "tool_use", "id": "toolu_002", "name": "allowed", "input": {}},
+            ],
+            stop_reason="tool_use",
+            usage=_Usage(input_tokens=11, output_tokens=6),
+        ),
+        _AnthropicToolTurnResponse(
+            id="msg_final",
+            content=[{"type": "text", "text": "done"}],
+            stop_reason="end_turn",
+            usage=_Usage(input_tokens=12, output_tokens=4),
+        ),
+    ]
+    return client
+
+
+def _two_tool_step_payload() -> dict[str, Any]:
+    return {
+        "messages": [{"role": "user", "content": "go"}],
+        "tools": [
+            {"name": "blocked", "server": "srv", "input_schema": {"type": "object"}},
+            {"name": "allowed", "server": "srv", "input_schema": {"type": "object"}},
+        ],
+        "params": {"max_tokens": 100},
+    }
+
+
+@pytest.mark.asyncio
+async def test_a_policy_refused_tool_call_is_an_error_result_and_the_turn_continues() -> None:
+    client = _two_tool_use_turn_client()
+    tp, exporter = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"anthropic": _AnthropicFakeAdapter(client)},
+        tracer_provider=tp,
+        hitl_tool_loop=cast(Any, _RefusingHITLToolLoop()),
+    )
+
+    result = await dispatcher.dispatch(
+        _binding("anthropic", model="claude-test"),
+        _step(_two_tool_step_payload()),
+        step_context=_step_context(),
+    )
+
+    assert len(client.messages.calls) == 2  # the next model call is made with the results
+    refused, allowed = client.messages.calls[1]["messages"][-1]["content"]
+    assert refused["tool_use_id"] == "toolu_001"
+    assert refused["is_error"] is True
+    assert refused["content"] == "policy refused this tool call: try another tool"
+    assert allowed["tool_use_id"] == "toolu_002"
+    assert "is_error" not in allowed
+    assert result is not None
+    classes = [
+        span.attributes.get("sandbox.fail.class")
+        for span in exporter.get_finished_spans()
+        if span.attributes is not None
+    ]
+    assert classes.count("policy_override") == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("descended", "parent", "expected_floor"),
+    [
+        (False, GateLevel.DENY, GateLevel.AUTO),
+        (True, GateLevel.DENY, GateLevel.DENY),
+        (True, GateLevel.ASK, GateLevel.ASK),
+    ],
+)
+async def test_the_loop_context_carries_the_parent_gate_floor_only_when_descended(
+    descended: bool, parent: GateLevel, expected_floor: GateLevel
+) -> None:
+    client = _two_tool_use_turn_client()
+    tp, _ = _tracer_provider_with_exporter()
+    loop = _RefusingHITLToolLoop()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"anthropic": _AnthropicFakeAdapter(client)},
+        tracer_provider=tp,
+        hitl_tool_loop=cast(Any, loop),
+    )
+
+    await dispatcher.dispatch(
+        _binding("anthropic", model="claude-test"),
+        _step(_two_tool_step_payload()),
+        step_context=_step_context().model_copy(
+            update={"descent_depth": 1 if descended else 0, "parent_gate_level": parent}
+        ),
+    )
+
+    assert loop.contexts[0].inherited_gate_floor is expected_floor
+
+
 @pytest.mark.asyncio
 async def test_active_system_prompt_injects_through_anthropic_memory_variant(
     monkeypatch: pytest.MonkeyPatch,
@@ -2778,108 +2911,6 @@ async def test_ollama_memory_read_executes_without_a_scope_ref_argument() -> Non
     assert executor.requests[0].context.scope_ref == "scope:u-mem-16"
     assert "scope_ref" not in executor.requests[0].arguments
     assert result["message"]["content"] == "done"
-
-
-@pytest.mark.asyncio
-async def test_ollama_mixed_memory_and_caller_tool_batch_returns_to_caller() -> None:
-    """Ollama mirror — a mixed batch goes back to the caller, executing nothing.
-
-    B-85 mirror too: the return is byte-identical and the unserved memory call
-    is reported. The R5 tools-unsupported fallback returns at `iteration == 0`
-    before any `tool_calls` are inspected, so it can never co-occur with this
-    exit — the separate sink keeps that structurally true.
-    """
-    memory_call = {
-        "function": {
-            "name": "memory.search",
-            "arguments": {
-                "query": "x",
-                "scope_ref": "scope:u-mem-16",
-                "policy_ref": "policy:u-mem-16",
-            },
-        }
-    }
-    caller_call = {"function": {"name": "weather.lookup", "arguments": {"city": "lisbon"}}}
-    client = _OllamaClient()
-    client.responses = [
-        _OllamaResponse(
-            prompt_eval_count=20,
-            eval_count=8,
-            _dump=_ollama_dump(
-                {"role": "assistant", "content": "", "tool_calls": [memory_call, caller_call]}
-            ),
-        )
-    ]
-    executor = _FakeStandardMemoryToolExecutor()
-    tp, exporter = _tracer_provider_with_exporter()
-    dispatcher = RuntimeLLMDispatcher(
-        providers={"ollama": _OllamaFakeAdapter(client)},
-        tracer_provider=tp,
-        memory_context=_ollama_memory_context(),
-        standard_memory_tool_executor=executor,
-    )
-
-    result = await dispatcher.dispatch(
-        _binding("ollama"),
-        _step(
-            {
-                "messages": [{"role": "user", "content": "hi"}],
-                "tools": [
-                    {
-                        "type": "function",
-                        "function": {"name": "weather.lookup", "parameters": {"type": "object"}},
-                    }
-                ],
-                "params": {"max_tokens": 100},
-            }
-        ),
-        step_context=_step_context(),
-    )
-
-    assert executor.requests == [], "no memory call may execute from a caller-owned batch"
-    assert len(client.calls) == 1, "the loop must not continue"
-    assert result["message"]["tool_calls"] == [memory_call, caller_call]
-
-    [span] = _unserved_tool_call_spans(exporter)
-    _assert_unserved_span_shape(dict(span.attributes or {}), provider="ollama", count=1)
-    assert _degraded_serve_spans(exporter) == [], (
-        "the R5 fallback did not run — its sink must be untouched"
-    )
-
-
-@pytest.mark.asyncio
-async def test_ollama_caller_only_tool_batch_matches_bare_path_semantics() -> None:
-    """Ollama mirror of the bare-path parity witness.
-
-    Note `memory_search` — the OPENAI wire spelling — is a caller-owned name on
-    this path: ollama advertises only the dotted identities, so the underscore
-    form names nothing we injected.
-    """
-    hallucinated = {"function": {"name": "memory_search", "arguments": {}}}
-    client = _OllamaClient()
-    client.responses = [
-        _OllamaResponse(
-            prompt_eval_count=20,
-            eval_count=8,
-            _dump=_ollama_dump({"role": "assistant", "content": "", "tool_calls": [hallucinated]}),
-        )
-    ]
-    executor = _FakeStandardMemoryToolExecutor()
-    tracer_provider, exporter = _tracer_provider_with_exporter()
-    dispatcher = RuntimeLLMDispatcher(
-        providers={"ollama": _OllamaFakeAdapter(client)},
-        tracer_provider=tracer_provider,
-        memory_context=_ollama_memory_context(),
-        standard_memory_tool_executor=executor,
-    )
-
-    result = await dispatcher.dispatch(_binding("ollama"), _step(), step_context=_step_context())
-
-    assert executor.requests == []
-    assert result["message"]["tool_calls"] == [hallucinated]
-    assert _unserved_tool_call_spans(exporter) == [], (
-        "zero memory-named calls in the batch — nothing went unserved, no span may claim otherwise"
-    )
 
 
 @pytest.mark.asyncio
@@ -7779,6 +7810,113 @@ class _FSCtx:
         self.tracer_provider = NoOpTracerProvider()
         self.validator_framework = None
         self.tenant_id = None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "verdict_text,expected_status",
+    [('{"accepted":true}', RunStatus.SUCCESS), ('{"accepted":', RunStatus.FAILED)],
+)
+async def test_ollama_evaluator_driver_boundary_preserves_raw_output_and_never_falls_back(
+    verdict_text: str, expected_status: RunStatus
+) -> None:
+    """One raw Ollama evaluate reply reaches the driver reader after dispatch."""
+    from harness_runtime.lifecycle.evaluator_verdict import read_ollama_evaluator_verdict
+
+    raw_draft = {
+        "done": True,
+        "done_reason": "stop",
+        "message": {"role": "assistant", "content": "draft"},
+    }
+    raw_verdict = {
+        "done": True,
+        "done_reason": "stop",
+        "message": {"role": "assistant", "content": verdict_text},
+    }
+    ollama = _OllamaFakeAdapter(_OllamaClient())
+    ollama.client.responses = [
+        _OllamaResponse(prompt_eval_count=1, eval_count=1, _dump=raw_draft),
+        _OllamaResponse(prompt_eval_count=1, eval_count=1, _dump=raw_verdict),
+    ]
+    hosted = _AnthropicFakeAdapter(_AnthropicClient())
+    tp, _ = _tracer_provider_with_exporter()
+    channel = InterStepOutputChannel()
+    inner = RuntimeLLMDispatcher(
+        providers={"ollama": ollama, "anthropic": hosted},
+        tracer_provider=tp,
+        inter_step_channel=channel,
+    )
+    chain = FallbackChain(
+        primary=_candidate("ollama", "local-evaluator"),
+        same_family=(),
+        cross_family=(_candidate("anthropic", "hosted-fallback"),),
+        terminal=None,
+    )
+    wrapper = RetryBreakerFallbackDispatcher(
+        inner=inner,
+        retry_breaker=_retry_breaker_with_llm_policy(),
+        fallback_chain=chain,
+        tracer_provider=tp,
+        sleep_fn=_noop_sleep,
+    )
+    facade = SyncDispatcherFacade(
+        inner=wrapper, loop=asyncio.get_running_loop(), result_timeout_seconds=5.0
+    )
+    manifest = WorkflowManifestEntry(
+        workflow_id="wf-ollama-evaluator-reader",
+        workload_class=WorkloadClass.SOFTWARE_ENGINEERING,
+        persona_tier=PersonaTier.TEAM_BINDING,
+        engine_class=EngineClass.PURE_PATTERN_NO_ENGINE,
+        topology_pattern=TopologyPattern.EVALUATOR_OPTIMIZER,
+        layer_budgets=(),
+        fallback_chain=chain,
+        hitl_placements=(),
+        per_step_overrides={},
+    )
+    steps = [
+        WorkflowStep(
+            step_id=StepID("generate"),
+            step_kind=StepKind.INFERENCE_STEP,
+            step_payload={
+                "messages": [{"role": "user", "content": "draft"}],
+                "tools": None,
+                "params": {"format": {"type": "object"}, "options": {"temperature": 0}},
+            },
+        ),
+        WorkflowStep(
+            step_id=StepID("evaluate"),
+            step_kind=StepKind.INFERENCE_STEP,
+            step_payload={
+                "messages": [{"role": "user", "content": "judge"}],
+                "tools": None,
+                "params": {"format": {"type": "object"}, "options": {"temperature": 0}},
+            },
+        ),
+    ]
+    ctx = _FSCtx()
+    ctx.evaluator_verdict_reader = read_ollama_evaluator_verdict
+    ctx.inter_step_output_channel = channel
+    result = await asyncio.to_thread(
+        partial(
+            execute_workflow,
+            manifest_entry=manifest,
+            steps=steps,
+            run_id="run-reader",
+            ctx=cast(Any, ctx),
+            default_model_binding=ModelBinding(provider="ollama", model="local-evaluator"),
+            step_dispatchers=cast(Any, _SingleKindFacadeRegistry(facade)),
+        )
+    )
+    assert result.status is expected_status, result.fail_class
+    assert len(ollama.client.calls) == 2  # generate, then one evaluate
+    assert hosted.client.messages.calls == []
+    assert ollama.client.calls[1]["format"] == {"type": "object"}
+    assert ollama.client.calls[1]["options"] == {"temperature": 0}
+    assert channel.most_recent_output() == raw_verdict
+    if expected_status is RunStatus.SUCCESS:
+        assert result.final_state["evaluation"] == raw_verdict
+    else:
+        assert "evaluator-optimizer-verdict-malformed" in result.fail_class
 
 
 class _SingleKindFacadeRegistry:

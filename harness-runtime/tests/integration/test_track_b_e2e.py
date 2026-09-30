@@ -828,9 +828,12 @@ def test_one_shot_and_daemon_client_pass_same_manifest_path(
     # Daemon-client mode: mock _daemon_client_dispatch + verify it sees the path.
     daemon_captured: dict[str, Any] = {}
 
-    async def _fake_daemon_dispatch(*, workflow_file: Path, socket_path: Path) -> dict[str, Any]:
+    async def _fake_daemon_dispatch(
+        *, workflow_file: Path, socket_path: Path, result_timeout_seconds: float
+    ) -> dict[str, Any]:
         daemon_captured["workflow_file"] = workflow_file
         daemon_captured["socket_path"] = socket_path
+        daemon_captured["result_timeout_seconds"] = result_timeout_seconds
         return {"status": "success", "workflow_id": "track-b-minimal"}
 
     socket_path = tmp_path / "track-b.sock"
@@ -842,6 +845,7 @@ def test_one_shot_and_daemon_client_pass_same_manifest_path(
     )
     assert result_dc.exit_code == EXIT_SUCCESS, result_dc.stdout + result_dc.stderr
     assert daemon_captured["workflow_file"] == manifest
+    assert daemon_captured["result_timeout_seconds"] == 3600.0
 
     # Both modes report SUCCESS-class status (exit code 0 verified above).
     # one-shot uses runtime status="completed"; daemon-client uses CP "success".
@@ -855,6 +859,7 @@ def test_one_shot_and_daemon_client_pass_same_manifest_path(
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.e2e
 @pytest.mark.asyncio
 @pytest.mark.skipif(
     not os.environ.get("ANTHROPIC_API_KEY"),
@@ -1074,6 +1079,7 @@ async def test_ac1_real_anthropic_single_step_succeeds(
     assert result.workflow_id == "wf-ac1-real-anthropic"
 
 
+@pytest.mark.e2e
 @pytest.mark.asyncio
 @pytest.mark.skipif(
     not os.environ.get("ANTHROPIC_API_KEY"),
@@ -1346,6 +1352,7 @@ async def test_ac3_daemon_mode_equivalent_to_one_shot_with_real_llm(
         await _shutdown(ctx)
 
 
+@pytest.mark.e2e
 @pytest.mark.asyncio
 @pytest.mark.skipif(
     not os.environ.get("ANTHROPIC_API_KEY"),
@@ -1566,6 +1573,7 @@ async def test_ac4_multi_step_real_llm_execution(
     assert result.workflow_id == "wf-ac4-multi-step"
 
 
+@pytest.mark.e2e
 @pytest.mark.asyncio
 @pytest.mark.skipif(
     not os.environ.get("ANTHROPIC_API_KEY"),
@@ -1852,6 +1860,7 @@ async def test_ac7_skill_activation_emits_skill_namespace_span(
     assert span.attrs["workflow.id"] == "wf-ac7-skill-activation"
 
 
+@pytest.mark.e2e
 @pytest.mark.asyncio
 @pytest.mark.skipif(
     not os.environ.get("ANTHROPIC_API_KEY"),
@@ -2503,14 +2512,18 @@ def test_ac6_daemon_concurrent_two_clients_complete_independently(
         *,
         default_model_binding: Any = None,
         step_dispatchers: Any = None,
+        descent_depth: int = 0,
         pause_snapshot_input: Any = None,
         resume_context: Any = None,
+        child_resume_authority: Any = None,
         hitl_uniform_fallback_eligible_run_id: Any = None,
         effect_fence_uniform_fallback_eligible_key: Any = None,
         effect_fence_tree_wide_abort_present: Any = False,
     ) -> _CpRunResult:
+        _ = descent_depth  # B-104 Task 4a — the depth-0 root run path.
         _ = pause_snapshot_input  # C-RT-35 resume threading — None on the run path.
         _ = resume_context  # B-39 Slice B — None on the (non-resume) run path.
+        assert child_resume_authority is None  # B-104 — a daemon run is unclaimed.
         _ = hitl_uniform_fallback_eligible_run_id  # B-39 Slice B, codex round-2 [P1] fix.
         _ = effect_fence_uniform_fallback_eligible_key  # B-70 impl leg.
         _ = effect_fence_tree_wide_abort_present  # B-80 impl leg.

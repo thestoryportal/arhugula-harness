@@ -51,11 +51,11 @@ Canonical spec heads — **one family per row, so each version stays bound to it
 
 | Axis | Head spec artifact | Head version |
 |---|---|---|
-| IS | `Spec_Information_Substrate_v1.md` | **v1.13** (cleared 2026-08-07) |
+| IS | `Spec_Information_Substrate_v1.md` | **v1.16** (cleared 2026-09-25) |
 | AS | `Spec_Action_Surface_v1.md` | **v1.14** (cleared 2026-07-15) |
-| CP | `Spec_Control_Plane_v1_119.md` | **v1.119** (cleared 2026-08-13) |
+| CP | `Spec_Control_Plane_v1_124.md` | **v1.124** (cleared 2026-09-25) |
 | OD | `Spec_Operational_Discipline_v1_42.md` | **v1.42** (cleared 2026-08-16) |
-| Runtime | `Spec_Harness_Runtime_v1.md` | **v1.121** (cleared 2026-08-13) |
+| Runtime | `Spec_Harness_Runtime_v1_133.md` | **v1.133** (cleared 2026-09-30) |
 | Memory | `Spec_Memory_Substrate_v1.md` | **v1.3** (cleared 2026-08-06) |
 
 Full per-version change-note lineage lives at `.harness/artifact-pointers/spec-heads.md` and, per family, at `.harness/artifact-pointers/{is,as,cp,od,runtime,memory}.md` — **query, do not read wholesale** (`rg <term> .harness/artifact-pointers/*.md`).
@@ -67,11 +67,11 @@ Canonical plan heads — one family per row (same adjacency rule as §2.3):
 | Axis | Head plan artifact |
 |---|---|
 | core | `Implementation_Plan_Harness_Core_v1_3.md` |
-| IS | `Implementation_Plan_Information_Substrate_v2_9.md` |
+| IS | `Implementation_Plan_Information_Substrate_v2_10.md` |
 | AS | `Implementation_Plan_Action_Surface_v1_6.md` (v1.6, cleared 2026-07-15) |
-| CP | `Implementation_Plan_Control_Plane_v2_53.md` |
+| CP | `Implementation_Plan_Control_Plane_v2_55.md` |
 | OD | `Implementation_Plan_Operational_Discipline_v2_36.md` |
-| Runtime | `Implementation_Plan_Harness_Runtime_v2_63.md` |
+| Runtime | `Implementation_Plan_Harness_Runtime_v2_64.md` |
 | CXA | `Cross_Axis_Composition_Document_v2_23.md` |
 | Memory | `Implementation_Plan_Memory_Substrate_v1.md` v1.3 (cleared 2026-08-06) |
 
@@ -272,7 +272,7 @@ This workspace has two logical postures co-resident in the same git repo:
 | Posture | What it edits | What it reads as canonical |
 |---|---|---|
 | **Design-phase** | `design-substrate/**`, `.harness/**` back-flow docs, `.harness/clearance/**` markers | substrate research + ADRs + ADD + workflow doc |
-| **Phase 7** | `harness-*/src/**`, `harness-*/tests/**`, axis subdirectory CLAUDE.md files | `design-substrate/*` (the cleared canonical) |
+| **Phase 7** | `harness-*/src/**`, `harness-*/tests/**`, `harness-cp/cp_tests/**`, axis subdirectory CLAUDE.md files | `design-substrate/*` (the cleared canonical) |
 
 Plus a third unconstrained mode for workspace operational work that touches neither (e.g., editing root `CLAUDE.md`, `.github/`, `.claude/`, `.harness/clearance/README.md` itself, this PR series).
 
@@ -285,7 +285,7 @@ At any point Claude is about to make substantive edits, it should determine the 
 | Files being edited | Posture |
 |---|---|
 | Only `design-substrate/**` (possibly with `.harness/**` companions) | **Design-phase** |
-| Only `harness-*/src/**` or `harness-*/tests/**` or axis subdirectory CLAUDE.md | **Phase 7** |
+| Only `harness-*/src/**` or `harness-*/tests/**` or `harness-cp/cp_tests/**` or axis subdirectory CLAUDE.md | **Phase 7** |
 | Only workspace operational files (root `CLAUDE.md`, `.github/`, `.claude/`, `.harness/clearance/README.md`, `pyproject.toml`, etc.) | **Mode-agnostic** |
 | Both `design-substrate/**` AND `harness-*/src/**` | **Halt + ask** — must be a documented bundled-absorption arc; verify back-flow doc presence |
 

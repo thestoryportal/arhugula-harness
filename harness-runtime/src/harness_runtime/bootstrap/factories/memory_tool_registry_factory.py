@@ -54,6 +54,13 @@ from harness_as.anthropic_graceful_degradation import (
 from harness_core.deployment_surface import DeploymentSurface
 
 from harness_runtime.bootstrap.mutable_context import _MutableHarnessContext
+from harness_runtime.config.state_placement import (
+    StateKind,
+    StatePlacementRefusal,
+    StateRootPlacementError,
+    require_inside_state_root,
+    resolve_state_path,
+)
 from harness_runtime.lifecycle.memory_tool_encrypted import FernetContentCodec, FernetLike
 from harness_runtime.lifecycle.memory_tool_filesystem import (
     LocalFilesystemMemoryToolBackend,
@@ -70,7 +77,7 @@ from harness_runtime.lifecycle.memory_tool_types import (
     MemoryToolBackendConfig,
     MemoryToolStorageBackendProtocol,
 )
-from harness_runtime.types import RuntimeConfig
+from harness_runtime.types import RuntimeConfig, VerifiedStateRoot
 
 __all__ = [
     "MEMORY_TOOL_DATABASE_SUBPATH",
@@ -81,7 +88,7 @@ __all__ = [
 ]
 
 
-MEMORY_TOOL_FILESYSTEM_ROOT_SUBPATH = ".harness/memories"
+MEMORY_TOOL_FILESYSTEM_ROOT_SUBPATH = f".harness/{StateKind.MEMORIES.value}"
 """Sub-path under `config.repository_root` for the FILESYSTEM backend root.
 
 Per spec §14.12.7 implementation discretion + §14.12.3 step 2a suggestion of
@@ -90,14 +97,14 @@ the `.harness/...` sibling sub-paths used by other runtime carriers
 (`.harness/runtime.pid`, etc.)."""
 
 
-MEMORY_TOOL_DATABASE_SUBPATH = ".harness/memories.db"
+MEMORY_TOOL_DATABASE_SUBPATH = f".harness/{StateKind.MEMORIES_DB.value}"
 """Default sub-path under `config.repository_root` for the DATABASE backend
 SQLite file, used when `backend_params['connection_string']` is absent (R-830;
 spec §14.12.3 DATABASE step). Sibling of the FILESYSTEM `.harness/memories`
 root."""
 
 
-MEMORY_TOOL_ENCRYPTED_FILESYSTEM_ROOT_SUBPATH = ".harness/memories-encrypted"
+MEMORY_TOOL_ENCRYPTED_FILESYSTEM_ROOT_SUBPATH = f".harness/{StateKind.MEMORIES_ENCRYPTED.value}"
 """Sub-path under `config.repository_root` for the ENCRYPTED_FILESYSTEM backend
 root (`B-MEMORY-SURFACE-BACKEND-IMPLS`; spec §14.12.3 ENCRYPTED_FILESYSTEM step).
 
@@ -108,20 +115,28 @@ as plaintext). ENCRYPTED_FILESYSTEM is override-only, so the two roots never bot
 populate in one process."""
 
 
-def _resolve_database_connection_path(config: RuntimeConfig) -> Path:
+def _resolve_database_connection_path(
+    config: RuntimeConfig, verified: VerifiedStateRoot | None
+) -> Path:
     """Resolve the SQLite database path for the DATABASE backend.
 
     Per spec §14.12.3 DATABASE step, the connection is supplied via
     `backend_params['connection_string']`. When that key is absent (or
-    `backend_params` is `None`), fall back to the workspace default
-    `config.repository_root / MEMORY_TOOL_DATABASE_SUBPATH`.
+    `backend_params` is `None`), fall back to the workspace default derived through
+    `resolve_state_path(StateKind.MEMORIES_DB, ...)`. With a declared state placement an
+    explicit local path must sit inside the verified root (else `PATH_OUTSIDE_ROOT`).
     """
     backend_cfg = config.memory_tool_backend_config
     if backend_cfg is not None and backend_cfg.backend_params is not None:
         connection_string = backend_cfg.backend_params.get("connection_string")
         if connection_string:
-            return Path(connection_string)
-    return config.repository_root / MEMORY_TOOL_DATABASE_SUBPATH
+            return require_inside_state_root(
+                Path(connection_string),
+                config,
+                verified,
+                what="memory DATABASE connection_string",
+            )
+    return resolve_state_path(StateKind.MEMORIES_DB, config, verified)
 
 
 def _resolve_database_connection_string(config: RuntimeConfig) -> str | None:
@@ -219,7 +234,9 @@ def _create_managed_sql_connect_from_backend_params(params: dict[str, str]) -> M
     return cast(ManagedSqlConnect, psycopg_module.connect)
 
 
-def _construct_database_backend(config: RuntimeConfig) -> MemoryToolStorageBackendProtocol:
+def _construct_database_backend(
+    config: RuntimeConfig, verified: VerifiedStateRoot | None
+) -> MemoryToolStorageBackendProtocol:
     connection_string = _resolve_database_connection_string(config)
     if _is_managed_database_connection_string(connection_string):
         params = _require_backend_params(
@@ -232,7 +249,7 @@ def _construct_database_backend(config: RuntimeConfig) -> MemoryToolStorageBacke
             connection_string=connection_string,
             connect=connect,
         )
-    return SqliteMemoryToolBackend(db_path=_resolve_database_connection_path(config))
+    return SqliteMemoryToolBackend(db_path=_resolve_database_connection_path(config, verified))
 
 
 def _resolve_memory_encryption_key(params: dict[str, str]) -> bytes:
@@ -297,7 +314,7 @@ def _create_fernet_from_key(key: bytes) -> FernetLike:
 
 
 def _construct_encrypted_filesystem_backend(
-    config: RuntimeConfig,
+    config: RuntimeConfig, verified: VerifiedStateRoot | None
 ) -> LocalFilesystemMemoryToolBackend:
     """Construct the ENCRYPTED_FILESYSTEM backend (`B-MEMORY-SURFACE-BACKEND-IMPLS`).
 
@@ -312,7 +329,7 @@ def _construct_encrypted_filesystem_backend(
     key = _resolve_memory_encryption_key(params)
     fernet = _create_fernet_from_key(key)
     return LocalFilesystemMemoryToolBackend(
-        root=config.repository_root / MEMORY_TOOL_ENCRYPTED_FILESYSTEM_ROOT_SUBPATH,
+        root=resolve_state_path(StateKind.MEMORIES_ENCRYPTED, config, verified),
         codec=FernetContentCodec(fernet),
     )
 
@@ -424,6 +441,7 @@ post-isinstance method-presence sweep at step 3 below."""
 def _construct_backend(
     configured: MemoryToolStorageBackend,
     config: RuntimeConfig,
+    verified: VerifiedStateRoot | None,
 ) -> MemoryToolStorageBackendProtocol:
     """Construct the storage-backend implementation for a resolved enum value.
 
@@ -438,14 +456,14 @@ def _construct_backend(
     """
     if configured is MemoryToolStorageBackend.FILESYSTEM:
         return LocalFilesystemMemoryToolBackend(
-            root=config.repository_root / MEMORY_TOOL_FILESYSTEM_ROOT_SUBPATH,
+            root=resolve_state_path(StateKind.MEMORIES, config, verified),
         )
     if configured is MemoryToolStorageBackend.ENCRYPTED_FILESYSTEM:
         # B-MEMORY-SURFACE-BACKEND-IMPLS: filesystem backend + injected Fernet
         # content codec (ciphertext at rest). Provider-free construction may
         # monkeypatch _create_fernet_from_key; live use reads the key reference
         # from the operator-named environment variable.
-        return _construct_encrypted_filesystem_backend(config)
+        return _construct_encrypted_filesystem_backend(config, verified)
     if configured is MemoryToolStorageBackend.S3:
         # R-830 MANAGED_CLOUD cloud-vault backend. Provider-free construction
         # reaches this path through a monkeypatched client factory; live use
@@ -455,10 +473,18 @@ def _construct_backend(
         # R-830 DATABASE backend. Plain/local connection strings route to the
         # existing SQLite implementation; postgres:// and postgresql:// route
         # to the optional managed-DB implementation.
-        return _construct_database_backend(config)
+        return _construct_database_backend(config, verified)
     if configured is MemoryToolStorageBackend.OPERATOR_DEFINED:
         # B-MEMORY-SURFACE-BACKEND-IMPLS: operator class resolved from
         # backend_params['class_qualified_name'] via importlib introspection.
+        # [LAW:single-enforcer] An opaque constructor cannot prove where it writes;
+        # refuse declared placement here, before importing operator code.
+        if config.state_placement is not None:
+            raise StateRootPlacementError(
+                StatePlacementRefusal.OPERATOR_DEFINED_UNVERIFIABLE,
+                "operator_defined memory backend cannot prove persistent writes "
+                "remain inside the verified state root before construction",
+            )
         return _construct_operator_defined_backend(config)
     assert_never(configured)
 
@@ -552,7 +578,7 @@ async def materialize_memory_tool_registry_stage(
     if config.memory_tool_backend_config is not None:
         # --- Operator override: one backend, EVERY surface (§14.12.1) --------
         configured = config.memory_tool_backend_config.backend
-        override_backend = _construct_backend(configured, config)
+        override_backend = _construct_backend(configured, config, ctx.verified_state_root)
         _enforce_protocol_conformance(override_backend, configured)
         registry = MemoryToolRegistry(backend=override_backend, configured_backend=configured)
         ctx.memory_tool_registry = registry
@@ -583,7 +609,7 @@ async def materialize_memory_tool_registry_stage(
             continue
         picked = MemoryToolStorageBackend.FILESYSTEM
         if picked not in backend_by_enum:
-            constructed = _construct_backend(picked, config)
+            constructed = _construct_backend(picked, config, ctx.verified_state_root)
             _enforce_protocol_conformance(constructed, picked)
             backend_by_enum[picked] = constructed
         backends[surface] = backend_by_enum[picked]

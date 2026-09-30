@@ -303,7 +303,11 @@ async def test_skill_activation_e2e_joint_with_other_opt_in_bindings(
                 hook=_AllSkillsHook(),
             ),
             "pause_resume_protocol_config": PauseResumeProtocolConfig.default(),
-            "webhook_delivery_composer_config": WebhookDeliveryComposerConfig.default(),
+            "webhook_delivery_composer_config": WebhookDeliveryComposerConfig(
+                webhook_id="local-binding-test",
+                endpoint_url="http://127.0.0.1:9/hitl",
+                timeout_seconds=1,
+            ),
         },
     )
 

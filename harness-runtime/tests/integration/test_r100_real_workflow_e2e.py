@@ -82,6 +82,7 @@ def _read_ledger_entries(state_ledger_root: Path) -> list[dict[str, Any]]:
     return entries
 
 
+@pytest.mark.e2e
 @pytest.mark.asyncio
 async def test_r100_real_multi_step_workflow_against_anthropic(
     tmp_path: Path,

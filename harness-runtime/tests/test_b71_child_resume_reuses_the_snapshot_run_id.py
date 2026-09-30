@@ -31,23 +31,31 @@ the crash-resume shape by `test_recursive_child_crash_resume_final_state_witness
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
+from harness_cp.gate_level_rule import GateLevel
 from harness_cp.handoff_context import StateSummary
-from harness_cp.pause_resume_protocol_types import PauseSnapshot, WorkflowPauseReason
+from harness_cp.pause_resume_protocol_types import (
+    PausedChildCapture,
+    PauseSnapshot,
+    WorkflowPauseReason,
+)
 from harness_is.state_ledger_entry_schema import Identifier
 from harness_runtime.lifecycle import child_workflow_runner as _cwr
+from harness_runtime.lifecycle.durable_child_admission import RefuseDurableChildAdmission
 
 _WF = "wf-child-b71"
 _ANCHOR = "0" * 64
 
 
 class _Ctx:
-    """Minimal parent context — the runner reads only `step_dispatchers` before it
+    """Minimal parent context — the runner reads only `step_dispatchers` and `pause_resume_protocol` before it
     delegates, and `execute_workflow` is captured rather than run."""
 
     step_dispatchers: dict[str, Any] = {}
+    pause_resume_protocol: Any = None  # ephemeral: no journal record to verify
 
 
 def _snapshot(run_id: str, workflow_id: str = _WF) -> PauseSnapshot:
@@ -69,6 +77,17 @@ def _snapshot(run_id: str, workflow_id: str = _WF) -> PauseSnapshot:
     )
 
 
+def _as_capture(snapshot: PauseSnapshot | None) -> PausedChildCapture | None:
+    """The resume capture a parent hands the runner for `snapshot` (ephemeral: no ref)."""
+    return (
+        None
+        if snapshot is None
+        else PausedChildCapture(
+            child_workflow_id=snapshot.workflow_id, child_snapshot=snapshot, child_record_ref=None
+        )
+    )
+
+
 def _capture_child_run_id(
     monkeypatch: pytest.MonkeyPatch,
     *,
@@ -84,17 +103,20 @@ def _capture_child_run_id(
         seen.append(child_run_id)
         return cast(Any, object())
 
-    monkeypatch.setattr(_cwr, "execute_workflow", _fake_execute_workflow)
+    monkeypatch.setattr(_cwr, "execute_workflow_at_depth", _fake_execute_workflow)
 
-    runner = _cwr.compose_child_workflow_runner(cast(Any, _Ctx()))
+    runner = _cwr.compose_child_workflow_runner(
+        cast(Any, _Ctx()), durable_admission=RefuseDurableChildAdmission()
+    )
     runner(
         workflow_id=_WF,
         manifest_entry=cast(Any, object()),
         steps=cast(Any, ()),
         handoff_context=cast(Any, object()),
-        descent=cast(Any, object()),
+        descent=cast(Any, SimpleNamespace(child_gate_level=GateLevel.AUTO)),
         default_model_binding=cast(Any, object()),
-        pause_snapshot_input=pause_snapshot_input,
+        descent_depth=1,
+        child_resume=_as_capture(pause_snapshot_input),
         child_run_id_seed=child_run_id_seed,
     )
     assert len(seen) == 1, "the runner did not reach execute_workflow exactly once"
@@ -155,3 +177,31 @@ def test_a_first_dispatch_without_a_seed_gets_a_fresh_id() -> None:
         second = _capture_child_run_id(mp, pause_snapshot_input=None, child_run_id_seed=None)
     assert first != second
     assert first not in {"run-child-original", "deterministic-seed-1"}
+
+
+@pytest.mark.parametrize("resuming", [False, True])
+def test_child_runner_forwards_recorded_gate_floor(
+    monkeypatch: pytest.MonkeyPatch, resuming: bool
+) -> None:
+    """The runtime-to-CP seam keeps the floor on first dispatch and re-entry."""
+    seen: list[GateLevel] = []
+
+    def _capture(_manifest: Any, _steps: Any, _run_id: str, _ctx: Any, **kwargs: Any) -> Any:
+        seen.append(kwargs["parent_gate_floor"])
+        return cast(Any, object())
+
+    monkeypatch.setattr(_cwr, "execute_workflow_at_depth", _capture)
+    runner = _cwr.compose_child_workflow_runner(
+        cast(Any, _Ctx()), durable_admission=RefuseDurableChildAdmission()
+    )
+    runner(
+        workflow_id=_WF,
+        manifest_entry=cast(Any, object()),
+        steps=(),
+        handoff_context=cast(Any, object()),
+        descent=cast(Any, SimpleNamespace(child_gate_level=GateLevel.ASK)),
+        default_model_binding=cast(Any, object()),
+        descent_depth=1,
+        child_resume=_as_capture(_snapshot("run-original")) if resuming else None,
+    )
+    assert seen == [GateLevel.ASK]

@@ -47,7 +47,7 @@ from harness_is.state_ledger_write import (
     EntryPayload,
     WriteResult,
 )
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_serializer
 
 from harness_cp.cp_shared_types import ActorIdentity
 from harness_cp.engine_class import EngineClass
@@ -92,6 +92,11 @@ class WorkloadBindingSelectionResult(BaseModel):
 
     selection_rationale: str
     """Documents the winning filter — which §7.3 step bound the result."""
+
+    @field_serializer("candidate_set", when_used="json")
+    def _serialize_candidate_set(self, candidates: frozenset[EngineClass]) -> list[str]:
+        """Give equal candidate sets one JSON byte order for ledger-key hashing."""
+        return sorted(candidate.value for candidate in candidates)
 
 
 class WorkloadBindingError(ValueError):

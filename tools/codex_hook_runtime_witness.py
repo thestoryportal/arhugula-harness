@@ -81,9 +81,9 @@ def _response_events(call_number: int) -> list[dict[str, Any]]:
                 "item": {
                     "type": "function_call",
                     "call_id": "witness-shell",
-                    "name": "shell_command",
+                    "name": "exec_command",
                     "arguments": json.dumps(
-                        {"command": "printf codex-shell-witness > shell-marker.txt"}
+                        {"cmd": "printf codex-shell-witness > shell-marker.txt"}
                     ),
                 },
             },

@@ -6,10 +6,12 @@ import asyncio
 from pathlib import Path
 from typing import Any
 
+import pytest
 from harness_core import PersonaTier
 from harness_core.deployment_surface import DeploymentSurface
 from harness_core.workload_class import WorkloadClass
 from harness_cp.cp_shared_types import ActorIdentity
+from harness_cp.gate_level_rule import GateLevel
 from harness_cp.hitl_response_palette import HITLResponse
 from harness_cp.persona_engine_hitl_matrix import SynchronyClass
 from harness_cp.topology_pattern import TopologyPattern
@@ -26,6 +28,7 @@ from harness_runtime.lifecycle.cp_is_wiring import (
 from harness_runtime.lifecycle.hitl_placement import RuntimeHITLPlacementRegistry
 from harness_runtime.lifecycle.hitl_tool_loop import (
     HITLGateDecision,
+    HITLToolCallAssessment,
     HITLToolLoopContext,
     ModelToolCall,
     RuntimeHITLToolLoop,
@@ -99,12 +102,14 @@ def _context() -> HITLToolLoopContext:
         cell_synchrony_class=SynchronyClass.SYNC_BLOCKING,
         cross_trust_boundary_state=CrossTrustBoundaryState.NONE,
         actor=_ACTOR,
+        inherited_gate_floor=GateLevel.AUTO,
     )
 
 
 class _Dispatcher:
-    def __init__(self) -> None:
+    def __init__(self, events: list[str] | None = None) -> None:
         self.calls: list[ModelToolCall] = []
+        self.events = events
 
     async def dispatch(
         self,
@@ -113,7 +118,31 @@ class _Dispatcher:
     ) -> dict[str, Any]:
         _ = context
         self.calls.append(call)
+        if self.events is not None:
+            self.events.append("dispatch")
         return {"tool_call_id": call.tool_call_id, "ok": True}
+
+
+class _Auditor:
+    def __init__(self, events: list[str] | None = None, *, fail: bool = False) -> None:
+        self.calls: list[tuple[ModelToolCall, GateLevel, HITLGateDecision]] = []
+        self.events = events
+        self.fail = fail
+
+    async def record(
+        self,
+        *,
+        call: ModelToolCall,
+        context: HITLToolLoopContext,
+        level: GateLevel,
+        decision: HITLGateDecision,
+    ) -> None:
+        _ = context
+        self.calls.append((call, level, decision))
+        if self.events is not None:
+            self.events.append("audit")
+        if self.fail:
+            raise RuntimeError("audit unavailable")
 
 
 class _Gate:
@@ -126,10 +155,14 @@ class _Gate:
         *,
         call: ModelToolCall,
         context: HITLToolLoopContext,
+        palette: frozenset[HITLResponse],
     ) -> HITLGateDecision:
-        _ = context
+        _ = (context, palette)
         self.calls.append(call)
-        return HITLGateDecision(response=self.response)
+        return HITLGateDecision(
+            response=self.response,
+            edited_arguments={"query": "edited"} if self.response is HITLResponse.EDIT else None,
+        )
 
 
 def _loop(
@@ -138,15 +171,21 @@ def _loop(
     hitl_required_ids: frozenset[str],
     gate: _Gate | None = None,
     dispatcher: _Dispatcher | None = None,
+    auditor: _Auditor | None = None,
 ) -> tuple[RuntimeHITLToolLoop, _Gate, _Dispatcher]:
     gate = gate or _Gate()
     dispatcher = dispatcher or _Dispatcher()
+    auditor = auditor or _Auditor()
     loop = RuntimeHITLToolLoop(
         wiring=_wiring(tmp_path),
         placement_registry=RuntimeHITLPlacementRegistry(),
-        hitl_required=lambda call, _context: call.tool_call_id in hitl_required_ids,
+        assess=lambda call, _context: HITLToolCallAssessment(
+            level=GateLevel.ASK if call.tool_call_id in hitl_required_ids else GateLevel.AUTO,
+            owner=call.server,
+        ),
         gate=gate,
         dispatcher=dispatcher,
+        response_auditor=auditor,
     )
     return loop, gate, dispatcher
 
@@ -160,6 +199,52 @@ def _call(tool_call_id: str, *, tool: str = "search") -> ModelToolCall:
         provider="fixture-provider",
         model="fixture-model",
     )
+
+
+@pytest.mark.parametrize(
+    "response",
+    [HITLResponse.APPROVE, HITLResponse.EDIT, HITLResponse.REJECT, HITLResponse.RESPOND],
+)
+def test_every_operator_response_is_audited_before_dispatch(
+    tmp_path: Path, response: HITLResponse
+) -> None:
+    events: list[str] = []
+    auditor = _Auditor(events)
+    dispatcher = _Dispatcher(events)
+    loop, _gate, _dispatcher = _loop(
+        tmp_path,
+        hitl_required_ids=frozenset({"call-hitl"}),
+        gate=_Gate(response=response),
+        dispatcher=dispatcher,
+        auditor=auditor,
+    )
+
+    asyncio.run(loop.run_tool_calls([_call("call-hitl")], _context()))
+
+    assert [
+        (call.tool_call_id, level, decision.response) for call, level, decision in auditor.calls
+    ] == [("call-hitl", GateLevel.ASK, response)]
+    assert events == (
+        ["audit"]
+        if response in {HITLResponse.REJECT, HITLResponse.RESPOND}
+        else ["audit", "dispatch"]
+    )
+
+
+def test_audit_failure_prevents_approved_tool_dispatch(tmp_path: Path) -> None:
+    auditor = _Auditor(fail=True)
+    dispatcher = _Dispatcher()
+    loop, _gate, _dispatcher = _loop(
+        tmp_path,
+        hitl_required_ids=frozenset({"call-hitl"}),
+        dispatcher=dispatcher,
+        auditor=auditor,
+    )
+
+    with pytest.raises(RuntimeError, match="audit unavailable"):
+        asyncio.run(loop.run_tool_calls([_call("call-hitl")], _context()))
+
+    assert dispatcher.calls == []
 
 
 def test_hitl_tool_loop_emits_only_when_hitl_required(tmp_path: Path) -> None:

@@ -88,8 +88,14 @@ semantics carry this mark.
 """
 
 _WORKFLOW_ID = "wf-b97-cross-process"
-_READY_TIMEOUT = 30.0
-"""A cold child interpreter's own import of `harness_runtime` costs seconds here."""
+_READY_TIMEOUT = 120.0
+"""[LAW:comments-carry-meaning] A cold child imports the harness before signaling.
+A related witness measured 33.89s on this host; this module also missed a 60s
+readiness window under load. The post-signal blocking assertion remains 0.5s."""
+_COMPLETION_TIMEOUT = 30.0
+# [LAW:no-ambient-temporal-coupling] The first ready bulk child must wait through
+# the second child's entire readiness window before the parent opens the barrier.
+_BULK_BARRIER_TIMEOUT = 2 * _READY_TIMEOUT
 
 _BLOCKED_WINDOW = 0.5
 """Bounded wait AFTER the child signals it is AT the `flock` syscall (the B-73
@@ -149,7 +155,7 @@ journal_dir, done_marker, ready_marker, identity_marker = sys.argv[1:5]
 """
     + _FLOCK_SIGNAL_WRAPPER
     + """
-JournalWorkflowPauseStore(journal_dir=Path(journal_dir), tenant_id=None).capture(snapshot("run-child"))
+JournalWorkflowPauseStore(journal_dir=Path(journal_dir), tenant_id=None).capture(snapshot("run-child"), depth=None)
 Path(done_marker).write_text("done")
 """
 )
@@ -171,15 +177,15 @@ with store._cross_process_append_lock(store._journal_file(workflow_id)):
 _CHILD_BULK_APPEND_SCRIPT = (
     _CHILD_PREAMBLE
     + """
-journal_dir, tag, count, payload_size, go_marker, ready_marker = sys.argv[1:7]
+journal_dir, tag, count, payload_size, go_marker, ready_marker, barrier_timeout = sys.argv[1:8]
 store = JournalWorkflowPauseStore(journal_dir=Path(journal_dir), tenant_id=None)
 Path(ready_marker).write_text("ready")
-deadline = time.monotonic() + 60.0
+deadline = time.monotonic() + float(barrier_timeout)
 while not Path(go_marker).exists():
     assert time.monotonic() < deadline, "start barrier never opened"
     time.sleep(0.005)
 for i in range(int(count)):
-    store.capture(snapshot("run-%s-%d" % (tag, i), payload_size=int(payload_size)))
+    store.capture(snapshot("run-%s-%d" % (tag, i), payload_size=int(payload_size)), depth=None)
 """
 )
 
@@ -311,7 +317,7 @@ def test_append_blocks_a_second_os_process_holding_the_journal_lock(tmp_path: Pa
             child.wait(timeout=30.0)
             raise
 
-    assert child.wait(timeout=_READY_TIMEOUT) == 0
+    assert child.wait(timeout=_COMPLETION_TIMEOUT) == 0
     assert done.exists()
     store = JournalWorkflowPauseStore(journal_dir=journal_dir, tenant_id=None)
     read = store.read_latest_attributed(_WORKFLOW_ID)
@@ -344,7 +350,7 @@ def test_both_processes_contend_on_the_same_lock_file_identity(tmp_path: Path) -
 
     with _child(_CHILD_CAPTURE_SCRIPT, journal_dir, done, ready, child_identity) as child:
         _await_marker(ready, what="the child's flock-attempt signal")
-        assert child.wait(timeout=_READY_TIMEOUT) == 0
+        assert child.wait(timeout=_COMPLETION_TIMEOUT) == 0
 
     lock_file = _lock_file(journal_dir)
     assert lock_file.exists(), "this workflow's journal carries no cross-process lock file"
@@ -405,8 +411,8 @@ def test_two_workflows_lock_distinct_targets_and_do_not_block_each_other(
 
     monkeypatch.setattr(JournalWorkflowPauseStore, "_cross_process_append_lock", _recording)
     store = JournalWorkflowPauseStore(journal_dir=journal_dir, tenant_id=None)
-    store.capture(_snapshot("run-a"))
-    store.capture(_snapshot_for(other, "run-b"))
+    store.capture(_snapshot("run-a"), depth=None)
+    store.capture(_snapshot_for(other, "run-b"), depth=None)
     assert acquired == [_journal_file(journal_dir), _journal_file(journal_dir, other)], (
         "the two workflows did not lock distinct per-workflow targets — a shared lock "
         "makes one workflow's capture wait behind another's"
@@ -419,7 +425,9 @@ def test_two_workflows_lock_distinct_targets_and_do_not_block_each_other(
     identity = tmp_path / "child_identity"
     with _hold_append_lock(journal_dir, other):
         with _child(_CHILD_CAPTURE_SCRIPT, journal_dir, done, ready, identity) as child:
-            assert child.wait(timeout=_READY_TIMEOUT) == 0, (
+            # [LAW:no-ambient-temporal-coupling] This wait starts at spawn, so it
+            # includes cold-child readiness plus the capture's completion time.
+            assert child.wait(timeout=_READY_TIMEOUT + _COMPLETION_TIMEOUT) == 0, (
                 "a capture for one workflow blocked behind a lock held on ANOTHER "
                 "workflow's journal — the lock is coarser than the store's isolation"
             )
@@ -450,10 +458,24 @@ def test_two_os_processes_appending_large_records_leave_every_record_whole(
 
     readies = [tmp_path / "ready-A", tmp_path / "ready-B"]
     with _child(
-        _CHILD_BULK_APPEND_SCRIPT, journal_dir, "A", per_process, payload, go, readies[0]
+        _CHILD_BULK_APPEND_SCRIPT,
+        journal_dir,
+        "A",
+        per_process,
+        payload,
+        go,
+        readies[0],
+        _BULK_BARRIER_TIMEOUT,
     ) as a:
         with _child(
-            _CHILD_BULK_APPEND_SCRIPT, journal_dir, "B", per_process, payload, go, readies[1]
+            _CHILD_BULK_APPEND_SCRIPT,
+            journal_dir,
+            "B",
+            per_process,
+            payload,
+            go,
+            readies[1],
+            _BULK_BARRIER_TIMEOUT,
         ) as b:
             for marker in readies:
                 _await_marker(marker, what=f"{marker.name} (a bulk appender)")
@@ -518,7 +540,7 @@ def test_the_read_path_acquires_no_cross_process_lock(
     monkeypatch.setattr(JournalWorkflowPauseStore, "_cross_process_append_lock", _recording)
 
     store = JournalWorkflowPauseStore(journal_dir=journal_dir, tenant_id=None)
-    store.capture(_snapshot("run-write"))
+    store.capture(_snapshot("run-write"), depth=None)
     assert acquired == [_journal_file(journal_dir)], (
         "the write path must lock THIS workflow's journal, exactly once"
     )
@@ -545,7 +567,7 @@ def test_read_completes_while_a_separate_os_process_holds_the_journal_lock(
     """
     journal_dir = tmp_path / "state_ledger" / "pause-journal"
     store = JournalWorkflowPauseStore(journal_dir=journal_dir, tenant_id=None)
-    store.capture(_snapshot("run-before-hold"))
+    store.capture(_snapshot("run-before-hold"), depth=None)
 
     held = tmp_path / "child_held"
     release = tmp_path / "child_release"
@@ -562,7 +584,7 @@ def test_read_completes_while_a_separate_os_process_holds_the_journal_lock(
             )
         finally:
             release.write_text("go")
-        assert child.wait(timeout=_READY_TIMEOUT) == 0
+        assert child.wait(timeout=_COMPLETION_TIMEOUT) == 0
 
 
 # --------------------------------------------------------------------------
@@ -578,12 +600,12 @@ def test_torn_tail_self_heal_still_repairs_under_the_lock(tmp_path: Path) -> Non
     latest one."""
     journal_dir = tmp_path / "state_ledger" / "pause-journal"
     store = JournalWorkflowPauseStore(journal_dir=journal_dir, tenant_id=None)
-    store.capture(_snapshot("run-first"))
+    store.capture(_snapshot("run-first"), depth=None)
     journal = _journal_file(journal_dir)
     with journal.open("a", encoding="utf-8") as handle:
         handle.write('{"workflow_id": "wf-b97-cros')  # a torn in-flight append
 
-    store.capture(_snapshot("run-after-tear"))
+    store.capture(_snapshot("run-after-tear"), depth=None)
 
     read = store.read_latest_attributed(_WORKFLOW_ID)
     assert read.snapshot is not None and read.snapshot.run_id == "run-after-tear"
@@ -623,7 +645,7 @@ def test_parent_dirent_is_fsynced_before_any_journal_file_can_exist(
     seen = _record_fsyncs(monkeypatch, journal_dir)
 
     JournalWorkflowPauseStore(journal_dir=journal_dir, tenant_id=None).capture(
-        _snapshot("run-first")
+        _snapshot("run-first"), depth=None
     )
 
     assert seen, "no directory fsync happened at all"
@@ -676,7 +698,7 @@ def test_parent_is_fsynced_even_when_a_dead_writer_left_state_behind(
 
     seen = _record_fsyncs(monkeypatch, journal_dir)
     JournalWorkflowPauseStore(journal_dir=journal_dir, tenant_id=None).capture(
-        _snapshot("run-after-residue")
+        _snapshot("run-after-residue"), depth=None
     )
 
     assert journal_dir.parent in [target for target, _ in seen], (
@@ -704,11 +726,11 @@ def test_journal_dir_is_fsynced_on_every_append_not_only_the_first(
     seen = _record_fsyncs(monkeypatch, journal_dir)
     store = JournalWorkflowPauseStore(journal_dir=journal_dir, tenant_id=None)
 
-    store.capture(_snapshot("run-first"))
+    store.capture(_snapshot("run-first"), depth=None)
     assert [target for target, _ in seen] == [journal_dir.parent, journal_dir]
 
     seen.clear()
-    store.capture(_snapshot("run-second"))
+    store.capture(_snapshot("run-second"), depth=None)
     assert [target for target, _ in seen] == [journal_dir.parent, journal_dir], (
         "a repeat append skipped a directory fsync — a predecessor that died before "
         "linking the dirent would never be recovered from"
@@ -739,7 +761,7 @@ def test_a_symlink_planted_at_the_lock_path_fails_loud(tmp_path: Path, dangling:
 
     with pytest.raises(OSError) as excinfo:
         JournalWorkflowPauseStore(journal_dir=journal_dir, tenant_id=None).capture(
-            _snapshot("run-symlink")
+            _snapshot("run-symlink"), depth=None
         )
     assert excinfo.value.errno in {errno.ELOOP, errno.EMLINK}, (
         f"expected a loud O_NOFOLLOW refusal, got errno={excinfo.value.errno}"
@@ -770,8 +792,8 @@ def test_windows_carve_out_round_trips_without_creating_a_lock_file(
     journal_dir = tmp_path / "state_ledger" / "pause-journal"
     store = JournalWorkflowPauseStore(journal_dir=journal_dir, tenant_id=None)
 
-    store.capture(_snapshot("run-windows"))
-    store.capture(_snapshot("run-windows-2"))
+    store.capture(_snapshot("run-windows"), depth=None)
+    store.capture(_snapshot("run-windows-2"), depth=None)
 
     read = store.read_latest_attributed(_WORKFLOW_ID)
     assert read.snapshot is not None and read.snapshot.run_id == "run-windows-2"
@@ -789,7 +811,7 @@ def test_the_lock_file_is_not_mistaken_for_a_journal_record(tmp_path: Path) -> N
     has never been journaled, whose own lock file is never created either."""
     journal_dir = tmp_path / "state_ledger" / "pause-journal"
     store = JournalWorkflowPauseStore(journal_dir=journal_dir, tenant_id=None)
-    store.capture(_snapshot("run-only"))
+    store.capture(_snapshot("run-only"), depth=None)
 
     assert _lock_file(journal_dir).exists()
     assert not _lock_file(journal_dir).read_bytes(), "the lock file must carry no bytes"
@@ -808,7 +830,7 @@ def test_journal_directory_is_still_provisioned_when_absent(tmp_path: Path) -> N
     journal_dir = tmp_path / "never" / "created" / "pause-journal"
     assert not journal_dir.parent.exists()
     JournalWorkflowPauseStore(journal_dir=journal_dir, tenant_id=None).capture(
-        _snapshot("run-deep")
+        _snapshot("run-deep"), depth=None
     )
     assert _journal_file(journal_dir).exists()
 
@@ -818,7 +840,7 @@ def test_round_trip_under_the_lock_preserves_the_record(tmp_path: Path, payload_
     """Both sides of the 8 KiB text-IO buffer boundary round-trip byte-identically."""
     journal_dir = tmp_path / "state_ledger" / "pause-journal"
     store = JournalWorkflowPauseStore(journal_dir=journal_dir, tenant_id=None)
-    store.capture(_snapshot("run-round-trip", payload_size=payload_size))
+    store.capture(_snapshot("run-round-trip", payload_size=payload_size), depth=None)
     read = store.read_latest_attributed(_WORKFLOW_ID)
     assert read.snapshot is not None
     assert len(read.snapshot.state_summary.summary_text) == payload_size

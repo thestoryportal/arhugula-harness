@@ -368,6 +368,7 @@ def test_config_load_failure_exits_three(
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.e2e
 @pytest.mark.skipif(
     not os.environ.get("ANTHROPIC_API_KEY"),
     reason=(

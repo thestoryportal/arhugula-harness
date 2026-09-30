@@ -262,6 +262,10 @@ def materialize_mcp_server_stage(
     # the closure lookup).
     from harness_cp import workflow_driver as _workflow_driver
     from harness_cp.workflow_driver import execute_workflow as _execute_workflow
+    from harness_cp.workflow_driver_types import ChildResumeAuthority
+    from harness_cp.workflow_driver_types import RunResult as _CpRunResult
+
+    from harness_runtime.lifecycle.root_resume_admission import UNCLAIMED, ResumeAdmission
 
     _compute_hitl_fallback_eligible_run_id = (
         _workflow_driver.compute_hitl_uniform_fallback_eligible_run_id
@@ -370,6 +374,11 @@ def materialize_mcp_server_stage(
         # (`workflow_driver.py` C-RT-24 §14.14.3) fires.
         _resume_snapshot = state.get("_resume_pause_snapshot")
         run_id = _resume_snapshot.run_id if _resume_snapshot is not None else uuid.uuid4().hex
+        # B-104 — how the worker admits its body: `api.resume` binds a `DurableRootResume`
+        # for a `resume_handle` read; a fresh run or caller-supplied snapshot is UNCLAIMED.
+        # Read HERE, once, so after a drain timeout the worker holds its own admission and
+        # nothing is read back from `_state`.
+        _admission: ResumeAdmission = state.get("_resume_admission", UNCLAIMED)
         # B-39 impl leg Slice B (CP spec v1.106 §1) — the operator's resume payload,
         # threaded as the depth-0 `execute_workflow(resume_context=...)` argument
         # (below) rather than set into a ctx-level `ResumeContextHolder` singleton
@@ -454,6 +463,24 @@ def materialize_mcp_server_stage(
             else getattr(harness_ctx, "step_dispatchers", None)
         )
 
+        def _execute(child_resume_authority: ChildResumeAuthority | None) -> _CpRunResult:
+            return _execute_workflow(
+                workflow.manifest_entry,
+                workflow.steps,
+                run_id,
+                harness_ctx,
+                default_model_binding=workflow.default_model_binding,
+                step_dispatchers=cast(Any, effective_step_dispatchers),
+                pause_snapshot_input=_resume_snapshot,
+                resume_context=_resume_context,
+                child_resume_authority=child_resume_authority,
+                hitl_uniform_fallback_eligible_run_id=(_hitl_uniform_fallback_eligible_run_id),
+                effect_fence_uniform_fallback_eligible_key=(
+                    _effect_fence_uniform_fallback_eligible_key
+                ),
+                effect_fence_tree_wide_abort_present=(_effect_fence_tree_wide_abort_present),
+            )
+
         try:
             # The per-run inter-step channel + cost accumulator were isolated in
             # their ContextVars above; the `asyncio.to_thread` worker inherits them
@@ -461,23 +488,11 @@ def materialize_mcp_server_stage(
             # Same composition pattern as the v1.11 `api.run()` baseline
             # (asyncio.to_thread for the sync CP driver; asyncio.wait_for to enforce
             # `RT-FAIL-DRAIN-TIMEOUT` per C-RT-14 + U-RT-44 AC #2).
+            # [LAW:no-ambient-temporal-coupling] The admission runs INSIDE the worker, so a
+            # durable root's claim, `started` fsync and lease span exactly the body's life,
+            # even when `wait_for` below has already answered `drained`.
             cp_result = await asyncio.wait_for(
-                asyncio.to_thread(
-                    _execute_workflow,
-                    workflow.manifest_entry,
-                    workflow.steps,
-                    run_id,
-                    harness_ctx,
-                    default_model_binding=workflow.default_model_binding,
-                    step_dispatchers=cast(Any, effective_step_dispatchers),
-                    pause_snapshot_input=_resume_snapshot,
-                    resume_context=_resume_context,
-                    hitl_uniform_fallback_eligible_run_id=(_hitl_uniform_fallback_eligible_run_id),
-                    effect_fence_uniform_fallback_eligible_key=(
-                        _effect_fence_uniform_fallback_eligible_key
-                    ),
-                    effect_fence_tree_wide_abort_present=(_effect_fence_tree_wide_abort_present),
-                ),
+                asyncio.to_thread(_admission.run, harness_ctx, _execute),
                 timeout=drain_timeout_seconds,
             )
             return cp_result.model_dump(mode="json")
@@ -485,9 +500,6 @@ def materialize_mcp_server_stage(
             # `RT-FAIL-DRAIN-TIMEOUT` projection per U-RT-44 AC #2;
             # the api.run caller per AC #5 unmarshals and re-builds the
             # runtime RunResult with status='drained'.
-            from harness_cp.workflow_driver_types import (
-                RunResult as _CpRunResult,
-            )
             from harness_cp.workflow_driver_types import (
                 RunStatus as _CpRunStatus,
             )

@@ -12,7 +12,13 @@ build probes).
 from __future__ import annotations
 
 import importlib.util
+import shutil
+import subprocess
+import sys
+import tomllib
 from pathlib import Path
+
+import pytest
 
 
 def _load_guard():
@@ -28,6 +34,13 @@ def _load_guard():
 
 
 mpg = _load_guard()
+ROOT = Path(__file__).resolve().parent.parent
+
+
+def _scan(root: Path, *roots: str) -> dict[str, list[str]]:
+    """Scan the explicitly configured roots; the default is the two synthetic members'."""
+    configured = roots or ("harness-aa/tests", "harness-bb/tests")
+    return mpg.find_duplicate_test_module_paths(root, [root / path for path in configured])
 
 
 def _mk(root: Path, rel: str, *, packages: bool = True) -> None:
@@ -46,7 +59,7 @@ def test_synthetic_duplicate_is_reported(tmp_path: Path) -> None:
     """Two members claiming tests/test_x.py collide — the #1241 shape."""
     _mk(tmp_path, "harness-aa/tests/test_x.py")
     _mk(tmp_path, "harness-bb/tests/test_x.py")
-    duplicates = mpg.find_duplicate_test_module_paths(tmp_path)
+    duplicates = _scan(tmp_path)
     assert duplicates == {
         "tests.test_x": [
             "harness-aa/tests/test_x.py",
@@ -60,14 +73,14 @@ def test_suffix_pattern_duplicate_is_reported(tmp_path: Path) -> None:
     drop for tests/collision_test.py; the guard must scan both patterns."""
     _mk(tmp_path, "harness-aa/tests/collision_test.py")
     _mk(tmp_path, "harness-bb/tests/collision_test.py")
-    assert "tests.collision_test" in mpg.find_duplicate_test_module_paths(tmp_path)
+    assert "tests.collision_test" in _scan(tmp_path)
 
 
 def test_package_subdir_duplicate_is_reported(tmp_path: Path) -> None:
     """Same path inside a tests SUBPACKAGE (with __init__.py chain) collides."""
     _mk(tmp_path, "harness-aa/tests/integration/test_y.py")
     _mk(tmp_path, "harness-bb/tests/integration/test_y.py")
-    assert "tests.integration.test_y" in mpg.find_duplicate_test_module_paths(tmp_path)
+    assert "tests.integration.test_y" in _scan(tmp_path)
 
 
 def test_broken_chain_still_collides_at_inner_package(tmp_path: Path) -> None:
@@ -80,7 +93,7 @@ def test_broken_chain_still_collides_at_inner_package(tmp_path: Path) -> None:
     _mk(tmp_path, "harness-bb/tests/integration/test_w.py", packages=False)
     (tmp_path / "harness-aa/tests/integration/__init__.py").touch()
     (tmp_path / "harness-bb/tests/integration/__init__.py").touch()
-    assert "integration.test_w" in mpg.find_duplicate_test_module_paths(tmp_path)
+    assert "integration.test_w" in _scan(tmp_path)
 
 
 def test_non_package_subdir_is_legal(tmp_path: Path) -> None:
@@ -91,20 +104,20 @@ def test_non_package_subdir_is_legal(tmp_path: Path) -> None:
     _mk(tmp_path, "harness-bb/tests/unit/test_y.py", packages=False)
     (tmp_path / "harness-aa/tests/__init__.py").touch()
     (tmp_path / "harness-bb/tests/__init__.py").touch()
-    assert mpg.find_duplicate_test_module_paths(tmp_path) == {}
+    assert _scan(tmp_path) == {}
 
 
 def test_same_basename_different_depth_is_legal(tmp_path: Path) -> None:
     """tests/test_z.py vs tests/integration/test_z.py are DISTINCT modules."""
     _mk(tmp_path, "harness-aa/tests/test_z.py")
     _mk(tmp_path, "harness-bb/tests/integration/test_z.py")
-    assert mpg.find_duplicate_test_module_paths(tmp_path) == {}
+    assert _scan(tmp_path) == {}
 
 
 def test_unique_tree_is_clean(tmp_path: Path) -> None:
     _mk(tmp_path, "harness-aa/tests/test_a.py")
     _mk(tmp_path, "harness-bb/tests/test_b.py")
-    assert mpg.find_duplicate_test_module_paths(tmp_path) == {}
+    assert _scan(tmp_path) == {}
 
 
 def test_non_harness_dirs_out_of_scope(tmp_path: Path) -> None:
@@ -112,21 +125,25 @@ def test_non_harness_dirs_out_of_scope(tmp_path: Path) -> None:
     top-level modules — the collision cannot arise there by construction)."""
     _mk(tmp_path, "tools/test_t.py", packages=False)
     _mk(tmp_path, "harness-aa/tests/test_t.py")
-    assert mpg.find_duplicate_test_module_paths(tmp_path) == {}
+    assert _scan(tmp_path, "harness-aa/tests") == {}
 
 
 def test_double_pattern_match_counts_once(tmp_path: Path) -> None:
     """A file matching BOTH patterns (test_foo_test.py) must not self-collide."""
     _mk(tmp_path, "harness-aa/tests/test_foo_test.py")
-    assert mpg.find_duplicate_test_module_paths(tmp_path) == {}
+    assert _scan(tmp_path, "harness-aa/tests") == {}
 
 
 def test_live_tree_is_clean() -> None:
     """Positive control at HEAD: the real workspace carries no collision (the
     B-117 re-measure) — and this very session imported the guard through the
-    root conftest, so a regression fails BOTH this assert and collection."""
-    root = Path(__file__).resolve().parent.parent
-    assert mpg.find_duplicate_test_module_paths(root) == {}
+    root conftest, so a regression fails BOTH this assert and collection. The
+    roots are the canonical pyproject `testpaths`, all seven members'."""
+    testpaths = tomllib.loads((ROOT / "pyproject.toml").read_text())["tool"]["pytest"][
+        "ini_options"
+    ]["testpaths"]
+    assert len(testpaths) == 7 and "harness-cp/cp_tests" in testpaths
+    assert _scan(ROOT, *testpaths) == {}
 
 
 def test_report_names_every_file() -> None:
@@ -158,6 +175,9 @@ def test_conftest_gate_aborts_real_session(tmp_path: Path) -> None:
     )
     _mk(tmp_path, "harness-aa/tests/test_x.py")
     _mk(tmp_path, "harness-bb/tests/test_x.py")
+    (tmp_path / "pyproject.toml").write_text(
+        '[tool.pytest.ini_options]\ntestpaths = ["harness-aa/tests", "harness-bb/tests"]\n'
+    )
     proc = subprocess.run(
         [sys.executable, "-m", "pytest", str(tmp_path), "-q", "-p", "no:cacheprovider"],
         cwd=tmp_path,
@@ -181,7 +201,7 @@ def test_norecursedirs_are_excluded(tmp_path: Path) -> None:
     ever adjudicated)."""
     _mk(tmp_path, "harness-aa/tests/venv/test_v.py")
     _mk(tmp_path, "harness-bb/tests/venv/test_v.py")
-    assert mpg.find_duplicate_test_module_paths(tmp_path) == {}
+    assert _scan(tmp_path) == {}
 
 
 def test_invalid_identifier_dir_anchors_below_it(tmp_path: Path) -> None:
@@ -190,7 +210,7 @@ def test_invalid_identifier_dir_anchors_below_it(tmp_path: Path) -> None:
     collide as integration.test_same (codex r6 probe, pytest 9.0.3)."""
     _mk(tmp_path, "harness-aa/tests/group-aa/integration/test_same.py")
     _mk(tmp_path, "harness-bb/tests/group-bb/integration/test_same.py")
-    assert "integration.test_same" in mpg.find_duplicate_test_module_paths(tmp_path)
+    assert "integration.test_same" in _scan(tmp_path)
 
 
 def test_marker_detected_env_roots_are_pruned(tmp_path: Path) -> None:
@@ -202,4 +222,83 @@ def test_marker_detected_env_roots_are_pruned(tmp_path: Path) -> None:
     (tmp_path / "harness-aa/tests/env/pyvenv.cfg").write_text("home = /x\n")
     (tmp_path / "harness-bb/tests/env/conda-meta").mkdir()
     (tmp_path / "harness-bb/tests/env/conda-meta/history").write_text("")
-    assert mpg.find_duplicate_test_module_paths(tmp_path) == {}
+    assert _scan(tmp_path) == {}
+
+
+def test_a_renamed_root_is_scanned_for_the_broken_chain_collision(tmp_path: Path) -> None:
+    """A `cp_tests` root still collides through a non-package `grp/` over an
+    `integration/` package: both files anchor as `integration.test_w`. Only a
+    guard that scans the configured `cp_tests` root can see it."""
+    for rel in ("harness-aa/cp_tests", "harness-bb/tests"):
+        _mk(tmp_path, f"{rel}/grp/integration/test_w.py", packages=False)
+        (tmp_path / rel / "grp/integration/__init__.py").touch()
+
+    duplicates = _scan(tmp_path, "harness-aa/cp_tests", "harness-bb/tests")
+
+    assert duplicates == {
+        "integration.test_w": [
+            "harness-aa/cp_tests/grp/integration/test_w.py",
+            "harness-bb/tests/grp/integration/test_w.py",
+        ]
+    }
+
+
+def test_distinct_package_roots_do_not_collide(tmp_path: Path) -> None:
+    """`cp_tests.test_x` and `tests.test_x` are different modules."""
+    _mk(tmp_path, "harness-aa/cp_tests/test_x.py")
+    _mk(tmp_path, "harness-bb/tests/test_x.py")
+
+    assert _scan(tmp_path, "harness-aa/cp_tests", "harness-bb/tests") == {}
+
+
+def test_a_missing_configured_root_raises(tmp_path: Path) -> None:
+    _mk(tmp_path, "harness-aa/tests/test_x.py")
+
+    with pytest.raises(FileNotFoundError, match="harness-bb/tests"):
+        _scan(tmp_path, "harness-aa/tests", "harness-bb/tests")
+
+
+def test_a_session_without_configured_testpaths_aborts(tmp_path: Path) -> None:
+    """With no `testpaths` the guard would prove nothing: the real session must
+    abort before running even a passing test."""
+    (tmp_path / "tools").mkdir()
+    shutil.copy(ROOT / "conftest.py", tmp_path / "conftest.py")
+    guard = Path("tools") / "module_path_guard.py"
+    shutil.copy(ROOT / guard, tmp_path / guard)
+    (tmp_path / "pyproject.toml").write_text("[tool.pytest.ini_options]\n")
+    _mk(tmp_path, "harness-aa/tests/test_ok.py")
+
+    proc = subprocess.run(
+        [sys.executable, "-m", "pytest", str(tmp_path), "-q", "-p", "no:cacheprovider"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+
+    assert proc.returncode != 0
+    assert "no configured `testpaths`" in proc.stdout + proc.stderr
+
+
+def test_a_session_with_a_missing_configured_root_is_a_usage_error(tmp_path: Path) -> None:
+    """A configured root that is gone must stop the real session as a usage error
+    (pytest exit 4), not as an internal error from an unhandled exception (exit 3)."""
+    (tmp_path / "tools").mkdir()
+    shutil.copy(ROOT / "conftest.py", tmp_path / "conftest.py")
+    guard = Path("tools") / "module_path_guard.py"
+    shutil.copy(ROOT / guard, tmp_path / guard)
+    (tmp_path / "pyproject.toml").write_text(
+        '[tool.pytest.ini_options]\ntestpaths = ["harness-aa/tests", "harness-bb/tests"]\n'
+    )
+    _mk(tmp_path, "harness-aa/tests/test_ok.py")
+
+    proc = subprocess.run(
+        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+
+    assert proc.returncode == 4, proc.stdout + proc.stderr
+    assert "configured test root" in proc.stderr and "harness-bb/tests" in proc.stderr

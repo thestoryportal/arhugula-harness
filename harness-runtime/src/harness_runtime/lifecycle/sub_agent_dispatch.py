@@ -122,6 +122,8 @@ from harness_cp.handoff_context import (
     RetryHistory,
     StateSummary,
 )
+from harness_cp.hitl_placement import HITLPlacementKind
+from harness_cp.pause_resume_protocol_types import PausedChildCapture
 from harness_cp.sub_agent_brief import SubAgentBrief
 from harness_cp.topology_pattern import TopologyPattern
 from harness_cp.topology_subagent_namespace import (
@@ -129,6 +131,7 @@ from harness_cp.topology_subagent_namespace import (
     TOPOLOGY_NAMESPACE_SCHEMA,
 )
 from harness_cp.workflow_driver_types import (
+    ChildResumeRefusedError,
     RunStatus,
     StepExecutionContext,
     StepKind,
@@ -152,6 +155,7 @@ from harness_runtime.lifecycle.audit_signing_errors import (
     AUDIT_SIGNING_HARD_FAILURES,
     PostEffectAuditSigningError,
     PostEffectClass,
+    RefusedChildAuditSigningError,
 )
 from harness_runtime.lifecycle.audit_writer import RuntimeAuditLedgerWriter
 from harness_runtime.lifecycle.child_workflow_runner import ChildWorkflowRunner
@@ -984,7 +988,7 @@ class RuntimeSubAgentDispatcher:
 
             # --- Step 6: invoke child runner (AC #7) -----------------------
             # B-HIERARCHICAL-PAUSE — when the parent fan-out is RESUMING a
-            # previously-paused child, the CP driver set `child_resume_snapshot` on
+            # previously-paused child, the CP driver set `child_resume` on
             # this worker's StepExecutionContext (the hash-inert per-step carrier).
             # Forward it so the child re-enters at its cursor rather than re-running
             # from scratch (the grandchild's completed steps are recovered, NOT
@@ -1104,7 +1108,19 @@ class RuntimeSubAgentDispatcher:
                     handoff_context=handoff_context,
                     descent=descent,
                     default_model_binding=binding.model_binding,
-                    pause_snapshot_input=step_context.child_resume_snapshot,
+                    # [LAW:one-source-of-truth] the child's depth derives from the parent's
+                    # `descent_depth`; no second counter exists.
+                    descent_depth=step_context.descent_depth + 1,
+                    # CP §17.3: the parent step context already carries the
+                    # ancestor-first fold; only PRE_ACTION crosses this boundary.
+                    inherited_hitl_placements=tuple(
+                        placement
+                        for placement in step_context.hitl_placements
+                        if placement.position is HITLPlacementKind.PRE_ACTION
+                    ),
+                    child_resume=step_context.child_resume,
+                    # B-104 Task 5b-1 — CP's opaque carrier, threaded beside `child_resume`.
+                    child_resume_authority=step_context.child_resume_authority,
                     child_run_id_seed=_child_run_id_seed,
                     # B-39 Slice B — the operator's resume payload, read off the SAME
                     # step_context the composer already receives (a CP driver-stamped
@@ -1136,6 +1152,31 @@ class RuntimeSubAgentDispatcher:
                         step_context.effect_fence_tree_wide_abort_present
                     ),
                 )
+            except ChildResumeRefusedError as refusal:
+                # B-104 Task 4c — a durable paused child was refused before it ran. The
+                # refusal must reach CP typed so the parent fails terminally; a signing
+                # failure while composing this best-effort audit must not replace it.
+                span.set_attribute("subagent.result_status", "failed")
+                span.set_attribute("subagent.request_blocked_by_budget", False)
+                span.set_attribute("subagent.tokens_in", 0)
+                span.set_attribute("subagent.tokens_out", 0)
+                span.set_attribute("subagent.cached_tokens_in", 0)
+                try:
+                    _ = self._compose_and_persist_audit(
+                        parent_action_id=parent_action_id,
+                        descent=descent,
+                        payload=payload,
+                        step_context=step_context,
+                        raise_on_failure=False,
+                    )
+                except AUDIT_SIGNING_HARD_FAILURES as sign_exc:
+                    # Reachable only under fail-closed (the helper already logged the
+                    # compliance event). Carry BOTH facts: still a refusal for CP, still
+                    # the typed signing family (U-RT-136), never a completed-effect carrier.
+                    raise RefusedChildAuditSigningError(
+                        refusal.reason, refusal.detail
+                    ) from sign_exc
+                raise
             except Exception:
                 # Typed errors from child execution: annotate span +
                 # propagate. Spec §14.7.2 step 10.
@@ -1271,9 +1312,15 @@ class RuntimeSubAgentDispatcher:
                         f"RunStatus.PAUSED with no pause_snapshot (cannot resume; "
                         f"§25.2 contract violation)"
                     )
+                # B-104 Task 4b: the exact journal ref of this child's own capture (None only
+                # for an ephemeral protocol) travels with the snapshot so the parent
+                # carrier can hold it; nothing here re-reads the journal.
                 raise SubAgentChildPausedError(
-                    child_workflow_id=payload.child_workflow_id,
-                    child_snapshot=child_result.pause_snapshot,
+                    capture=PausedChildCapture(
+                        child_workflow_id=payload.child_workflow_id,
+                        child_snapshot=child_result.pause_snapshot,
+                        child_record_ref=child_result.pause_record_ref,
+                    )
                 )
             else:
                 # PARTIAL — reserved per C-CP-25 §25.2. v1.6 MVP treats as

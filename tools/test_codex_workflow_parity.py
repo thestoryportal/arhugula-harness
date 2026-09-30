@@ -47,6 +47,14 @@ def _runtime_witness_module():
     return module
 
 
+def test_live_runtime_witness_requests_supported_shell_tool() -> None:
+    witness = _runtime_witness_module()
+    call = witness._response_events(1)[1]["item"]
+
+    assert call["name"] == "exec_command"
+    assert json.loads(call["arguments"]) == {"cmd": "printf codex-shell-witness > shell-marker.txt"}
+
+
 def test_live_runtime_witness_reports_empty_hook_stream(tmp_path: Path) -> None:
     witness = _runtime_witness_module()
     events_path = tmp_path / "events.jsonl"

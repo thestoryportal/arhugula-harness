@@ -23,6 +23,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, cast
 
+from harness_as.sandbox_tier import BlastRadiusTier, SandboxTier
 from harness_core import PersonaTier, StepID, WorkloadClass
 from harness_cp.cp_shared_types import ModelBinding
 from harness_cp.cross_family_fallback_chain import (
@@ -31,12 +32,15 @@ from harness_cp.cross_family_fallback_chain import (
     ProviderFamily,
 )
 from harness_cp.engine_class import EngineClass
+from harness_cp.gate_level_rule import GateLevel
+from harness_cp.sub_agent_gate_level_descent import SubAgentGateLevelDescent
 from harness_cp.topology_pattern import TopologyPattern
 from harness_cp.workflow_driver import _compute_run_idempotency_key
 from harness_cp.workflow_driver_types import RunStatus, StepKind, WorkflowStep
 from harness_cp.workflow_manifest_entry import WorkflowManifestEntry
 from harness_is.state_ledger_entry_schema import Actor, ActorClass
 from harness_runtime.lifecycle.child_workflow_runner import compose_child_workflow_runner
+from harness_runtime.lifecycle.durable_child_admission import RefuseDurableChildAdmission
 from harness_runtime.lifecycle.engine_output_store import EngineOutputStore, engine_output_dir_for
 from harness_runtime.lifecycle.sub_agent_dispatch import compose_child_run_id_seed
 
@@ -53,6 +57,23 @@ _CHAIN = FallbackChain(
 _CHILD_WF = "fanout-child-wf"
 _PARENT_KEY = "parent-idem-key-worker-branch-0"
 _ENTRY_VERSION = 1
+
+
+def _root_child_descent() -> SubAgentGateLevelDescent:
+    """A root child's real gate-level descent at the historical AUTO floor —
+    the `parent_gate_floor` `execute_workflow_at_depth` defaulted to before
+    `child_workflow_runner.py` started forwarding `descent.child_gate_level`
+    (`[LAW:single-enforcer]`). Every field is real and contract-valid; this
+    witness exercises no override and no privilege escalation."""
+    return SubAgentGateLevelDescent(
+        parent_gate_level=GateLevel.AUTO,
+        parent_sandbox_tier=SandboxTier.TIER_1_PROCESS,
+        child_blast_radius_ceiling=BlastRadiusTier.READ_ONLY,
+        child_sandbox_tier=SandboxTier.TIER_1_PROCESS,
+        child_gate_level=GateLevel.AUTO,
+        override_applied=False,
+        override_audit_ref=None,
+    )
 
 
 def _manifest(
@@ -160,15 +181,18 @@ def _drive(
     engine_class: EngineClass = EngineClass.EVENT_SOURCED_REPLAY,
 ) -> Any:
     ctx = _Ctx(ledger=_Ledger(), store=store, dispatchers=_Registry(dispatcher))
-    runner = compose_child_workflow_runner(cast(Any, ctx))
+    runner = compose_child_workflow_runner(
+        cast(Any, ctx), durable_admission=RefuseDurableChildAdmission()
+    )
     return runner(
         workflow_id=_CHILD_WF,
         manifest_entry=_manifest(engine_class),
         steps=[_branch_step(0, kind), _branch_step(1, kind), _branch_step(2, kind)],
         handoff_context=cast(Any, None),
-        descent=cast(Any, None),
+        descent=_root_child_descent(),
+        descent_depth=1,  # a direct child-runner call is a depth-1 child of the root
         default_model_binding=_DEFAULT_BINDING,
-        pause_snapshot_input=None,  # CRASH-resume
+        child_resume=None,  # CRASH-resume
         child_run_id_seed=seed,
     )
 

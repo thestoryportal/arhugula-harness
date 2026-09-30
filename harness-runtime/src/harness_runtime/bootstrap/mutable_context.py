@@ -22,6 +22,7 @@ The builder additionally carries:
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -29,6 +30,7 @@ from harness_as.tool_contract import ToolContract
 from harness_core import ClientName, SkillID
 from harness_cp.cp_shared_types import AgentRole
 from harness_cp.cross_family_fallback_chain import FallbackChain
+from harness_cp.evaluator_verdict import EvaluatorVerdict
 from harness_cp.routing_manifest_residence import RoutingManifest
 from harness_is.path_resolver import PathResolver
 from harness_is.prompt_manifest import PromptManifest, PromptVersion
@@ -68,6 +70,7 @@ from harness_runtime.types import (
     Skill,
     ToolName,
     TopologyDispatcher,
+    VerifiedStateRoot,
 )
 
 __all__ = [
@@ -224,6 +227,7 @@ class _MutableHarnessContext:
     # Stage 1 IS.
     path_resolver: PathResolver | None = None
     worktree_manager: WorktreeIsolationManager | None = None
+    verified_state_root: VerifiedStateRoot | None = None
     shadow_git: ShadowGitSupervisor | None = None
     ledger_writer: LedgerWriter | None = None
     ledger_reader: LedgerReader | None = None
@@ -466,6 +470,8 @@ class _MutableHarnessContext:
     the frozen ``HarnessContext.inter_step_output_channel`` field carries the
     narrowed ``InterStepOutputChannel | None`` surface."""
 
+    evaluator_verdict_reader: Callable[[Mapping[str, Any]], EvaluatorVerdict] | None = None
+
     engine_output_store: Any = None
     """B-ENGINE-OUTPUT-REPLAY (runtime spec C-RT-32) — the durable per-run
     output-carrying event-history store. Constructed + bound at stage 5 LOOP_INIT
@@ -528,6 +534,7 @@ class _MutableHarnessContext:
             pause_resume_protocol=self.pause_resume_protocol,
             path_resolver=_bound(self.path_resolver),
             worktree_manager=_bound(self.worktree_manager),
+            verified_state_root=self.verified_state_root,
             shadow_git=self.shadow_git,
             ledger_writer=_bound(self.ledger_writer),
             ledger_reader=self.ledger_reader,
@@ -584,6 +591,7 @@ class _MutableHarnessContext:
             ),
             procedural_tier_snapshot_resolver=self.procedural_tier_snapshot_resolver,
             inter_step_output_channel=self.inter_step_output_channel,
+            evaluator_verdict_reader=self.evaluator_verdict_reader,
             engine_output_store=self.engine_output_store,
             # codex [P1] round 6 on the B-65-A arc — this field was set on
             # the mutable builder at stage 4 OD but never forwarded here, so

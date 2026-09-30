@@ -60,6 +60,7 @@ from harness_runtime.lifecycle.audit_signing_fail_closed_validation import (
     AuditSigningConfigInvalidError,
     _reject_record_key_used_by_persisted_rows,  # pyright: ignore[reportPrivateUsage]  # shared trust-anchor component
     _verify_existing_record,  # pyright: ignore[reportPrivateUsage]  # shared trust-anchor component
+    configured_cutover_record_path,
 )
 from harness_runtime.lifecycle.audit_writer import (
     AUDIT_SNAPSHOT_FILENAME,
@@ -69,7 +70,7 @@ from harness_runtime.lifecycle.audit_writer import (
 if TYPE_CHECKING:
     from harness_cp.f5_signing_key_resolution import SigningBackend
 
-    from harness_runtime.types import RuntimeConfig
+    from harness_runtime.types import RuntimeConfig, VerifiedStateRoot
 
 __all__ = [
     "RecordMigrationError",
@@ -242,8 +243,14 @@ def _read_sidecar_rows(sidecar_path: Path) -> _SidecarRows:
     return _SidecarRows(lines=tuple(lines))
 
 
-def _record_trust_inputs(config: RuntimeConfig) -> tuple[Path, str, str]:
-    """The C-RT-03 record-trust triple, all REQUIRED for record modes."""
+def _record_trust_inputs(
+    config: RuntimeConfig, verified_state_root: VerifiedStateRoot | None
+) -> tuple[Path, str, str]:
+    """The C-RT-03 record-trust triple, all REQUIRED for record modes.
+
+    The record path passes the shared placement judgment (`configured_cutover_record_path`)
+    here, before any record mode reads, authors or replaces anything.
+    """
     missing = [
         name
         for name, value in (
@@ -258,7 +265,7 @@ def _record_trust_inputs(config: RuntimeConfig) -> tuple[Path, str, str]:
             f"record modes require the config record-trust inputs; missing: {', '.join(missing)}"
         )
     return (
-        Path(cast("str", config.audit_cutover_record_path)),
+        cast("Path", configured_cutover_record_path(config, verified_state_root)),
         cast("str", config.audit_cutover_record_key_id),
         cast("str", config.audit_ledger_binding_id),
     )
@@ -299,6 +306,7 @@ def _validate_signing_config(config: RuntimeConfig, *, signing_backend: SigningB
     from harness_runtime.lifecycle.audit_signing_fail_closed_validation import (
         IncompatibleConfigVersion,
         validate_mtc_audit_signing_config,
+        validate_record_key_distinctness,
     )
     from harness_runtime.lifecycle.span_processor import (
         SpanProcessorBindError,
@@ -307,6 +315,8 @@ def _validate_signing_config(config: RuntimeConfig, *, signing_backend: SigningB
 
     try:
         validate_mtc_audit_signing_config(config)
+        # [LAW:single-enforcer] Direct record modes use the same loaded-key check as bootstrap.
+        validate_record_key_distinctness(config, signing_backend)
         validate_audit_signing_for_span_stage(
             config,
             signing_backend=signing_backend,
@@ -371,6 +381,7 @@ def _authenticate_record(
     *,
     sidecar_path: Path,
     signing_backend: SigningBackend,
+    verified_state_root: VerifiedStateRoot | None,
 ) -> AuditCutoverRecord:
     """Authenticate the configured record via the SHARED U-RT-134 component.
 
@@ -378,7 +389,7 @@ def _authenticate_record(
     REJECTED, never treated as absent (absent-record fallback would silently
     downgrade exemption/era decisions), and ZERO tags are changed.
     """
-    record_path, record_key_id, binding_id = _record_trust_inputs(config)
+    record_path, record_key_id, binding_id = _record_trust_inputs(config, verified_state_root)
     _reject_reserved_record_path(record_path, sidecar_path=sidecar_path)
     if not record_path.is_file():
         raise RecordMigrationError(
@@ -392,7 +403,10 @@ def _authenticate_record(
     # contends between fds within one process).
     try:
         _reject_record_key_used_by_persisted_rows(
-            config, sidecar_path=sidecar_path, record_key_id=record_key_id
+            config,
+            sidecar_path=sidecar_path,
+            record_key_id=record_key_id,
+            signing_backend=signing_backend,
         )
         return _verify_existing_record(
             record_path,
@@ -414,12 +428,16 @@ def retag_sidecar(
     *,
     sidecar_path: Path,
     signing_backend: SigningBackend,
+    verified_state_root: VerifiedStateRoot | None,
     ledger_audit_refs: frozenset[str] = frozenset(),
 ) -> RetagOutcome:
     """OD v1.34 §21.2.1 row-6 retag, driven by the authenticated record."""
     _validate_signing_config(config, signing_backend=signing_backend)
     record = _authenticate_record(
-        config, sidecar_path=sidecar_path, signing_backend=signing_backend
+        config,
+        sidecar_path=sidecar_path,
+        signing_backend=signing_backend,
+        verified_state_root=verified_state_root,
     )
     if not sidecar_path.is_file():
         raise RecordMigrationError(f"sidecar not found at {sidecar_path} — nothing to retag")
@@ -607,6 +625,7 @@ def author_cutover_record(
     *,
     sidecar_path: Path,
     signing_backend: SigningBackend,
+    verified_state_root: VerifiedStateRoot | None,
     attestation: dict[str, TenantAttestation],
     tofu_quarantine_tenant: str | None = None,
     ledger_audit_refs: frozenset[str] = frozenset(),
@@ -631,7 +650,7 @@ def author_cutover_record(
     be inferred from mutable signature values afterward).
     """
     _validate_signing_config(config, signing_backend=signing_backend)
-    record_path, record_key_id, binding_id = _record_trust_inputs(config)
+    record_path, record_key_id, binding_id = _record_trust_inputs(config, verified_state_root)
     _reject_reserved_record_path(record_path, sidecar_path=sidecar_path)
     if record_path.exists():
         raise RecordMigrationError(
@@ -641,7 +660,10 @@ def author_cutover_record(
         )
     try:
         _reject_record_key_used_by_persisted_rows(
-            config, sidecar_path=sidecar_path, record_key_id=record_key_id
+            config,
+            sidecar_path=sidecar_path,
+            record_key_id=record_key_id,
+            signing_backend=signing_backend,
         )
     except AuditSigningConfigInvalidError as exc:
         # Expected trust rejection (e.g. a historical row key omitted from

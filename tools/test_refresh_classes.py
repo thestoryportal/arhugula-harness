@@ -211,6 +211,41 @@ def test_class_4_claims_the_leaves_this_test_green_idiom():
         assert "4 vacuous witness" not in out[fid], (fid, out[fid])
 
 
+def test_class_4_catches_standalone_selector_tests_that_remain_green():
+    rows = [
+        {
+            "finding_id": "runtime-selector:1",
+            "observed_evidence": (
+                "The production composer never calls the selector. The new tests "
+                "exercise only the standalone selector, so they remain green while "
+                "production violates its result."
+            ),
+            "location": "harness-runtime/src/harness_runtime/lifecycle/hitl_gate_composer.py:2027",
+        },
+        {
+            "finding_id": "service-status:1",
+            "observed_evidence": "The daemon tests remain green after the health probe.",
+            "location": "harness-runtime/src/harness_runtime/daemon.py:1",
+        },
+        {
+            "finding_id": "latest-status:1",
+            "observed_evidence": (
+                "The latest revision only fixes docs; the lint checks remain green."
+            ),
+            "location": "docs/status.md:1",
+        },
+        {
+            "finding_id": "mixed-regression:1",
+            "observed_evidence": ("The unit tests fail, and only the smoke checks remain green."),
+            "location": "tools/checks.py:1",
+        },
+    ]
+    out = json.loads(_run("classify", stdin=json.dumps(rows)).stdout)
+    assert "4 vacuous witness" in out["runtime-selector:1"]
+    for fid in ("service-status:1", "latest-status:1", "mixed-regression:1"):
+        assert "4 vacuous witness" not in out[fid]
+
+
 def test_class_3_does_not_describe_the_class_table_itself():
     """No class term names this table's own machinery, deliberately.
 

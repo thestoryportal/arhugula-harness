@@ -27,7 +27,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import graft_reachability as gr
 
 SRC = "harness-cp/src/harness_cp/thing.py"
-TEST = "harness-cp/tests/test_thing.py"
+TEST = "harness-cp/cp_tests/test_thing.py"
+
+
+def test_cp_tests_helpers_are_tests_and_src_is_not() -> None:
+    """CP's tests live in `cp_tests`: a non-`test_` helper there is test code too."""
+    assert gr.is_test("harness-cp/cp_tests/fixtures.py")
+    assert gr.is_test("harness-cp/cp_tests/integration/helpers.py")
+    assert not gr.is_test("harness-cp/src/harness_cp/cp_tests_view.py")
 
 
 def _node(path: str, name: str, *, kind: str = "function", exported: bool = False) -> dict:

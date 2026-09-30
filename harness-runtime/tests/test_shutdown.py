@@ -298,27 +298,31 @@ async def test_flush_observability_fsyncs_ledger_path(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """`os.fsync` is called with the open fd of the ledger canonical_path."""
+    """The ledger inode is fsynced once even when another file is flushed."""
     ledger_path = tmp_path / "state.jsonl"
     ledger_path.write_text("entry-1\n")
 
-    fsynced_fds: list[int] = []
+    fsynced_inodes: list[tuple[int, int]] = []
     real_fsync = os.fsync
 
     def _spy_fsync(fd: int) -> None:
-        fsynced_fds.append(fd)
+        opened = os.fstat(fd)
+        fsynced_inodes.append((opened.st_dev, opened.st_ino))
         real_fsync(fd)
 
     monkeypatch.setattr(os, "fsync", _spy_fsync)
+    unrelated_path = tmp_path / "unrelated.bin"
+    unrelated_path.write_bytes(b"unrelated")
+    with unrelated_path.open("rb") as unrelated:
+        os.fsync(unrelated.fileno())
     tracer = _FakeTracerProvider(returns=True)
     ctx = _ctx_with(tmp_path, tracer=tracer, ledger_path=ledger_path)
 
     report = await flush_observability(ctx)
 
     assert report.ledger_fsynced is True
-    assert len(fsynced_fds) == 1
-    # fd is process-local; can't assert exact value but it must be valid.
-    assert fsynced_fds[0] >= 0
+    ledger_inode = ledger_path.stat()
+    assert fsynced_inodes.count((ledger_inode.st_dev, ledger_inode.st_ino)) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -1427,6 +1431,7 @@ async def test_cancelled_flush_keeps_registration_for_flush_before_close(
     await point), and a later `shutdown()` of the same ctx must still skip
     the provider close."""
     release = threading.Event()
+    existing_threads = set(threading.enumerate())
 
     class _StallingTracer(_FakeTracerWithShutdown):
         def force_flush(self, timeout_millis: int = 30_000) -> bool:
@@ -1444,12 +1449,27 @@ async def test_cancelled_flush_keeps_registration_for_flush_before_close(
         with pytest.raises(asyncio.CancelledError):
             await flush_task
         report = await asyncio.wait_for(shutdown(ctx, timeout=2.0), timeout=10.0)
-        # Asserted BEFORE releasing: the close never overlapped the worker
-        # (after release the round-5 deferred watcher legitimately closes).
+        # Asserted BEFORE releasing: the close never overlapped the worker.
         assert tracer.shutdown_called is False
+        own_watchers = [
+            thread
+            for thread in threading.enumerate()
+            if thread.name == "harness-deferred-tracer-close" and thread not in existing_threads
+        ]
+        assert len(own_watchers) == 1
+        watcher = own_watchers[0]
     finally:
         release.set()
 
+    # This watcher's final action unregisters its ordered atexit backstop.
+    # Its exit, rather than tracer.shutdown_called, is the cleanup boundary.
+    # Keep the event loop moving while its flush completion is delivered.
+    for _ in range(500):
+        if not watcher.is_alive():
+            break
+        await asyncio.sleep(0.01)
+    assert not watcher.is_alive()
+    assert tracer.shutdown_called is True
     assert "tracer_provider" in report.failures
 
 
@@ -2078,15 +2098,12 @@ async def test_shutdown_recomputes_budget_across_multiple_slow_providers(
         daemon=_FakeCollectorDaemon(),
         providers=providers,
     )
-    start = asyncio.get_event_loop().time()
-    await asyncio.wait_for(shutdown(ctx, timeout=0.3), timeout=2.0)
-    elapsed = asyncio.get_event_loop().time() - start
-    assert elapsed < 0.38, (
-        f"shutdown() took {elapsed:.3f}s across 3x 0.15s-slow providers with a "
-        "0.3s overall budget — a stale re-allotted budget lets every provider "
-        "use its full 0.15s (~0.45s total) instead of the aggregate shrinking "
-        "toward the 0.3s deadline (~0.3s total)"
-    )
+    report = await asyncio.wait_for(shutdown(ctx, timeout=0.3), timeout=2.0)
+    # Three sequential 0.15s closes cannot all complete within one 0.3s
+    # budget. Check the result rather than scheduler-sensitive wall time.
+    assert report.timed_out is True
+    assert "provider:ollama" in report.failures
+    assert providers["ollama"].aclose_completed is False
 
 
 @pytest.mark.asyncio
@@ -2659,24 +2676,46 @@ def test_b150_subprocess_probe_real_exit_no_unordered_close(tmp_path: Path) -> N
         "    tracer_provider=tracer,\n"
         "    ledger_writer=SimpleNamespace(handle=SimpleNamespace(canonical_path=ledger)),\n"
         ")\n"
+        "Path('probe-ready').write_text('ready')\n"
         "report = asyncio.run(flush_observability(ctx, timeout_millis=200))\n"
         "print('TIMED-OUT', report.timed_out, flush=True)\n"
         "print('EXITING', flush=True)\n"
     )
-    result = subprocess.run(
+    ready = tmp_path / "probe-ready"
+    process = subprocess.Popen(
         [sys.executable, str(script)],
         cwd=tmp_path,
-        capture_output=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True,
-        timeout=60,
     )
-    assert result.returncode == 0, result.stderr
-    assert "TIMED-OUT True" in result.stdout
-    assert "EXITING" in result.stdout
+    try:
+        # Cold imports precede the probe. Start the exit deadline only once
+        # the child has registered its handler and is ready to flush.
+        deadline = time.monotonic() + 120
+        while not ready.exists() and time.monotonic() < deadline:
+            if process.poll() is not None:
+                stdout, stderr = process.communicate(timeout=30)
+                raise AssertionError(f"probe exited before ready: {stdout!r} {stderr!r}")
+            time.sleep(0.01)
+        assert ready.exists(), "probe did not reach flush after cold startup"
+        try:
+            stdout, stderr = process.communicate(timeout=60)
+        except subprocess.TimeoutExpired as exc:
+            raise AssertionError(
+                f"probe did not exit after ready: {exc.stdout!r} {exc.stderr!r}"
+            ) from exc
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.communicate(timeout=30)
+    assert process.returncode == 0, stderr
+    assert "TIMED-OUT True" in stdout
+    assert "EXITING" in stdout
     # The whole point: no unordered close fired at exit while the worker
     # was still live — neither the SDK-shaped handler nor the ordered
     # backstop called `shutdown()`.
-    assert "PROVIDER-CLOSE-FIRED" not in result.stdout
+    assert "PROVIDER-CLOSE-FIRED" not in stdout
 
 
 @pytest.mark.asyncio

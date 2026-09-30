@@ -37,7 +37,8 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from enum import Enum, StrEnum
 from pathlib import Path
 from types import MappingProxyType  # stdlib `types`, not this module (absolute import)
@@ -61,6 +62,7 @@ from harness_cp.brief_authoring_inheritance import BriefAuthoringInheritance
 from harness_cp.cp_shared_types import ModelBinding
 from harness_cp.cross_family_fallback_chain import FallbackChain
 from harness_cp.engine_class import EngineClass
+from harness_cp.evaluator_verdict import EvaluatorVerdict
 from harness_cp.gate_level_rule import GateLevel as CPGateLevel
 from harness_cp.hitl_as_tool_call_rewriting import (
     HITLSemanticVariant,
@@ -115,6 +117,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    ValidationInfo,
     computed_field,
     field_serializer,
     field_validator,
@@ -464,11 +467,13 @@ class AuditSigningBackendKind(StrEnum):
     — no backend is constructed and every audit write behaves exactly as
     before the seam existed. `AWS_KMS` selects ADR-D8's
     `AwsKmsSigningBackend` (Ed25519, KMS-delegated — the private key never
-    enters harness process memory).
+    enters harness process memory). `LOCAL_ED25519` loads private PKCS#8 keys
+    from host-owned files; one fixed key per ID does not provide rotation.
     """
 
     NONE = "none"
     AWS_KMS = "aws-kms"
+    LOCAL_ED25519 = "local-ed25519"
 
 
 _EMPTY_KEY_ARNS: Mapping[str, str] = MappingProxyType({})
@@ -564,12 +569,10 @@ class AuditSigningConfig(BaseModel):
     """Audit-signing composition-root config (`B-47` PR B; ADR-D8 §Decision
     items 2/5).
 
-    Carries the deployment-time selection + the logical `key_id → physical
-    KMS key ARN` mapping ADR-D8 requires the composition root to own. Key
-    MATERIAL never lives in this config — only key *identifiers*; the AWS
-    credential chain is boto3's own (env / shared config / instance role),
-    never harness-managed. Mirrors `ProviderSecretsConfig`'s config-driven
-    backend-selector shape (the R-421 precedent).
+    Carries deployment-time selection and logical key IDs mapped to physical
+    KMS ARNs or absolute local PEM paths. Key material never lives in config;
+    the local backend reads it only during construction. AWS credentials use
+    boto3's resolution chain. Mirrors `ProviderSecretsConfig`'s selector shape.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -582,15 +585,24 @@ class AuditSigningConfig(BaseModel):
     AWS KMS key ARN/ID. Aliases are rejected at backend construction
     (`MutableKeyAliasRejectedError` — ADR-D8 §Decision item 2)."""
 
+    local_key_paths: Mapping[str, str] = Field(default_factory=dict, validate_default=True)
+    """Logical key ID to absolute private PKCS#8 PEM path for local signing.
+
+    Paths are identifiers, never key material. One key per ID does not prove
+    rotation or resistance to compromise of the harness OS user.
+    """
+
+    local_public_key_paths: Mapping[str, str] = Field(default_factory=dict, validate_default=True)
+    """Logical key ID to absolute public PEM path for historical row identity only."""
+
     aws_region: str | None = None
     """Optional region override for the boto3 KMS client; `None` defers to
     boto3's own resolution chain."""
 
-    @field_serializer("key_arns")
+    @field_serializer("key_arns", "local_key_paths", "local_public_key_paths")
     def _serialize_key_arns(self, value: Mapping[str, str]) -> dict[str, str]:
-        # The stored value is an _ImmutableKeyArns (immutability, round-9
-        # codex); serialize as a plain dict so model_dump/model_dump_json
-        # stay warning-free and TOML/JSON round-trips re-validate cleanly.
+        # The sealed mapping serializes as a plain dict so model dumps and
+        # TOML/JSON round-trips re-validate cleanly for either backend.
         return dict(value)
 
     @field_validator("key_arns")
@@ -629,14 +641,56 @@ class AuditSigningConfig(BaseModel):
         # TypeError.
         return _ImmutableKeyArns(normalized)
 
+    @field_validator("local_key_paths", "local_public_key_paths")
+    @classmethod
+    def _local_key_paths_entries_valid(
+        cls, value: Mapping[str, str], info: ValidationInfo
+    ) -> Mapping[str, str]:
+        # [LAW:single-enforcer] Normalize logical IDs and require absolute paths at config load.
+        map_name = info.field_name
+        normalized: dict[str, str] = {}
+        for raw_key_id, raw_path in value.items():
+            key_id, path = raw_key_id.strip(), raw_path.strip()
+            if not key_id:
+                raise ValueError(f"{map_name} contains a blank logical key_id")
+            if not path:
+                raise ValueError(f"{map_name}[{raw_key_id!r}] is blank")
+            if not Path(path).is_absolute():
+                raise ValueError(f"{map_name}[{raw_key_id!r}] must be absolute")
+            if key_id in normalized:
+                raise ValueError(
+                    f"{map_name} contains duplicate logical key_id {key_id!r} "
+                    "after whitespace normalization"
+                )
+            normalized[key_id] = path
+        # [LAW:one-type-per-behavior] Both signing maps need the same sealed carrier.
+        return _ImmutableKeyArns(normalized)
+
     @model_validator(mode="after")
-    def _require_key_arns_for_aws_kms(self) -> Self:
-        if self.backend is AuditSigningBackendKind.AWS_KMS and not self.key_arns:
-            raise ValueError(
-                "key_arns must be non-empty when backend is aws-kms — the "
-                "composition root must supply an explicit key_id -> KMS key "
-                "ARN mapping (ADR-D8 §Decision item 2); no default key is assumed"
-            )
+    def _require_selected_signing_map(self) -> Self:
+        if (
+            self.local_public_key_paths
+            and self.backend is not AuditSigningBackendKind.LOCAL_ED25519
+        ):
+            raise ValueError("local_public_key_paths requires local-ed25519")
+        if self.key_arns and self.local_key_paths:
+            raise ValueError("key_arns and local_key_paths are mutually incompatible")
+        if self.backend is AuditSigningBackendKind.AWS_KMS:
+            if self.local_key_paths:
+                raise ValueError("local_key_paths is incompatible with aws-kms")
+            if not self.key_arns:
+                raise ValueError(
+                    "key_arns must be non-empty when backend is aws-kms — the "
+                    "composition root must supply an explicit key_id -> KMS key "
+                    "ARN mapping (ADR-D8 §Decision item 2); no default key is assumed"
+                )
+        elif self.backend is AuditSigningBackendKind.LOCAL_ED25519:
+            if self.key_arns:
+                raise ValueError("key_arns is incompatible with local-ed25519")
+            if not self.local_key_paths:
+                raise ValueError("local_key_paths must be non-empty when backend is local-ed25519")
+        elif self.local_key_paths:
+            raise ValueError("local_key_paths is incompatible with none")
         return self
 
 
@@ -1312,7 +1366,7 @@ class HandoffRegistry(Protocol):
         parent_gate_level: CPGateLevel,
         child_gate_level: CPGateLevel,
     ) -> None:
-        """Enforce C-CP-12 §12.2 monotonic-descent (child <= parent gate level)."""
+        """Enforce C-CP-12 §12.2/§12.3 monotonic-descent (child >= parent gate level)."""
         ...
 
     def assert_ascent(
@@ -1737,6 +1791,49 @@ class RuntimeMemoryConfig(BaseModel):
 # ----------------------------------------------------------------------------
 # `RuntimeConfig` — C-RT-03 v1.1 schema.
 # ----------------------------------------------------------------------------
+class StatePlacementConfig(BaseModel):
+    """External persistent state-root declaration (S1 carrier; no wiring yet).
+
+    Declares WHERE persistent recovery state must live so it survives a checkout
+    clean/restore. This model only carries the operator's declaration, exactly as
+    written: no `~`/environment expansion and no normalisation beyond `Path`
+    parsing. Judging it (absolute, outside every checkout, safe, durable) is the
+    single job of `harness_runtime.config.state_placement`, which raises typed
+    refusals — nothing else re-checks these fields.
+
+    `RuntimeConfig.state_placement` defaults to `None`, which leaves every path and
+    behaviour byte-identical to a runtime with no declared placement (and makes no
+    durability claim).
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    state_root: Path
+    """The persistent state root; must be an absolute path with no `~` or `..`."""
+
+    forbidden_roots: tuple[Path, ...] = ()
+    """Operator-declared clean/restore scopes beyond Git checkouts (backup or
+    snapshot restore targets, dotfile managers). The verifier finds Git checkouts
+    itself; an empty tuple is NOT evidence that no non-Git restore scope exists."""
+
+
+@dataclass(frozen=True, slots=True)
+class VerifiedStateRoot:
+    """The stamp a verified external state root hands out (produced only by
+    `harness_runtime.config.state_placement`).
+
+    Equality is the revalidation test: the same realpath, device, inode and marker
+    content mean the same root; anything else is a different (or replaced) directory.
+    Lives beside `StatePlacementConfig` so the frozen `HarnessContext` can carry it
+    without an import cycle; `state_placement` re-exports it.
+    """
+
+    realpath: Path
+    st_dev: int
+    st_ino: int
+    root_id: str
+
+
 class RuntimeConfig(BaseModel):
     """Input configuration to the runtime; frozen post-construction.
 
@@ -1764,6 +1861,12 @@ class RuntimeConfig(BaseModel):
     every sub-table, which combined with the plaintext-secret detector
     false-match on `provider_secrets` (see config_source.py fix (B)) made the
     documented file-loader pathway unreachable from any source."""
+
+    state_placement: StatePlacementConfig | None = None
+    """External persistent state-root declaration (S1 carrier). `None` (default)
+    keeps every current path and loader behaviour byte-identical and makes no
+    durability claim; a declared placement is judged by
+    `harness_runtime.config.state_placement`, not here."""
 
     provider_secrets: ProviderSecretsConfig = Field(default_factory=ProviderSecretsConfig)
     """Keyring allowlist *keys* only — no secret values. Enriched at U-RT-06.
@@ -2072,9 +2175,19 @@ class RuntimeConfig(BaseModel):
     (the #213 MVP behavior-preserving echo) → byte-identical, ZERO blast radius on
     existing deployments. This is the HIGHEST-blast-radius opt-in (it changes WHICH
     model serves a workload), so default-off is load-bearing; flag-on additionally
-    requires the operator to wire an embedding classifier (+ install the optional
-    `[embedding]` extra) and a partial manifest, and the LIVE multi-provider exercise
+    requires an injected classifier or a local hashed model and private cache (+ the
+    optional `[embedding]` extra), and a partial routing manifest. The LIVE exercise
     needs a second configured provider (a deployment gate, not a build gate)."""
+
+    embedding_routing_candidates: dict[WorkloadClass, str] | None = None
+    """Four explicit provider:model labels for the active L2 corpus."""
+
+    embedding_model_dir: Path | None = None
+    """Absolute local FastEmbed directory with SHA256SUMS; required only when the
+    routing factory builds its own L2 classifier."""
+
+    embedding_cache_dir: Path | None = None
+    """Absolute private cache directory for local L2 construction."""
 
     tenant_id: str | None = None
     """Multi-tenant separation key per OD audit-ledger. `None` = single-tenant."""
@@ -2466,12 +2579,11 @@ class RuntimeConfig(BaseModel):
     instance bound to `ctx.webhook_delivery_composer`; durable-async branch
     at §14.8.8.1 step 3 invokes `ctx.webhook_delivery_composer.deliver_webhook(...)`.
 
-    Internal operator-supply shape (per-endpoint URL, per-retry-policy,
-    per-idempotency-key-store substrate, outbound HTTP timeout, TLS/auth)
-    deferred to implementation discretion at C-RT-26 landing arc per FM-2
-    (spec §14.16.1 + change-note adjacent defect (i)). Ingested at stage 5
-    LOOP_INIT by `materialize_webhook_delivery_composer_stage` factory
-    (U-RT-97) per §14.16.3.
+    The first Omarchy operator shape supplies a public webhook_id, a literal
+    loopback HTTP endpoint and a bounded timeout. The empty marker remains
+    for legacy binding behavior; a bound pause protocol with an empty marker is
+    refused during stage-5 bootstrap. Remote delivery, authentication and
+    generalized retry remain separate follow-on work under C-RT-26.
     """
 
     skill_activation_hook_config: SkillActivationHookConfig | None = None
@@ -2648,6 +2760,11 @@ class HarnessContext(BaseModel):
     # Stage 1 IS.
     path_resolver: PathResolver
     worktree_manager: WorktreeIsolationManager
+    verified_state_root: VerifiedStateRoot | None = None
+    """S2: the external persistent state root verified at stage 1 before the path
+    registry, or `None` when no `RuntimeConfig.state_placement` was declared (every
+    persistent path then keeps its legacy repo-local derivation). The one stamp every
+    persistent-store factory derives through."""
     shadow_git: ShadowGitSupervisor
     ledger_writer: LedgerWriter
     ledger_reader: LedgerReader
@@ -2811,6 +2928,9 @@ class HarnessContext(BaseModel):
     # `arbitrary_types_allowed`; a typed container field would be Pydantic-copied
     # at `freeze()`, disconnecting the driver's records from the dispatcher's read.
     inter_step_output_channel: InterStepOutputChannel | None = None
+
+    # [LAW:types-are-the-program] The bound provider reader returns CP's verdict type.
+    evaluator_verdict_reader: Callable[[Mapping[str, Any]], EvaluatorVerdict] | None = None
 
     engine_output_store: EngineOutputStore | None = None
     """B-ENGINE-OUTPUT-REPLAY (runtime spec C-RT-32) — the durable per-run

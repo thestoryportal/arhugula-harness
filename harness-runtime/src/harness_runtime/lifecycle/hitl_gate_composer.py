@@ -121,7 +121,7 @@ import hashlib
 import inspect
 import json
 import logging
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -137,7 +137,7 @@ from harness_cp.audit_hitl_span_namespace import (
 from harness_cp.cp_shared_types import ActorIdentity, MCPTrustTier
 from harness_cp.f5_signing_key_resolution import SigningBackend
 from harness_cp.gate_level_rule import GateLevel as CPGateLevel
-from harness_cp.gate_level_rule import GateLevelComputation
+from harness_cp.gate_level_rule import GateLevelComputation, max_gate_level
 from harness_cp.handoff_context import (
     ActionKind,
     HandoffContext,
@@ -151,6 +151,7 @@ from harness_cp.hitl_placement import (
     HITLPlacementKind,
     HITLResult,
     LoosenablePlacementKind,
+    select_governing_pre_action_placement,
 )
 from harness_cp.hitl_response_palette import HITLResponse
 from harness_cp.hitl_timeout_degradation import (
@@ -171,7 +172,7 @@ from harness_cp.persona_engine_hitl_matrix import (
     matrix_cell_for,
 )
 from harness_cp.validator_framework_types import HITLEscalationBrief
-from harness_cp.workflow_driver_types import StepExecutionContext, WorkflowStep
+from harness_cp.workflow_driver_types import StepExecutionContext, StepKind, WorkflowStep
 from harness_cxa.cp_audit_conversion import cp_audit_to_od_audit
 from harness_is.state_ledger_entry_schema import Identifier
 from harness_is.state_ledger_write import (
@@ -180,7 +181,7 @@ from harness_is.state_ledger_write import (
     WriteKey,
 )
 from harness_od.audit_ledger_types import SignatureAlgorithm, StateLedgerEntryRef
-from opentelemetry.trace import Status, StatusCode
+from opentelemetry.trace import Status, StatusCode, get_current_span
 
 from harness_runtime.lifecycle.ask_user_question_surface import (
     AskUserQuestionResult,
@@ -206,6 +207,7 @@ __all__ = [
     "HITLCellExcludedError",
     "HITLGateAuditComposeError",
     "HITLGateEditDecodeError",
+    "HITLGatePolicyOverrideError",
     "HITLGateRejectedError",
     "HITLGateTimeoutError",
     "HITLPauseRequestedSignal",
@@ -333,6 +335,12 @@ class HITLGateRejectedError(Exception):
     """
 
     rt_fail_class = "RT-FAIL-HITL-GATE-REJECTED"
+
+
+class HITLGatePolicyOverrideError(HITLGateRejectedError):
+    """A DENY gate structurally refused dispatch after the response audit."""
+
+    sandbox_fail_class = "policy_override"
 
 
 class HITLGateAuditComposeError(Exception):
@@ -645,9 +653,8 @@ def _compute_gate_decision(
     default per U-RT-131, contributing no floor there).
 
     Returns `None` for the **test-fixture / partial-binding** case (`persona_tier`
-    or `blast_radius_tier` unavailable) — the caller then falls back to
-    `placement.requires_hitl` (bool) + `DEFAULT_FULL_PALETTE` (palette) per the
-    Reading-B v1.22 tolerance (preserved).
+    or `blast_radius_tier` unavailable). The caller derives a gate from
+    `placement.requires_hitl`, then applies the inherited floor and palette.
 
     U-RT-115 (G1-blast): `resolved_blast_radius` is the per-step blast radius
     resolved by the composer's `blast_radius_resolver` (design §3.2) — the REAL
@@ -666,8 +673,7 @@ def _compute_gate_decision(
         else getattr(binding, "blast_radius_tier", None)
     )
     if persona_tier is None or not isinstance(blast_radius_tier, BlastRadiusTier):
-        # Test-fixture / partial-binding fallback — caller uses requires_hitl +
-        # DEFAULT_FULL_PALETTE (preserve v1.11 MVP behavior).
+        # Partial bindings leave the base decision to the placement flag.
         return None
 
     per_tool = getattr(binding, "per_tool_gate_level", GateLevel.AUTO)
@@ -728,6 +734,40 @@ def _evaluate_cell_synchrony(
 _evaluate_cell_synchrony_tolerant = _evaluate_cell_synchrony
 
 
+def _effective_gate_level(
+    decision: GateLevelComputation | None,
+    placement: HITLPlacement,
+    step_context: StepExecutionContext,
+) -> CPGateLevel:
+    """Apply the inherited C-CP-12 floor to a real or partial four-axis decision."""
+    base = (
+        decision.computed_gate_level
+        if decision is not None
+        else CPGateLevel.ASK
+        if getattr(placement, "requires_hitl", True)
+        else CPGateLevel.AUTO
+    )
+    # [LAW:single-enforcer] Only descended steps consume the parent term.
+    return (
+        max_gate_level(base, step_context.parent_gate_level)
+        if step_context.sub_agent_descent
+        else base
+    )
+
+
+def _reject_policy_override(message: str, tracer_provider: Any) -> NoReturn:
+    active_span = get_current_span()
+    if active_span.is_recording():
+        active_span.set_attribute("sandbox.fail.class", "policy_override")
+    else:
+        # [LAW:no-silent-failure] Resume can enter without an enclosing trace span.
+        with tracer_provider.get_tracer("harness.runtime.hitl_gate").start_as_current_span(
+            "hitl.gate.policy_override"
+        ) as refusal_span:
+            refusal_span.set_attribute("sandbox.fail.class", "policy_override")
+    raise HITLGatePolicyOverrideError(message)
+
+
 def _effective_palette_for(gate_level: CPGateLevel) -> frozenset[HITLResponse]:
     """U-RT-117 (G2; D-palette) §14.8.2 step 4d — palette from the REAL `gate_level`.
 
@@ -736,9 +776,8 @@ def _effective_palette_for(gate_level: CPGateLevel) -> frozenset[HITLResponse]:
     (wrap-time path has no cross-trust context — §14.15 mid-step re-entry only)
     and `validator_escalation_brief=None`. For `ASK`/`AUTO` this is the full
     palette (unchanged wrap-time behavior); for `DENY` it is the §19.4 deny-row
-    narrowing `{REJECT, RESPOND}` — behaviorally inert-but-harmless in production
-    until the `per_tool_gate_level` producer (G2c / O-CP-3) lands, since
-    `gate_level` never reaches `DENY` in production at HEAD.
+    narrowing `{REJECT, RESPOND}`. The caller then structurally refuses DENY
+    after recording the response.
     """
     from harness_cp.validator_fail_transient_staircase import (
         CrossTrustBoundaryState,
@@ -760,7 +799,7 @@ def _empty_summary_hash() -> str:
     return hashlib.sha256(b"").hexdigest()
 
 
-def _post_mutation_payload_hash(payload: Mapping[str, Any]) -> str:
+def post_mutation_payload_hash(payload: Mapping[str, Any]) -> str:
     """`sha256` over the canonical JSON of a post-mutation step_payload (hex-64).
 
     Canonical form matches the workspace convention
@@ -844,7 +883,7 @@ def _compute_response_summary_hash(
     Returns hex-64.
     """
     if result.response == HITLResponse.EDIT and edited_payload is not None:
-        return _post_mutation_payload_hash(edited_payload)
+        return post_mutation_payload_hash(edited_payload)
     payload: bytes
     if result.response == HITLResponse.EDIT and result.edited_proposal is not None:
         payload = result.edited_proposal.encode("utf-8")
@@ -950,6 +989,40 @@ def _compute_handoff_context_size_bytes(handoff_context: Any) -> int:
         return len(dump_method().encode("utf-8"))
     except Exception:  # pragma: no cover — defensive
         return 0
+
+
+def _matching_wrap_placements(
+    placements: Sequence[HITLPlacement],
+    applicable: frozenset[HITLPlacementKind],
+    step: WorkflowStep,
+) -> list[HITLPlacement]:
+    """Select one governing PRE_ACTION for this action, preserving other kinds.
+
+    CP §17.3 supplies ancestor-first order and the exact-name selector. The
+    same selection governs a fresh dispatch and durable-resume Step 0.
+    """
+    matching = [
+        placement
+        for placement in placements
+        if placement.position in applicable
+        and placement.position is not HITLPlacementKind.VALIDATOR_ESCALATION
+    ]
+    if HITLPlacementKind.PRE_ACTION not in applicable:
+        return matching
+    tool_id = step.step_payload.get("tool_id") if step.step_kind is StepKind.TOOL_STEP else None
+    governing = select_governing_pre_action_placement(
+        matching, tool_id=tool_id if isinstance(tool_id, str) else None
+    )
+    selected = False
+    result: list[HITLPlacement] = []
+    for placement in matching:
+        if placement.position is HITLPlacementKind.PRE_ACTION:
+            if placement is governing and not selected:
+                result.append(placement)
+                selected = True
+        else:
+            result.append(placement)
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -1560,6 +1633,7 @@ class RuntimeHITLGateComposer:
         gate_result: AskUserQuestionResult | None,
         step_context: StepExecutionContext,
         raise_on_failure: bool,
+        effective_gate_level: CPGateLevel,
         auto_approved: bool = False,
         placement_removed: bool = False,
         system_reject_reason: str | None = None,
@@ -1649,7 +1723,7 @@ class RuntimeHITLGateComposer:
             # carrier); REJECT uses the pre-computed `response_summary_hash`.
             response_value = resume_response.response.value
             edited_hash = (
-                _post_mutation_payload_hash(edited_payload)
+                post_mutation_payload_hash(edited_payload)
                 if resume_response.response == HITLResponse.EDIT and edited_payload is not None
                 else None
             )
@@ -1681,7 +1755,7 @@ class RuntimeHITLGateComposer:
             # failure (edited_payload is None) fall back to the raw operator
             # `str` so the attempt is still recorded before the step-4i raise.
             edited_hash = (
-                _post_mutation_payload_hash(edited_payload)
+                post_mutation_payload_hash(edited_payload)
                 if gate_result.response == HITLResponse.EDIT and edited_payload is not None
                 else (
                     hashlib.sha256(gate_result.edited_proposal.encode("utf-8")).hexdigest()
@@ -1715,17 +1789,11 @@ class RuntimeHITLGateComposer:
             placement.position,
             resolve_escalation_instance_id(step_context, placement.position),
         )
-        # `gate_level` value: HITLMatrixCell at landed CP schema does not
-        # carry a `gate_level` field (per `persona_engine_hitl_matrix.py:80`);
-        # v1.11 MVP uses sentinel "auto" string-value mapped to the
-        # `CPAuditLedgerEntry.gate_level: GateLevel` field. The GateLevel enum
-        # at C-CP-19 §19.1 has AUTO as a canonical value; cast at this site
-        # per the C-RT-04 Protocol-vs-concrete pattern. Spec narrative
-        # references `cell.gate_level` — carry-forward Class 3 spec-prose
-        # drift item for future revision pass.
+        # [LAW:one-source-of-truth] Record the gate that governed this response,
+        # rather than the historical matrix-cell AUTO placeholder.
         cp_entry = CPAuditLedgerEntry(
             action_id=hitl_action_id,
-            gate_level=GateLevel.AUTO,
+            gate_level=GateLevel(effective_gate_level.value),
             response=response_value,
             edited_proposal_hash=edited_hash,
             rejection_reason_hash=rejection_hash,
@@ -1876,13 +1944,36 @@ class RuntimeHITLGateComposer:
             resumed_placements = getattr(step_context, "hitl_placements", ()) or getattr(
                 step, "hitl_placements", ()
             )
-            resumed_matching = [
-                p
-                for p in resumed_placements
-                if p.position in self.applicable_placements
-                and p.position != HITLPlacementKind.VALIDATOR_ESCALATION
-            ]
+            resumed_matching = _matching_wrap_placements(
+                resumed_placements, self.applicable_placements, step
+            )
             resumed_parent_action_id = cast(ActionID, step_context.parent_action_id)
+            # Step 0 re-evaluates the current gate without repeating the HITL request.
+            # [LAW:single-enforcer] The same floor/palette helper serves first dispatch and resume.
+            resolved_blast = (
+                self.blast_radius_resolver(step) if self.blast_radius_resolver is not None else None
+            )
+            resolved_trust = (
+                self.mcp_trust_tier_resolver(step)
+                if self.mcp_trust_tier_resolver is not None
+                else None
+            )
+            persona_override, blast_override = _policy_floor_overrides(
+                self.hitl_auto_approve_policy,
+                getattr(binding, "persona_tier", None),
+                resolved_blast,
+            )
+            resumed_decision = _compute_gate_decision(
+                binding=binding,
+                resolved_blast_radius=resolved_blast,
+                persona_floor_override=persona_override,
+                blast_floor_override=blast_override,
+                mcp_trust_tier=resolved_trust,
+            )
+            resumed_levels = [
+                _effective_gate_level(resumed_decision, placement, step_context)
+                for placement in resumed_matching
+            ]
             # EDIT carrier: the resume `ProposedAction.payload` is ALREADY the
             # `Mapping[str, Any]` step_payload (no `_decode_edit_proposal` — that
             # decodes only the sync flat-`str` MCP carrier). Fed to the audit for
@@ -1893,7 +1984,7 @@ class RuntimeHITLGateComposer:
                 and resumed_response.edited_proposal is not None
                 else None
             )
-            for placement in resumed_matching:
+            for placement, level in zip(resumed_matching, resumed_levels, strict=True):
                 # REJECT suppresses an audit-compose failure (the rejection is the
                 # primary fault); the other 3 raise on audit failure — mirrors the
                 # sync step-4h `raise_on_failure` discipline. An EDIT with a None
@@ -1905,11 +1996,26 @@ class RuntimeHITLGateComposer:
                     cell=cast(HITLMatrixCell, _SentinelMatrixCell()),
                     gate_result=None,
                     step_context=step_context,
-                    raise_on_failure=resumed_response.response != HITLResponse.REJECT,
+                    effective_gate_level=level,
+                    raise_on_failure=(
+                        resumed_response.response != HITLResponse.REJECT
+                        and CPGateLevel.DENY not in resumed_levels
+                    ),
                     edited_payload=resumed_edited_payload,
                     resume_response=resumed_response,
                 )
             # --- response routing per the §14.8.2 step 4i 4-response palette ---
+            if CPGateLevel.DENY in resumed_levels:
+                _reject_policy_override(
+                    "DENY gate structurally refused resumed dispatch", self.tracer_provider
+                )
+            if any(
+                resumed_response.response not in _effective_palette_for(level)
+                for level in resumed_levels
+            ):
+                raise HITLGateRejectedError(
+                    "delivered HITL response is outside the current gate palette"
+                )
             if resumed_response.response == HITLResponse.EDIT:
                 # None-guard mirrors the sync path's typed error (never an
                 # AttributeError); applied AFTER the audit so the attempt is
@@ -1949,19 +2055,11 @@ class RuntimeHITLGateComposer:
         if not placements:
             return await self._dispatch_inner(binding, step, step_context=step_context)
 
-        # --- Step 2: Filter by composer's applicable set --------------------
-        matching = [p for p in placements if p.position in self.applicable_placements]
-        if not matching:
-            return await self._dispatch_inner(binding, step, step_context=step_context)
-
-        # --- Step 3: Filter VALIDATOR_ESCALATION placements (Reading B v1.22).
-        # Per spec v1.22 §14.8.2 step 3: VALIDATOR_ESCALATION placements are
-        # VALID at v1.22 — they fire via the mid-step re-entry path at
-        # `validator_escalation_composer.compose_validator_escalation_gate`
-        # invoked from workflow_driver post-dispatch hook (NOT here at
-        # wrap-time composer). The wrap-time composer body ignores
-        # VALIDATOR_ESCALATION placements (filtered out of `matching`).
-        matching = [p for p in matching if p.position != HITLPlacementKind.VALIDATOR_ESCALATION]
+        # --- Steps 2/3: Applicable positions and CP §17.3 first match ------
+        # The validator gate remains a mid-step re-entry path. PRE_ACTION
+        # chooses one governing placement by exact tool name (or no tool for
+        # inference); inherited ancestors appear first in the CP-composed tuple.
+        matching = _matching_wrap_placements(placements, self.applicable_placements, step)
         if not matching:
             return await self._dispatch_inner(binding, step, step_context=step_context)
 
@@ -2027,8 +2125,8 @@ class RuntimeHITLGateComposer:
             # U-RT-117 (G2; D-palette): compute the GateLevelComputation ONCE and
             # thread `computed_gate_level` to BOTH the hitl_required bool (§19.4)
             # AND the step-4d palette (replacing the prior hardcoded ASK + the
-            # redundant double-computation). `None` → test-fixture partial-binding
-            # fallback: requires_hitl (bool) + DEFAULT_FULL_PALETTE (palette).
+            # redundant double-computation). `None` → partial-binding fallback
+            # from the placement flag, with the same parent floor and palette.
             gate_decision = _compute_gate_decision(
                 binding=binding,
                 resolved_blast_radius=resolved_blast_radius,
@@ -2036,31 +2134,20 @@ class RuntimeHITLGateComposer:
                 blast_floor_override=blast_floor_override,
                 mcp_trust_tier=resolved_mcp_trust_tier,
             )
-            if gate_decision is not None:
-                hitl_required = gate_decision.computed_gate_level in (
-                    CPGateLevel.ASK,
-                    CPGateLevel.DENY,
-                )
-            else:
-                hitl_required = bool(getattr(placement, "requires_hitl", True))
+            effective_gate_level = _effective_gate_level(gate_decision, placement, step_context)
+            hitl_required = effective_gate_level is not CPGateLevel.AUTO
 
             # --- 4d: effective palette from the SAME gate_level (U-RT-117 G2) ---
             # Spec v1.22 §14.8.2 step 4d. For ASK/AUTO → full palette (unchanged);
-            # for DENY → §19.4 deny-row narrowing (inert-but-harmless until G2c).
-            # Test-fixture partial-binding fallback → DEFAULT_FULL_PALETTE.
-            palette = (
-                _effective_palette_for(gate_decision.computed_gate_level)
-                if gate_decision is not None
-                else DEFAULT_FULL_PALETTE
-            )
+            # for DENY → §19.4 deny-row narrowing.
+            # Partial-binding fallback uses the effective level as well.
+            palette = _effective_palette_for(effective_gate_level)
 
             # --- 4e: Open hitl.gate.evaluated span + canonical 3 attrs -----
             with tracer.start_as_current_span("hitl.gate.evaluated") as gate_span:
-                # `cell.gate_level` is not on landed HITLMatrixCell; v1.11
-                # MVP sentinel value (matches CPAuditLedgerEntry composition
-                # site at _compose_and_persist_audit). Carrier-vs-spec drift
-                # carried as Class 3 item for next revision.
-                gate_level_value: str = "auto"
+                # [LAW:one-source-of-truth] The span and audit use the same
+                # effective gate as the prompt palette and dispatch decision.
+                gate_level_value = effective_gate_level.value
                 persona_tier_value = (
                     persona_tier.value
                     if persona_tier is not None and hasattr(persona_tier, "value")
@@ -2094,6 +2181,7 @@ class RuntimeHITLGateComposer:
                             cell=cell,
                             gate_result=None,
                             step_context=step_context,
+                            effective_gate_level=effective_gate_level,
                             raise_on_failure=True,
                             auto_approved=True,
                         )
@@ -2149,23 +2237,27 @@ class RuntimeHITLGateComposer:
                         ),
                         mcp_trust_tier=resolved_mcp_trust_tier,
                     )
-                    removal_effective = (
-                        clamped is not None and clamped.computed_gate_level is CPGateLevel.AUTO
+                    removal_effective_level = (
+                        _effective_gate_level(clamped, placement, step_context)
+                        if clamped is not None
+                        else None
                     )
                     gate_span.set_attribute("hitl.gate.sub_agent_boundary_removal_requested", True)
                     gate_span.set_attribute(
                         "hitl.gate.sub_agent_boundary_removal_effective",
-                        bool(removal_effective),
+                        removal_effective_level is CPGateLevel.AUTO,
                     )
-                    if removal_effective:
+                    if removal_effective_level is CPGateLevel.AUTO:
                         # Removal applied → skip the gate. Auto-audit (fail-closed):
                         # a removed preventive gate NEVER goes live un-audited.
+                        # [LAW:one-source-of-truth] Audit the clamped level that authorized removal.
                         await self._compose_and_persist_audit_off_loop(
                             parent_action_id=parent_action_id,
                             placement=placement,
                             cell=cell,
                             gate_result=None,
                             step_context=step_context,
+                            effective_gate_level=removal_effective_level,
                             raise_on_failure=True,
                             placement_removed=True,
                         )
@@ -2303,6 +2395,7 @@ class RuntimeHITLGateComposer:
                                     cell=cell,
                                     gate_result=None,
                                     step_context=step_context,
+                                    effective_gate_level=effective_gate_level,
                                     raise_on_failure=False,
                                 )
                             else:
@@ -2319,6 +2412,7 @@ class RuntimeHITLGateComposer:
                                     cell=cell,
                                     gate_result=None,
                                     step_context=step_context,
+                                    effective_gate_level=effective_gate_level,
                                     raise_on_failure=False,
                                     system_reject_reason="timeout-fail-closed",
                                 )
@@ -2406,6 +2500,7 @@ class RuntimeHITLGateComposer:
                             cell=cell,
                             gate_result=gate_result,
                             step_context=step_context,
+                            effective_gate_level=effective_gate_level,
                             raise_on_failure=raise_on_audit_failure,
                             edited_payload=edited_payload,
                         )
@@ -2431,6 +2526,12 @@ class RuntimeHITLGateComposer:
                         raise
 
                     # --- 4i: Process gate response per 4-response palette --
+                    if effective_gate_level is CPGateLevel.DENY:
+                        _reject_policy_override(
+                            f"DENY gate structurally refused dispatch at placement="
+                            f"{placement.position.value!r}",
+                            self.tracer_provider,
+                        )
                     if gate_result.response == HITLResponse.APPROVE:
                         pass  # proceed to step 5 with step unchanged
                     elif gate_result.response == HITLResponse.EDIT:

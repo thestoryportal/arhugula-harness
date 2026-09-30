@@ -58,12 +58,14 @@ import hashlib
 import json
 import logging
 import re
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Generator, Mapping, Sequence
+from contextlib import contextmanager
 from contextvars import ContextVar
 from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
+from pathlib import Path
 from typing import Any, Final, Protocol, cast, runtime_checkable
 
 from harness_as.memory_tool_contracts import MEMORY_TOOL_CONTRACTS, MemoryToolName
@@ -77,6 +79,7 @@ from harness_cp.cp_shared_types import (
     TraceContext,
 )
 from harness_cp.engine_class import EngineClass
+from harness_cp.gate_level_rule import GateLevel
 from harness_cp.layer_budget import DEFAULT_LAYER_BUDGETS, LayerBudget
 from harness_cp.layered_routing_strategy import LayerDecisionFn
 from harness_cp.memory_access_mode import MemoryAccessMode, MemoryAccessModeDenialReason
@@ -1877,7 +1880,6 @@ class RuntimeLLMDispatcher:
                             step_context=step_context,
                             step_id=step_id,
                             degraded_sink=degraded_sink,
-                            unserved_sink=unserved_sink,
                             wire_sink=wire_sink,
                             system=effective_system_prompt,
                             upstream=upstream_output,
@@ -3064,15 +3066,13 @@ class _UnservedMemoryToolCalls:
 class _UnservedMemoryToolCallsSink:
     """Mutable single-slot carrier for a B-85 unserved-batch decision.
 
-    Written INSIDE the standard-tools loop functions (neither of which receives
-    a tracer) and read by the arm site's `finally`, which owns every memory
-    telemetry emission for the dispatch. Single-slot is sufficient: the mixed
-    exit RETURNS immediately, so a dispatch populates it at most once, and the
-    openai / ollama arms are mutually exclusive `elif` branches so the two
-    write sites can never both run. The ollama R5 tools-unsupported fallback
-    returns at `iteration == 0` BEFORE any `tool_calls` inspection, so it can
-    never co-occur with a write here either — and because this sink is separate
-    from `_DegradedMemoryServeSink`, neither decision can overwrite the other.
+    Written INSIDE the OpenAI standard-tools loop (which receives no tracer) and
+    read by the arm site's `finally`, which owns every memory telemetry emission
+    for the dispatch. Single-slot is sufficient: the mixed exit RETURNS
+    immediately, so a dispatch populates it at most once. The ollama arm has no
+    such exit — it serves a mixed batch's memory calls and refuses the rest — and
+    because this sink is separate from `_DegradedMemoryServeSink`, neither
+    decision can overwrite the other.
 
     One instance per dispatch, created at the arm-selection site; never shared
     across concurrent branches.
@@ -3712,12 +3712,60 @@ def _hitl_loop_context_from_step(
         cell_synchrony_class=SynchronyClass.SYNC_BLOCKING,
         cross_trust_boundary_state=CrossTrustBoundaryState.NONE,
         actor=ActorIdentity(str(actor_id)),
+        # [LAW:single-enforcer] The descended-step parent floor (C-CP-12) reaches the loop's
+        # one gate evaluation; a root step contributes none.
+        inherited_gate_floor=(
+            step_context.parent_gate_level if step_context.sub_agent_descent else GateLevel.AUTO
+        ),
     )
+
+
+_POLICY_REFUSAL_TEXT = "policy refused this tool call"
+
+
+def _record_policy_overrides(results: Sequence[Any]) -> None:
+    """Record `policy_override` once per refused tool call of a C-RT-38 loop turn."""
+    for result in results:
+        if getattr(result, "refusal", None) is not None:
+            _record_policy_override()
+
+
+def _record_policy_override() -> None:
+    """Mark the enclosing dispatch span `policy_override` for one refused tool call."""
+    with _policy_override_span():
+        pass
+
+
+@contextmanager
+def _policy_override_span() -> Generator[Any]:
+    """The span classified `policy_override` for one refused tool call, to annotate further.
+
+    Same class and attribute the tool-step gate composer records on its refusal span; with
+    no recording span a dedicated span carries it, so a refusal is never unobserved. The
+    class is an attribute, so on the enclosing span it marks the dispatch once however many
+    calls were refused; a caller that must count refusals adds its own record per call.
+    """
+    from opentelemetry import trace
+
+    span = trace.get_current_span()
+    if span.is_recording():
+        span.set_attribute("sandbox.fail.class", "policy_override")
+        yield span
+        return
+    with trace.get_tracer("harness.runtime.hitl_tool_loop").start_as_current_span(
+        "hitl.tool_loop.policy_override"
+    ) as refusal_span:
+        refusal_span.set_attribute("sandbox.fail.class", "policy_override")
+        yield refusal_span
 
 
 def _anthropic_tool_result_content(result: Any) -> str:
     if result is None:
         return "HITL tool loop did not return a result for this tool call."
+    refusal = getattr(result, "refusal", None)
+    if refusal is not None:
+        text = getattr(refusal, "response_text", None)
+        return _POLICY_REFUSAL_TEXT if not text else f"{_POLICY_REFUSAL_TEXT}: {text}"
     dispatch_result = getattr(result, "dispatch_result", None)
     if not isinstance(dispatch_result, Mapping):
         return "HITL rejected or skipped this tool call."
@@ -3739,7 +3787,11 @@ def _anthropic_tool_result_block(tool_use_block: Any, result: Any) -> dict[str, 
         "tool_use_id": tool_call_id,
         "content": _anthropic_tool_result_content(result),
     }
-    if result is None or getattr(result, "dispatch_result", None) is None:
+    if (
+        result is None
+        or getattr(result, "refusal", None) is not None
+        or getattr(result, "dispatch_result", None) is None
+    ):
         block["is_error"] = True
     return block
 
@@ -3834,6 +3886,7 @@ async def _dispatch_anthropic_with_hitl_tool_loop(
             for block in tool_use_blocks
         )
         results = await hitl_tool_loop.run_tool_calls(calls, context)
+        _record_policy_overrides(results)
         result_by_id = {result.tool_call_id: result for result in results}
 
         messages.append(
@@ -4038,10 +4091,11 @@ def _all_calls_are_memory_tools(
 
     A batch containing any other call — a legitimate caller-advertised tool that
     survived the dedup filter, a malformed tool_call shape, or a hallucinated
-    name — belongs to the CALLER. The bare dispatch paths (`_dispatch_openai` /
-    `_dispatch_ollama`) return every tool_call to the caller untouched, whatever
-    it names; auto-injecting memory tools must not turn that into a raise, or
-    enabling automatic memory would break ordinary tool workflows.
+    name — belongs to the CALLER. The bare `_dispatch_openai` path returns every
+    tool_call to the caller untouched, whatever it names; auto-injecting memory
+    tools must not turn that into a raise, or enabling automatic memory would
+    break ordinary tool workflows. (The Ollama arms refuse such calls instead; see
+    `_ollama_answer_tool_turn`.)
     """
     return all(name is not None and name in memory_names for name in names)
 
@@ -4060,8 +4114,8 @@ def _record_unserved_memory_tool_calls(
     Writes NOTHING when the batch names no memory tool at all: a purely
     caller-owned batch is the ordinary tool workflow the memory tools were
     injected alongside, nothing memory-related went unserved in it, and a span
-    claiming otherwise would be false. Both provider loops route here so the
-    two exits cannot drift apart.
+    claiming otherwise would be false. Only the OpenAI loop has this exit; the
+    Ollama loop serves a mixed batch's memory calls and refuses the rest.
     """
 
     count = sum(1 for name in names if name is not None and name in memory_names)
@@ -4119,9 +4173,14 @@ def _memory_tool_loop_exhausted(provider_label: str, max_iterations: int) -> Run
     ``TRANSIENT_RETRY``), which is a separate decision from the
     execute-before-raise defect this shape exists to close.
     """
-    return RuntimeError(
-        f"{provider_label} standard memory tool loop exceeded {max_iterations} continuation turns"
+    return _continuation_loop_exhausted(
+        f"{provider_label} standard memory tool loop", max_iterations
     )
+
+
+def _continuation_loop_exhausted(loop_label: str, max_iterations: int) -> RuntimeError:
+    """The shared continuation-loop bound error (a bare `RuntimeError`, see above)."""
+    return RuntimeError(f"{loop_label} exceeded {max_iterations} continuation turns")
 
 
 async def _dispatch_openai_with_standard_memory_tools(
@@ -4663,6 +4722,7 @@ async def _dispatch_ollama(
     upstream: Mapping[str, Any] | None = None,
     memory_packet: RenderedMemoryPromptPacket | None = None,
     wire_sink: _ProviderWireReachedSink | None = None,
+    max_iterations: int = 16,
 ) -> tuple[Mapping[str, Any], _UsageAttrs]:
     """Ollama provider branch — ``client.chat(...)``.
 
@@ -4673,16 +4733,40 @@ async def _dispatch_ollama(
     effective system source AFTER the normal translate, so it can never collide
     with a payload-carried system message. `None` — every caller but the
     tools-unsupported fallback — is byte-identical to pre-B-83.
+
+    This route serves no tool, so a reply that asks for tools is never the step's
+    result: every call is refused and the turn continues (see
+    `_ollama_answer_tool_turn`) until the model answers in text or the bound is hit.
     """
     kwargs = _payload_to_ollama_kwargs(payload, system, upstream)
     if memory_packet is not None:
         _fold_memory_packet_into_system(kwargs, memory_packet)
-    # Construct, then mark, then await (codex R7 [P2-1] — see the sink
-    # docstring): a call-time SDK argument rejection stays PRE-wire.
-    pending = adapter.client.chat(model=model, **kwargs)
-    _mark_wire_reached(wire_sink)
-    response = await pending
-    return _ollama_response_bundle(response)
+    messages = list(kwargs["messages"])
+    kwargs["messages"] = messages
+
+    usage = _NO_USAGE
+    for iteration in range(max_iterations):
+        # Construct, then mark, then await (codex R7 [P2-1] — see the sink
+        # docstring): a call-time SDK argument rejection stays PRE-wire.
+        pending = adapter.client.chat(model=model, **kwargs)
+        _mark_wire_reached(wire_sink)
+        response = await pending
+        usage = _accumulated_usage(usage, _ollama_usage_attrs(response))
+        response_mapping = _response_to_mapping(response)
+        tool_calls = _ollama_tool_calls(response_mapping)
+        if not tool_calls:
+            return (response_mapping, usage)
+        names = [_function_tool_name(call) for call in tool_calls]
+        if iteration + 1 >= max_iterations:
+            _record_ollama_loop_exhausted(iteration, len(tool_calls))
+            raise _continuation_loop_exhausted("Ollama unserved tool refusal loop", max_iterations)
+        messages.extend(
+            _ollama_answer_tool_turn(
+                response_mapping, names, turn=iteration, memory_names=frozenset(), served=()
+            )
+        )
+
+    raise _continuation_loop_exhausted("Ollama unserved tool refusal loop", max_iterations)
 
 
 async def _dispatch_ollama_with_standard_memory_tools(
@@ -4695,7 +4779,6 @@ async def _dispatch_ollama_with_standard_memory_tools(
     step_context: StepExecutionContext,
     step_id: str,
     degraded_sink: _DegradedMemoryServeSink,
-    unserved_sink: _UnservedMemoryToolCallsSink,
     wire_sink: _ProviderWireReachedSink,
     system: str | None = None,
     upstream: Mapping[str, Any] | None = None,
@@ -4716,10 +4799,10 @@ async def _dispatch_ollama_with_standard_memory_tools(
     owns the telemetry emission so every B-83 reachability reports through one
     emitter.
 
-    ``unserved_sink`` receives the B-85 report when a MIXED batch is handed
-    back whole — a strictly later point in the loop than the R5 fallback above
-    it, which returns at ``iteration == 0`` before any ``tool_calls`` exist, so
-    the two sinks can never both be written on one dispatch.
+    A reply naming any tool but the memory tools is never handed back as the
+    step's result: its memory calls are served and every other call is refused
+    in the same continuation turn (`_ollama_answer_tool_turn`), so this arm has no
+    B-85 unserved-batch exit.
 
     ``wire_sink`` (B-87) is passed THROUGH to the R5 bare retry and is
     deliberately NOT marked for this loop's own calls: those carry the tools,
@@ -4799,25 +4882,18 @@ async def _dispatch_ollama_with_standard_memory_tools(
         tool_calls = _ollama_tool_calls(response_mapping)
         if not tool_calls:
             return (response_mapping, usage)
-        if not _all_calls_are_memory_tools(
-            [_function_tool_name(call) for call in tool_calls],
-            _MEMORY_TOOL_NAMES,
-        ):
-            # Caller-owned batch — see the OpenAI arm's matching comment.
-            # B-85 posture (3): the memory call inside a MIXED batch goes
-            # unserved and un-ledgered here; still unrepairable at this site
-            # (the response is handed back whole for batch atomicity), so the
-            # return is byte-identical and the fact is REPORTED instead.
-            _record_unserved_memory_tool_calls(
-                unserved_sink,
-                [_function_tool_name(call) for call in tool_calls],
-                _MEMORY_TOOL_NAMES,
-            )
-            return (response_mapping, usage)
+        # Nothing but the memory tools is served here: a batch naming anything else
+        # is not handed back as a result — its memory calls are served and every
+        # other call is refused in the same continuation turn.
+        names = [_function_tool_name(call) for call in tool_calls]
         # Validate first, then check the bound, then execute — see the OpenAI
         # arm's matching comments; the ordering rationale is identical.
         prepared = _ollama_prepared_memory_tool_calls(
-            tool_calls,
+            [
+                call
+                for call, name in zip(tool_calls, names, strict=True)
+                if name in _MEMORY_TOOL_NAMES
+            ],
             memory_context=memory_context,
             step_context=step_context,
             step_id=step_id,
@@ -4825,13 +4901,20 @@ async def _dispatch_ollama_with_standard_memory_tools(
             standard_memory_tool_executor=standard_memory_tool_executor,
         )
         if iteration + 1 >= max_iterations:
+            _record_ollama_loop_exhausted(iteration, len(tool_calls))
             raise _memory_tool_loop_exhausted("Ollama", max_iterations)
 
-        messages.append(dict(_ollama_message(response_mapping)))
+        served = _ollama_memory_tool_result_messages(
+            prepared,
+            standard_memory_tool_executor=standard_memory_tool_executor,
+        )
         messages.extend(
-            _ollama_memory_tool_result_messages(
-                prepared,
-                standard_memory_tool_executor=standard_memory_tool_executor,
+            _ollama_answer_tool_turn(
+                response_mapping,
+                names,
+                turn=iteration,
+                memory_names=_MEMORY_TOOL_NAMES,
+                served=served,
             )
         )
 
@@ -4881,10 +4964,6 @@ def _ollama_usage_attrs(response: Any) -> _UsageAttrs:
     )
 
 
-def _ollama_response_bundle(response: Any) -> tuple[Mapping[str, Any], _UsageAttrs]:
-    return (_response_to_mapping(response), _ollama_usage_attrs(response))
-
-
 def _ollama_message(response: Mapping[str, Any]) -> Mapping[str, Any]:
     """Read the assistant turn off an ollama ``ChatResponse`` dump.
 
@@ -4910,6 +4989,68 @@ def _ollama_tool_calls(response: Mapping[str, Any]) -> tuple[Mapping[str, Any], 
             raise LLMDispatchPayloadShapeError("Ollama tool_call entries must be mappings")
         calls.append(cast(Mapping[str, Any], item))
     return tuple(calls)
+
+
+_OLLAMA_REFUSED_EVENT: Final[str] = "ollama.tool_call.refused"
+"""One span event per refused call: its turn, its position in the reply's batch and its
+name when it has one. Never its arguments or any result."""
+
+_OLLAMA_EXHAUSTED_EVENT: Final[str] = "ollama.tool_loop.exhausted"
+"""One span event when the bound is hit: the final turn's calls get no continuation, so
+they are recorded as unanswered here and never as refusals the model did not receive."""
+
+
+def _record_ollama_loop_exhausted(turn: int, calls: int) -> None:
+    from opentelemetry import trace
+
+    # The raised bound error is the authority; this event only annotates the dispatch span.
+    trace.get_current_span().add_event(
+        _OLLAMA_EXHAUSTED_EVENT, {"tool.call.turn": turn, "tool.call.count": calls}
+    )
+
+
+_OLLAMA_UNSERVED_TOOL_REFUSAL: Final[str] = (
+    f"{_POLICY_REFUSAL_TEXT}: model tool calls are not supported on this route"
+)
+"""What the model reads for a tool call this route did not serve (first release: no
+model-emitted MCP tool is dispatched on the Ollama route)."""
+
+
+def _ollama_answer_tool_turn(
+    response: Mapping[str, Any],
+    names: Sequence[str | None],
+    *,
+    turn: int,
+    memory_names: frozenset[str],
+    served: Sequence[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """The continuation turn for one tool-call reply: the assistant turn, then one answer
+    per call, in call order.
+
+    ``served`` holds, in order, the result turns of exactly the calls naming a member of
+    ``memory_names`` — the memory tools this arm executed (none on the plain arm). Every
+    other call is refused, never executed, and recorded: the dispatch is classified
+    `policy_override` and each refusal adds its own `_OLLAMA_REFUSED_EVENT`, so an unserved
+    call can neither pass through as the step's result nor go uncounted. A call naming
+    nothing is refused too, under a `None` ``tool_name`` (the field is optional on Ollama's
+    tool message), and is recorded by position alone.
+    """
+    results = iter(served)
+    answers: list[dict[str, Any]] = [dict(_ollama_message(response))]
+    for index, name in enumerate(names):
+        if name in memory_names:
+            answers.append(next(results))
+            continue
+        identity = {"tool.call.turn": turn, "tool.call.index": index}
+        with _policy_override_span() as span:
+            span.add_event(
+                _OLLAMA_REFUSED_EVENT,
+                identity if name is None else {**identity, "gen_ai.tool.name": name},
+            )
+        answers.append(
+            {"role": "tool", "tool_name": name, "content": _OLLAMA_UNSERVED_TOOL_REFUSAL}
+        )
+    return answers
 
 
 def _ollama_prepared_memory_tool_calls(
@@ -5368,6 +5509,10 @@ def materialize_llm_dispatcher_stage(
     prompt_versions_by_sha: Mapping[str, str] | None = None,
     approved_prompt_version_shas: frozenset[str] = frozenset(),
     routing_activation: bool = False,
+    embedding_routing_candidates: Mapping[WorkloadClass, str] | None = None,
+    external_cli_provider_names: tuple[str, ...] = (),
+    embedding_model_dir: Path | None = None,
+    embedding_cache_dir: Path | None = None,
     embedding_classifier: LayerDecisionFn | None = None,
     prewarm_model: str | None = None,
     prewarm_policy_fail_closed: bool = False,
@@ -5406,25 +5551,34 @@ def materialize_llm_dispatcher_stage(
     # route-once-then-fallback-the-chain pattern applied to layered routing).
 
     # B-L2-EMBEDDING-ACTIVATION (C-CP-02 §2.2): when routing_activation is on and no
-    # classifier is injected, build the default L2 EMBEDDING classifier (the light
-    # in-process fastembed realization over the default per-workload corpus) so the
-    # §2.2-conditional DECLARATIVE decline has a real fall-through target. Local
-    # imports keep the module-load light + touch fastembed ONLY when flag-on;
-    # `make_fastembed_embedding` fail-louds with the install hint when the optional
-    # `[embedding]` extra is absent (the dep stays optional — promoting it to a
-    # required dependency is the deferred deployment step). Default-off ⇒ this block
-    # is skipped, fastembed is never imported, byte-identical.
+    # classifier is injected, build L2 from the explicit verified local model.
+    # Local imports keep the optional extra untouched for default-off and injected
+    # classifiers; either local admission or a missing extra fails bootstrap.
     if routing_activation and embedding_classifier is None:
         from harness_cp.embedding_routing import make_embedding_classifier
 
         from harness_runtime.lifecycle.embedding_resolution import (
-            default_routing_corpus,
+            EmbeddingModelError,
+            RoutingCorpusConfigError,
             make_fastembed_embedding,
+            routing_corpus,
         )
 
+        try:
+            # [LAW:single-enforcer] The built map is the actual stage-3a admission result.
+            corpus = routing_corpus(
+                embedding_routing_candidates,
+                {name for name in ("ollama", *external_cli_provider_names) if name in providers},
+            )
+            embed = make_fastembed_embedding(
+                model_dir=embedding_model_dir, cache_dir=embedding_cache_dir
+            )
+        except (RoutingCorpusConfigError, EmbeddingModelError, ImportError) as exc:
+            # [LAW:no-silent-failure] A missing or invalid local L2 model aborts bootstrap.
+            raise LLMDispatchBindError(str(exc)) from exc
         embedding_classifier = make_embedding_classifier(
-            embed=make_fastembed_embedding(),
-            corpus=default_routing_corpus(),
+            embed=embed,
+            corpus=corpus,
         )
 
     return RuntimeLLMDispatcher(

@@ -37,6 +37,7 @@ _D_DERIVATIVE_FIELDS = {
     "procedural_tier_snapshot_ref",
     "branch_metadata",
     "rotation_correlation_id",
+    "recovery_audit",
 }
 _CURRENT_FIELDS = _F_LAYER_FIELDS | _D_DERIVATIVE_FIELDS
 

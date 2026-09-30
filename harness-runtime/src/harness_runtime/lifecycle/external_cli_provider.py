@@ -15,7 +15,12 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+import logging
 import os
+import shutil
+import signal
+import sys
+import tempfile
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol, cast
@@ -91,12 +96,14 @@ class ExternalCLICommandError(ExternalCLIProviderError):
         stderr: str,
         *,
         stdout: str = "",
+        detail: str | None = None,
     ) -> None:
         self.command = command
         self.exit_code = exit_code
         self.stderr = stderr
         self.stdout = stdout
-        detail = stderr.strip() or stdout.strip() or "no stderr/stdout"
+        if detail is None:
+            detail = stderr.strip() or stdout.strip() or "no stderr/stdout"
         super().__init__(f"external CLI command {command!r} exited {exit_code}: {detail}")
 
 
@@ -186,6 +193,41 @@ _SCRUBBED_PROVIDER_ENV_VARS: frozenset[str] = frozenset(
         "GOOGLE_APPLICATION_CREDENTIALS",
     }
 )
+
+_CLAUDE_ENV_KEYS = frozenset(
+    {
+        "PATH",
+        "HOME",
+        "USER",
+        "LOGNAME",
+        "LANG",
+        "TZ",
+        "TMPDIR",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME",
+        "XDG_STATE_HOME",
+        "XDG_CACHE_HOME",
+        "CLAUDE_CONFIG_DIR",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "NO_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "no_proxy",
+        "SSL_CERT_FILE",
+        "REQUESTS_CA_BUNDLE",
+        "NODE_EXTRA_CA_CERTS",
+    }
+)
+
+
+def _claude_child_env() -> dict[str, str]:
+    # [LAW:single-enforcer] The Claude subscription subprocess has one env boundary.
+    return {
+        key: value
+        for key, value in os.environ.items()
+        if key in _CLAUDE_ENV_KEYS or key.startswith("LC_")
+    }
 
 
 def _notify_wire(on_wire: Callable[[], None] | None) -> None:
@@ -326,33 +368,63 @@ def _scrubbed_child_env() -> dict[str, str]:
     }
 
 
-async def _reap_child(process: asyncio.subprocess.Process) -> None:
-    """SIGKILL a child and await its exit, tolerating one already reaped.
+_CLEANUP_WAIT_SECONDS = 5.0
+_CLEANUP_UNCERTAIN = "External CLI process-group cleanup could not be confirmed"
+_SCRATCH_UNCERTAIN = "Claude scratch directory removal failed"
+_LOG = logging.getLogger(__name__)
 
-    `Process.kill()` raises `ProcessLookupError` once asyncio's transport has
-    finished with the child — `BaseSubprocessTransport._call_connection_lost`
-    clears the `Popen` reference, and `Process.kill()` delegates to that same
-    transport, whose own `kill()` runs `BaseSubprocessTransport._check_proc()`
-    first — and every reap site below races that: the child can exit and the
-    transport can finish in the window between the event that sends us into
-    the reap path (cancellation, a deadline, a raising observer) and the
-    `kill()` itself (codex R1 [P2]). Letting it escape would replace the
-    exception being unwound — a `CancelledError`, an
-    `ExternalCLIProcessTimeout`, or the observer's own error — with an
-    unrelated `ProcessLookupError`, e.g. classifying a shutdown cancellation as
-    a provider failure. An already-exited child needs no signal and cannot be
-    leaked, so suppression loses nothing; `wait()` stays unconditional because
-    it still resolves immediately from the recorded return code.
 
-    `docker_tool_execution_driver._reap_child` is a deliberate local sibling of
-    this helper (this one is module-private, so the Docker tier driver carries
-    its own copy rather than importing it); an edit here likely belongs there too.
-    """
+async def _terminate_group(process: asyncio.subprocess.Process) -> str | None:
+    """Signal the isolated process group, then bound direct-child reaping."""
+    uncertain = False
+    if os.name == "posix" and process.pid != os.getpgrp():
+        try:
+            # [LAW:single-enforcer] The runner owns the lifetime of every child in this group.
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        except OSError:
+            uncertain = True
+            try:
+                process.kill()
+            except ProcessLookupError:
+                pass
+    else:
+        if os.name == "posix":
+            uncertain = True  # Never signal the harness's own process group.
+        try:
+            process.kill()
+        except ProcessLookupError:
+            pass
     try:
-        process.kill()
-    except ProcessLookupError:
-        pass
-    await process.wait()
+        await asyncio.wait_for(process.wait(), timeout=_CLEANUP_WAIT_SECONDS)
+    except (OSError, TimeoutError):
+        uncertain = True
+    return _CLEANUP_UNCERTAIN if uncertain else None
+
+
+async def _settle_process(
+    process: asyncio.subprocess.Process, original: BaseException | None = None
+) -> None:
+    """Finish cleanup despite repeated caller cancellation; preserve the first outcome."""
+    # [LAW:no-ambient-temporal-coupling] The cleanup task owns the exit boundary.
+    task = asyncio.create_task(_terminate_group(process))
+    cancelled: asyncio.CancelledError | None = None
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError as exc:
+            cancelled = exc
+    try:
+        note = task.result()
+    except Exception:
+        note = _CLEANUP_UNCERTAIN
+    if note is not None:
+        _LOG.warning("%s", note)
+        if original is not None:
+            original.add_note(note)
+    if cancelled is not None and not isinstance(original, asyncio.CancelledError):
+        raise cancelled
 
 
 class AsyncioSubprocessRunner:
@@ -366,6 +438,25 @@ class AsyncioSubprocessRunner:
         timeout_seconds: float,
         on_wire: Callable[[], None] | None = None,
     ) -> CLIProcessResult:
+        return await self._run_process(
+            argv,
+            stdin=stdin,
+            timeout_seconds=timeout_seconds,
+            on_wire=on_wire,
+            env=_scrubbed_child_env(),
+            cwd=None,
+        )
+
+    async def _run_process(
+        self,
+        argv: tuple[str, ...],
+        *,
+        stdin: str,
+        timeout_seconds: float,
+        on_wire: Callable[[], None] | None,
+        env: Mapping[str, str],
+        cwd: str | None,
+    ) -> CLIProcessResult:
         if not argv:
             raise ExternalCLICommandError("", 127, "empty argv")
         try:
@@ -374,53 +465,92 @@ class AsyncioSubprocessRunner:
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                env=_scrubbed_child_env(),
+                env=env,
+                cwd=cwd,
+                start_new_session=os.name == "posix",
             )
         except FileNotFoundError as exc:
             raise ExternalCLICommandError(argv[0], 127, str(exc)) from exc
 
-        # A child process now exists and can observe the payload: THIS is the
-        # wire (B-87, codex R3 [P2-1]). Every raise above is pre-wire — the
-        # empty-argv guard, the missing-command translation, and anything
-        # `create_subprocess_exec` raises that is NOT translated (a
-        # `PermissionError` on an unexecutable command propagates as-is and is
-        # pre-wire for free). Everything below is post-wire.
+        # The child exists before the wire notification. Every post-spawn outcome
+        # settles its group before the caller can observe completion.
         try:
             _notify_wire(on_wire)
-        except BaseException:
-            # A caller-supplied observer that raises must not leak the child we
-            # just spawned (B-87, codex R7 [P2-2]): this guard is one of the
-            # three reap sites — see `_reap_child` — and control would unwind
-            # past the `communicate` block below, past the other two, and the
-            # CLI would keep running. Repeated observer failures would leak one
-            # process each. Same reap idiom as those sites; the observer's
-            # exception is then propagated unchanged.
-            await _reap_child(process)
+        except BaseException as exc:
+            await _settle_process(process, exc)
             raise
 
         try:
             stdout_bytes, stderr_bytes = await asyncio.wait_for(
-                process.communicate(stdin.encode("utf-8")),
-                timeout=timeout_seconds,
+                process.communicate(stdin.encode("utf-8")), timeout=timeout_seconds
             )
         except TimeoutError as exc:
-            await _reap_child(process)
-            raise ExternalCLIProcessTimeout(argv[0], timeout_seconds) from exc
-        except asyncio.CancelledError:
-            # A cancellation delivered while awaiting the child must not leak it
-            # either (B-87 residual): without this clause control unwinds past
-            # the only two reap sites — the timeout path above and the R7
-            # observer guard — and the CLI keeps running. Same reap idiom;
-            # SIGKILL is already issued, so the wait resolves without needing a
-            # fresh cancellation scope. The `CancelledError` is NEVER swallowed.
-            await _reap_child(process)
+            outcome = ExternalCLIProcessTimeout(argv[0], timeout_seconds)
+            await _settle_process(process, outcome)
+            raise outcome from exc
+        except BaseException as exc:
+            await _settle_process(process, exc)
             raise
 
+        await _settle_process(process)
         return CLIProcessResult(
             exit_code=process.returncode or 0,
             stdout=stdout_bytes.decode("utf-8", errors="replace"),
             stderr=stderr_bytes.decode("utf-8", errors="replace"),
         )
+
+
+class _PrivateCwdSubprocessRunner(AsyncioSubprocessRunner):
+    """A production boundary that runs each child in its own fresh empty private cwd."""
+
+    _cwd_prefix: str
+    _scratch_uncertain: str
+    _child_env: Callable[[], dict[str, str]]
+
+    async def run(
+        self,
+        argv: tuple[str, ...],
+        *,
+        stdin: str,
+        timeout_seconds: float,
+        on_wire: Callable[[], None] | None = None,
+    ) -> CLIProcessResult:
+        # [LAW:no-ambient-temporal-coupling] The process group settles before cwd removal.
+        cwd = tempfile.mkdtemp(prefix=self._cwd_prefix, dir="/tmp")
+        try:
+            return await self._run_process(
+                argv,
+                stdin=stdin,
+                timeout_seconds=timeout_seconds,
+                on_wire=on_wire,
+                env=self._child_env(),
+                cwd=cwd,
+            )
+        finally:
+            outcome = sys.exc_info()[1]
+            try:
+                shutil.rmtree(cwd)
+            except Exception:
+                # [LAW:no-silent-failure] Removal cannot replace the call outcome.
+                _LOG.warning("%s", self._scratch_uncertain)
+                if outcome is not None:
+                    outcome.add_note(self._scratch_uncertain)
+
+
+class _ClaudeCodeSubprocessRunner(_PrivateCwdSubprocessRunner):
+    """Production Claude boundary; one empty private cwd per child."""
+
+    _cwd_prefix = "arhugula-claude-"
+    _scratch_uncertain = _SCRATCH_UNCERTAIN
+    _child_env = staticmethod(_claude_child_env)
+
+
+class _CodexSubprocessRunner(_PrivateCwdSubprocessRunner):
+    """Production Codex boundary; one empty private cwd per child, credentials scrubbed."""
+
+    _cwd_prefix = "arhugula-codex-"
+    _scratch_uncertain = "Codex scratch directory removal failed"
+    _child_env = staticmethod(_scrubbed_child_env)
 
 
 class RecordingSubprocessRunner:
@@ -507,9 +637,9 @@ class CodexCLIAdapter:
             timeout_seconds=self.timeout_seconds,
             on_wire=on_wire,
         )
-        _raise_for_nonzero(self.command, result)
-        events = _parse_json_lines(result.stdout, "Codex inference response")
-        text = _extract_jsonl_text_result(events, "Codex inference response")
+        _raise_for_codex_nonzero(self.command, result)
+        events = _parse_codex_json_lines(result.stdout, "Codex inference response")
+        text = _codex_answer_text(events, "Codex inference response")
         return ExternalCLITextResult(
             text=text,
             exit_code=result.exit_code,
@@ -672,10 +802,14 @@ def _claude_inference_argv(command: str, model: str) -> tuple[str, ...]:
         "--input-format",
         "text",
         "--no-session-persistence",
+        "--safe-mode",
+        "--strict-mcp-config",
         "--tools",
         "",
         "--permission-mode",
         "dontAsk",
+        "--permission-prompts",
+        "none",
         "--model",
         model,
     )
@@ -694,6 +828,44 @@ def _codex_inference_argv(command: str, model: str) -> tuple[str, ...]:
         "--skip-git-repo-check",
         "--sandbox",
         "read-only",
+        # The JSONL filter below is a second boundary: it observes tool events only
+        # after Codex has run them. Refuse tool entry points before the model turn.
+        # Unknown --disable switches make older CLI versions fail closed.
+        "--ignore-user-config",
+        "--disable",
+        "shell_tool",
+        "--disable",
+        "unified_exec",
+        "--disable",
+        "code_mode_host",
+        "--disable",
+        "apps",
+        "--disable",
+        "plugins",
+        "--disable",
+        "remote_plugin",
+        "--disable",
+        "browser_use",
+        "--disable",
+        "view_image",
+        "--disable",
+        "computer_use",
+        "--disable",
+        "image_generation",
+        "--disable",
+        "multi_agent",
+        "--disable",
+        "skill_search",
+        "--disable",
+        "tool_suggest",
+        "--disable",
+        "in_app_browser",
+        "--disable",
+        "in_app_local_automation",
+        "--disable",
+        "hooks",
+        "-c",
+        'web_search="disabled"',
         "-m",
         model,
         "-",
@@ -751,6 +923,18 @@ def _raise_for_nonzero(command: str, result: CLIProcessResult) -> None:
         )
 
 
+def _raise_for_codex_nonzero(command: str, result: CLIProcessResult) -> None:
+    """Nonzero exit still wins over parsing, but Codex stdout/stderr are untrusted output.
+
+    The error keeps the command and exit code and stores neither stream: a tool item's text
+    must not reach a message or a diagnostic field just because the CLI also exited nonzero.
+    """
+    if result.exit_code != 0:
+        raise ExternalCLICommandError(
+            command, result.exit_code, "", detail="CLI output withheld (untrusted Codex output)"
+        )
+
+
 def _parse_json_object(raw: str, label: str) -> Mapping[str, Any]:
     try:
         parsed = json.loads(raw)
@@ -781,6 +965,71 @@ def _parse_json_lines(raw: str, label: str) -> tuple[Mapping[str, Any], ...]:
     return tuple(events)
 
 
+class _CodexJSONBoundaryError(ValueError):
+    """A Codex JSONL line broke the boundary; `reason` is a fixed label, never CLI output."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
+def _codex_object_without_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    """`object_pairs_hook`: runs for every object at every depth, on ESCAPE-DECODED keys, so
+    `"\\u0074ype"` and `"type"` collide. `json.loads` alone keeps the last duplicate."""
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise _CodexJSONBoundaryError("contained a duplicate object key")
+        result[key] = value
+    return result
+
+
+def _codex_reject_non_finite(_literal: str) -> Any:
+    raise _CodexJSONBoundaryError("contained a non-finite number")
+
+
+def _codex_finite_float(literal: str) -> float:
+    """`parse_float`: `1e999` overflows to infinity without ever reaching `parse_constant`."""
+    value = float(literal)
+    if value != value or value in (float("inf"), float("-inf")):
+        raise _CodexJSONBoundaryError("contained a non-finite number")
+    return value
+
+
+def _parse_codex_json_lines(raw: str, label: str) -> tuple[Mapping[str, Any], ...]:
+    """Parse the WHOLE Codex JSONL stream before anything is classified or answered.
+
+    Codex-only: the shared `_parse_json_lines` (last duplicate key wins) still serves every
+    other provider. Every line must be one JSON object with no duplicate key at any depth
+    (compared after escape decoding) and no non-finite number. A failing line refuses the
+    entire stream with a fixed diagnostic naming only the line number: no exception text and
+    no raw content is echoed, because the line is untrusted CLI output. Lines split on `\\n`
+    only (JSONL), so a raw U+2028 inside a string is text, not a break.
+    [LAW:parse-dont-validate] [LAW:no-silent-failure]
+    """
+    events: list[Mapping[str, Any]] = []
+    for line_number, line in enumerate(raw.split("\n"), start=1):
+        if not line.strip(" \t\r"):
+            continue
+        try:
+            parsed = json.loads(
+                line,
+                object_pairs_hook=_codex_object_without_duplicate_keys,
+                parse_constant=_codex_reject_non_finite,
+                parse_float=_codex_finite_float,
+            )
+        except _CodexJSONBoundaryError as exc:
+            raise ExternalCLIOutputError(f"{label} line {line_number} {exc.reason}") from None
+        except (ValueError, RecursionError):
+            raise ExternalCLIOutputError(f"{label} line {line_number} was not valid JSON") from None
+        if not isinstance(parsed, dict):
+            raise ExternalCLIOutputError(f"{label} line {line_number} was not a JSON object")
+        events.append(cast(dict[str, Any], parsed))
+    if not events:
+        raise ExternalCLIOutputError(f"{label} did not contain JSON events")
+    return tuple(events)
+
+
 def _extract_text_result(payload: Mapping[str, Any]) -> str:
     for key in ("result", "text", "response"):
         value = payload.get(key)
@@ -806,6 +1055,72 @@ def _extract_jsonl_text_result(events: Sequence[Mapping[str, Any]], label: str) 
                 return text
         text = event.get("text")
         if isinstance(text, str) and event_type in {"message", "response"}:
+            return text
+    raise ExternalCLIOutputError(f"{label} did not contain an agent text result")
+
+
+_CODEX_LIFECYCLE_TYPES = frozenset({"thread.started", "turn.started", "turn.completed"})
+"""The only no-item Codex envelopes. Anything else, including `turn.failed` and `error`, is
+unverified output on a successful exit and refuses; this grammar is closed, not a denylist."""
+
+_CODEX_ITEM_PHASES = frozenset({"item.started", "item.updated", "item.completed"})
+"""The only outer types that may carry an `item`."""
+
+_CODEX_NON_TOOL_ITEM_TYPES = frozenset({"agent_message", "reasoning"})
+"""The only Codex JSONL item types that are model output rather than tool activity."""
+
+_CODEX_NAMED_TOOL_ITEM_TYPES = frozenset(
+    {"command_execution", "mcp_tool_call", "file_change", "web_search"}
+)
+"""Tool item types a refusal may name. The name comes from this fixed set, never from the
+untrusted output: any other type is reported only as unrecognised."""
+
+
+def _codex_event_refusal(event: Mapping[str, Any]) -> str | None:
+    """The fixed label for an event outside the closed Codex grammar, else `None`.
+
+    The outer `type` must be a string in exactly one of two sets: a lifecycle type, which
+    carries no `item` key, or an item phase, which carries a mapping item of a recognised
+    non-tool type. Every label is a constant or a name from `_CODEX_NAMED_TOOL_ITEM_TYPES`.
+    """
+    event_type = event.get("type")
+    if not isinstance(event_type, str):
+        return "malformed event envelope"
+    if event_type in _CODEX_LIFECYCLE_TYPES:
+        return "malformed event envelope" if "item" in event else None
+    if event_type not in _CODEX_ITEM_PHASES:
+        return "unrecognised event type"
+    item = event.get("item")
+    item_type = cast(Mapping[str, Any], item).get("type") if isinstance(item, Mapping) else None
+    if not isinstance(item_type, str):
+        return "malformed item event"
+    if item_type in _CODEX_NON_TOOL_ITEM_TYPES:
+        return None
+    if item_type in _CODEX_NAMED_TOOL_ITEM_TYPES:
+        return item_type
+    return "unrecognised item type"
+
+
+def _codex_answer_text(events: Sequence[Mapping[str, Any]], label: str) -> str:
+    """Parse a Codex stream: refuse anything outside the grammar, then take the answer.
+
+    Detection after the fact, not prevention. The answer is the last COMPLETED agent-message
+    item of a fully validated stream; no top-level text shape is ever an answer.
+    [LAW:parse-dont-validate]
+    """
+    for event in events:
+        refusal = _codex_event_refusal(event)
+        if refusal is not None:
+            raise ExternalCLIOutputError(
+                f"{label} contained a tool item or unverifiable event ({refusal}); "
+                "tool use is not supported on this route"
+            )
+    for event in reversed(events):
+        if event["type"] != "item.completed":
+            continue
+        item = cast(Mapping[str, Any], event["item"])
+        text = item.get("text")
+        if item["type"] == "agent_message" and isinstance(text, str):
             return text
     raise ExternalCLIOutputError(f"{label} did not contain an agent text result")
 
@@ -872,14 +1187,20 @@ async def _assert_codex_authenticated(
         stdin="",
         timeout_seconds=config.timeout_seconds,
     )
+    # [LAW:no-silent-failure] The login-status output is untrusted CLI output and may carry
+    # credentials: it selects the classification below but is never copied into an error.
+    # Only fixed text and the integer exit code reach `detail`.
     if result.exit_code != 0:
         raise ExternalCLINotAuthenticatedError(
             config.provider,
-            result.stderr.strip() or result.stdout.strip() or f"exit={result.exit_code}",
+            f"Codex login status exited {result.exit_code}",
         )
     output = f"{result.stdout}\n{result.stderr}".lower()
     if "not logged" in output or "logged out" in output or "not authenticated" in output:
-        raise ExternalCLINotAuthenticatedError(config.provider, output.strip())
+        raise ExternalCLINotAuthenticatedError(
+            config.provider,
+            "Codex reported it is not logged in",
+        )
     if "logged in" not in output and "authenticated" not in output:
         raise ExternalCLINotAuthenticatedError(
             config.provider,
@@ -938,7 +1259,7 @@ async def construct_claude_code_cli_adapter(
 ) -> ClaudeCodeCLIAdapter:
     if config.kind is not ExternalCLIProviderKind.CLAUDE_CODE:
         raise ValueError(f"unsupported Claude Code adapter kind: {config.kind}")
-    process_runner = runner if runner is not None else AsyncioSubprocessRunner()
+    process_runner = runner if runner is not None else _ClaudeCodeSubprocessRunner()
     if config.auth_check:
         await _assert_claude_authenticated(config, process_runner)
     return ClaudeCodeCLIAdapter(
@@ -956,7 +1277,7 @@ async def construct_codex_cli_adapter(
 ) -> CodexCLIAdapter:
     if config.kind is not ExternalCLIProviderKind.CODEX:
         raise ValueError(f"unsupported Codex adapter kind: {config.kind}")
-    process_runner = runner if runner is not None else AsyncioSubprocessRunner()
+    process_runner = runner if runner is not None else _CodexSubprocessRunner()
     if config.auth_check:
         await _assert_codex_authenticated(config, process_runner)
     return CodexCLIAdapter(

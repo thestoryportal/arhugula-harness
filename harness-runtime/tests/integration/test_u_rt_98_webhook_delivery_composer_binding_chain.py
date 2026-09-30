@@ -27,19 +27,19 @@ Coverage:
   `ctx.webhook_delivery_composer is not None`; the bound instance is a
   C-RT-20 §14.10.1 `WebhookDeliveryComposer` carrier per spec §14.16.2.
 
-- **Joint-binding substrate** (both pause_resume_protocol_config AND
-  webhook_delivery_composer_config supplied): both fields bound non-None at
+- **Joint-binding substrate** (pause_resume_protocol_config and a complete
+  loopback webhook_delivery_composer_config supplied): both fields bound non-None at
   the frozen HarnessContext — the substrate for §14.8.8.1 step 0 OR-form
   precondition to evaluate False (durable-async branch reachable). The
   composer-body durable-async branch exercise is at U-RT-95 e2e (Phase 3
   step 10); U-RT-98 verifies the binding substrate only.
 
-The `.deliver_webhook(...)` invocation path is NOT exercised at α scope (the
-empty-marker config has no operator-supplied endpoint substrate — only the
-binding-chain materialisation is verified). Outbound HTTP exercise (with
-operator-supplied endpoint config + retry policy) is deferred to mechanism
-β / γ at a follow-on arc per FM-2 (§14.16.1 + change-note adjacent defect
-(i)).
+The `.deliver_webhook(...)` invocation path is NOT exercised at α scope; only
+the binding-chain materialisation is verified. A complete loopback endpoint
+is supplied for joint binding because an empty marker with a bound pause
+protocol is now refused at bootstrap. Real local HTTP delivery is covered in
+the separate loopback component tests; the full operator response cycle
+remains open.
 
 ## Verification-shape discipline
 
@@ -83,7 +83,11 @@ def _config_with_joint_opt_in(tmp_path: Path) -> RuntimeConfig:
     base = build_config(tmp_path)
     return base.model_copy(
         update={
-            "webhook_delivery_composer_config": WebhookDeliveryComposerConfig.default(),
+            "webhook_delivery_composer_config": WebhookDeliveryComposerConfig(
+                webhook_id="local-binding-test",
+                endpoint_url="http://127.0.0.1:9/hitl",
+                timeout_seconds=1,
+            ),
             "pause_resume_protocol_config": PauseResumeProtocolConfig.default(),
         },
     )

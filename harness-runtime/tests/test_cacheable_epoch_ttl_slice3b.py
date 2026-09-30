@@ -314,7 +314,7 @@ def _step_context() -> StepExecutionContext:
         parent_idempotency_key="test-step-key",
         tenant_id=None,
         step_index=0,
-        sub_agent_descent=False,
+        descent_depth=0,
     )
 
 

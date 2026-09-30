@@ -1,7 +1,8 @@
 """B-117 — duplicate-test-module-path guard (library half).
 
-Every ``harness-*/tests/`` directory is a package literally named ``tests``
-(each carries an ``__init__.py``), so two test files resolving to the same
+Every member's test root except CP's (``harness-*/tests/``) is a package
+literally named ``tests`` (each carries an ``__init__.py``; CP's is ``cp_tests``,
+see below), so two test files resolving to the same
 PACKAGE-ANCHORED module path (``tests.test_x`` / ``tests.integration.test_x``)
 are imported as ONE module — pytest SILENTLY runs one file's tests under both
 paths and DROPS the loser's, with every signal (exit code, collected count)
@@ -26,6 +27,11 @@ rounds absorbed):
   (probe: two ``tests/collision_test.py`` files — the second path re-ran the
   FIRST file's function; the loser's tests silently vanished).
 
+CP's tests use relative sibling imports, which resolve against whichever
+``tests`` package was bound first, so they live in their own ``cp_tests``
+package. The scanned roots are therefore pytest's configured ``testpaths``,
+never a guessed ``tests`` name, and a configured root that is missing raises.
+
 Consumed by the root ``conftest.py`` at every pytest session start (local
 runs and the CI axis jobs alike — the earliest-stage venue per the
 gate-enforcement-site discipline). ``tools/`` test files are top-level
@@ -36,6 +42,7 @@ scope by construction (noted, not silently skipped).
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Sequence
 from fnmatch import fnmatch
 from pathlib import Path
 
@@ -113,21 +120,25 @@ def _package_anchored_module(member: Path, test_file: Path) -> str | None:
     return ".".join(reversed(parts))
 
 
-def find_duplicate_test_module_paths(root: Path) -> dict[str, list[str]]:
+def find_duplicate_test_module_paths(
+    root: Path, test_roots: Sequence[Path]
+) -> dict[str, list[str]]:
     """Map each colliding package-anchored module path to the files claiming it.
 
-    Scans both pytest default discovery patterns under
-    ``<root>/harness-*/tests/``; the key is the dotted module path
-    (``tests[.subpkg…].stem``), the value the repo-relative file paths
-    (sorted) — an entry appears only when two or more DISTINCT members claim
-    the same module path. Empty dict == clean.
+    Scans both pytest default discovery patterns under each configured test
+    root (the session passes pytest's own ``testpaths``); each root's parent is
+    its member, where anchoring stops. The key is the dotted module path
+    (``tests[.subpkg…].stem``, ``cp_tests.stem``, ``integration.stem`` …), the
+    value the ``root``-relative file paths (sorted) — an entry appears only
+    when two or more files claim the same module path. Empty dict == clean.
     """
     claims: dict[str, list[str]] = defaultdict(list)
-    for member in sorted(root.glob("harness-*")):
-        tests_dir = member / "tests"
-        if not tests_dir.is_dir():
-            continue
-        for test_file in _iter_test_files(tests_dir):
+    for test_root in test_roots:
+        if not test_root.is_dir():
+            # [LAW:no-silent-failure] a configured root that is gone would scan nothing and pass
+            raise FileNotFoundError(f"B-117: configured test root {test_root} is not a directory")
+        member = test_root.parent
+        for test_file in _iter_test_files(test_root):
             module = _package_anchored_module(member, test_file)
             if module is None:
                 continue
@@ -144,6 +155,6 @@ def render_report(duplicates: dict[str, list[str]]) -> str:
     for mod, files in sorted(duplicates.items()):
         lines.append(f"  {mod}:")
         lines.extend(f"    - {f}" for f in files)
-    lines.append("Rename one file in each group (module paths under the shared")
-    lines.append("`tests` package name must be workspace-unique).")
+    lines.append("Rename one file in each group (each package-anchored module path")
+    lines.append("must be unique across the configured test roots).")
     return "\n".join(lines)

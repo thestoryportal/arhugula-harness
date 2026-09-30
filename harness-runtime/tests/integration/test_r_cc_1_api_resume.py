@@ -65,8 +65,9 @@ from harness_cp.workflow_driver_types import StepKind, WorkflowStep
 from harness_cp.workflow_manifest_entry import WorkflowManifestEntry
 from harness_is.path_class_registry import PathClass
 from harness_runtime.api import RunResult, _build_run_result, resume
-from harness_runtime.bootstrap import run_bootstrap
+from harness_runtime.bootstrap import run_bootstrap, stage_1_is
 from harness_runtime.bootstrap import stage_4_od as _stage_4_od_mod
+from harness_runtime.config import state_placement
 from harness_runtime.lifecycle.pause_resume_protocol_types import (
     PauseResumeProtocolConfig,
 )
@@ -77,7 +78,10 @@ from harness_runtime.types import (
     PathBindingConfig,
     ProviderSecretsConfig,
     RuntimeConfig,
+    StatePlacementConfig,
 )
+
+from ..test_state_placement import world  # noqa: F401  (fixture: scratch dir with no .git above)
 
 _WORKLOAD = WorkloadClass.SOFTWARE_ENGINEERING
 _SURFACE = DeploymentSurface.LOCAL_DEVELOPMENT
@@ -362,12 +366,15 @@ async def test_api_resume_restart_proof_round_trip(
     # ---- "Pause" — capture a real PauseSnapshot via a bootstrapped protocol.
     capture_ctx = await run_bootstrap(config, workload_class=_WORKLOAD)
     assert capture_ctx.pause_resume_protocol is not None
-    snapshot = await capture_ctx.pause_resume_protocol.capture_pause_snapshot(
-        workflow_id=_WORKFLOW_ID,
-        run_id="run-resume-e2e",
-        step_index=0,
-        pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
-    )
+    snapshot = (
+        await capture_ctx.pause_resume_protocol.capture_pause_snapshot(
+            workflow_id=_WORKFLOW_ID,
+            run_id="run-resume-e2e",
+            step_index=0,
+            pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
+            descent_depth=0,
+        )
+    ).snapshot
 
     # ---- "Restart" — persist + reload across a process boundary (JSON round-trip).
     rehydrated = PauseSnapshot.model_validate_json(snapshot.model_dump_json())
@@ -400,12 +407,15 @@ async def test_api_resume_corrupt_snapshot_surfaces_failed(
 
     capture_ctx = await run_bootstrap(config, workload_class=_WORKLOAD)
     assert capture_ctx.pause_resume_protocol is not None
-    snapshot = await capture_ctx.pause_resume_protocol.capture_pause_snapshot(
-        workflow_id=_WORKFLOW_ID,
-        run_id="run-resume-corrupt",
-        step_index=0,
-        pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
-    )
+    snapshot = (
+        await capture_ctx.pause_resume_protocol.capture_pause_snapshot(
+            workflow_id=_WORKFLOW_ID,
+            run_id="run-resume-corrupt",
+            step_index=0,
+            pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
+            descent_depth=0,
+        )
+    ).snapshot
     corrupted = snapshot.model_copy(update={"snapshot_hash": "f" * 64})
 
     result = await resume(_Workflow(), pause_snapshot=corrupted, config=config)
@@ -494,6 +504,27 @@ def _config_durable(tmp_path: Path) -> RuntimeConfig:
     )
 
 
+@pytest.fixture
+def _placed_root(world: Path, monkeypatch: pytest.MonkeyPatch) -> Path:  # noqa: F811
+    """An external state root beside a checkout: B-104 claims a durable `resume_handle`
+    record only under a declared, verified `state_placement` (see `_config_durable_placed`)."""
+    # The scratch dir may be tmpfs; the verifier's real resolver is covered in test_state_placement.
+    monkeypatch.setattr(stage_1_is, "linux_filesystem_type", lambda _p: "ext4")
+    monkeypatch.setattr(state_placement, "linux_filesystem_type", lambda _p: "ext4")
+    (world / "repo" / ".git").mkdir(parents=True)
+    return world / "state"
+
+
+def _config_durable_placed(root: Path) -> RuntimeConfig:
+    """`_config_durable` with every path (so the STATE_LEDGER cell) under the placed `root`."""
+    return _config_durable(root).model_copy(
+        update={
+            "repository_root": root.parent / "repo",
+            "state_placement": StatePlacementConfig(state_root=root),
+        }
+    )
+
+
 # ---- Store unit tests (no bootstrap) --------------------------------------
 
 
@@ -505,7 +536,7 @@ def test_durable_store_capture_read_round_trip(tmp_path: Path) -> None:
 
     store = JournalWorkflowPauseStore(journal_dir=tmp_path / "pj", tenant_id=None)
     snap = _snapshot_for(_WORKFLOW_ID)
-    store.capture(snap)
+    store.capture(snap, depth=None)
     assert store.read_latest(_WORKFLOW_ID) == snap
 
 
@@ -521,8 +552,8 @@ def test_durable_store_latest_record_wins(tmp_path: Path) -> None:
     second = _snapshot_for(_WORKFLOW_ID, step_index=0).model_copy(
         update={"run_id": "run-second", "created_at": 999}
     )
-    store.capture(first)
-    store.capture(second)
+    store.capture(first, depth=None)
+    store.capture(second, depth=None)
     latest = store.read_latest(_WORKFLOW_ID)
     assert latest is not None
     assert latest.run_id == "run-second"
@@ -548,7 +579,7 @@ def test_durable_store_corrupt_latest_fails_closed(tmp_path: Path) -> None:
     )
 
     store = JournalWorkflowPauseStore(journal_dir=tmp_path / "pj", tenant_id=None)
-    store.capture(_snapshot_for(_WORKFLOW_ID))
+    store.capture(_snapshot_for(_WORKFLOW_ID), depth=None)
     # Append a torn trailing line directly to the pair's journal file. The
     # filename derives from the TENANT-COMPOSITE key at `B-97` half (a) (Runtime
     # spec v1.108 §14.14.8) — the store's own derivation is used rather than a
@@ -572,7 +603,7 @@ def test_durable_store_recovers_from_torn_unterminated_append(tmp_path: Path) ->
     )
 
     store = JournalWorkflowPauseStore(journal_dir=tmp_path / "pj", tenant_id=None)
-    store.capture(_snapshot_for(_WORKFLOW_ID))
+    store.capture(_snapshot_for(_WORKFLOW_ID), depth=None)
     # Simulate a crash mid-append: a partial record with NO trailing newline.
     # The path comes from the store's OWN derivation (tenant-composite at `B-97`
     # half (a)). Re-deriving `sha256(workflow_id)` here would write the fragment
@@ -583,7 +614,7 @@ def test_durable_store_recovers_from_torn_unterminated_append(tmp_path: Path) ->
         handle.write('{"workflow_id": "wf", "pause_snapshot": {TORN-NO-NEWLINE')
     # A valid capture after the torn append must be cleanly recoverable.
     recovered = _snapshot_for(_WORKFLOW_ID).model_copy(update={"run_id": "run-after-torn"})
-    store.capture(recovered)
+    store.capture(recovered, depth=None)
     latest = store.read_latest(_WORKFLOW_ID)
     assert latest is not None, "torn append must not brick future resumes"
     assert latest.run_id == "run-after-torn"
@@ -599,8 +630,8 @@ def test_durable_store_per_workflow_isolation(tmp_path: Path) -> None:
     store = JournalWorkflowPauseStore(journal_dir=tmp_path / "pj", tenant_id=None)
     snap_a = _snapshot_for("wf-a")
     snap_b = _snapshot_for("wf-b")
-    store.capture(snap_a)
-    store.capture(snap_b)
+    store.capture(snap_a, depth=None)
+    store.capture(snap_b, depth=None)
     assert store.read_latest("wf-a") == snap_a
     assert store.read_latest("wf-b") == snap_b
 
@@ -628,9 +659,11 @@ async def test_durable_wrapper_persists_on_capture(tmp_path: Path) -> None:
         store=store,
     )
 
-    returned = await protocol.capture_pause_snapshot(
-        _WORKFLOW_ID, "run-x", 0, WorkflowPauseReason.EXPLICIT_OPERATOR
-    )
+    returned = (
+        await protocol.capture_pause_snapshot(
+            _WORKFLOW_ID, "run-x", 0, WorkflowPauseReason.EXPLICIT_OPERATOR, descent_depth=0
+        )
+    ).snapshot
     assert returned.workflow_id == _WORKFLOW_ID
     assert returned.run_id == "run-x"
     # A fresh store over the same dir reads it back (durable across instances —
@@ -673,13 +706,16 @@ async def test_durable_wrapper_forwards_handoff_resume(tmp_path: Path) -> None:
         stage_count=2,
     )
 
-    returned = await protocol.capture_pause_snapshot(
-        _WORKFLOW_ID,
-        "run-handoff",
-        1,
-        WorkflowPauseReason.EXPLICIT_OPERATOR,
-        handoff_resume=handoff_resume,
-    )
+    returned = (
+        await protocol.capture_pause_snapshot(
+            _WORKFLOW_ID,
+            "run-handoff",
+            1,
+            WorkflowPauseReason.EXPLICIT_OPERATOR,
+            handoff_resume=handoff_resume,
+            descent_depth=0,
+        )
+    ).snapshot
     # The carrier survived the durable capture (forwarded to the parent, not dropped).
     assert returned.handoff_resume == handoff_resume
     assert returned.fan_out_resume is None
@@ -725,18 +761,25 @@ async def test_durable_wrapper_forwards_evaluator_optimizer_resume(tmp_path: Pat
                 entry_index=1,
                 declared_step_index=1,
                 step_id="evaluate",
-                output={"accepted": False},
+                output={
+                    "done": True,
+                    "done_reason": "stop",
+                    "message": {"role": "assistant", "content": '{"accepted": false}'},
+                },
             ),
         ),
     )
 
-    returned = await protocol.capture_pause_snapshot(
-        _WORKFLOW_ID,
-        "run-eo",
-        2,
-        WorkflowPauseReason.EXPLICIT_OPERATOR,
-        evaluator_optimizer_resume=eo_resume,
-    )
+    returned = (
+        await protocol.capture_pause_snapshot(
+            _WORKFLOW_ID,
+            "run-eo",
+            2,
+            WorkflowPauseReason.EXPLICIT_OPERATOR,
+            evaluator_optimizer_resume=eo_resume,
+            descent_depth=0,
+        )
+    ).snapshot
     # The carrier survived the durable capture (forwarded to the parent, not dropped).
     assert returned.evaluator_optimizer_resume == eo_resume
     assert returned.fan_out_resume is None
@@ -756,7 +799,7 @@ async def test_durable_wrapper_forwards_evaluator_optimizer_resume(tmp_path: Pat
 
 @pytest.mark.asyncio
 async def test_api_resume_durable_handle_restart_proof(
-    tmp_path: Path,
+    _placed_root: Path,
     _patched_runtime: None,
 ) -> None:
     """The harness-owned durability path: capture through a DURABLE-bootstrapped
@@ -770,21 +813,24 @@ async def test_api_resume_durable_handle_restart_proof(
     )
 
     _ = _patched_runtime
-    config = _config_durable(tmp_path)
+    config = _config_durable_placed(_placed_root)
 
     # ---- "Pause" — capture via the DURABLE protocol → persists to the journal.
     capture_ctx = await run_bootstrap(config, workload_class=_WORKLOAD)
     assert capture_ctx.pause_resume_protocol is not None
-    snapshot = await capture_ctx.pause_resume_protocol.capture_pause_snapshot(
-        workflow_id=_WORKFLOW_ID,
-        run_id="run-durable-e2e",
-        step_index=0,
-        pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
-    )
+    snapshot = (
+        await capture_ctx.pause_resume_protocol.capture_pause_snapshot(
+            workflow_id=_WORKFLOW_ID,
+            run_id="run-durable-e2e",
+            step_index=0,
+            pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
+            descent_depth=0,
+        )
+    ).snapshot
 
     # ---- The harness owns the durable copy (NOT the caller). A fresh store over
     # the resolved STATE_LEDGER pause-journal dir reads it back across instances.
-    state_ledger_dir = tmp_path / PathClass.STATE_LEDGER.value.lower()
+    state_ledger_dir = _placed_root / PathClass.STATE_LEDGER.value.lower()
     durable = JournalWorkflowPauseStore(
         journal_dir=pause_journal_dir_for(state_ledger_dir), tenant_id=None
     ).read_latest(_WORKFLOW_ID)
@@ -803,7 +849,7 @@ async def test_api_resume_durable_handle_restart_proof(
 
 @pytest.mark.asyncio
 async def test_api_resume_durable_handle_skips_completed_prefix(
-    tmp_path: Path,
+    _placed_root: Path,
     _patched_runtime: None,
 ) -> None:
     """Position-only resume through the durable handle SKIPS the completed prefix.
@@ -814,7 +860,7 @@ async def test_api_resume_durable_handle_skips_completed_prefix(
     (continue from step k without re-running 0..k-1) end-to-end, which a 1-step
     pause-at-0 e2e cannot distinguish from a fresh run."""
     _ = _patched_runtime
-    config = _config_durable(tmp_path)
+    config = _config_durable_placed(_placed_root)
 
     dispatched: list[str] = []
 
@@ -851,12 +897,15 @@ async def test_api_resume_durable_handle_skips_completed_prefix(
     # ---- "Pause" at step_index=1 — capture via the DURABLE protocol → journaled.
     capture_ctx = await run_bootstrap(config, workload_class=_WORKLOAD)
     assert capture_ctx.pause_resume_protocol is not None
-    await capture_ctx.pause_resume_protocol.capture_pause_snapshot(
-        workflow_id=_WORKFLOW_ID,
-        run_id="run-prefix-skip",
-        step_index=1,
-        pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
-    )
+    (
+        await capture_ctx.pause_resume_protocol.capture_pause_snapshot(
+            workflow_id=_WORKFLOW_ID,
+            run_id="run-prefix-skip",
+            step_index=1,
+            pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
+            descent_depth=0,
+        )
+    ).snapshot
 
     # ---- "Resume" by HANDLE — fresh bootstrap; only step-1 runs.
     result = await resume(workflow, resume_handle=_WORKFLOW_ID, config=config)

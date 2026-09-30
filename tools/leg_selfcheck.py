@@ -39,6 +39,7 @@ import json
 import re
 import subprocess
 import sys
+from bisect import bisect_right
 from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -217,19 +218,40 @@ def added_with_positions(diff: str) -> dict[str, list[tuple[int, str]]]:
     return dict(out)
 
 
-def enclosing_row_at(path: str, lineno: int) -> str | None:
-    """The register/plan row whose block encloses `lineno`, read from HEAD."""
-    full = ROOT / path
-    if not full.is_file():
-        return None
-    best: str | None = None
-    for i, line in enumerate(full.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
-        if i > lineno:
-            break
-        m = _ROW_ID_RE.match(line) or _UNIT_HEADING_RE.match(line)
-        if m:
-            best = m.group(1)
-    return best
+def enclosing_row_at(
+    path: str,
+    lineno: int,
+    index: dict[str, tuple[list[int], list[str | None]]] | None = None,
+) -> str | None:
+    """The latest row/unit heading at `lineno`, indexed once per check run.
+
+    A later ordinary heading ends a unit in an aggregate spec. The optional
+    per-run index avoids rereading that large file for every count claim.
+    """
+    cached = index.get(path) if index is not None else None
+    if cached is None:
+        full = ROOT / path
+        if not full.is_file():
+            return None
+        positions: list[int] = []
+        subjects: list[str | None] = []
+        aggregate_spec = path.startswith("design-substrate/Spec_") and path.endswith(".md")
+        for i, line in enumerate(
+            full.read_text(encoding="utf-8", errors="replace").splitlines(), 1
+        ):
+            m = _ROW_ID_RE.match(line) or _UNIT_HEADING_RE.match(line)
+            if m:
+                positions.append(i)
+                subjects.append(m.group(1))
+            elif aggregate_spec and re.match(r"^\s*#{1,6}\s+", line):
+                positions.append(i)
+                subjects.append(None)
+        cached = (positions, subjects)
+        if index is not None:
+            index[path] = cached
+    positions, subjects = cached
+    at = bisect_right(positions, lineno) - 1
+    return subjects[at] if at >= 0 else None
 
 
 def context_with_positions(diff: str) -> dict[str, list[tuple[int, str]]]:
@@ -405,7 +427,7 @@ def is_fixture_path(path: str) -> bool:
     fixtures — gets the gate muted, which costs every check, not one.
     """
     p = path.lower()
-    return Path(p).name.startswith("test_") or "/tests/" in p
+    return Path(p).name.startswith("test_") or "/tests/" in p or "/cp_tests/" in p
 
 
 # --- check 1: cite resolution ------------------------------------------------
@@ -774,6 +796,7 @@ def check_counts(
     of which is right — so that is what this reports.
     """
     claims: dict[tuple[str, str], dict[int, list[str]]] = defaultdict(lambda: defaultdict(list))
+    heading_index: dict[str, tuple[list[int], list[str | None]]] = {}
 
     # PROSE ARTIFACTS ONLY. Every carrier that drifted on the `B-71` leg was a
     # `.md` (spec preamble, section body, plan delta, clearance marker,
@@ -814,6 +837,12 @@ def check_counts(
                 m = _ROW_ID_RE.match(line) or _UNIT_HEADING_RE.match(line)
                 if m:
                     enclosing = m.group(1)
+                elif (
+                    path.startswith("design-substrate/Spec_")
+                    and path.endswith(".md")
+                    and re.match(r"^\s*#{1,6}\s+", line)
+                ):
+                    enclosing = f"(unattributed in {path})"
                 else:
                     # A body-only edit contributes no heading, so resolve the
                     # enclosing row from the file at HEAD by POSITION.
@@ -822,9 +851,11 @@ def check_counts(
                     at = slots[idx] if idx < len(slots) else None
                     if at is not None:
                         consumed[line] = idx + 1
-                        resolved = enclosing_row_at(path, at)
+                        resolved = enclosing_row_at(path, at, heading_index)
                         if resolved:
                             enclosing = resolved
+                        elif path.startswith("design-substrate/Spec_") and path.endswith(".md"):
+                            enclosing = f"(unattributed in {path})"
                 out.append((path, enclosing, line))
         return out
 
@@ -832,7 +863,20 @@ def check_counts(
     # Unchanged text immediately around the edits, so a single edited mirror can
     # still disagree with an untouched co-located one (codex round 1 [P1]).
     scanned += _with_enclosing(context or {})
+    skipped_aggregate_specs: set[str] = set()
     for _path, enclosing, line in scanned:
+        if (
+            _path.startswith("design-substrate/Spec_")
+            and _path.endswith(".md")
+            and not _UNIT_ID_RE.search(line)
+            and not _UNIT_ID_RE.fullmatch(enclosing)
+        ):
+            # A versioned aggregate spec folds many unrelated subjects into
+            # each change note and section. A noun alone cannot identify which
+            # count it measures, even twice in one paragraph. Report the blind
+            # spot rather than blocking a push on a guessed correspondence.
+            skipped_aggregate_specs.add(_path)
+            continue
         low = line.lower()
         if len(set(_UNIT_ID_RE.findall(line))) > 1:
             # A line naming two or more units cannot be attributed by position:
@@ -865,6 +909,14 @@ def check_counts(
                 value = int(raw) if raw.isdigit() else _NUMBER_WORDS[raw]
                 subject = _claim_subject(line, enclosing, m.start())
                 claims[(subject, bucket)][value].append(line.strip()[:150])
+
+    for path in sorted(skipped_aggregate_specs):
+        report.add(
+            "count",
+            ADVISORY,
+            f"unattributed aggregate-spec claims NOT count-checked in {path}; "
+            "only claims tied to a U-id can block",
+        )
 
     for (subject, bucket), by_value in sorted(claims.items()):
         if len(by_value) > 1:

@@ -33,12 +33,15 @@ from typing import Any, Protocol, cast
 
 from harness_core import EntryID, WorkflowID
 from pydantic import BaseModel, ConfigDict
+from pydantic_core import PydanticSerializationError
 
 from harness_cp.cp_shared_types import ActorIdentity
 from harness_cp.handoff_context import ExternalReference, StateSummary
 from harness_cp.material_diff_detection import MaterialDiff
 from harness_cp.pause_resume_protocol_types import (
+    CapturedPause,
     EffectFenceResumeState,
+    EphemeralCapturedPause,
     EvaluatorOptimizerResumeState,
     FanOutResumeState,
     HandoffResumeState,
@@ -422,8 +425,15 @@ class PauseResumeProtocol:
         effect_fence_resume: EffectFenceResumeState | None = None,
         orchestrator_effect_fence_resume: OrchestratorEffectFencePausedResumeState | None = None,
         hitl_gate_config_hash: str | None = None,
-    ) -> PauseSnapshot:
+        descent_depth: int,
+    ) -> CapturedPause:
         """Capture a workflow-layer pause snapshot per CP spec v1.11 §26.1.
+
+        Returns an `EphemeralCapturedPause`: this class journals nothing, so there is no
+        record ref. A durable subclass returns a `DurableCapturedPause` carrying the exact
+        ref of the record it appended. ``descent_depth`` (B-104 Task 4a; required, no
+        default — root 0, child 1, grandchild 2) is the ancestry a durable capture
+        records; it is inert here.
 
         Per §26.6 invariants 1-3:
         1. Snapshot is immutable once captured (frozen Pydantic model).
@@ -466,22 +476,24 @@ class PauseResumeProtocol:
             orchestrator_effect_fence_resume=orchestrator_effect_fence_resume,
             hitl_gate_config_hash=hitl_gate_config_hash,
         )
-        return PauseSnapshot(
-            workflow_id=workflow_id,
-            run_id=run_id,
-            step_index=step_index,
-            pause_reason=pause_reason,
-            state_summary=state_summary,
-            snapshot_hash=snapshot_hash,
-            created_at=_now_epoch_ms(),
-            state_ledger_anchor=state_ledger_anchor,
-            fan_out_resume=fan_out_resume,
-            peer_fan_out_resume=peer_fan_out_resume,
-            handoff_resume=handoff_resume,
-            evaluator_optimizer_resume=evaluator_optimizer_resume,
-            effect_fence_resume=effect_fence_resume,
-            orchestrator_effect_fence_resume=orchestrator_effect_fence_resume,
-            hitl_gate_config_hash=hitl_gate_config_hash,
+        return EphemeralCapturedPause(
+            snapshot=PauseSnapshot(
+                workflow_id=workflow_id,
+                run_id=run_id,
+                step_index=step_index,
+                pause_reason=pause_reason,
+                state_summary=state_summary,
+                snapshot_hash=snapshot_hash,
+                created_at=_now_epoch_ms(),
+                state_ledger_anchor=state_ledger_anchor,
+                fan_out_resume=fan_out_resume,
+                peer_fan_out_resume=peer_fan_out_resume,
+                handoff_resume=handoff_resume,
+                evaluator_optimizer_resume=evaluator_optimizer_resume,
+                effect_fence_resume=effect_fence_resume,
+                orchestrator_effect_fence_resume=orchestrator_effect_fence_resume,
+                hitl_gate_config_hash=hitl_gate_config_hash,
+            )
         )
 
     async def attempt_resume(
@@ -529,19 +541,7 @@ class PauseResumeProtocol:
         # AC #1 — validate snapshot_hash by recomputing canonical hash
         # (B-FANOUT-PAUSE: pass fan_out_resume so a tampered recovered-output is
         # caught here as CP-FAIL-PAUSE-SNAPSHOT-CORRUPTION; None for linear).
-        expected_hash = _compute_snapshot_hash(
-            workflow_id=snapshot.workflow_id,
-            run_id=snapshot.run_id,
-            step_index=snapshot.step_index,
-            state_summary=snapshot.state_summary,
-            fan_out_resume=snapshot.fan_out_resume,
-            peer_fan_out_resume=snapshot.peer_fan_out_resume,
-            handoff_resume=snapshot.handoff_resume,
-            evaluator_optimizer_resume=snapshot.evaluator_optimizer_resume,
-            effect_fence_resume=snapshot.effect_fence_resume,
-            orchestrator_effect_fence_resume=snapshot.orchestrator_effect_fence_resume,
-            hitl_gate_config_hash=snapshot.hitl_gate_config_hash,
-        )
+        expected_hash = compute_pause_snapshot_hash(snapshot)
         if expected_hash != snapshot.snapshot_hash:
             return ResumeResult(
                 resumed=False,
@@ -693,6 +693,11 @@ def _strip_default_fanout_resume_fields(
             # drop-when-default discipline as `synthesis_step_id`).
             if pcb_dict.get("child_workflow_id") is None:
                 pcb_dict.pop("child_workflow_id", None)
+            # B-104 Task 4b: `child_record_ref` is likewise new and default-None (an
+            # ephemeral capture or a pre-4b snapshot); dropping it when None keeps those
+            # hashes byte-identical at every depth, while a real ref stays covered.
+            if pcb_dict.get("child_record_ref") is None:
+                pcb_dict.pop("child_record_ref", None)
             child_snapshot = pcb_dict.get("child_snapshot")
             if not isinstance(child_snapshot, dict):
                 continue
@@ -840,6 +845,51 @@ def _compute_snapshot_hash(
         canonical["hitl_gate_config_hash"] = hitl_gate_config_hash
     payload = json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(payload).hexdigest()
+
+
+_HASH_INPUT_FIELDS: tuple[str, ...] = (
+    "workflow_id",
+    "run_id",
+    "step_index",
+    "state_summary",
+    "fan_out_resume",
+    "peer_fan_out_resume",
+    "handoff_resume",
+    "evaluator_optimizer_resume",
+    "effect_fence_resume",
+    "orchestrator_effect_fence_resume",
+    "hitl_gate_config_hash",
+)
+"""The `PauseSnapshot` fields `_compute_snapshot_hash` covers, and its keyword inputs.
+
+[LAW:one-source-of-truth] The one CP-owned list of what the hash covers when computed FROM a
+snapshot. `snapshot_hash`, `created_at`, `pause_reason` and `state_ledger_anchor` are deliberately
+outside it (CP spec §26.1). A consumer must not re-list these names: a copy silently misses the
+next hashed field. The guard test requires every `PauseSnapshot` field to be classified here or
+as not hashed."""
+
+
+def compute_pause_snapshot_hash(snapshot: PauseSnapshot) -> str:
+    """The `snapshot_hash` a snapshot's own content hashes to, byte-identical to capture's.
+
+    Public for consumers that must check a snapshot's integrity without a protocol instance
+    (the Runtime claim store checks a parent's carriers this way). Reads exactly
+    `_HASH_INPUT_FIELDS` and delegates to `_compute_snapshot_hash`, so it can never disagree
+    with the hash the capture path stamped."""
+    return _compute_snapshot_hash(**{name: getattr(snapshot, name) for name in _HASH_INPUT_FIELDS})
+
+
+def verify_pause_snapshot_hash(snapshot: PauseSnapshot) -> bool:
+    """`True` iff the snapshot's stored `snapshot_hash` equals the hash of its own content.
+
+    A snapshot built without validation (`model_construct`) whose carriers cannot be serialised
+    is `False`: its integrity cannot be shown. Only that known serialisation failure is caught;
+    any other fault in the computation propagates rather than being reported as a mismatch.
+    Unknown JSON fields never reach here: `PauseSnapshot` forbids extras at parse."""
+    try:
+        return compute_pause_snapshot_hash(snapshot) == snapshot.snapshot_hash
+    except PydanticSerializationError:
+        return False
 
 
 def _now_epoch_ms() -> int:

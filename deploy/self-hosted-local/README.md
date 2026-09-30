@@ -16,18 +16,73 @@ in the OS keyring through `[runtime.provider_secrets] backend =
 "self-hosted-keyring"`. The default live e2e uses local Ollama and a
 non-secret sentinel keyring entry, so it makes no hosted-provider call.
 
+The first same-VM HITL webhook configuration is documented in
+[webhook-loopback.md](webhook-loopback.md).
+
 ## Runbook
 
-1. Start Docker Desktop.
-2. Copy `harness.selfhosted.local.example.toml` to a local, gitignored config:
+1. Start the Docker daemon on the Omarchy/Arch host.
+2. Create an operator-owned Grafana admin password file outside the checkout. The
+   prompt hides the password; the commands do not print or store it in shell
+   history. Keep this exported path in the shell that runs the stack commands:
+
+   ```bash
+   grafana_secret_dir="$HOME/.local/share/arhugula/secrets"
+   install -d -m 0700 "$grafana_secret_dir"
+   grafana_secret_file="$grafana_secret_dir/grafana-admin-password"
+   umask 077
+   read -r -s -p "Grafana admin password: " grafana_password
+   printf '\n'
+   printf '%s' "$grafana_password" > "$grafana_secret_file"
+   unset grafana_password
+   chmod 0644 "$grafana_secret_file"
+   export R420_GRAFANA_ADMIN_PASSWORD_FILE="$grafana_secret_file"
+   test -s "$R420_GRAFANA_ADMIN_PASSWORD_FILE"
+   ```
+
+   The host directory is mode `0700`, so other host users cannot traverse to
+   the file. The file is mode `0644` because file-sourced Compose secrets are
+   bind mounts and Compose cannot remap their ownership or mode for Grafana's
+   non-root user. Only Grafana receives this read-only secret at
+   `/run/secrets/grafana_admin_password`; it is not committed or copied into
+   Compose environment values. See [Docker's Compose secret permissions](https://docs.docker.com/reference/compose-file/services/#secrets)
+   and [Grafana's `__FILE` setting](https://grafana.com/docs/grafana/latest/setup-grafana/configure-docker/#configure-grafana-with-docker-secrets).
+   Re-export the path in any later shell before `up`, `status`, or `down`.
+
+   Before starting the stack, check the resolved Compose model. The command
+   prints only a pass message; it does not print the password or the secret file
+   contents:
+
+   ```sh
+   docker compose -f deploy/self-hosted-local/compose.yaml config --format json |
+     python3 -c 'import json, os, sys
+m = json.load(sys.stdin)
+s = m["services"]
+p = [entry for service in s.values() for entry in service.get("ports", [])]
+assert len(p) == 4 and all(entry.get("host_ip") == "127.0.0.1" for entry in p)
+g = s["grafana"]
+assert g["environment"]["GF_AUTH_ANONYMOUS_ENABLED"] == "false"
+assert "GF_SECURITY_ADMIN_PASSWORD" not in g["environment"]
+assert g["environment"]["GF_SECURITY_ADMIN_PASSWORD__FILE"] == "/run/secrets/grafana_admin_password"
+assert g["secrets"][0]["source"] == "grafana_admin_password"
+assert m["secrets"]["grafana_admin_password"]["file"] == os.environ["R420_GRAFANA_ADMIN_PASSWORD_FILE"]
+print("Compose OK: four loopback ports, anonymous access off, file secret mounted")'
+   ```
+
+   Compose refuses to resolve this stack when
+   `R420_GRAFANA_ADMIN_PASSWORD_FILE` is unset or empty. The configuration
+   check proves the planned mounts and bindings; Grafana login and secret-file
+   readability still need the later live stack gate.
+
+3. Copy `harness.selfhosted.local.example.toml` to a local, gitignored config:
 
    ```sh
    cp deploy/self-hosted-local/harness.selfhosted.local.example.toml harness.selfhosted.local.toml
    ```
 
-3. Replace every `/absolute/path/to/arhugula-v2` placeholder with this
+4. Replace every `/absolute/path/to/arhugula-v2` placeholder with this
    workspace root.
-4. Prepare the path-class bindings the live e2e resolves. The template binds
+5. Prepare the path-class bindings the live e2e resolves. The template binds
    four `PathClass` members per workflow class; three of them point at
    directories this repo does not ship:
 
@@ -65,31 +120,31 @@ non-secret sentinel keyring entry, so it makes no hosted-provider call.
      The directory is gitignored (`.harness/r420-scratch/`), so a stray `git add`
      cannot commit the run's state; delete it when the run is done.
 
-5. Put the R-420 sentinel value in the OS keyring under service `harness`.
+6. Put the R-420 sentinel value in the OS keyring under service `harness`.
    The included no-paid template expects keyring item name `r420_probe_key`:
 
    ```sh
    uv run python -c 'import keyring; keyring.set_password("harness", "r420_probe_key", "r420-local-sentinel")'
    ```
-6. Start the local backend:
+7. Start the local backend:
 
    ```sh
    just r420-self-hosted-stack-up
    ```
 
-7. Run the non-mutating static gate:
+8. Run the non-mutating static gate:
 
    ```sh
    just r420-self-hosted-readiness harness.selfhosted.local.toml
    ```
 
-8. Start the harness daemon against the self-hosted config:
+9. Start the harness daemon against the self-hosted config:
 
    ```sh
    uv run harness daemon --config harness.selfhosted.local.toml
    ```
 
-9. Or run the full local live e2e in one command:
+10. Or run the full local live e2e in one command:
 
    ```sh
    just r420-self-hosted-live-e2e harness.selfhosted.local.toml
@@ -100,7 +155,7 @@ non-secret sentinel keyring entry, so it makes no hosted-provider call.
    below. Without one it aborts at dispatch with
    `SandboxDriverUnavailableError: resolved tier 'tier-3-microvm'`.
 
-10. Run the R-430 tail-keep collector proof against the same local stack:
+11. Run the R-430 tail-keep collector proof against the same local stack:
 
    ```sh
    just r430-tail-keep-live-e2e harness.selfhosted.local.toml
@@ -110,7 +165,7 @@ non-secret sentinel keyring entry, so it makes no hosted-provider call.
    trace through the real OTLP collector. Passing output ends with
    `trigger-trace-preserved=true` and `non-trigger-trace-exported=false`.
 
-11. Run the R-500 multi-tenant self-hosted proof against the same local stack:
+12. Run the R-500 multi-tenant self-hosted proof against the same local stack:
 
    ```sh
    just r500-multitenant-live-e2e harness.selfhosted.local.toml
@@ -122,8 +177,12 @@ non-secret sentinel keyring entry, so it makes no hosted-provider call.
    ledger. Passing output ends with `tenant-resource-separated=true`,
    `content-redacted=true`, and `audit-ledger-separated=true`.
 
-12. Open Grafana at `http://127.0.0.1:3000`.
-
+13. Open Grafana at `http://127.0.0.1:3000`. The `grafana-data` volume may
+    already hold admin credentials from an earlier initialization. Grafana's
+    configured admin password is [set only on first run](https://grafana.com/docs/grafana/latest/setup-grafana/configure-grafana/#admin_password),
+    so changing this file does not rotate an existing volume's password. Verify
+    login and use Grafana's password-reset procedure for an existing instance;
+    do not remove its volume as a password reset.
 Stop the backend with:
 
 ```sh

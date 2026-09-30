@@ -59,10 +59,12 @@ from harness_runtime.lifecycle.audit_signing_fail_closed_validation import (
 )
 from harness_runtime.lifecycle.cacheable_epoch import select_cache_ttl
 from harness_runtime.lifecycle.child_workflow_runner import compose_child_workflow_runner
+from harness_runtime.lifecycle.durable_child_admission import RefuseDurableChildAdmission
 from harness_runtime.lifecycle.engine_output_store import (
     EngineOutputStore,
     engine_output_dir_for,
 )
+from harness_runtime.lifecycle.evaluator_verdict import read_ollama_evaluator_verdict
 from harness_runtime.lifecycle.frozen_tool_superset import (
     CHILD_DOWNGRADE_REMOVE_TIERS,
     compute_frozen_tool_superset,
@@ -268,6 +270,9 @@ async def execute(
     if config.inter_step_data_flow and ctx.inter_step_output_channel is None:
         ctx.inter_step_output_channel = RunScopedInterStepOutputChannel()
 
+    # [LAW:single-enforcer] CP consumes this one provider-specific verdict boundary.
+    ctx.evaluator_verdict_reader = read_ollama_evaluator_verdict
+
     # B-ENGINE-OUTPUT-REPLAY (runtime spec C-RT-32) — the durable output-carrying
     # event-history store, co-located under the resolved STATE_LEDGER dir (the
     # `<state_ledger_dir>/engine-output` sibling of the pause-journal). The CP
@@ -304,6 +309,7 @@ async def execute(
             config,
             workload_class=workload_class,
             tracer_provider=tracer_provider,
+            state_root=ctx.verified_state_root,
         )
         # U-1 (B-18) — compute the deterministic frozen tool superset for the
         # Anthropic prompt-cache `cache_control` breakpoint (ADR-D3 §1.5 slice 1).
@@ -413,10 +419,19 @@ async def execute(
             approved_prompt_version_shas=config.approved_prompt_version_shas,
             # B-L2-EMBEDDING-ACTIVATION (C-CP-02 §2.2 — the routing-activation gate).
             # When True, the DECLARATIVE layer is §2.2-faithful (declines on a
-            # manifest-miss → EMBEDDING → L3) and the factory builds the default L2
-            # classifier (fail-loud if the `[embedding]` extra is absent). Default
-            # False → the #213 always-echo, byte-identical / zero blast radius.
+            # manifest-miss → EMBEDDING → L3) and the factory builds the configured L2
+            # classifier from explicit profile labels and the verified local model
+            # (fail-loud on absent labels, model, cache or optional extra).
+            # Default False preserves the #213 echo.
             routing_activation=config.routing_activation,
+            embedding_routing_candidates=config.embedding_routing_candidates,
+            external_cli_provider_names=tuple(
+                item.provider
+                for item in config.external_cli_providers
+                if item.provider in config.enabled_provider_names
+            ),
+            embedding_model_dir=config.embedding_model_dir,
+            embedding_cache_dir=config.embedding_cache_dir,
             # B-18-KEEPALIVE — Anthropic model string for prewarm/keep-alive pings
             # (ADR-D3 §1.5:189). File/CLI-only on RuntimeConfig (not env-keyed);
             # resolved inside `prewarm()` from routing_manifest first, then this
@@ -596,7 +611,11 @@ async def execute(
     # casts ctx to the CP driver's structural `DriverContext` Protocol.
     # The mutable ctx satisfies the Protocol structurally — same pattern
     # api.py uses on the frozen ctx.
-    child_runner = compose_child_workflow_runner(cast(HarnessContext, ctx))
+    # B-104 Task 4c: no claim/started gateway exists yet (Task 5), so a durable paused
+    # child is verified and then REFUSED; Task 5 replaces only this binding.
+    child_runner = compose_child_workflow_runner(
+        cast(HarnessContext, ctx), durable_admission=RefuseDurableChildAdmission()
+    )
 
     # v1.7 §14.7.2 step 8 4-substep audit composition extends the
     # dispatcher's dependency set with the IS state-ledger writer (8b F2-

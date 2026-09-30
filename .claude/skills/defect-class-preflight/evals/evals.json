@@ -368,6 +368,19 @@
     "explains why the existing substring assert cannot discriminate: `just widget-emit` is present whether or not the prefix is — noting only that the test is 'weak' or 'old' does not pass",
     "proposes a witness that pins the prefixed form in BOTH carriers and also fails on a remaining bare `just widget-emit` line — a single-carrier pin, or a presence check with no bare-copy check, does not pass"
    ]
+  },
+  {
+   "id": 22,
+   "eval_name": "standalone-selector-witness-misses-production",
+   "skill": "defect-class-preflight",
+   "prompt": "A reviewer found that a new unit test calls select_governing_pre_action_placement directly, while RuntimeHITLGateComposer still loops through every placement and never calls that selector. The test remains green when the composer ignores the selector. Classify the defect and describe a production-path witness that would fail if the composer call were removed. State the behavior of a filtered ancestor gate on fs.write and a child gate on http.get.",
+   "expected_output": "Names class 4 vacuous witness, identifies the standalone-selector-only test as unable to detect the production omission, and proposes a composer/real descendant test that distinguishes ancestor first-match on fs.write from child gap-fill on http.get with one prompt and audit write per action.",
+   "files": [],
+   "assertions": [
+    "classifies the standalone-selector-only test as a vacuous witness rather than treating its green result as production proof",
+    "names the missing composer call and the wrong extra prompts for overlapping placements",
+    "proposes a producer-path test that goes red if the composer call is removed and distinguishes fs.write ancestor priority from http.get child gap-fill"
+   ]
   }
  ]
 }

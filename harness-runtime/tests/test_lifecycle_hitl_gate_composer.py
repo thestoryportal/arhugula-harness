@@ -1039,7 +1039,7 @@ async def test_edit_valid_json_applies_replacement_full_chain(
     import hashlib
     import json as _json
 
-    from harness_runtime.lifecycle.hitl_gate_composer import _post_mutation_payload_hash
+    from harness_runtime.lifecycle.hitl_gate_composer import post_mutation_payload_hash
 
     provider, _ = tracer_provider
     inner = _MockInnerDispatcher()
@@ -1093,7 +1093,7 @@ async def test_edit_valid_json_applies_replacement_full_chain(
     # decoded Mapping), NOT the raw operator `str`.
     _, od_entry = audit.appends[0]
     audit_hash = od_entry.payload.audit_namespace_attrs["audit.cp.edited_proposal_hash"]
-    assert audit_hash == _post_mutation_payload_hash(replacement_payload)
+    assert audit_hash == post_mutation_payload_hash(replacement_payload)
     assert audit_hash != hashlib.sha256(edited_str.encode("utf-8")).hexdigest()
 
 
@@ -1321,20 +1321,64 @@ async def test_respond_response_does_not_inject_payload(
 
 
 # ---------------------------------------------------------------------------
+# CP §17.3 — a filtered PRE_ACTION gates only its exact tool action
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("kind", "tool_id", "expected_prompts"),
+    [
+        (StepKind.INFERENCE_STEP, None, 0),
+        (StepKind.TOOL_STEP, "http.get", 0),
+        (StepKind.TOOL_STEP, "fs.write", 1),
+    ],
+)
+async def test_filtered_pre_action_uses_exact_action_tool_name(
+    tracer_provider: tuple[TracerProvider, InMemorySpanExporter],
+    kind: StepKind,
+    tool_id: str | None,
+    expected_prompts: int,
+) -> None:
+    """The real composer must not gate inference or a different tool.
+
+    Removing runtime selector use makes both zero-prompt cases fail while the
+    standalone CP selector test stays green.
+    """
+    provider, _ = tracer_provider
+    inner = _MockInnerDispatcher()
+    surface = _MockAskUserQuestionSurface(
+        [AskUserQuestionResult(response=HITLResponse.APPROVE, latency_ms=1.0)]
+    )
+    composer = _make_composer(inner=inner, surface=surface, tracer_provider=provider)
+    placement = HITLPlacement(position=HITLPlacementKind.PRE_ACTION, tool_filter=("fs.write",))
+    step = WorkflowStep(
+        step_id=StepID("step-filtered"),
+        step_kind=kind,
+        step_payload={"tool_id": tool_id} if tool_id is not None else {},
+    )
+
+    await composer.dispatch(
+        cast(Any, object()), step, step_context=_make_step_context(placements=(placement,))
+    )
+
+    assert len(surface.calls) == expected_prompts
+    assert len(inner.calls) == 1
+
+
+# ---------------------------------------------------------------------------
 # AC #11 — multi-placement same-position 4-span emission count
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_two_pre_action_placements_emit_per_placement_canonical_4_spans(
+async def test_two_pre_action_placements_prompt_once_for_first_match(
     tracer_provider: tuple[TracerProvider, InMemorySpanExporter],
 ) -> None:
-    """AC #11: 2 PRE_ACTION placements on a single step → 2× each canonical span.
+    """CP §17.3 first-match: overlapping PRE_ACTION placements prompt once.
 
-    Per spec v1.11 §14.8.5 hierarchy diagram + §14.8.6 Invariants ("exactly
-    once per matching placement"): each matching placement gets exactly one
-    `hitl.gate.evaluated` + one `hitl.invocation.opened` + one
-    `hitl.invocation.responded`. Distinct action_ids per placement preserved.
+    Deleting the first-match selection from the production composer must make
+    this fail even though the standalone CP selector still passes its tests.
     """
     provider, exporter = tracer_provider
     inner = _MockInnerDispatcher()
@@ -1365,28 +1409,59 @@ async def test_two_pre_action_placements_emit_per_placement_canonical_4_spans(
 
     await composer.dispatch(cast(Any, object()), step, step_context=ctx)
 
-    # Surface called twice (once per placement)
-    assert len(surface.calls) == 2
-    # 2× each canonical span
+    assert len(surface.calls) == 1
     span_names = [s.name for s in exporter.get_finished_spans()]
-    assert span_names.count("hitl.gate.evaluated") == 2
-    assert span_names.count("hitl.invocation.opened") == 2
-    assert span_names.count("hitl.invocation.responded") == 2
-    # 2× audit entries reach the writer
-    assert len(audit.appends) == 2
-    # Note: the v1.11 MVP action_id shape `hitl:<parent>:<position>` collides
-    # across same-position placements. NOTE 6-i does NOT license that — it
-    # ASSERTS the opposite ("Each placement's audit entry uses a distinct
-    # `action_id`"), justifying it by "action_id includes placement.position.value",
-    # which only holds when the positions DIFFER (its own example pairs PRE_ACTION
-    # with SUB_AGENT_BOUNDARY). The earlier reading of this comment — that the
-    # in-loop sub-shape is impl-discretion — inverted the spec into a licence and
-    # is why the collision went unexamined from v1.11. It is now filed as `B-165`
-    # (Class 1 back-flow, `.harness/class_1_fork_b165_same_position_placement_
-    # identity_collision.md`) and witnessed at
-    # `test_b165_same_position_placement_identity_witness.py`. This test's own
-    # scope is unchanged: the 2-emission cardinality and surface invocation
-    # pattern; the identity claim is the B-165 witness's to make.
+    assert span_names.count("hitl.gate.evaluated") == 1
+    assert span_names.count("hitl.invocation.opened") == 1
+    assert span_names.count("hitl.invocation.responded") == 1
+    assert len(audit.appends) == 1
+    # CP v1.120 first-match selection prevents a second prompt or audit write for
+    # overlapping PRE_ACTION declarations. B-165 retains the underlying key-only
+    # ledger dedup invariant as a separate boundary witness.
+
+
+@pytest.mark.parametrize(
+    ("tool_id", "expected_timeout"),
+    [("fs.write", 0.1), ("http.get", 0.2)],
+)
+@pytest.mark.asyncio
+async def test_pre_action_first_match_keeps_ancestor_priority_and_child_gap(
+    tool_id: str,
+    expected_timeout: float,
+    tracer_provider: tuple[TracerProvider, InMemorySpanExporter],
+) -> None:
+    """A later child declaration cannot steal a matching ancestor action.
+
+    The distinct timeouts expose which placement the real composer used. A
+    nonmatching ancestor leaves the action for the child's unfiltered gate.
+    """
+    provider, _ = tracer_provider
+    surface = _MockAskUserQuestionSurface(
+        [AskUserQuestionResult(response=HITLResponse.APPROVE, latency_ms=1.0)]
+    )
+    composer = _make_composer(
+        inner=_MockInnerDispatcher(), surface=surface, tracer_provider=provider
+    )
+    ancestor = HITLPlacement(
+        position=HITLPlacementKind.PRE_ACTION,
+        tool_filter=("fs.write",),
+        timeout=100,
+    )
+    child = HITLPlacement(position=HITLPlacementKind.PRE_ACTION, timeout=200)
+    step = WorkflowStep(
+        step_id=StepID("step-0"),
+        step_kind=StepKind.TOOL_STEP,
+        step_payload={"tool_id": tool_id},
+    )
+
+    await composer.dispatch(
+        cast(Any, object()),
+        step,
+        step_context=_make_step_context(placements=(ancestor, child)),
+    )
+
+    assert len(surface.calls) == 1
+    assert surface.calls[0][2] == expected_timeout
 
 
 # ---------------------------------------------------------------------------
@@ -1943,6 +2018,7 @@ def test_auto_approve_audit_entry_is_non_vacuous_approve_not_timeout(
         gate_result=None,
         step_context=_make_step_context(),
         raise_on_failure=True,
+        effective_gate_level=CPGateLevel.AUTO,
         auto_approved=True,
     )
     assert cp_entry.response == HITLResponse.APPROVE.value
@@ -2320,6 +2396,7 @@ def test_timeout_reject_audit_entry_is_reject_shaped(
         gate_result=None,
         step_context=_make_step_context(),
         raise_on_failure=False,
+        effective_gate_level=CPGateLevel.AUTO,
         system_reject_reason="timeout-fail-closed",
     )
     assert cp_entry.response == HITLResponse.REJECT.value
@@ -2335,6 +2412,7 @@ def test_residual_timeout_audit_entry_keeps_partial_shape(
     `system_reject_reason`) keeps the `response=""` partial entry, consistent
     with RT-FAIL-HITL-GATE-TIMEOUT (the pre-existing v1.9 disposition)."""
     from harness_as import BlastRadiusTier
+    from harness_cp.gate_level_rule import GateLevel as CPGateLevel
     from harness_runtime.lifecycle.hitl_auto_approve_policy import HITLAutoApprovePolicy
 
     provider, _ = tracer_provider
@@ -2350,6 +2428,7 @@ def test_residual_timeout_audit_entry_keeps_partial_shape(
         gate_result=None,
         step_context=_make_step_context(),
         raise_on_failure=False,
+        effective_gate_level=CPGateLevel.AUTO,
     )
     assert cp_entry.response == ""
     assert cp_entry.rejection_reason_hash is None
@@ -2874,6 +2953,38 @@ def _make_resume_composer_with_audit(
 
 
 @pytest.mark.asyncio
+async def test_resume_step_zero_audits_only_the_governing_pre_action(
+    tracer_provider: tuple[TracerProvider, InMemorySpanExporter],
+) -> None:
+    """A delivered response is audited once for the first matching placement.
+
+    Restoring the old resume Step-0 loop would append two audit records for one
+    operator response, even if the normal dispatch path were corrected.
+    """
+    from harness_cp.pause_resume_protocol_types import HITLDeliveryCell
+
+    provider, _ = tracer_provider
+    inner = _MockInnerDispatcher()
+    first = HITLPlacement(position=HITLPlacementKind.PRE_ACTION)
+    second = HITLPlacement(position=HITLPlacementKind.PRE_ACTION)
+    composer, audit, ctx = _make_resume_composer_with_audit(
+        inner, provider, placements=(first, second)
+    )
+    ctx = ctx.model_copy(
+        update={
+            "hitl_delivery_holder": HITLDeliveryCell(_make_resume_hitl_result(HITLResponse.APPROVE))
+        }
+    )
+
+    await composer.dispatch(
+        cast(Any, object()), _resume_step_with_payload({"orig": 1}), step_context=ctx
+    )
+
+    assert len(audit.appends) == 1
+    assert len(inner.calls) == 1
+
+
+@pytest.mark.asyncio
 async def test_resume_reject_audits_then_raises(
     tracer_provider: tuple[TracerProvider, InMemorySpanExporter],
 ) -> None:
@@ -2919,7 +3030,7 @@ async def test_resume_edit_audits_post_mutation_hash_and_applies(
     from the structured edited_proposal.payload), AND the edit is applied +
     dispatched."""
     from harness_cp.handoff_context import ActionKind, ProposedAction
-    from harness_runtime.lifecycle.hitl_gate_composer import _post_mutation_payload_hash
+    from harness_runtime.lifecycle.hitl_gate_composer import post_mutation_payload_hash
 
     provider, _ = tracer_provider
     inner = _MockInnerDispatcher()
@@ -2946,7 +3057,7 @@ async def test_resume_edit_audits_post_mutation_hash_and_applies(
     assert len(audit.appends) == 1
     attrs = audit.appends[0][1].payload.audit_namespace_attrs
     assert attrs["audit.cp.response"] == HITLResponse.EDIT.value
-    assert attrs["audit.cp.edited_proposal_hash"] == _post_mutation_payload_hash({"edited": 2})
+    assert attrs["audit.cp.edited_proposal_hash"] == post_mutation_payload_hash({"edited": 2})
 
 
 @pytest.mark.asyncio
@@ -3318,6 +3429,7 @@ def test_sab_removal_audit_entry_response_is_placement_removed_not_approve(
         gate_result=None,
         step_context=_make_step_context(),
         raise_on_failure=True,
+        effective_gate_level=CPGateLevel.AUTO,
         placement_removed=True,
     )
     assert cp_entry.response == "placement-removed"
@@ -3474,6 +3586,8 @@ def test_signing_backend_is_passed_into_audit_composition(
     deliver the backend to the OD signing seam (sign invoked), not merely
     hold it as an inert field.
     """
+    from harness_cp.gate_level_rule import GateLevel as CPGateLevel
+
     provider, _ = tracer_provider
     backend = _CountingBackend()
     composer = _make_composer(
@@ -3489,6 +3603,7 @@ def test_signing_backend_is_passed_into_audit_composition(
         gate_result=None,
         step_context=_make_step_context(),
         raise_on_failure=True,
+        effective_gate_level=CPGateLevel.AUTO,
         auto_approved=True,
     )
     assert cp_entry.response == HITLResponse.APPROVE.value
@@ -3520,6 +3635,7 @@ async def test_hitl_audit_persist_counts_as_inflight_effect_at_trip_time(
     `ACKED_EFFECT_AMBIGUOUS`, because the write is no longer counted as an
     in-flight effect at the moment it trips the token.
     """
+    from harness_cp.gate_level_rule import GateLevel as CPGateLevel
     from harness_cp.sub_agent_dispatch_cancellation import (
         DISPATCH_CANCEL_TOKEN_VAR,
         DispatchCancelToken,
@@ -3550,6 +3666,7 @@ async def test_hitl_audit_persist_counts_as_inflight_effect_at_trip_time(
             gate_result=None,
             step_context=_make_step_context(),
             raise_on_failure=True,
+            effective_gate_level=CPGateLevel.AUTO,
             auto_approved=True,
         )
     finally:
@@ -3643,3 +3760,392 @@ async def test_hitl_webhook_delivery_counts_as_inflight_effect_at_trip_time(
         f"ambiguous, got {outcome} — the delivery was not counted as an "
         f"in-flight effect at trip time"
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("parent,prompts", [("auto", 0), ("ask", 1)])
+async def test_descended_parent_floor_gates_real_composer_even_when_four_axes_auto(
+    parent: str,
+    prompts: int,
+    tracer_provider: tuple[TracerProvider, InMemorySpanExporter],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # [LAW:behavior-not-structure] The prompt is the observable gate, beyond context propagation.
+    from harness_as import BlastRadiusTier
+    from harness_cp.gate_level_rule import GateLevel
+    from harness_runtime.lifecycle.hitl_auto_approve_policy import HITLAutoApprovePolicy
+
+    async def record_audit(_self: Any, **_kwargs: Any) -> tuple[None, None]:
+        return None, None
+
+    # [LAW:effects-at-boundaries] Keep the audit sink out of the gate decision test.
+    monkeypatch.setattr(
+        RuntimeHITLGateComposer, "_compose_and_persist_audit_off_loop", record_audit
+    )
+    provider, _ = tracer_provider
+    inner = _MockInnerDispatcher()
+    surface = _MockAskUserQuestionSurface(
+        [AskUserQuestionResult(response=HITLResponse.APPROVE, latency_ms=1.0)]
+    )
+    composer = _smart_composer(
+        tracer_provider=provider,
+        blast=BlastRadiusTier.READ_ONLY,
+        policy=HITLAutoApprovePolicy(),
+        surface=surface,
+        inner=inner,
+    )
+    context = _make_step_context().model_copy(
+        update={"descent_depth": 1, "parent_gate_level": GateLevel(parent)}
+    )
+    import asyncio
+
+    result = await asyncio.wait_for(
+        composer.dispatch(
+            _binding(PersonaTier.SOLO_DEVELOPER), _pre_action_step(), step_context=context
+        ),
+        timeout=2,
+    )
+    assert result == {"inner_dispatched": True}
+    assert len(surface.calls) == prompts
+    assert len(inner.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_root_default_ask_does_not_gate_auto_axes(
+    tracer_provider: tuple[TracerProvider, InMemorySpanExporter],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from harness_as import BlastRadiusTier
+    from harness_cp.gate_level_rule import GateLevel
+    from harness_runtime.lifecycle.hitl_auto_approve_policy import HITLAutoApprovePolicy
+
+    async def record_audit(_self: Any, **_kwargs: Any) -> tuple[None, None]:
+        return None, None
+
+    # [LAW:effects-at-boundaries] Keep the audit sink out of the gate decision test.
+    monkeypatch.setattr(
+        RuntimeHITLGateComposer, "_compose_and_persist_audit_off_loop", record_audit
+    )
+    provider, _ = tracer_provider
+    inner = _MockInnerDispatcher()
+    surface = _MockAskUserQuestionSurface([])
+    composer = _smart_composer(
+        tracer_provider=provider,
+        blast=BlastRadiusTier.READ_ONLY,
+        policy=HITLAutoApprovePolicy(),
+        surface=surface,
+        inner=inner,
+    )
+    context = _make_step_context().model_copy(update={"parent_gate_level": GateLevel.ASK})
+    import asyncio
+
+    await asyncio.wait_for(
+        composer.dispatch(
+            _binding(PersonaTier.SOLO_DEVELOPER), _pre_action_step(), step_context=context
+        ),
+        timeout=2,
+    )
+    assert surface.calls == []
+    assert len(inner.calls) == 1
+
+
+@pytest.fixture
+def record_gate_audits(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
+    calls: list[dict[str, Any]] = []
+
+    async def record(_self: Any, **kwargs: Any) -> tuple[None, None]:
+        calls.append(kwargs)
+        return None, None
+
+    # [LAW:effects-at-boundaries] Test gate ordering without a signing worker.
+    monkeypatch.setattr(RuntimeHITLGateComposer, "_compose_and_persist_audit_off_loop", record)
+    return calls
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("response", [HITLResponse.APPROVE, HITLResponse.REJECT])
+async def test_descended_parent_ask_routes_sync_response_once(
+    response: HITLResponse,
+    tracer_provider: tuple[TracerProvider, InMemorySpanExporter],
+    record_gate_audits: list[dict[str, Any]],
+) -> None:
+    from harness_as import BlastRadiusTier
+    from harness_cp.gate_level_rule import GateLevel
+    from harness_runtime.lifecycle.hitl_auto_approve_policy import HITLAutoApprovePolicy
+    from harness_runtime.lifecycle.hitl_gate_composer import HITLGateRejectedError
+
+    provider, _ = tracer_provider
+    inner = _MockInnerDispatcher()
+    surface = _MockAskUserQuestionSurface(
+        [
+            AskUserQuestionResult(
+                response=response,
+                latency_ms=1.0,
+                rejection_reason="no" if response is HITLResponse.REJECT else None,
+            )
+        ]
+    )
+    composer = _smart_composer(
+        tracer_provider=provider,
+        blast=BlastRadiusTier.READ_ONLY,
+        policy=HITLAutoApprovePolicy(),
+        surface=surface,
+        inner=inner,
+    )
+    context = _make_step_context().model_copy(
+        update={"descent_depth": 1, "parent_gate_level": GateLevel.ASK}
+    )
+    if response is HITLResponse.REJECT:
+        with pytest.raises(HITLGateRejectedError):
+            await composer.dispatch(
+                _binding(PersonaTier.SOLO_DEVELOPER), _pre_action_step(), step_context=context
+            )
+    else:
+        await composer.dispatch(
+            _binding(PersonaTier.SOLO_DEVELOPER), _pre_action_step(), step_context=context
+        )
+    assert len(surface.calls) == 1
+    assert len(inner.calls) == (0 if response is HITLResponse.REJECT else 1)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("response", [HITLResponse.RESPOND, HITLResponse.REJECT])
+async def test_descended_parent_deny_audits_then_refuses_dispatch(
+    response: HITLResponse,
+    tracer_provider: tuple[TracerProvider, InMemorySpanExporter],
+) -> None:
+    from harness_as import BlastRadiusTier
+    from harness_cp.gate_level_rule import GateLevel
+    from harness_runtime.lifecycle.hitl_auto_approve_policy import HITLAutoApprovePolicy
+    from harness_runtime.lifecycle.hitl_gate_composer import HITLGatePolicyOverrideError
+
+    provider, exporter = tracer_provider
+    inner = _MockInnerDispatcher()
+    audit = _MockAuditWriter()
+    surface = _MockAskUserQuestionSurface(
+        [
+            AskUserQuestionResult(
+                response=response,
+                latency_ms=1.0,
+                response_text="ack" if response is HITLResponse.RESPOND else None,
+                rejection_reason="no" if response is HITLResponse.REJECT else None,
+            )
+        ]
+    )
+    composer = _smart_composer(
+        tracer_provider=provider,
+        blast=BlastRadiusTier.READ_ONLY,
+        policy=HITLAutoApprovePolicy(),
+        surface=surface,
+        inner=inner,
+        audit=audit,
+    )
+    context = _make_step_context().model_copy(
+        update={"descent_depth": 1, "parent_gate_level": GateLevel.DENY}
+    )
+    with pytest.raises(HITLGatePolicyOverrideError) as exc:
+        await composer.dispatch(
+            _binding(PersonaTier.SOLO_DEVELOPER), _pre_action_step(), step_context=context
+        )
+    assert exc.value.sandbox_fail_class == "policy_override"
+    assert set(surface.calls[0][1]) == {HITLResponse.REJECT, HITLResponse.RESPOND}
+    assert len(audit.appends) == 1
+    assert audit.appends[0][1].payload.audit_namespace_attrs["audit.cp.gate_level"] == "deny"
+    assert inner.calls == []
+    spans = exporter.get_finished_spans()
+    assert any(
+        span.attributes and span.attributes.get("sandbox.fail.class") == "policy_override"
+        for span in spans
+    )
+    assert any(
+        span.name == "hitl.gate.evaluated"
+        and span.attributes
+        and span.attributes.get("hitl.gate.level") == "deny"
+        for span in spans
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("parent,dispatches", [("ask", 1), ("deny", 0)])
+async def test_descended_resume_recomputes_floor_without_reprompt(
+    parent: str,
+    dispatches: int,
+    tracer_provider: tuple[TracerProvider, InMemorySpanExporter],
+) -> None:
+    from harness_cp.gate_level_rule import GateLevel
+    from harness_cp.pause_resume_protocol_types import HITLDeliveryCell
+    from harness_runtime.lifecycle.hitl_gate_composer import HITLGatePolicyOverrideError
+
+    provider, exporter = tracer_provider
+    inner = _MockInnerDispatcher()
+    placements = (HITLPlacement(position=HITLPlacementKind.PRE_ACTION),)
+    composer, audit, context = _make_resume_composer_with_audit(
+        inner, provider, placements=placements
+    )
+    context = context.model_copy(
+        update={
+            "descent_depth": 1,
+            "parent_gate_level": GateLevel(parent),
+            "hitl_delivery_holder": HITLDeliveryCell(
+                _make_resume_hitl_result(HITLResponse.APPROVE)
+            ),
+        }
+    )
+    if parent == "deny":
+        with pytest.raises(HITLGatePolicyOverrideError):
+            await composer.dispatch(
+                _binding(PersonaTier.SOLO_DEVELOPER),
+                _resume_step_with_payload({}),
+                step_context=context,
+            )
+    else:
+        await composer.dispatch(
+            _binding(PersonaTier.SOLO_DEVELOPER),
+            _resume_step_with_payload({}),
+            step_context=context,
+        )
+    assert len(audit.appends) == 1
+    assert audit.appends[0][1].payload.audit_namespace_attrs["audit.cp.gate_level"] == parent
+    assert len(inner.calls) == dispatches
+    assert cast(_MockAskUserQuestionSurface, composer.ask_user_question_surface).calls == []
+    if parent == "deny":
+        assert any(
+            span.attributes and span.attributes.get("sandbox.fail.class") == "policy_override"
+            for span in exporter.get_finished_spans()
+        )
+
+
+@pytest.mark.asyncio
+async def test_descended_partial_binding_respects_parent_ask(
+    tracer_provider: tuple[TracerProvider, InMemorySpanExporter],
+    record_gate_audits: list[dict[str, Any]],
+) -> None:
+    from types import SimpleNamespace
+
+    from harness_cp.gate_level_rule import GateLevel
+
+    provider, _ = tracer_provider
+    inner = _MockInnerDispatcher()
+    surface = _MockAskUserQuestionSurface(
+        [AskUserQuestionResult(response=HITLResponse.APPROVE, latency_ms=1.0)]
+    )
+    composer = _make_composer(inner=inner, surface=surface, tracer_provider=provider)
+    placement = cast(
+        HITLPlacement,
+        SimpleNamespace(
+            position=HITLPlacementKind.PRE_ACTION,
+            requires_hitl=False,
+            timeout=None,
+            tool_filter=None,
+            cascade_policy=None,
+        ),
+    )
+    step = _make_step(placements=(placement,))
+    context = _make_step_context().model_copy(
+        update={
+            "descent_depth": 1,
+            "parent_gate_level": GateLevel.ASK,
+        }
+    )
+    await composer.dispatch(object(), step, step_context=context)
+    assert len(surface.calls) == 1
+    assert len(inner.calls) == 1
+    assert len(record_gate_audits) == 1
+
+
+@pytest.mark.asyncio
+async def test_descended_auto_parent_removal_persists_clamped_auto_level(
+    tracer_provider: tuple[TracerProvider, InMemorySpanExporter],
+) -> None:
+    # [LAW:behavior-not-structure] The persisted audit must name the level that skipped the gate.
+    from harness_as import BlastRadiusTier
+    from harness_cp.gate_level_rule import GateLevel
+    from harness_runtime.lifecycle.hitl_auto_approve_policy import HITLAutoApprovePolicy
+
+    provider, _ = tracer_provider
+    audit = _MockAuditWriter()
+    inner = _MockInnerDispatcher()
+    surface = _MockAskUserQuestionSurface([])
+    composer = _sab_composer(
+        tracer_provider=provider,
+        blast=BlastRadiusTier.READ_ONLY,
+        policy=HITLAutoApprovePolicy(solo_persona_floor_auto=False),
+        surface=surface,
+        inner=inner,
+        audit=audit,
+    )
+    context = _make_step_context().model_copy(
+        update={"descent_depth": 1, "parent_gate_level": GateLevel.AUTO}
+    )
+
+    result = await composer.dispatch(
+        _sab_binding(PersonaTier.SOLO_DEVELOPER, removed=True),
+        _sab_step(),
+        step_context=context,
+    )
+
+    assert result == {"inner_dispatched": True}
+    assert surface.calls == []
+    assert len(inner.calls) == 1
+    assert len(audit.appends) == 1
+    entry = audit.appends[0][1].payload
+    assert entry.audit_namespace_attrs["audit.cp.response"] == "placement-removed"
+    assert entry.audit_namespace_attrs["audit.cp.gate_level"] == "auto"
+
+
+@pytest.mark.asyncio
+async def test_descended_boundary_removal_cannot_lower_parent_ask(
+    tracer_provider: tuple[TracerProvider, InMemorySpanExporter],
+    record_gate_audits: list[dict[str, Any]],
+) -> None:
+    from harness_as import BlastRadiusTier
+    from harness_cp.gate_level_rule import GateLevel
+    from harness_runtime.lifecycle.hitl_auto_approve_policy import HITLAutoApprovePolicy
+
+    provider, _ = tracer_provider
+    inner = _MockInnerDispatcher()
+    surface = _MockAskUserQuestionSurface(
+        [AskUserQuestionResult(response=HITLResponse.APPROVE, latency_ms=1.0)]
+    )
+    composer = _sab_composer(
+        tracer_provider=provider,
+        blast=BlastRadiusTier.READ_ONLY,
+        policy=HITLAutoApprovePolicy(),
+        surface=surface,
+        inner=inner,
+    )
+    context = _make_step_context().model_copy(
+        update={
+            "descent_depth": 1,
+            "parent_gate_level": GateLevel.ASK,
+        }
+    )
+    await composer.dispatch(
+        _sab_binding(PersonaTier.SOLO_DEVELOPER, removed=True),
+        _sab_step(),
+        step_context=context,
+    )
+    assert len(surface.calls) == 1
+    assert len(inner.calls) == 1
+    assert len(record_gate_audits) == 1
+
+
+@pytest.mark.asyncio
+async def test_descended_parent_floor_keeps_no_placement_opt_in_behavior(
+    tracer_provider: tuple[TracerProvider, InMemorySpanExporter],
+) -> None:
+    from harness_cp.gate_level_rule import GateLevel
+
+    provider, _ = tracer_provider
+    inner = _MockInnerDispatcher()
+    surface = _MockAskUserQuestionSurface([])
+    composer = _make_composer(inner=inner, surface=surface, tracer_provider=provider)
+    context = _make_step_context().model_copy(
+        update={
+            "descent_depth": 1,
+            "parent_gate_level": GateLevel.ASK,
+        }
+    )
+    await composer.dispatch(object(), _make_plain_step(), step_context=context)
+    assert len(inner.calls) == 1
+    assert surface.calls == []

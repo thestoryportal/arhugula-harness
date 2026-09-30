@@ -293,13 +293,15 @@ class WebhookDeliveryComposer:
                 with attempt_cm as attempt_span:
                     _set(attempt_span, ATTR_RETRY_ATTEMPT_NUMBER, attempt)
                     try:
-                        async with self._http_client_factory() as client:
-                            response = await client.post(
-                                url,
-                                json=request_body,
-                                headers=headers,
-                                timeout=_duration_to_seconds(webhook_config.timeout),
-                            )
+                        attempt_timeout = _duration_to_seconds(webhook_config.timeout)
+                        async with asyncio.timeout(attempt_timeout):
+                            async with self._http_client_factory() as client:
+                                response = await client.post(
+                                    url,
+                                    json=request_body,
+                                    headers=headers,
+                                    timeout=attempt_timeout,
+                                )
                         attempt_status = response.status_code
                         last_status_code = attempt_status
                         if 200 <= attempt_status < 300:
@@ -347,7 +349,9 @@ class WebhookDeliveryComposer:
         # failure raises the result-preserving carrier (CP v1.101 §2).
         try:
             await self._attribute_webhook_cost_off_loop(
-                url=url,
+                # The URL path can hold operator material. Cost records and
+                # signed audit payloads carry only this fixed-length digest.
+                url=url_hash,
                 request_body=request_body,
                 idempotency_key=idempotency_key,
                 tenant_id=effective_tenant_id,

@@ -175,6 +175,7 @@ async def _site_hitl_direct(_monkeypatch: pytest.MonkeyPatch, flag: bool) -> Non
         gate_result=None,
         step_context=_step_context(),
         raise_on_failure=False,
+        effective_gate_level=GateLevel.AUTO,
         auto_approved=True,
     )
     assert cp_entry is not None
@@ -911,6 +912,7 @@ async def test_hitl_flag_on_raises_typed_family_not_compose_wrap_on_raise_on_fai
             gate_result=None,
             step_context=_step_context(),
             raise_on_failure=True,
+            effective_gate_level=GateLevel.AUTO,
             auto_approved=True,
         )
 
