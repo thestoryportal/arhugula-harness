@@ -356,6 +356,7 @@ def test_per_family_pointer_rejects_wrong_cell_count(venue: str) -> None:
     with pytest.raises(AssertionError):
         _check_per_family_pointer_tables(venue, malformed)
 
+
 _ADJACENT_WINDOW = 90
 
 
