@@ -8,11 +8,11 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `140a5021fef1` |
-| `last_refreshed` | 2026-09-20T00:00:00Z |
-| `git_head` | `dd571885` —  |
+| `workspace_state_hash` | `8860b083ce3b` |
+| `last_refreshed` | 2026-09-30T11:38:20Z |
+| `git_head` | `d2095b18` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
-| `open_fork_doc_count` | 121 |
+| `open_fork_doc_count` | 122 |
 
 **Hash recipe.** `sha256(git_head[:8] + "|" + sorted_open_pr_csv + "|" + open_fork_doc_count + "|" + latest_retirement_batch_path)[:12]`. See `Project_Roadmap_v1.md` §7.1.
 
@@ -22,7 +22,7 @@
 
 **Purpose.** Live pointer to the next Claude/Codex-executable frontier. Full round-by-round history (every prior round, verbatim, most-recent-first) lives in the archive below — grep it by PR/`B-`/`R-`-id/round, never read wholesale.
 
-**Current next action (post-#1614).** U-HE-58b landed the half of U-HE-58 that made it useful: the context ceiling can now actually find memento. #1612's install-path constant omitted the version segment a real `claude plugin install` writes, so `lib/ceiling_config.py` was never under it and the plugin read as absent forever — and it shipped green because every assert pinned the `MEMENTO_ROOT` override that bypasses discovery. #1614 reads Claude Code's own `installed_plugins.json`, gates on `enabledPlugins` with the precedence probed from `claude plugin list` (local > project > user), prefers the record bound to this project without ever filtering the set to empty (a lane matches none), loads memento's module by path rather than by cached name, and stops writing the shared-at-start record memento's own hook owns. 75 → 99 asserts, 15 mutation probes. Four residuals are registered at B-303 with named closure conditions. The original U-HE-58 objective is still not demonstrated end to end: a real session hitting the ceiling and the next resuming from a handoff needs the double-hook question resolved now both Stop hooks can be live, a project ceiling chosen (250,000 on a 1M session is the operator's number to pick, `ceiling set project <N>`), proof-of-close-out in the attended arm, and a handoff on the headless arm — then U-HE-59.
+**Current next action (post-#1616).** PR #1616 landed the production-source integration, the B-104 and CP/Runtime/IS fixes, and the solo/team local-signing design with its source guard; PR and main CI passed. The existing U-HE-58 frontier remains unfinished: demonstrate the real memento ceiling and next-session handoff in the attended and headless arms, resolve the two Stop hooks, choose the project ceiling, and then progress U-HE-59. For the first self-hosted Omarchy release, keep audit signing off by default until B1/B2 and installed restart, tamper, key-residence, tenant-isolation, and redaction evidence are complete with the required live-device consent. MTC and in-place local-signed-ledger migration remain deferred. B-304 tracks two P3 document-status corrections from independent final-head review.
 
 **Archive.** `.harness/roadmap-next-action-archive.md` (PRIOR rounds only, verbatim as each stood when superseded — the current round lives only in this head; the newest superseded round may lag there until the next content PR archives it, and is always losslessly recoverable from this file's own git history meanwhile).
 
@@ -50,11 +50,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #1616 | 2026-09-30 | Production source and solo/team audit-signing guard landed; independent review and PR/main CI passed; installed acceptance remains gated. |
 | PR #1614 | 2026-09-20 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1612 | 2026-09-20 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1610 | 2026-09-19 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1608 | 2026-09-19 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
-| PR #1606 | 2026-09-19 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 
 ---
 
