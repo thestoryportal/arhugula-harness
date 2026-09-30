@@ -329,26 +329,45 @@ def test_per_family_pointer_tables_track_derived_heads(venue: str) -> None:
     _check_per_family_pointer_tables(venue, pointer.read_text(encoding="utf-8"))
 
 
-@pytest.mark.parametrize("venue", ("runtime", "cp"))
-def test_per_family_pointer_rejects_stale_inline_label(venue: str) -> None:
+@pytest.mark.parametrize(
+    ("venue", "family"),
+    (
+        ("runtime", "spec-harness-runtime"),
+        ("runtime", "implementation-plan-harness-runtime"),
+        ("cp", "spec-control-plane"),
+        ("cp", "implementation-plan-control-plane"),
+    ),
+)
+def test_per_family_pointer_rejects_stale_inline_label(venue: str, family: str) -> None:
     pointer = ah.REPO_ROOT / ".harness/artifact-pointers" / f"{venue}.md"
     text = pointer.read_text(encoding="utf-8")
-    spec_family = "spec-harness-runtime" if venue == "runtime" else "spec-control-plane"
-    version = next(head.version for head in ah.derive() if head.family == spec_family)
+    version = next(head.version for head in ah.derive() if head.family == family)
     label = f"**{version} — current cleared HEAD**"
-    assert label in text
+    assert text.count(label) == 1
     stale = text.replace(label, "**v0.0 — current cleared HEAD**", 1)
     with pytest.raises(AssertionError):
         _check_per_family_pointer_tables(venue, stale)
 
 
-@pytest.mark.parametrize("venue", ("runtime", "cp"))
-def test_per_family_pointer_rejects_wrong_cell_count(venue: str) -> None:
+@pytest.mark.parametrize(
+    ("venue", "section_number"),
+    (("runtime", "3"), ("runtime", "4"), ("cp", "3"), ("cp", "4")),
+)
+def test_per_family_pointer_rejects_wrong_cell_count(venue: str, section_number: str) -> None:
     pointer = ah.REPO_ROOT / ".harness/artifact-pointers" / f"{venue}.md"
     text = pointer.read_text(encoding="utf-8")
     lines = text.splitlines(keepends=True)
+    section_start = next(
+        i for i, line in enumerate(lines) if line.startswith(f"## §2.{section_number} ")
+    )
+    section_end = next(
+        (i for i in range(section_start + 1, len(lines)) if lines[i].startswith("## §2.")),
+        len(lines),
+    )
     historical = next(
-        i for i, line in enumerate(lines) if line.startswith("| ") and "former HEAD" in line
+        i
+        for i in range(section_start + 1, section_end)
+        if lines[i].startswith("| ") and "former HEAD" in lines[i]
     )
     lines[historical] = lines[historical].replace(" |\n", " | extra |\n", 1)
     malformed = "".join(lines)
