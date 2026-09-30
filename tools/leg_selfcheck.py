@@ -924,7 +924,11 @@ def check_counts(
                 claimed.append((m.start(), m.end()))
                 raw = m.group(1).lower()
                 value = int(raw) if raw.isdigit() else _NUMBER_WORDS[raw]
-                subject = _claim_subject(line, enclosing, m.start())
+                # A pointer row is an artifact-version history entry, even if
+                # its prose names a unit shared with another version.
+                subject = _pointer_row_subject(_path, line) or _claim_subject(
+                    line, enclosing, m.start()
+                )
                 claims[(subject, bucket)][value].append(line.strip()[:150])
 
     for path in sorted(skipped_aggregate_specs):
