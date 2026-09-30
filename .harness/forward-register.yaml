@@ -71,14 +71,14 @@
 
 
 snapshot:
-  total: 298
+  total: 299
   open: 2
   design_substrate_gated: 3
-  registered_finding: 124
+  registered_finding: 125
   operator_gated: 0
   held: 4
   closed: 165
-  identity_digest: 762809e61d8ef5e7
+  identity_digest: 848568c4c1e0ab06
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -12243,3 +12243,11 @@ items:
   summary: "The independent Opus final-head source review of PR #1616 returned GO with two P3 documentation authority gaps. The audit-signing fork had presented its successor packet as held for review after six clearance markers existed. The per-family CP pointer had called older spec and plan versions canonical HEAD despite newer generated artifact heads. Both labels were reconciled in this follow-up. Source GO, PR CI, and installed acceptance are separate claims."
   close_out: "CLOSED 2026-09-30 by this documentation follow-up: the audit-signing fork now identifies all six cleared successor artifacts, records the PR #1616 landing and first-release solo/team scope, and preserves historical review holds as history. The CP per-family pointer identifies spec v1.124 and plan v2.55 as current, consistent with generated artifact-heads.md, while old rows are dated history. Installed signing, redaction, tenant isolation and MTC transition remain separate release gates."
   council: "NO — two bounded documentation status corrections, with no new design decision."
+- id: "B-305"
+  title: "Per-family artifact pointers track generated heads and retain valid tables"
+  status: "registered_finding"
+  pr: "#1618"
+  heading: "### B-305 · Per-family artifact pointer authority and table shape *(#1618 review cycle, 2026-09-30; REGISTERED)*"
+  summary: "PR #1618 pass-1 review found that the Runtime per-family pointer still labels older spec and plan versions as canonical HEAD while the generated artifact-head table names newer heads. The CP pointer names the current versions, but its newest plan row has a different cell count from the table beneath it. Existing artifact-head checks do not pin these inline labels, so a stale label can return without a check failing. These are documentation authority and witness gaps, not evidence of installed runtime behavior."
+  close_out: "OPEN 2026-09-30. The Runtime and CP per-family pointers should identify the generated current heads, distinguish older versions as history, and render structurally valid tables. A check should fail if either current label drifts behind its generated head or a pointer table row has the wrong cell count. The done signal is a current, well-formed pointer pair with a regression check that catches both stale-label and malformed-row mutations."
+  council: "NO — one bounded pointer-authority correction with no new runtime or design decision."

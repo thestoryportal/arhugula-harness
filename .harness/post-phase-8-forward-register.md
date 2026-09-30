@@ -3099,3 +3099,10 @@ same spec leg.
 - **Current state.** CLOSED 2026-09-30 by this documentation follow-up. The final-head source reviewer of #1616 released with no P1/P2; its two P3 labels are now corrected.
 - **What closes this row.** CLOSED 2026-09-30: the audit-signing fork now identifies all six cleared successor artifacts, records the PR #1616 landing and first-release solo/team scope, and preserves historical review holds as history. The CP per-family pointer identifies spec v1.124 and plan v2.55 as current, consistent with generated artifact-heads.md, while old rows are dated history. Installed signing, redaction, tenant isolation and MTC transition remain separate release gates.
 - **Council.** NO — two bounded documentation status corrections, with no new design decision.
+
+### B-305 · Per-family artifact pointer authority and table shape *(#1618 review cycle, 2026-09-30; REGISTERED)*
+
+- **What it is.** PR #1618 pass-1 review found that the Runtime per-family pointer still labels older spec and plan versions as canonical HEAD while the generated artifact-head table names newer heads. The CP pointer names the current versions, but its newest plan row has a different cell count from the table beneath it. Existing artifact-head checks do not pin these inline labels, so a stale label can return without a check failing. These are documentation authority and witness gaps, not evidence of installed runtime behavior.
+- **Current state.** REGISTERED 2026-09-30 from the #1618 pass-1 review. The pointer and witness gaps remain open.
+- **What closes this row.** OPEN 2026-09-30. The Runtime and CP per-family pointers should identify the generated current heads, distinguish older versions as history, and render structurally valid tables. A check should fail if either current label drifts behind its generated head or a pointer table row has the wrong cell count. The done signal is a current, well-formed pointer pair with a regression check that catches both stale-label and malformed-row mutations.
+- **Council.** NO — one bounded pointer-authority correction with no new runtime or design decision.
