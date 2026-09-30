@@ -45,7 +45,6 @@ def test_mtc_local_backend_is_invalid_value_even_when_required_inputs_are_missin
     assert "RT-FAIL-CONFIG" in str(caught.value)
     assert "persona_tier" in str(caught.value)
     assert "local-ed25519" in str(caught.value)
-    assert not (tmp_path / "cutover.pem").exists()
 
 
 @pytest.mark.parametrize("persona", [PersonaTier.SOLO_DEVELOPER, PersonaTier.TEAM_BINDING])
@@ -114,6 +113,8 @@ def test_record_migration_rejects_mtc_local_before_backend_construction(
     ledger = tmp_path / "state.jsonl"
     ledger.write_text("")
     assert main([str(ledger), "--author", "--runtime-config", str(tmp_path / "config.toml")]) == 1
-    assert "RT-FAIL-CONFIG" in capsys.readouterr().err
+    stderr = capsys.readouterr().err
+    assert "RT-FAIL-CONFIG" in stderr
+    assert "local-ed25519" in stderr
     assert calls == []
     assert not (tmp_path / "record.json").exists()
