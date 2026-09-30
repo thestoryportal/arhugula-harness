@@ -18,6 +18,7 @@ uv run pytest -q \
   tools/test_ac_claim_precision.py \
   tools/test_agy_review.py \
   tools/test_codex_stop_gate.py \
+  tools/test_codex_pre_tool_use_policy.py \
   tools/test_codex_workflow_parity.py \
   tools/test_codex_worktree_gc.py \
   tools/test_arc_exit_report.py \
