@@ -1812,7 +1812,11 @@ def _local_alias_config(
             "harness-cost-attribution-v1": str(other_key),
         },
     )
-    config = dep.config().model_copy(update={"audit_signing": signing})
+    # Local private signing is admitted only below MTC; these direct-call
+    # witnesses still exercise record/row key separation at TEAM_BINDING.
+    config = dep.config().model_copy(
+        update={"persona_tier": PersonaTier.TEAM_BINDING, "audit_signing": signing}
+    )
     backend = make_audit_signing_backend(signing)
     assert backend is not None
     return config, backend
