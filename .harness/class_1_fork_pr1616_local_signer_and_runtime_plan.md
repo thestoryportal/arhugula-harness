@@ -27,7 +27,8 @@ authorizes advertising the file-backed backend as compliance-tier key isolation.
 `local-ed25519` to `SOLO_DEVELOPER` and `TEAM_BINDING` as an explicit local
 opt-in. At MTC, reject the selection as `RT-FAIL-CONFIG` during the pure
 configuration validation pass, before private-key I/O, KMS SDK discovery,
-record writes, or tracer registration. Do not substitute KMS automatically.
+audit cutover-record writes, or tracer registration. Bootstrap stages 1–3 may
+create the state root or ledger before this refusal. Do not substitute KMS automatically.
 `aws-kms` stays available at MTC. The local key is not protected against a
 compromised harness OS user; installed restart/tamper proof remains a separate
 release gate. [SPECULATIVE] A later compliance-tier local signer could use a
@@ -42,8 +43,10 @@ remains the general secret-fetch authority; proposed ADR-F5 v1.2 owns the
 bounded lower-tier file-key exception, including no per-access fingerprint and
 outside-Git residence. ADR-D5 v1.7 composes with it. Cross-deployment
 dual-signature continuity is an unimplemented target. The first-release
-operator procedure prohibits an in-place MTC upgrade; source has no general
-MTC+KMS-over-local-ledger guard, which a future MTC activation must add.
+operator procedure at `docs/first-release-omarchy-audit-signing.md` prohibits an
+in-place MTC upgrade under release gate R-AUDIT-TRANSITION-01, owned by Buford.
+Source has no general MTC+KMS-over-local-ledger guard, which a future MTC
+activation must add.
 
 ## Fork B — Runtime plan head trails implemented contracts
 
