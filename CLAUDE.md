@@ -272,7 +272,7 @@ This workspace has two logical postures co-resident in the same git repo:
 | Posture | What it edits | What it reads as canonical |
 |---|---|---|
 | **Design-phase** | `design-substrate/**`, `.harness/**` back-flow docs, `.harness/clearance/**` markers | substrate research + ADRs + ADD + workflow doc |
-| **Phase 7** | `harness-*/src/**`, `harness-*/tests/**`, axis subdirectory CLAUDE.md files | `design-substrate/*` (the cleared canonical) |
+| **Phase 7** | `harness-*/src/**`, `harness-*/tests/**`, `harness-cp/cp_tests/**`, axis subdirectory CLAUDE.md files | `design-substrate/*` (the cleared canonical) |
 
 Plus a third unconstrained mode for workspace operational work that touches neither (e.g., editing root `CLAUDE.md`, `.github/`, `.claude/`, `.harness/clearance/README.md` itself, this PR series).
 
@@ -285,7 +285,7 @@ At any point Claude is about to make substantive edits, it should determine the 
 | Files being edited | Posture |
 |---|---|
 | Only `design-substrate/**` (possibly with `.harness/**` companions) | **Design-phase** |
-| Only `harness-*/src/**` or `harness-*/tests/**` or axis subdirectory CLAUDE.md | **Phase 7** |
+| Only `harness-*/src/**` or `harness-*/tests/**` or `harness-cp/cp_tests/**` or axis subdirectory CLAUDE.md | **Phase 7** |
 | Only workspace operational files (root `CLAUDE.md`, `.github/`, `.claude/`, `.harness/clearance/README.md`, `pyproject.toml`, etc.) | **Mode-agnostic** |
 | Both `design-substrate/**` AND `harness-*/src/**` | **Halt + ask** — must be a documented bundled-absorption arc; verify back-flow doc presence |
 

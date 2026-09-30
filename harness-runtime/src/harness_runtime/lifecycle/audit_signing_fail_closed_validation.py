@@ -8,13 +8,12 @@ Discipline_v1_34.md` §21.2.3 rows 1-4) and the MTC tenant-bootstrap invariant
 row-4 cutover record when `audit_cutover_record_path` is configured but the
 file does not yet exist.
 
-Called from bootstrap stage 4 OD, AFTER the audit-signing backend is
-constructed (`make_audit_signing_backend`) — the record-key resolution +
-greenfield-signing steps need `backend.algorithm` / `backend.sign()` — and
-BEFORE the one-shot global tracer registration (mirrors the round-18
-rationale that already gates the sibling `validate_audit_signing_for_span_
-stage` call at the same site: a KMS config failure surfacing after
-`set_tracer_provider` poisons same-process bootstrap retry).
+The pure `validate_mtc_audit_signing_config` pass runs at bootstrap stage 4 OD
+BEFORE `make_audit_signing_backend`, private-key loading, and one-shot global
+tracer registration. Later record-key resolution and greenfield signing need
+`backend.algorithm` / `backend.sign()`, so they run after backend construction.
+A config refusal after `set_tracer_provider` would poison a same-process
+bootstrap retry; the pure pass preserves that ordering.
 
 **Scope boundary (deliberately narrow).** This module owns config-shape
 validation + greenfield record initialization ONLY. It does NOT touch the
@@ -30,8 +29,9 @@ inputs (absent backend, at every tier when the flag resolves ON; absent
 tenant/record inputs, at MTC only) surface as `IncompatibleConfigVersion`
 (`RT-FAIL-CONFIG-VERSION`) — the config predates the v1.101 contract,
 upgrade it. INVALID v2 VALUES (explicit `false` at MTC, a normalizer-refused
-tenant token, a record-key sharing row material or mismatching the mapping
-algorithm, a non-MTC opt-in missing its co-required record fields) surface
+tenant token, local-ed25519 selected at MTC, a record-key sharing row
+material or mismatching the mapping algorithm, a non-MTC opt-in missing
+its co-required record fields) surface
 as `AuditSigningConfigInvalidError` (`RT-FAIL-CONFIG`) — the config speaks v2 and
 is wrong. Each raise names every violation in its own class, not just the
 first found.
@@ -327,6 +327,11 @@ def validate_mtc_audit_signing_config(config: RuntimeConfig) -> None:
 
     # --- Pass 2: INVALID v2 values -> AuditSigningConfigInvalidError.
     invalid: list[str] = []
+    if is_mtc and config.audit_signing.backend is AuditSigningBackendKind.LOCAL_ED25519:
+        invalid.append(
+            "audit_signing.backend='local-ed25519' is invalid at "
+            "persona_tier='multi-tenant-compliance' — MTC requires delegated signing"
+        )
     if is_mtc and config.audit_signing_fail_closed is False:
         invalid.append(
             "audit_signing_fail_closed=false is invalid at "

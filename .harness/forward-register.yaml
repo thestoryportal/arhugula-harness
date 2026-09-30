@@ -9100,7 +9100,9 @@ items:
     only when the positions DIFFER, as in its own PRE_ACTION + SUB_AGENT_BOUNDARY example. COST: the composed
     key is also the F2 idempotency_key, and append_ledger_entry dedups key-only (state_ledger_write.py:330),
     so the second placement''s entry is an IDEMPOTENT_NOOP and is DROPPED -- a silent omission of oversight
-    evidence, not a noisy duplicate.'
+    evidence, not a noisy duplicate. Runtime spec v1.132 and its independently reviewed first-match source
+    correction now resolve the PRE_ACTION same-position double-emission half of this historical finding;
+    the SUB_AGENT_BOUNDARY same-position half remains open, and this row retains its Class 1 gate.'
   close_out: 'GROUNDING IS DONE; the row now awaits an operator decision on a committed surface. Filed
     as Class 1 back-flow at .harness/class_1_fork_b165_same_position_placement_identity_collision.md;
     witnessed by harness-runtime/tests/test_b165_same_position_placement_identity_witness.py (13 test

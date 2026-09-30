@@ -86,5 +86,5 @@ Useful provider-free checks:
 ```bash
 just memory-closeout-check
 UV_CACHE_DIR=/tmp/arhugula-uv-cache uv run pytest harness-runtime/tests/test_automatic_memory_runtime.py
-UV_CACHE_DIR=/tmp/arhugula-uv-cache uv run pytest harness-cp/tests/test_memory_access_mode.py
+UV_CACHE_DIR=/tmp/arhugula-uv-cache uv run pytest harness-cp/cp_tests/test_memory_access_mode.py
 ```
