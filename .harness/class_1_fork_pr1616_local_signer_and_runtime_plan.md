@@ -1,9 +1,9 @@
 # PR #1616 Class 1 backflow: local signer boundary and Runtime plan coverage
 
-Status: routed for design review, 2026-09-29. Source execution is held at the
-audit-signing configuration boundary until the successor artifacts are reviewed.
-This is a bundled absorption under root `CLAUDE.md` §11.4: the design correction
-and its implementation will land in the same PR only after independent review.
+Status: cleared and landed in PR #1616, 2026-09-30. The design correction
+and its implementation received independent review before landing. The
+2026-09-29 holds below remain as a dated review record; they are not current
+clearance or source-execution holds.
 
 ## Fork A — ADR-D8 signing-key residence
 
@@ -67,11 +67,11 @@ now routes to Control Plane plan v2.55, co-reviewed with Runtime v2.64.
 Pass-1 spec lens: `pr1616-pass1-visible-lenses/spec-refined-block-raw.txt`
 SHA256 `35192865d5e99c0d8a56b97a27ada3cf5b65206f293fe93a50b47faba0fa6e0d`.
 LIT disposition: `arhugula-harness-trial-193`
-`cmt-24579abc-f9a0-4760-8dc1-cf1f872648e0`. Both findings remain accepted
-until reviewed design, source witness, composite checks and merge-gate passes
-close them. No live-device consent or installed-readiness claim is implied.
+`cmt-24579abc-f9a0-4760-8dc1-cf1f872648e0`. Both findings were accepted
+for the subsequent design, source, composite-check and merge-gate arc.
+No live-device consent or installed-readiness claim is implied.
 
-## Independent packet review hold
+## Historical independent packet review holds (2026-09-29)
 
 The existing Opus 5.5/high independent reviewer returned BLOCK at LIT
 `cmt-121cef7f-a806-45e6-bab2-9bb195ece9c4` (raw SHA256
@@ -80,10 +80,29 @@ It confirmed ADR-D8 MTC isolation and the central validation site, and found:
 (1) first-release MTC has no admissible signer when KMS is excluded — operator
 profile scope resolved by the direct user addendum `/home/robbo/Work/arhugula-omarchy/docs/orchestration/review-evidence/buford-continuation-01a0e147/first-release-persona-decision-2026-09-29.md` (solo/team first release; tenant isolation/redaction retained; MTC deferred); (2) ADR-D5 §1.4 rows 1–2 require
 a residence amendment; (3) the Runtime plan's witness citations and source
-limits need correction; (4) CP v1.120–v1.124 needs a plan successor. No
-clearance marker is filed while these hold. The reviewer was read-only and
-released with no handles.
+limits need correction; (4) CP v1.120–v1.124 needs a plan successor. At that stage no clearance marker had been filed while these holds remained.
+The reviewer was read-only and released with no handles.
 
-The second independent review at LIT `cmt-671239f0-f409-4990-94f9-903000f4bbbe` closed the Runtime plan citation P2 for draft review and narrowed two P2s: foundational F5 exception/cross-deployment continuity and missing nonempty-prefix CP witnesses. These remain open; no design clearance or source admission follows from this draft correction.
+The second independent review at LIT `cmt-671239f0-f409-4990-94f9-903000f4bbbe` closed the Runtime plan citation P2 for draft review and narrowed two P2s: foundational F5 exception/cross-deployment continuity and missing nonempty-prefix CP witnesses. These remained open at that draft stage; no design clearance or source admission followed from that draft correction.
 
-The third independent review at LIT `cmt-7a631c7d-206c-4c22-914d-b637b9bbc5b5` closed CP plan U-CP-103 for draft review and held F5/D5 over two unsupported source-MUST claims. This draft now states key-path checkout exclusion as an installed provisioning gate and MTC transition as a deferred, operator-prohibited operation needing a future source guard. The direct user scope decision is at LIT `cmt-477a5afa-3304-4a82-ae20-e0766c7c3310`. Neither review has cleared these revised bytes.
+The third independent review at LIT `cmt-7a631c7d-206c-4c22-914d-b637b9bbc5b5` closed CP plan U-CP-103 for draft review and held F5/D5 over two unsupported source-MUST claims. That draft stated key-path checkout exclusion as an installed provisioning gate and MTC transition as a deferred, operator-prohibited operation needing a future source guard. The direct user scope decision is at LIT `cmt-477a5afa-3304-4a82-ae20-e0766c7c3310`. Neither review had cleared those draft bytes at that stage.
+
+## Final disposition (2026-09-30)
+
+The successor packet was independently reviewed and cleared. The six clearance
+markers are:
+
+- `.harness/clearance/ADR-D8_audit_signing_backend-v1-1-cleared-2026-09-30.md`
+- `.harness/clearance/ADR-D5-v1-7-cleared-2026-09-30.md`
+- `.harness/clearance/ADR-F5-v1-2-cleared-2026-09-30.md`
+- `.harness/clearance/spec-harness-runtime-v1-133-cleared-2026-09-30.md`
+- `.harness/clearance/implementation-plan-harness-runtime-v2-64-cleared-2026-09-30.md`
+- `.harness/clearance/implementation-plan-control-plane-v2-55-cleared-2026-09-30.md`
+
+PR #1616 landed on main at `d2095b18e2ab4cf0676c808050dd240223447828`
+after independent source GO and exact-head CI. The first self-hosted release
+remains scoped to solo/team tiers: tenant isolation and redaction remain in
+scope, while MTC and its key-isolation promise are deferred. The source guard
+rejects `local-ed25519` at MTC before key I/O; this does not prove installed
+signing, restart/tamper behavior, tenant-isolation/redaction, or a later MTC
+transition. Those retain separate release gates.
