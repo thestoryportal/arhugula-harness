@@ -649,6 +649,19 @@ _UNIT_ID_RE = re.compile(r"\bU-[A-Z]+-\d+\b")
 #: unit they sit under rather than to the file as a whole.
 _UNIT_HEADING_RE = re.compile(r"^\s*#{1,6}\s+.*?\b(U-[A-Z]+-\d+)\b")
 
+_POINTER_ROW_RE = re.compile(r"^\|\s*[^|]+\|\s*`([^`]+)`\s*\(\*\*(v\d+(?:\.\d+)*)")
+
+
+def _pointer_row_subject(path: str, line: str) -> str | None:
+    """Keep versioned pointer rows distinct without exempting their count claims."""
+    if not (path.startswith(".harness/artifact-pointers/") and path.endswith(".md")):
+        return None
+    match = _POINTER_ROW_RE.match(line)
+    if match is None:
+        return None
+    artifact, version = match.groups()
+    return f"{artifact}@{version} in {path}"
+
 
 def _claim_subject(line: str, enclosing: str, at: int = 0) -> str:
     """The unit a count claim at offset `at` belongs to: the NEAREST unit id at
@@ -834,6 +847,10 @@ def check_counts(
             consumed: dict[str, int] = defaultdict(int)
             enclosing = f"(unattributed in {path})"
             for line in lines:
+                pointer_subject = _pointer_row_subject(path, line)
+                if pointer_subject is not None:
+                    out.append((path, pointer_subject, line))
+                    continue
                 m = _ROW_ID_RE.match(line) or _UNIT_HEADING_RE.match(line)
                 if m:
                     enclosing = m.group(1)

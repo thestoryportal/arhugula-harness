@@ -973,6 +973,32 @@ def test_count_subjects_still_disagree_within_one_enclosing_row():
     assert _hard(report) != []
 
 
+def test_pointer_history_counts_are_scoped_to_artifact_and_version():
+    path = ".harness/artifact-pointers/runtime.md"
+    report = _report_for_counts(
+        {
+            path: [
+                "| Runtime | `Spec_Harness_Runtime_v1.md` (**v1.121 — former HEAD**, two sites) |",
+                "| Runtime | `Spec_Harness_Runtime_v1.md` (**v1.117**, four sites) |",
+            ]
+        }
+    )
+    assert _hard(report) == [], _hard(report)
+
+
+def test_pointer_history_still_blocks_conflicting_counts_for_same_version():
+    path = ".harness/artifact-pointers/runtime.md"
+    report = _report_for_counts(
+        {
+            path: [
+                "| Runtime | `Spec_Harness_Runtime_v1.md` (**v1.121 — former HEAD**, two sites) |",
+                "| Runtime | `Spec_Harness_Runtime_v1.md` (**v1.121**, four sites) |",
+            ]
+        }
+    )
+    assert any("sites" in message and "DIFFERENT" in message for message in _hard(report))
+
+
 def test_minted_labels_are_queried_only_within_their_own_family(tmp_path):
     """[P2] (codex round 10): unioning every changed family let a label minted
     only in a CP artifact be queried against Runtime siblings merely because a
