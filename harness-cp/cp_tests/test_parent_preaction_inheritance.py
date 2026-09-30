@@ -231,9 +231,11 @@ def _linear_steps() -> list[WorkflowStep]:
 def _run(
     manifest: WorkflowManifestEntry,
     steps: list[WorkflowStep],
+    *,
+    recorder: _ContextRecorder | None = None,
     **kwargs: Any,
 ) -> _ContextRecorder:
-    recorder = _ContextRecorder()
+    recorder = recorder if recorder is not None else _ContextRecorder()
     result = execute_workflow_at_depth(
         manifest,
         steps,
@@ -320,6 +322,84 @@ def test_parallelization_branches_receive_the_inherited_prefix() -> None:
     )
 
     assert set(recorder.seen.values()) == {inherited}
+
+
+class _AcceptingContextRecorder(_ContextRecorder):
+    """Complete the real evaluator loop while recording each step's context."""
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        super().dispatch(binding, step, step_context=step_context)
+        if str(step.step_id) == "s1":
+            return {"accepted": True}
+        return {"draft": "generated"}
+
+
+@pytest.mark.parametrize(
+    "topology",
+    [
+        TopologyPattern.ORCHESTRATOR_WORKERS,
+        TopologyPattern.DECENTRALIZED_HANDOFF,
+        TopologyPattern.HIERARCHICAL_DELEGATION,
+    ],
+)
+def test_nonempty_prefix_reaches_each_non_evaluator_strategy_context(
+    topology: TopologyPattern,
+) -> None:
+    """Dispatch actual strategy steps, including fan-out and sequential handoff."""
+    inherited = (_pre("fs.write", timeout=1000),)
+    own = _pre("http.get", timeout=5)
+
+    recorder = _run(
+        _manifest(topology, (own,)),
+        _linear_steps(),
+        inherited_hitl_placements=inherited,
+    )
+
+    assert recorder.seen == {
+        "s0": (*inherited, own),
+        "s1": (*inherited, own),
+    }
+
+
+def test_nonempty_prefix_reaches_both_evaluator_optimizer_contexts() -> None:
+    inherited = (_pre("fs.write", timeout=1000),)
+    own = _pre("http.get", timeout=5)
+
+    recorder = _run(
+        _manifest(TopologyPattern.EVALUATOR_OPTIMIZER, (own,)),
+        _linear_steps(),
+        recorder=_AcceptingContextRecorder(),
+        inherited_hitl_placements=inherited,
+    )
+
+    assert recorder.seen == {
+        "s0": (*inherited, own),
+        "s1": (*inherited, own),
+    }
+
+
+def test_nonempty_prefix_reaches_real_post_join_synthesis_context() -> None:
+    inherited = (_pre("fs.write", timeout=1000),)
+    own = _pre("http.get", timeout=5)
+    synthesis = WorkflowStep(
+        step_id=StepID("synthesis"),
+        step_kind=StepKind.POST_JOIN_SYNTHESIS,
+        step_payload={"prompt": "compose"},
+    )
+
+    recorder = _run(
+        _manifest(TopologyPattern.ORCHESTRATOR_WORKERS, (own,)),
+        [*_linear_steps(), synthesis],
+        inherited_hitl_placements=inherited,
+    )
+
+    assert recorder.seen == {
+        "s0": (*inherited, own),
+        "s1": (*inherited, own),
+        "synthesis": (*inherited, own),
+    }
 
 
 # --- 5. The prefix is bound into the captured gate-config hash --------------------------
