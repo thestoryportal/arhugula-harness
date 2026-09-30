@@ -39,7 +39,7 @@ Routing chain: ADR-D8 successor plus ADR-D5 §1.4 residence amendment →
 Runtime C-RT-03 successor → Runtime plan successor → Phase 7 config guard
 + behavioral witness. The CP SigningBackend
 protocol, signature bytes, key IDs, and audit record format are unchanged. ADR-F5
-remains the general secret-fetch authority; proposed ADR-F5 v1.2 owns the
+remains the general secret-fetch authority; cleared ADR-F5 v1.2 owns the
 bounded lower-tier file-key exception, including no per-access fingerprint and
 outside-Git residence. ADR-D5 v1.7 composes with it. Cross-deployment
 dual-signature continuity is an unimplemented target. The first-release
