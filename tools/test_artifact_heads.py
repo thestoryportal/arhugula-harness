@@ -294,6 +294,68 @@ FILENAME_PINS = (
     (".harness/artifact-pointers/cxa.md", "cross-axis-composition-document"),
 )
 
+
+def _check_per_family_pointer_tables(venue: str, text: str) -> None:
+    families = {
+        "runtime": ("spec-harness-runtime", "implementation-plan-harness-runtime"),
+        "cp": ("spec-control-plane", "implementation-plan-control-plane"),
+    }[venue]
+    heads = {head.family: head for head in ah.derive()}
+    pointer = ah.REPO_ROOT / ".harness/artifact-pointers" / f"{venue}.md"
+    sections = text.split("## §2.")
+    for section_number, family in zip(("3", "4"), families, strict=True):
+        section = next(s for s in sections if s.startswith(section_number + " "))
+        table = [line for line in section.splitlines() if line.startswith("|")]
+        assert len(table) >= 3, f"{pointer}: §2.{section_number} has no pointer rows"
+        expected_cells = len(re.split(r"(?<!\\)\|", table[0]))
+        assert all(len(re.split(r"(?<!\\)\|", row)) == expected_cells for row in table), (
+            f"{pointer}: §2.{section_number} has a malformed pointer-table row"
+        )
+        head = heads[family]
+        current = table[2]
+        assert head.artifact.rsplit("/", 1)[-1] in current
+        assert f"**{head.version} — current cleared HEAD**" in current
+        assert head.marker in current
+        assert all(
+            not re.search(r"\*\*v[^*]+ — (?:canonical|current cleared) HEAD\*\*", row)
+            for row in table[3:]
+        ), f"{pointer}: §2.{section_number} has a stale head label"
+
+
+@pytest.mark.parametrize("venue", ("runtime", "cp"))
+def test_per_family_pointer_tables_track_derived_heads(venue: str) -> None:
+    """Current rows agree with clearance heads and every pointer row has valid cells."""
+    pointer = ah.REPO_ROOT / ".harness/artifact-pointers" / f"{venue}.md"
+    _check_per_family_pointer_tables(venue, pointer.read_text(encoding="utf-8"))
+
+
+@pytest.mark.parametrize("venue", ("runtime", "cp"))
+def test_per_family_pointer_rejects_stale_inline_label(venue: str) -> None:
+    pointer = ah.REPO_ROOT / ".harness/artifact-pointers" / f"{venue}.md"
+    text = pointer.read_text(encoding="utf-8")
+    spec_family = "spec-harness-runtime" if venue == "runtime" else "spec-control-plane"
+    version = next(head.version for head in ah.derive() if head.family == spec_family)
+    label = f"**{version} — current cleared HEAD**"
+    assert label in text
+    stale = text.replace(label, "**v0.0 — current cleared HEAD**", 1)
+    with pytest.raises(AssertionError):
+        _check_per_family_pointer_tables(venue, stale)
+
+
+@pytest.mark.parametrize("venue", ("runtime", "cp"))
+def test_per_family_pointer_rejects_wrong_cell_count(venue: str) -> None:
+    pointer = ah.REPO_ROOT / ".harness/artifact-pointers" / f"{venue}.md"
+    text = pointer.read_text(encoding="utf-8")
+    lines = text.splitlines(keepends=True)
+    historical = next(
+        i for i, line in enumerate(lines) if line.startswith("| ") and "former HEAD" in line
+    )
+    lines[historical] = lines[historical].replace(" |\n", " | extra |\n", 1)
+    malformed = "".join(lines)
+    assert malformed != text
+    with pytest.raises(AssertionError):
+        _check_per_family_pointer_tables(venue, malformed)
+
 _ADJACENT_WINDOW = 90
 
 
