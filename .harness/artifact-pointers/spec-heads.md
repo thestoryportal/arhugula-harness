@@ -6,7 +6,7 @@ pointer to this file. Query this pack for the detail; do not preload it.*
 
 ---
 
-Current source heads (2026-09-29): IS `design-substrate/Spec_Information_Substrate_v1.md` v1.16; CP `design-substrate/Spec_Control_Plane_v1_124.md` v1.124; Runtime `design-substrate/Spec_Harness_Runtime_v1_132.md` v1.132. The lineage paragraph below preserves its 2026-08-12 state and is not a present-tense head declaration.
+Current source heads (2026-09-30): IS `design-substrate/Spec_Information_Substrate_v1.md` v1.16; CP `design-substrate/Spec_Control_Plane_v1_124.md` v1.124; Runtime `design-substrate/Spec_Harness_Runtime_v1_133.md` v1.133. The lineage paragraph below preserves its 2026-08-12 state and is not a present-tense head declaration.
 
 ### 2.3 Per-Axis Specs (Phase 5 Contract Authority)
 

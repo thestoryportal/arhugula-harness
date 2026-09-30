@@ -23,15 +23,16 @@ is the one that resolved the head.
 | Family | Head | Cleared | Artifact | Markers | Head marker |
 |---|---|---|---|---|---|
 | `adr-d2` | `v1.3` | 2026-07-15 | `design-substrate/ADR-D2.md` | 1 | `adr-d2-v1-3-cleared-2026-07-15.md` |
-| `adr-d5` | `v1.6` | 2026-08-09 | `design-substrate/ADR-D5.md` | 2 | `ADR-D5-v1-6-cleared-2026-08-09.md` |
+| `adr-d5` | `v1.7` | 2026-09-30 | `design-substrate/ADR-D5_v1_7.md` | 3 | `ADR-D5-v1-7-cleared-2026-09-30.md` |
 | `adr-d6` | `v1.3` | 2026-08-12 | `design-substrate/ADR-D6_v1_2.md` | 1 | `adr-d6-v1-3-cleared-2026-08-12.md` |
 | `adr-d7-memory-substrate` | `v1 (Proposed, 2026-07-01)` | 2026-07-09 | `design-substrate/ADR-D7_memory_substrate.md` | 1 | `ADR-D7_memory_substrate-cleared-2026-07-09.md` |
-| `adr-d8-audit-signing-backend` | `v1 (Accepted, 2026-07-16)` | 2026-07-16 | `design-substrate/ADR-D8_audit_signing_backend.md` | 1 | `ADR-D8_audit_signing_backend-cleared-2026-07-16.md` |
+| `adr-d8-audit-signing-backend` | `v1.1` | 2026-09-30 | `design-substrate/ADR-D8_audit_signing_backend_v1_1.md` | 2 | `ADR-D8_audit_signing_backend-v1-1-cleared-2026-09-30.md` |
+| `adr-f5` | `v1.2` | 2026-09-30 | `design-substrate/ADR-F5_v1_2.md` | 1 | `ADR-F5-v1-2-cleared-2026-09-30.md` |
 | `cross-axis-composition-document` | `v2.23` | 2026-07-30 | `design-substrate/Cross_Axis_Composition_Document_v2_23.md` | 8 | `cross-axis-composition-v2-23-cleared-2026-07-30.md` |
 | `implementation-plan-action-surface` | `v1.6` | 2026-07-15 | `design-substrate/Implementation_Plan_Action_Surface_v1_6.md` | 2 | `implementation-plan-action-surface-v1-6-cleared-2026-07-15.md` |
-| `implementation-plan-control-plane` | `v2.54` | 2026-09-24 | `design-substrate/Implementation_Plan_Control_Plane_v2_54.md` | 24 | `implementation-plan-control-plane-v2-54-cleared-2026-09-24.md` |
+| `implementation-plan-control-plane` | `v2.55` | 2026-09-30 | `design-substrate/Implementation_Plan_Control_Plane_v2_55.md` | 25 | `implementation-plan-control-plane-v2-55-cleared-2026-09-30.md` |
 | `implementation-plan-harness-core` | `v1.3` | 2026-07-19 | `design-substrate/Implementation_Plan_Harness_Core_v1_3.md` | 1 | `implementation-plan-harness-core-v1-3-cleared-2026-07-19.md` |
-| `implementation-plan-harness-runtime` | `v2.63` | 2026-08-13 | `design-substrate/Implementation_Plan_Harness_Runtime_v2_63.md` | 22 | `implementation-plan-harness-runtime-v2-63-cleared-2026-08-13.md` |
+| `implementation-plan-harness-runtime` | `v2.64` | 2026-09-30 | `design-substrate/Implementation_Plan_Harness_Runtime_v2_64.md` | 23 | `implementation-plan-harness-runtime-v2-64-cleared-2026-09-30.md` |
 | `implementation-plan-information-substrate` | `v2.10` | 2026-09-29 | `design-substrate/Implementation_Plan_Information_Substrate_v2_10.md` | 6 | `implementation-plan-information-substrate-v2-10-cleared-2026-09-29.md` |
 | `implementation-plan-memory-substrate` | `v1.3` | 2026-08-06 | `design-substrate/Implementation_Plan_Memory_Substrate_v1.md` | 4 | `implementation-plan-memory-substrate-v1-3-cleared-2026-08-06.md` |
 | `implementation-plan-operational-discipline` | `v2.36` | 2026-08-16 | `design-substrate/Implementation_Plan_Operational_Discipline_v2_36.md` | 10 | `implementation-plan-operational-discipline-v2-36-cleared-2026-08-16.md` |
@@ -40,7 +41,7 @@ is the one that resolved the head.
 | `project-workflow` | `v1.19` | 2026-07-24 | `design-substrate/Project_Workflow_v1_19.md` | 7 | `Project_Workflow-v1_19-cleared-2026-07-24.md` |
 | `spec-action-surface` | `v1.14` | 2026-07-15 | `design-substrate/Spec_Action_Surface_v1.md` | 6 | `spec-action-surface-v1-14-cleared-2026-07-15.md` |
 | `spec-control-plane` | `v1.124` | 2026-09-25 | `design-substrate/Spec_Control_Plane_v1_124.md` | 99 | `spec-control-plane-v1-124-cleared-2026-09-25.md` |
-| `spec-harness-runtime` | `v1.132` | 2026-09-29 | `design-substrate/Spec_Harness_Runtime_v1_132.md` | 95 | `spec-harness-runtime-v1-132-cleared-2026-09-29.md` |
+| `spec-harness-runtime` | `v1.133` | 2026-09-30 | `design-substrate/Spec_Harness_Runtime_v1_133.md` | 96 | `spec-harness-runtime-v1-133-cleared-2026-09-30.md` |
 | `spec-information-substrate` | `v1.16` | 2026-09-25 | `design-substrate/Spec_Information_Substrate_v1.md` | 14 | `spec-information-substrate-v1-16-cleared-2026-09-25.md` |
 | `spec-memory-substrate` | `v1.3` | 2026-08-06 | `design-substrate/Spec_Memory_Substrate_v1.md` | 4 | `spec-memory-substrate-v1-3-cleared-2026-08-06.md` |
 | `spec-operational-discipline` | `v1.42` | 2026-08-16 | `design-substrate/Spec_Operational_Discipline_v1_42.md` | 16 | `spec-operational-discipline-v1-42-cleared-2026-08-16.md` |

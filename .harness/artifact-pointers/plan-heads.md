@@ -6,7 +6,7 @@ pointer to this file. Query this pack for the detail; do not preload it.*
 
 ---
 
-Current source heads (2026-09-29): IS `design-substrate/Implementation_Plan_Information_Substrate_v2_10.md` v2.10; CP `design-substrate/Implementation_Plan_Control_Plane_v2_54.md` v2.54; Runtime `design-substrate/Implementation_Plan_Harness_Runtime_v2_63.md` v2.63. The lineage paragraph below preserves its 2026-08-12 state and is not a present-tense head declaration.
+Current source heads (2026-09-30): IS `design-substrate/Implementation_Plan_Information_Substrate_v2_10.md` v2.10; CP `design-substrate/Implementation_Plan_Control_Plane_v2_55.md` v2.55; Runtime `design-substrate/Implementation_Plan_Harness_Runtime_v2_64.md` v2.64. The lineage paragraph below preserves its 2026-08-12 state and is not a present-tense head declaration.
 
 ### 2.4 Per-Axis Plans + CXA (Phase 6 Execution Authority)
 
