@@ -8,7 +8,7 @@ back_reference:
   - ".harness/class_1_fork_pr1616_local_signer_and_runtime_plan.md"
   - "PR #1616"
   - "LIT arhugula-harness-trial-193 cmt-d177b0f9-19a1-4bc3-a0db-7df8844d1936 (Buford disposition)"
-  - "design-substrate/ADR-D5_v1_7.md SHA256 43a8e6e6c80889b5a17c05beff318e8a4bf678d7d1738548becd9c742f314b50"
+  - "design-substrate/ADR-D5_v1_7.md SHA256 e4262f3a218c7352ae869f2823343a6d1c57757d5e64d6248f3b5c4b997ab84e"
 merge_commit: "pending (recorded at PR #1616)"
 reviewer_chain:
   - "Claude Opus 5.5/high draft design closure cmt-a6d57693-e701-4c43-a308-522bac76bf60 (draft only)"
