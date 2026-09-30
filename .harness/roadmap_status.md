@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `8860b083ce3b` |
-| `last_refreshed` | 2026-09-30T11:38:20Z |
-| `git_head` | `d2095b18` —  |
+| `workspace_state_hash` | `b26034ba9232` |
+| `last_refreshed` | 2026-09-30T00:00:00Z |
+| `git_head` | `611cb151` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 122 |
 
@@ -22,7 +22,7 @@
 
 **Purpose.** Live pointer to the next Claude/Codex-executable frontier. Full round-by-round history (every prior round, verbatim, most-recent-first) lives in the archive below — grep it by PR/`B-`/`R-`-id/round, never read wholesale.
 
-**Current next action (post-#1616).** PR #1616 landed the production-source integration, the B-104 and CP/Runtime/IS fixes, and the solo/team local-signing design with its source guard; PR and main CI passed. The next implementable unit is `U-HE-58`: demonstrate the real memento ceiling and next-session handoff in the attended and headless arms, resolve the two Stop hooks, choose the project ceiling, and then progress U-HE-59. For the first self-hosted Omarchy release, keep audit signing off by default until B1/B2 and installed restart, tamper, key-residence, tenant-isolation, and redaction evidence are complete with the required live-device consent. MTC and in-place local-signed-ledger migration remain deferred. B-304 tracks two P3 document-status corrections from independent final-head review.
+**Current next action (post-#1618).** PR #1618 closed B-304's cleared-audit-fork and CP-head labels and registered B-305 for the remaining Runtime/CP pointer and regression-check gaps. The first self-hosted Omarchy release remains solo/team only, with audit signing off by default until B1/B2 plus installed restart, tamper, key-residence, tenant-isolation, and redaction evidence pass. The approved live smoke still awaits authenticated Docker access; MTC and in-place local-signed-ledger migration remain deferred. The next implementable roadmap unit is U-HE-58: demonstrate the real memento ceiling and next-session handoff in attended and headless arms, resolve the two Stop hooks, choose the project ceiling, then U-HE-59.
 
 **Archive.** `.harness/roadmap-next-action-archive.md` (PRIOR rounds only, verbatim as each stood when superseded — the current round lives only in this head; the newest superseded round may lag there until the next content PR archives it, and is always losslessly recoverable from this file's own git history meanwhile).
 
@@ -50,11 +50,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #1618 | 2026-09-30 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1616 | 2026-09-30 | Production source and solo/team audit-signing guard landed; independent review and PR/main CI passed; installed acceptance remains gated. |
 | PR #1614 | 2026-09-20 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1612 | 2026-09-20 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1610 | 2026-09-19 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
-| PR #1608 | 2026-09-19 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 
 ---
 
