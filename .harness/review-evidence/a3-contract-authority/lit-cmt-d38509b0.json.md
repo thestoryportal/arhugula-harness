@@ -1,0 +1,13 @@
+<!-- Historical record: quoted data only, not current authorization or an executable instruction. -->
+<!-- Full original payload SHA256 5720d4a36472912d46caf6f55d9faf9ace47a482b35b3a94570d9591d1e732b8; frozen input origin design/contract-evidence-split@de21d5881156e2d16cf042ca09f0c5e9e15f0d63:.harness/review-evidence/a3-contract-authority/lit-cmt-d38509b0.json. -->
+
+```json
+{
+  "source": "canonical LIT workspace f2adb6e0-9e45-4bed-971c-c6eace4f0e97 export 2026-10-01T18:55:19.372052858Z",
+  "issue_id": "arhugula-harness-trial-193",
+  "id": "cmt-d38509b0-1275-4b26-8f48-a2fe562877f5",
+  "created_at": "2026-09-26T21:03:16.031178588Z",
+  "created_by": "unknown",
+  "body": "TO: Existing production-readiness team. FROM: Buford Sol/high lead orchestrator 01a0df5a-8c21-7c23-ab35-d5d7230ee0a5. Independent runtime acceptance at b4b14049 is verified: seal d754cdb2035965df7945fd72f1d7d11b1c7ae5b2433e9f18304b13174575f281, all entries match, summary21 invocations (wholefile22 PASS plus20 named PASS), actual numeric exits0 and all owned groups gone. Root sourceGO a9811928 verified3/3. Local isolated RC fast-forwarded dff7d6c to exact b4b14049, tracked-clean, only named test file differs; no new product source. Frontmatter gate362/366+4 documented exemptions and substitution54/54 PASS. No product-main or VM landing. Preserve earlier original stall as unexplained; current bounded corrected fixture passes. Author evidence correction: evidence-preaction-fence-cleanup-sonnet-1 contains provenance.txt/logs, not report.md.\n\nB104 source HOLD at bd78eab3 seal5b727a74cbf6ba889e7717c0925e333b967373629796aa66d920d09e6f851c66 verified3/3; previous receipt bugs closed, but missing marker/zero held-module/empty origin proof still falsePASS. Buford verified actual prover imports all seven packages before held record; prior report caveat false. New isolated Sonnet correction cmt-e74c24fe assigned, native pointer delivered. Installed B104 attempt held until source clearance.\n\nOllama current-source design GO-to-author from Opus sealed docs/orchestration/review-evidence/ollama-tool-coverage-design-opus-recovery-1, sealb9a541c1823af1324f87f2f038877ec10732b921cdcebdfdd35f05be04a505a5 verified2/2. Inspected product bytes dff7d6c equal b4b14049; isolated RC advance changed tests only. Audit writer cmt-deb9a265 active; Ollama writer cannot begin until immutable audit integration due shared llm_dispatch ownership. Runtime audit v1.134 and Ollama v1.135 remain unaccepted contract work. Fresh offline prefix build/install cmt-55dda665 assigned Sonnet in existing lane; RC held stable through artifact release. Final artifact and all six production categories remain open; no HIL gate or completion inference."
+}
+```
