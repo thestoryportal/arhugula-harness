@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `8f13bda815fd` |
-| `last_refreshed` | 2026-10-01T02:14:04Z |
-| `git_head` | `ceb1ded3` — ops: roadmap status refresh post-#1620 (#1621) |
+| `workspace_state_hash` | `8d11eaf26132` |
+| `last_refreshed` | 2026-10-01T00:00:00Z |
+| `git_head` | `4995c364` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 122 |
 
@@ -22,7 +22,7 @@
 
 **Purpose.** Live pointer to the next Claude/Codex-executable frontier. Full round-by-round history (every prior round, verbatim, most-recent-first) lives in the archive below — grep it by PR/`B-`/`R-`-id/round, never read wholesale.
 
-**Current next action (post-#1621).** PR #1620 closed B-305 Runtime and CP pointer authority and its Git-diff regression witness. The first self-hosted Omarchy release remains solo/team only, with audit signing off by default until B1/B2 and installed restart, tamper, key-residence, tenant-isolation, and redaction evidence pass. The first approved installed smoke completed on the exact dc17c69 artifact with Docker/gVisor, local Ollama, Tempo/OTel/Grafana, and verified cleanup (Buford LIT cmt-1452e534-580b-439a-808d-03d842f891bb); further live witnesses need separate consent. MTC and in-place local-signed-ledger migration remain deferred. The next implementable roadmap unit is U-HE-58: demonstrate the real memento ceiling and next-session handoff in attended and headless arms, resolve the two Stop hooks, choose the project ceiling, then U-HE-59.
+**Current next action (post-#1623).** PR #1623 closes the B-104 helper report-loss source fix; installed B-104 acceptance remains pending a final-main artifact and separately consented process/socket witness. The first self-hosted Omarchy release remains solo/team, with audit signing off by default until B1/B2 and installed restart, tamper, key-residence, tenant-isolation, and redaction evidence pass. The approved dc17c69 Docker/gVisor, local Ollama, and Tempo/OTel/Grafana smoke and cleanup are complete (LIT cmt-1452e534-580b-439a-808d-03d842f891bb); further live witnesses need separate consent. MTC and in-place local-signed-ledger migration remain deferred. The next implementable roadmap unit is U-HE-58: demonstrate the real memento ceiling and next-session handoff in attended and headless arms, resolve the two Stop hooks, choose the project ceiling, then U-HE-59.
 
 **Archive.** `.harness/roadmap-next-action-archive.md` (PRIOR rounds only, verbatim as each stood when superseded — the current round lives only in this head; the newest superseded round may lag there until the next content PR archives it, and is always losslessly recoverable from this file's own git history meanwhile).
 
@@ -50,11 +50,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #1623 | 2026-10-01 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1621 | 2026-10-01 | Terminating roadmap refresh post-#1620 landed; its own main CI passed. |
 | PR #1620 | 2026-10-01 | B-305 Runtime and CP pointer authority plus Git-diff regression witness landed at PR #1620; final-head and post-main CI passed. |
 | PR #1618 | 2026-09-30 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1616 | 2026-09-30 | Production source and solo/team audit-signing guard landed; independent review and PR/main CI passed; installed acceptance remains gated. |
-| PR #1614 | 2026-09-20 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 
 ---
 
