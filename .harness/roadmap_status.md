@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `be356d07c294` |
+| `workspace_state_hash` | `02211271132b` |
 | `last_refreshed` | 2026-10-01T00:00:00Z |
-| `git_head` | `8d042157` —  |
+| `git_head` | `01cea3cd` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 122 |
 
@@ -50,11 +50,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #1629 | 2026-10-01 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1627 | 2026-10-01 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1625 | 2026-10-01 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1623 | 2026-10-01 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1621 | 2026-10-01 | Terminating roadmap refresh post-#1620 landed; its own main CI passed. |
-| PR #1620 | 2026-10-01 | B-305 Runtime and CP pointer authority plus Git-diff regression witness landed at PR #1620; final-head and post-main CI passed. |
 
 ---
 
