@@ -1,0 +1,101 @@
+# Local two-level hierarchical delegation; run with examples/ollama.local.toml.example
+# copied as harness.toml PLUS the research path bindings in examples/README.md.
+#
+# Hierarchical delegation is orchestrator-workers applied recursively, with at most
+# three direct children per parent (a fourth is refused, never truncated). At the
+# root, steps[0] is the lead; its children are a direct worker and a sub-agent
+# dispatch whose child workflow itself declares hierarchical-delegation, so the
+# driver re-enters the same strategy one level down (its own lead plus two workers,
+# fanned out concurrently). The root's terminal post-join-synthesis step receives the
+# root children's outputs after the barrier; the delegated child contributes its own
+# aggregate. Three Ollama calls run at the root level and three in the child.
+#
+# Current limits, stated rather than hidden: the tree is the declared steps, not
+# grown at run time; no step receives its lead's output; and this example declares no
+# HITL placements, so it does not exercise approval-gate inheritance across levels.
+# The child shares the parent's ledger and context. Only local Ollama is bound; every
+# fallback chain is empty, so no hosted provider can be reached.
+version = 1
+
+[workflow]
+workflow_id = "example-ollama-hierarchical-delegation"
+workload_class = "research"
+persona_tier = "solo-developer"
+engine_class = "pure-pattern-no-engine"
+topology_pattern = "hierarchical-delegation"
+layer_budgets = []
+hitl_placements = []
+per_step_overrides = {}
+fallback_chain = { primary = { provider = "ollama", model = "llama3.2:3b", family = "local_open_weight" }, same_family = [], cross_family = [] }
+
+[default_model_binding]
+provider = "ollama"
+model = "llama3.2:3b"
+
+[[steps]]
+step_id = "root-lead"
+step_kind = "inference-step"
+
+[steps.step_payload]
+messages = [{ role = "user", content = "In one short sentence, state the question a brief on local language model deployment will answer." }]
+tools = []
+params = { options = { num_predict = 32 } }
+
+[[steps]]
+step_id = "root-worker-hardware"
+step_kind = "inference-step"
+
+[steps.step_payload]
+messages = [{ role = "user", content = "In one short sentence, name the hardware resource that most limits running a language model locally." }]
+tools = []
+params = { options = { num_predict = 32 } }
+
+[[steps]]
+step_id = "delegate-operations"
+step_kind = "sub-agent-dispatch"
+
+[steps.step_payload]
+child_workflow_id = "example-ollama-hierarchical-delegation-operations"
+
+[steps.step_payload.child_manifest_entry]
+workflow_id = "example-ollama-hierarchical-delegation-operations"
+workload_class = "research"
+persona_tier = "solo-developer"
+engine_class = "pure-pattern-no-engine"
+topology_pattern = "hierarchical-delegation"
+layer_budgets = []
+hitl_placements = []
+per_step_overrides = {}
+fallback_chain = { primary = { provider = "ollama", model = "llama3.2:3b", family = "local_open_weight" }, same_family = [], cross_family = [] }
+
+[[steps.step_payload.child_steps]]
+step_id = "operations-lead"
+step_kind = "inference-step"
+step_payload = { messages = [{ role = "user", content = "In one short sentence, state what an operator must do to keep a local language model service healthy." }], tools = [], params = { options = { num_predict = 32 } } }
+
+[[steps.step_payload.child_steps]]
+step_id = "operations-worker-updates"
+step_kind = "inference-step"
+step_payload = { messages = [{ role = "user", content = "In one short sentence, explain why pinning a local model version matters." }], tools = [], params = { options = { num_predict = 32 } } }
+
+[[steps.step_payload.child_steps]]
+step_id = "operations-worker-monitoring"
+step_kind = "inference-step"
+step_payload = { messages = [{ role = "user", content = "In one short sentence, name one signal to monitor on a local model service." }], tools = [], params = { options = { num_predict = 32 } } }
+
+# summary_hash is sha256 over the sorted-key JSON of the other four brief fields; it
+# must be recomputed whenever any of them changes.
+[steps.step_payload.brief]
+objective = "Report how to operate a local language model service."
+guidance = "Answer each step in one short sentence."
+summary_hash = "e2798812d6012f9cba114cf1450c261b342625a92bc9963d7ae11a5e0cb90c4f"
+output_format = { schema_kind = "free_text" }
+task_boundaries = { in_scope = ["local model operations"], out_of_scope = ["hosted providers", "hardware purchasing"], termination_criteria = ["every child step has answered"] }
+
+[[steps]]
+step_id = "synthesize-brief"
+step_kind = "post-join-synthesis"
+
+[steps.step_payload]
+messages = [{ role = "user", content = "Combine the findings listed below into a three-sentence brief on deploying a language model locally." }]
+params = { options = { num_predict = 96 } }
