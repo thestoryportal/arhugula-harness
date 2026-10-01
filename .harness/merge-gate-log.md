@@ -1316,3 +1316,19 @@ delegated `laws:prompt` author.
 | 2026-09-30T16:56:01Z | #1618 | e2600963babf | merge-gate-witness-adequacy | APPROVE | 0 finding(s) | r1 |
 | 2026-09-30T17:19:22Z | #1618 | 0e1602b62914 | merge-gate-witness-adequacy | APPROVE | 0 finding(s) | r2 |
 | 2026-09-30T17:32:16Z | #1618 | 0e1602b62914 | merge-gate-spec-conformance | APPROVE | 0 finding(s) | r2 |
+| 2026-09-30T22:13:59Z | #1620 | 84d25583cc5d | merge-gate-concurrency | APPROVE | 0 finding(s) | r1 |
+| 2026-09-30T22:14:07Z | #1620 | 84d25583cc5d | merge-gate-spec-conformance | APPROVE | 0 finding(s) | r1 |
+| 2026-09-30T22:14:28Z | #1620 | 84d25583cc5d | merge-gate-witness-adequacy | BLOCK | 1 finding(s) | r1 |
+
+| #1620 | 2026-09-30 | docs/b305-pointer-authority | pass 1 @84d25583cc5d | Antigravity blocking reviewer: REVIEWER_UNAVAILABLE (permanent; `agy` executable absent, so no out-of-family verdict) | merge-gate-concurrency: APPROVE (0 findings) | merge-gate-spec-conformance: APPROVE (0 findings) | merge-gate-witness-adequacy: BLOCK (1 accepted P2: §2.4 plan-pointer mutation witnesses absent) | outcome: INCOMPLETE and BLOCK — no merge; repair the witness, restore the required reviewer, then re-admit the bounded cycle | blast-radius: NOT RUN (`graft` executable absent and no per-checkout wiring graph; manual `rg` found `check_counts` production call at `tools/leg_selfcheck.py:1367`, a floor) |
+| 2026-09-30T23:07:03Z | #1620 | fb7c38b40598 | merge-gate-concurrency | APPROVE | 0 finding(s) | r2 |
+| 2026-09-30T23:07:03Z | #1620 | fb7c38b40598 | merge-gate-spec-conformance | APPROVE | 0 finding(s) | r2 |
+| 2026-09-30T23:07:04Z | #1620 | fb7c38b40598 | merge-gate-witness-adequacy | BLOCK | 1 finding(s) | r2 |
+| #1620 | 2026-10-01 | docs/b305-pointer-authority | pass 1 @79975f3fc7e9 | Antigravity: BLOCK (five P1/P2 claims, all rejected with exact-source evidence; terminal verdict remains BLOCK) | merge-gate-concurrency: APPROVE | merge-gate-spec-conformance: APPROVE | merge-gate-witness-adequacy: BLOCK (one accepted P2: production `run()` witness absent) | outcome: BLOCK; test fix committed as 0e2358901e0d; pass 2 owed | blast-radius: NOT RUN (`graft` absent; manual `rg` found production `check_counts` call at `tools/leg_selfcheck.py:1374`) |
+| 2026-10-01T00:47:39Z | #1620 | 79975f3fc7e9 | merge-gate-concurrency | APPROVE | 0 finding(s) | r3 |
+| 2026-10-01T00:47:40Z | #1620 | 79975f3fc7e9 | merge-gate-spec-conformance | APPROVE | 0 finding(s) | r3 |
+| 2026-10-01T00:47:40Z | #1620 | 79975f3fc7e9 | merge-gate-witness-adequacy | BLOCK | 1 finding(s) | r3 |
+| 2026-10-01T00:58:31Z | #1620 | 0e2358901e0d | merge-gate-witness-adequacy | APPROVE | 0 finding(s) | r4 |
+| #1620 | 2026-10-01 | docs/b305-pointer-authority | pass 2 @0e2358901e0d, base 79975f3fc7e9 | Antigravity: BLOCK (one P2 rejected; the historical-row reset intentionally clears the prior conflict before the current-head case; initial missing-`agy` attempt was REVIEWER_UNAVAILABLE and delivered no verdict) | merge-gate-witness-adequacy: APPROVE (production `run()` and pre-fix mutation checked) | outcome: pass 2 complete, no accepted P1; pass 3 full diff owed |
+| 2026-10-01T01:03:23Z | #1620 | 0e2358901e0d | merge-gate-witness-adequacy | APPROVE | 0 finding(s) | r5 |
+| #1620 | 2026-10-01 | docs/b305-pointer-authority | pass 3 @0e2358901e0d, full diff from 846e804de73b | merge-gate-witness-adequacy: APPROVE (0 findings; 152 focused tests, production `run()` and pre-fix mutation witnessed) | outcome: bounded cycle complete at reviewed code head; gate-log-only landing delta and final-head CI owed |

@@ -649,6 +649,22 @@ _UNIT_ID_RE = re.compile(r"\bU-[A-Z]+-\d+\b")
 #: unit they sit under rather than to the file as a whole.
 _UNIT_HEADING_RE = re.compile(r"^\s*#{1,6}\s+.*?\b(U-[A-Z]+-\d+)\b")
 
+_POINTER_ROW_RE = re.compile(r"^\|\s*[^|]+\|\s*`([^`]+)`\s*\(\*\*(v\d+(?:\.\d+)*)")
+
+
+def _pointer_row_subject(path: str, line: str) -> str | None:
+    """Separate history versions while current-head claims still meet their unit."""
+    if not (path.startswith(".harness/artifact-pointers/") and path.endswith(".md")):
+        return None
+    match = _POINTER_ROW_RE.match(line)
+    if match is None:
+        return None
+    label = line[match.end() :].split("**", 1)[0]
+    if re.match(r"\s*[—-]\s*(?:current(?:\s+cleared)?|canonical)\s+HEAD\b", label, re.I):
+        return None
+    artifact, version = match.groups()
+    return f"{artifact}@{version} in {path}"
+
 
 def _claim_subject(line: str, enclosing: str, at: int = 0) -> str:
     """The unit a count claim at offset `at` belongs to: the NEAREST unit id at
@@ -834,6 +850,10 @@ def check_counts(
             consumed: dict[str, int] = defaultdict(int)
             enclosing = f"(unattributed in {path})"
             for line in lines:
+                pointer_subject = _pointer_row_subject(path, line)
+                if pointer_subject is not None:
+                    out.append((path, pointer_subject, line))
+                    continue
                 m = _ROW_ID_RE.match(line) or _UNIT_HEADING_RE.match(line)
                 if m:
                     enclosing = m.group(1)
@@ -907,7 +927,11 @@ def check_counts(
                 claimed.append((m.start(), m.end()))
                 raw = m.group(1).lower()
                 value = int(raw) if raw.isdigit() else _NUMBER_WORDS[raw]
-                subject = _claim_subject(line, enclosing, m.start())
+                # History rows need version identity; a current-head row must
+                # still cross-check its unit count against the current plan.
+                subject = _pointer_row_subject(_path, line) or _claim_subject(
+                    line, enclosing, m.start()
+                )
                 claims[(subject, bucket)][value].append(line.strip()[:150])
 
     for path in sorted(skipped_aggregate_specs):

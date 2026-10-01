@@ -74,11 +74,11 @@ snapshot:
   total: 299
   open: 2
   design_substrate_gated: 3
-  registered_finding: 125
+  registered_finding: 124
   operator_gated: 0
   held: 4
-  closed: 165
-  identity_digest: 848568c4c1e0ab06
+  closed: 166
+  identity_digest: 2431d23c30065fb9
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -12245,9 +12245,9 @@ items:
   council: "NO — two bounded documentation status corrections, with no new design decision."
 - id: "B-305"
   title: "Per-family artifact pointers track generated heads and retain valid tables"
-  status: "registered_finding"
+  status: "closed"
   pr: "#1618"
-  heading: "### B-305 · Per-family artifact pointer authority and table shape *(#1618 review cycle, 2026-09-30; REGISTERED)*"
+  heading: "### B-305 · Per-family artifact pointer authority and table shape *(#1618 review cycle, 2026-09-30; CLOSED)*"
   summary: "PR #1618 pass-1 review found that the Runtime per-family pointer still labels older spec and plan versions as canonical HEAD while the generated artifact-head table names newer heads. The CP pointer names the current versions, but its newest plan row has a different cell count from the table beneath it. Existing artifact-head checks do not pin these inline labels, so a stale label can return without a check failing. These are documentation authority and witness gaps, not evidence of installed runtime behavior."
-  close_out: "OPEN 2026-09-30. The Runtime and CP per-family pointers should identify the generated current heads, distinguish older versions as history, and render structurally valid tables. A check should fail if either current label drifts behind its generated head or a pointer table row has the wrong cell count. The done signal is a current, well-formed pointer pair with a regression check that catches both stale-label and malformed-row mutations."
+  close_out: "CLOSED 2026-09-30 for source routing by the B-305 follow-up to PR #1618: the Runtime pointer names clearance-derived spec v1.133 and plan v2.64, while the CP pointer names spec v1.124 and plan v2.55. Older head labels are history and both pointer tables have valid cells. Clearance-derived regression tests catch stale current labels and malformed historical rows in both files. This is source and test closure only; PR CI, merge, and installed-runtime acceptance remain separate gates."
   council: "NO — one bounded pointer-authority correction with no new runtime or design decision."
