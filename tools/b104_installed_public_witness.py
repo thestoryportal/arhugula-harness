@@ -1463,8 +1463,7 @@ def with_services(
 
 
 def load_result(layout: Layout, phase: str) -> dict[str, object] | None:
-    path = layout.result(phase)
-    return json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
+    return read_record(layout.result(phase))
 
 
 def read_record(path: Path) -> dict[str, object] | None:
@@ -1999,6 +1998,9 @@ def run(
     placement = checked_scenario_root(scenario_root, Path("/proc/self/mountinfo").read_text())
     if not output.parent.is_dir() or os.path.lexists(output):
         raise ValueError("output parent must exist and output must be new")
+    artifacts = output.with_suffix(".artifacts")
+    if os.path.lexists(artifacts):
+        raise ValueError("artifacts destination must be new")
     if output.resolve(strict=False).is_relative_to(scenario_root):
         raise ValueError("report must be outside the scenario root")
     logs = output.with_suffix(".logs")
@@ -2070,7 +2072,7 @@ def run(
         signal.signal(signal.SIGTERM, previous_term)
     report["config_sha256"] = sha256(layout.config)
     report["evidence"] = evidence
-    report["artifacts"] = retain_artifacts(layout, output.with_suffix(".artifacts"))
+    report["artifacts"] = retain_artifacts(layout, artifacts)
     # [LAW:one-source-of-truth] The digest of the receipt THIS parent verified binds evaluate.
     report.update(evaluate(evidence, expected_receipt_sha256=sha256(receipt)))
     write_new(output, json.dumps(report, sort_keys=True, indent=2, default=str) + "\n", 0o644)
