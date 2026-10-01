@@ -2815,3 +2815,50 @@ def test_read_record_marks_unreadable_records_instead_of_treating_them_as_absent
     assert w.read_record(tmp_path / "garbage.json") == {"unreadable": True}
     assert w.read_record(tmp_path / "list.json") == {"unreadable": True}
     assert w.read_record(tmp_path / "ok.json") == {"pid": 1}
+
+
+@pytest.mark.parametrize("contents", ("{torn", "[1]"))
+def test_malformed_child_result_reaches_a_typed_fail(tmp_path: Path, contents: str) -> None:
+    layout = w.Layout(tmp_path)
+    layout.results.mkdir()
+    layout.result("capture").write_text(contents)
+
+    evidence = passing_evidence()
+    evidence["results"]["capture"] = w.load_result(layout, "capture")
+    verdict = evaluate(evidence)
+
+    assert evidence["results"]["capture"] == {"unreadable": True}
+    assert verdict["status"] == "FAIL"
+    assert "capture:result-phase-mismatch" in verdict["failure_reasons"]
+
+
+@pytest.mark.parametrize("kind", ("directory", "dangling-symlink"))
+def test_artifacts_collision_refuses_before_services_start(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str
+) -> None:
+    output = tmp_path / "out" / "report.json"
+    output.parent.mkdir()
+    artifacts = output.with_suffix(".artifacts")
+    if kind == "directory":
+        artifacts.mkdir()
+    else:
+        artifacts.symlink_to(tmp_path / "missing")
+    monkeypatch.setattr(
+        w, "checked_candidate", lambda *_args: (tmp_path, tmp_path, Path(sys.executable))
+    )
+    monkeypatch.setattr(w, "checked_provenance", lambda *_args: {"wheels": []})
+    monkeypatch.setattr(w, "checked_scenario_root", lambda *_args: {})
+    (tmp_path / "receipt.json").write_text("{}")
+
+    def forbidden_services(*_args: object) -> dict[str, object]:
+        raise AssertionError("services started before the artifacts collision was refused")
+
+    monkeypatch.setattr(w, "with_services", forbidden_services)
+    with pytest.raises(ValueError, match="artifacts"):
+        w.run(
+            tmp_path, tmp_path, "0" * 40, tmp_path / "receipt.json", tmp_path / "scenario", output
+        )
+
+    assert os.path.lexists(artifacts)
+    assert not output.with_suffix(".logs").exists()
+    assert not (tmp_path / "scenario").exists()
