@@ -1,0 +1,96 @@
+# Omarchy production profile: local Ollama with offline Layer-2 (embedding) routing.
+#
+# A COMPLETE runtime config (not an overlay). It is examples/omarchy.ollama.toml.example
+# plus routing activation and the local embedding model. Copy it to harness.toml at the
+# checkout root, then replace every placeholder below with a literal absolute path:
+#   /absolute/path/to/your/workspace        this checkout (`pwd -P`)
+#   /absolute/path/to/your/state-root       outside every checkout, worktree and
+#                                           restore/snapshot scope (used twice)
+#   /absolute/path/to/your/models/bge-small-en-v1.5
+#                                           the verified model directory
+#   /absolute/path/to/your/embedding-cache  a separate private cache directory
+# No tilde or environment variable is expanded.
+#
+# Install the optional embedding extra, place the model files and write SHA256SUMS
+# exactly as docs/operations/omarchy-offline-embedding.md describes BEFORE the first run.
+# Bootstrap fails, rather than falling back, if the extra, any model file, any hash or
+# the cache directory does not pass verification. Nothing here downloads a model.
+#
+# Status: source-checked only. No installed-host acceptance yet: the embedding extra on
+# the final ARM artifact, the real model hashes and a no-network run are not witnessed.
+# Pause/resume persistence is NOT enabled here. Paid hosted providers are excluded.
+
+[runtime]
+deployment_surface = "local-development"
+repository_root = "/absolute/path/to/your/workspace"
+default_topology = "single-threaded-linear"
+enabled_provider_names = ["ollama"]
+external_cli_providers = []
+mcp_clients = []
+ollama_host = "http://127.0.0.1:11434"
+ollama_optional = false
+
+# Layer-2 routing. With activation on, a request the routing manifest below does not
+# bind falls through to the embedding classifier, which picks one of these four
+# provider:model labels by workload. Every provider must be an enabled provider, so
+# with Ollama alone each label starts "ollama:". The second model is a deliberate
+# choice so that routing can select between two candidates; pull it with
+# `ollama pull qwen2.5-coder:3b` or name a model you already have.
+routing_activation = true
+embedding_routing_candidates = { "software-engineering" = "ollama:qwen2.5-coder:3b", "content-creation" = "ollama:llama3.2:3b", "pipeline-automation" = "ollama:llama3.2:3b", "research" = "ollama:llama3.2:3b" }
+
+# The model directory must be absolute, contain no symlinks, and hold exactly the
+# files listed in its SHA256SUMS. The cache must be outside the model directory, under
+# a real (non-symlinked) parent, and owned by the harness user with mode 0700; bootstrap
+# creates it with 0700 if it is missing.
+embedding_model_dir = "/absolute/path/to/your/models/bge-small-en-v1.5"
+embedding_cache_dir = "/absolute/path/to/your/embedding-cache"
+
+# Keep the first run independent of the optional memory subsystem.
+[runtime.memory]
+enabled = false
+
+# The exporter uses a loopback endpoint. A collector is optional for this first run.
+[runtime.otel]
+otlp_endpoint = "http://127.0.0.1:4317"
+
+# Every STATE_LEDGER cell must sit inside state_root. List each snapshot, backup or
+# dotfile-restore target that could reach state_root's location.
+[runtime.state_placement]
+state_root = "/absolute/path/to/your/state-root"
+forbidden_roots = []
+
+[[runtime.path_bindings.raw_entries]]
+path_class = "SKILLS"
+workflow_class = "pipeline-automation"
+deployment_surface = "local-development"
+path = "/absolute/path/to/your/workspace/.agents/skills"
+
+[[runtime.path_bindings.raw_entries]]
+path_class = "PROMPTS"
+workflow_class = "pipeline-automation"
+deployment_surface = "local-development"
+path = "/absolute/path/to/your/workspace/.harness/onboarding/prompts"
+
+[[runtime.path_bindings.raw_entries]]
+path_class = "ROUTING_MANIFEST"
+workflow_class = "pipeline-automation"
+deployment_surface = "local-development"
+path = "/absolute/path/to/your/workspace/.harness/onboarding/routing-manifest"
+
+[[runtime.path_bindings.raw_entries]]
+path_class = "STATE_LEDGER"
+workflow_class = "pipeline-automation"
+deployment_surface = "local-development"
+path = "/absolute/path/to/your/state-root/state-ledger"
+
+# Empty role and workload bindings leave every request unbound, which is what lets the
+# declarative layer decline to the embedding classifier.
+[runtime.routing_manifest]
+manifest_version = 1
+per_role_bindings = {}
+per_workload_overrides = {}
+retry_policies = {}
+fallback_chains = [
+    { primary = { provider = "ollama", model = "llama3.2:3b", family = "local_open_weight" }, same_family = [], cross_family = [] },
+]

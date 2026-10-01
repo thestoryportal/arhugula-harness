@@ -1,4 +1,5 @@
-"""Provider-free contract checks for the A7 examples: three local topology manifests.
+"""Provider-free contract checks for the A7 examples: three local topology manifests and
+the offline-embedding Omarchy profile.
 
 Every check loads the SHIPPED file through the loader the CLI uses, and the behaviour
 checks drive the real CP driver and Runtime LLM dispatcher with a recording stand-in for
@@ -9,8 +10,10 @@ an installed candidate remains a separate, unwitnessed acceptance.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
+import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -29,6 +32,12 @@ from harness_is.path_class_registry import PathClass
 from harness_is.path_resolver import PathResolver
 from harness_runtime.config.path_bindings import build_path_binding
 from harness_runtime.config_source import RuntimeConfigSource
+from harness_runtime.lifecycle.embedding_resolution import (
+    MODEL_FILES,
+    EmbeddingModelError,
+    routing_corpus,
+    verify_local_embedding,
+)
 from harness_runtime.lifecycle.evaluator_verdict import read_ollama_evaluator_verdict
 from harness_runtime.lifecycle.inter_step_output_channel import InterStepOutputChannel
 from harness_runtime.lifecycle.llm_dispatch import RuntimeLLMDispatcher
@@ -56,6 +65,7 @@ ROOT = Path(__file__).resolve().parents[2]
 README = ROOT / "examples/README.md"
 SHARED_CONFIG = "examples/ollama.local.toml.example"
 HANDOFF_CONFIG = "examples/ollama.handoff.local.toml.example"
+EMBEDDING_CONFIG = "examples/omarchy.offline-embedding.toml.example"
 
 _PLACEHOLDERS = {
     "/absolute/path/to/your/workspace": "workspace",
@@ -382,3 +392,116 @@ def test_orchestrator_workers_synthesis_receives_only_the_worker_outputs(
     for worker in ("worker-benefits", "worker-costs"):
         sent = next(c for c in client.calls if prompts.get(str(c[0]["content"])) == worker)
         assert "OUT-lead-plan" not in _text(sent)
+
+
+# --- the offline-embedding profile and the documented model directory -------------------
+
+
+def test_offline_embedding_config_activates_l2_over_an_unbound_manifest(tmp_path: Path) -> None:
+    config = _load_config(EMBEDDING_CONFIG, tmp_path)
+
+    assert config.routing_activation is True
+    assert config.embedding_model_dir == tmp_path / "models/bge-small-en-v1.5"
+    assert config.embedding_cache_dir == tmp_path / "embedding-cache"
+    assert not config.routing_manifest.per_role_bindings
+    assert not config.routing_manifest.per_workload_overrides
+    candidates = config.embedding_routing_candidates
+    assert candidates is not None and set(candidates) == set(WorkloadClass)
+    routing_corpus(candidates, set(config.enabled_provider_names))
+    assert len(set(candidates.values())) >= 2
+
+
+def _recipe_model(root: Path, *, sha256sum_args: tuple[str, ...] = ()) -> Path:
+    """Lay out a synthetic model directory with the documented `sha256sum` recipe."""
+    model = root / "bge-small-en-v1.5"
+    model.mkdir(parents=True)
+    for name in sorted(MODEL_FILES):
+        (model / name).write_bytes(hashlib.sha256(name.encode()).digest())
+    sums = subprocess.run(
+        ["sha256sum", *sha256sum_args, *sorted(MODEL_FILES)],
+        cwd=model,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    (model / "SHA256SUMS").write_text(sums)
+    return model
+
+
+def test_the_documented_recipe_passes_the_verifier_and_creates_a_private_cache(
+    tmp_path: Path,
+) -> None:
+    model = _recipe_model(tmp_path)
+    cache = tmp_path / "embedding-cache"
+
+    verified = verify_local_embedding(model, cache)
+
+    assert verified.model_dir == model
+    assert (cache.stat().st_mode & 0o777) == 0o700
+
+
+def _extra_file(model: Path, cache: Path) -> None:
+    (model / "README.md").write_text("x")
+
+
+def _changed_file(model: Path, cache: Path) -> None:
+    (model / "config.json").write_bytes(b"changed")
+
+
+def _missing_manifest(model: Path, cache: Path) -> None:
+    (model / "SHA256SUMS").unlink()
+
+
+def _shared_cache(model: Path, cache: Path) -> None:
+    cache.mkdir(mode=0o755)
+    cache.chmod(0o755)
+
+
+_REFUSALS: list[Any] = [
+    pytest.param(_extra_file, "differ from SHA256SUMS", id="extra-file"),
+    pytest.param(_changed_file, "SHA256 mismatch: config.json", id="changed-file"),
+    pytest.param(_missing_manifest, "cannot be verified", id="missing-sha256sums"),
+    pytest.param(_shared_cache, "private owned directory", id="group-readable-cache"),
+]
+
+
+@pytest.mark.parametrize(("mutate", "message"), _REFUSALS)
+def test_the_verifier_refuses_a_broken_model_directory(
+    tmp_path: Path, mutate: Callable[[Path, Path], None], message: str
+) -> None:
+    model = _recipe_model(tmp_path)
+    cache = tmp_path / "embedding-cache"
+    mutate(model, cache)
+
+    with pytest.raises(EmbeddingModelError, match=message):
+        verify_local_embedding(model, cache)
+
+
+def test_the_verifier_refuses_a_missing_cache_parent(tmp_path: Path) -> None:
+    model = _recipe_model(tmp_path)
+
+    with pytest.raises(EmbeddingModelError, match="cannot be verified"):
+        verify_local_embedding(model, tmp_path / "absent" / "embedding-cache")
+
+
+def test_the_verifier_refuses_a_missing_model_directory(tmp_path: Path) -> None:
+    with pytest.raises(EmbeddingModelError, match="cannot be verified"):
+        verify_local_embedding(tmp_path / "absent-model", tmp_path / "embedding-cache")
+
+
+def test_the_verifier_refuses_binary_mode_sha256sum_entries(tmp_path: Path) -> None:
+    model = _recipe_model(tmp_path, sha256sum_args=("-b",))
+
+    with pytest.raises(EmbeddingModelError, match="malformed embedding SHA256SUMS entry"):
+        verify_local_embedding(model, tmp_path / "embedding-cache")
+
+
+def test_the_verifier_accepts_an_additional_listed_file(tmp_path: Path) -> None:
+    """The five files are the minimum; any further file must exist and be listed."""
+    model = _recipe_model(tmp_path)
+    (model / "README.md").write_text("provenance note\n")
+    digest = hashlib.sha256(b"provenance note\n").hexdigest()
+    with (model / "SHA256SUMS").open("a") as sums:
+        sums.write(f"{digest}  README.md\n")
+
+    assert verify_local_embedding(model, tmp_path / "embedding-cache").model_dir == model
