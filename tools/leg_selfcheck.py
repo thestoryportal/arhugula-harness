@@ -653,11 +653,14 @@ _POINTER_ROW_RE = re.compile(r"^\|\s*[^|]+\|\s*`([^`]+)`\s*\(\*\*(v\d+(?:\.\d+)*
 
 
 def _pointer_row_subject(path: str, line: str) -> str | None:
-    """Keep versioned pointer rows distinct without exempting their count claims."""
+    """Separate history versions while current-head claims still meet their unit."""
     if not (path.startswith(".harness/artifact-pointers/") and path.endswith(".md")):
         return None
     match = _POINTER_ROW_RE.match(line)
     if match is None:
+        return None
+    label = line[match.end() :].split("**", 1)[0]
+    if re.match(r"\s*[—-]\s*(?:current(?:\s+cleared)?|canonical)\s+HEAD\b", label, re.I):
         return None
     artifact, version = match.groups()
     return f"{artifact}@{version} in {path}"
@@ -924,8 +927,8 @@ def check_counts(
                 claimed.append((m.start(), m.end()))
                 raw = m.group(1).lower()
                 value = int(raw) if raw.isdigit() else _NUMBER_WORDS[raw]
-                # A pointer row is an artifact-version history entry, even if
-                # its prose names a unit shared with another version.
+                # History rows need version identity; a current-head row must
+                # still cross-check its unit count against the current plan.
                 subject = _pointer_row_subject(_path, line) or _claim_subject(
                     line, enclosing, m.start()
                 )
