@@ -1062,6 +1062,68 @@ def test_current_pointer_unit_count_agrees_with_plan():
         assert _hard(report) == [], (label, _hard(report))
 
 
+def test_pointer_counts_flow_through_the_committed_git_diff(tmp_path, monkeypatch):
+    """The shipped run must join changed rows with their unchanged diff context."""
+    import subprocess
+
+    # [LAW:behavior-not-structure] Use real commits so run() performs its own diff assembly.
+    monkeypatch.setattr(ls, "ROOT", tmp_path)
+
+    def git(*args: str) -> None:
+        subprocess.run(["git", *args], cwd=tmp_path, check=True, capture_output=True, text=True)
+
+    def commit() -> None:
+        git("add", ".")
+        git(
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "commit",
+            "-qm",
+            "fixture",
+        )
+
+    pointer = tmp_path / ".harness/artifact-pointers/runtime.md"
+    pointer.parent.mkdir(parents=True)
+    former = (
+        "| Runtime | `Spec_Harness_Runtime_v1.md` "
+        "(**v1.121 — former HEAD**, U-RT-155, two sites) |\n"
+    )
+    older = "| Runtime | `Spec_Harness_Runtime_v1.md` (**v1.117**, U-RT-155, four sites) |\n"
+    git("init", "-q")
+    pointer.write_text(former)
+    commit()
+
+    pointer.write_text(former + older)
+    commit()
+    assert _hard(ls.run("HEAD~1", False)) == []
+
+    pointer.write_text(former + older.replace("v1.117", "v1.121"))
+    commit()
+    assert any(
+        "sites" in message and "DIFFERENT" in message for message in _hard(ls.run("HEAD~1", False))
+    )
+
+    plan = tmp_path / "design-substrate/Implementation_Plan_Harness_Runtime_v2_65.md"
+    plan.parent.mkdir(parents=True)
+    current = (
+        "| Runtime | `Implementation_Plan_Harness_Runtime_v2_65.md` "
+        "(**v2.65 — current cleared HEAD**, U-RT-157, 12 acceptance criteria) |\n"
+    )
+    pointer.write_text(former + older + current)
+    plan.write_text("U-RT-157 = 11 acceptance criteria.\n")
+    commit()
+    assert any(
+        "acceptance criteria" in message and "DIFFERENT" in message
+        for message in _hard(ls.run("HEAD~1", False))
+    )
+
+    pointer.write_text(former + older + current.replace("12 acceptance", "11 acceptance"))
+    commit()
+    assert _hard(ls.run("HEAD~2", False)) == []
+
+
 def test_minted_labels_are_queried_only_within_their_own_family(tmp_path):
     """[P2] (codex round 10): unioning every changed family let a label minted
     only in a CP artifact be queried against Runtime siblings merely because a
