@@ -216,6 +216,7 @@ __all__ = [
     "AuditLedgerWriter",
     "BootstrapStage",
     "ClientName",
+    "CodexReadBoundaryConfig",
     "CollectorConfig",
     "CollectorDaemonHandle",
     "ContentAddressedIndex",
@@ -1619,6 +1620,70 @@ class ExternalCLIPromptTransport(StrEnum):
     ARG = "arg"
 
 
+DEFAULT_CODEX_READ_ONLY_PATHS: tuple[Path, ...] = (
+    Path("/etc/hosts"),
+    Path("/etc/nsswitch.conf"),
+    Path("/etc/resolv.conf"),
+    Path("/etc/ssl/certs"),
+    Path("/etc/ca-certificates"),
+)
+"""Public DNS/TLS configuration only. No ``/``, ``/usr``, ``/run/user`` or HOME."""
+
+_SHA256_HEX = re.compile(r"^[0-9a-f]{64}$")
+
+
+class CodexReadBoundaryConfig(BaseModel):
+    """The Codex read boundary (Runtime v1.135 C-RT-05): what a Codex process may touch.
+
+    Every real Codex process runs under the Landlock launcher with exactly these
+    allowances; everything else (the operator's HOME and ``~/.codex`` included) is
+    denied. Absolute paths only, so nothing depends on the caller's cwd or a moving
+    ``latest`` symlink; the executable is additionally pinned by content.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    executable: Path
+    """The pinned Codex binary: an absolute, symlink-free path to a regular file."""
+
+    executable_sha256: str
+    """Lowercase hex SHA-256 the launcher verifies through the descriptor it executes."""
+
+    codex_home: Path
+    """The dedicated harness ``CODEX_HOME`` (0700, owned, holding ``auth.json``)."""
+
+    scratch_root: Path
+    """Owned 0700 directory under which each call gets a fresh private scratch."""
+
+    read_only_paths: tuple[Path, ...] = DEFAULT_CODEX_READ_ONLY_PATHS
+    """Read-only allowances, each resolved to its target inode at launch."""
+
+    executable_paths: tuple[Path, ...] = ()
+    """Extra FILES the process may execute, e.g. the ELF loader of a dynamically linked
+    binary. Empty for the static Codex binary; a directory here refuses at launch."""
+
+    @field_validator("executable", "codex_home", "scratch_root")
+    @classmethod
+    def _absolute(cls, value: Path) -> Path:
+        if not value.is_absolute():
+            raise ValueError("must be an absolute path")
+        return value
+
+    @field_validator("read_only_paths", "executable_paths")
+    @classmethod
+    def _absolute_each(cls, value: tuple[Path, ...]) -> tuple[Path, ...]:
+        if any(not item.is_absolute() for item in value):
+            raise ValueError("boundary allowances must be absolute paths")
+        return value
+
+    @field_validator("executable_sha256")
+    @classmethod
+    def _sha256(cls, value: str) -> str:
+        if not _SHA256_HEX.fullmatch(value):
+            raise ValueError("executable_sha256 must be 64 lowercase hex characters")
+        return value
+
+
 class ExternalCLIProviderConfig(BaseModel):
     """Config for an already-authenticated local CLI-backed provider.
 
@@ -1657,6 +1722,24 @@ class ExternalCLIProviderConfig(BaseModel):
 
     optional: bool = False
     """If true, construction failure degrades like the built-in optional providers."""
+
+    read_boundary: CodexReadBoundaryConfig | None = None
+    """Codex only (Runtime v1.135). Without it a Codex provider refuses to construct."""
+
+    @model_validator(mode="after")
+    def _read_boundary_is_codex_only(self) -> Self:
+        if self.read_boundary is not None and self.kind is not ExternalCLIProviderKind.CODEX:
+            raise ValueError("read_boundary applies only to kind 'codex'")
+        return self
+
+    @model_validator(mode="after")
+    def _a_kind_named_provider_has_that_kind(self) -> Self:
+        # [LAW:types-are-the-program] provider "codex" with another kind would route the
+        # named Codex provider around its read boundary; the conflicting state cannot parse.
+        named = {kind.value for kind in ExternalCLIProviderKind}
+        if self.provider in named and self.provider != self.kind.value:
+            raise ValueError(f"provider {self.provider!r} must have kind {self.provider!r}")
+        return self
 
     @field_validator("provider", "command")
     @classmethod

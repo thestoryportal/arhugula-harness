@@ -19,13 +19,22 @@ import logging
 import os
 import shutil
 import signal
+import stat
 import sys
 import tempfile
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Protocol, cast
 
+from harness_runtime.lifecycle.cli_read_boundary import (
+    REFUSAL_EXIT,
+    REFUSAL_MARKER,
+    build_ruleset_spec,
+)
+from harness_runtime.lifecycle.cli_read_boundary import launcher_argv as boundary_launcher_argv
 from harness_runtime.types import (
+    CodexReadBoundaryConfig,
     ExternalCLIPromptTransport,
     ExternalCLIProviderConfig,
     ExternalCLIProviderKind,
@@ -105,6 +114,19 @@ class ExternalCLICommandError(ExternalCLIProviderError):
         if detail is None:
             detail = stderr.strip() or stdout.strip() or "no stderr/stdout"
         super().__init__(f"external CLI command {command!r} exited {exit_code}: {detail}")
+
+
+class ExternalCLIReadBoundaryError(ExternalCLICommandError):
+    """The Codex read boundary (Runtime v1.135) is unconfigured or could not be established.
+
+    No Codex process ran, or the launcher refused before executing it. A command error, so
+    provider construction maps it to `ProviderTransientError` and an optional Codex entry
+    degrades instead of ever running unconfined.
+    """
+
+    def __init__(self, reason: str) -> None:
+        self.reason = reason
+        super().__init__("codex", REFUSAL_EXIT, reason, detail=f"read boundary: {reason}")
 
 
 class ExternalCLIOutputError(ExternalCLIProviderError):
@@ -507,6 +529,19 @@ class _PrivateCwdSubprocessRunner(AsyncioSubprocessRunner):
     _scratch_uncertain: str
     _child_env: Callable[[], dict[str, str]]
 
+    def _scratch_root(self) -> str:
+        return "/tmp"
+
+    def _preflight(self) -> None:
+        """Refuse before any directory or process exists (no-op unless a boundary needs it)."""
+
+    def _prepare(self, argv: tuple[str, ...], cwd: str) -> tuple[tuple[str, ...], dict[str, str]]:
+        _ = cwd
+        return argv, self._child_env()
+
+    def _checked(self, result: CLIProcessResult) -> CLIProcessResult:
+        return result
+
     async def run(
         self,
         argv: tuple[str, ...],
@@ -515,16 +550,20 @@ class _PrivateCwdSubprocessRunner(AsyncioSubprocessRunner):
         timeout_seconds: float,
         on_wire: Callable[[], None] | None = None,
     ) -> CLIProcessResult:
+        self._preflight()
         # [LAW:no-ambient-temporal-coupling] The process group settles before cwd removal.
-        cwd = tempfile.mkdtemp(prefix=self._cwd_prefix, dir="/tmp")
+        cwd = tempfile.mkdtemp(prefix=self._cwd_prefix, dir=self._scratch_root())
         try:
-            return await self._run_process(
-                argv,
-                stdin=stdin,
-                timeout_seconds=timeout_seconds,
-                on_wire=on_wire,
-                env=self._child_env(),
-                cwd=cwd,
+            child_argv, env = self._prepare(argv, cwd)
+            return self._checked(
+                await self._run_process(
+                    child_argv,
+                    stdin=stdin,
+                    timeout_seconds=timeout_seconds,
+                    on_wire=on_wire,
+                    env=env,
+                    cwd=cwd,
+                )
             )
         finally:
             outcome = sys.exc_info()[1]
@@ -545,12 +584,97 @@ class _ClaudeCodeSubprocessRunner(_PrivateCwdSubprocessRunner):
     _child_env = staticmethod(_claude_child_env)
 
 
-class _CodexSubprocessRunner(_PrivateCwdSubprocessRunner):
-    """Production Codex boundary; one empty private cwd per child, credentials scrubbed."""
+class _CodexReadBoundaryRunner(_PrivateCwdSubprocessRunner):
+    """The only production Codex runner (Runtime v1.135): every process runs confined.
 
-    _cwd_prefix = "arhugula-codex-"
+    Each call gets a fresh private scratch under the configured root, an allow-listed
+    environment and the Landlock launcher in front of the pinned binary. A launcher
+    refusal surfaces as `ExternalCLIReadBoundaryError`; nothing ever runs unconfined.
+    """
+
+    _cwd_prefix = "codex-"
     _scratch_uncertain = "Codex scratch directory removal failed"
-    _child_env = staticmethod(_scrubbed_child_env)
+
+    def __init__(self, config: CodexReadBoundaryConfig) -> None:
+        self._config = config
+
+    def _scratch_root(self) -> str:
+        return str(self._config.scratch_root)
+
+    def _preflight(self) -> None:
+        for label, directory in (
+            ("codex_home", self._config.codex_home),
+            ("scratch_root", self._config.scratch_root),
+        ):
+            _require_private_directory(label, directory)
+        auth = self._config.codex_home / "auth.json"
+        try:
+            auth_stat = auth.lstat()  # metadata only: the credential is never read here
+        except OSError as exc:
+            raise ExternalCLIReadBoundaryError(
+                f"codex_home/auth.json unusable ({exc.strerror}): log in with this CODEX_HOME"
+            ) from None
+        if not stat.S_ISREG(auth_stat.st_mode):
+            raise ExternalCLIReadBoundaryError("codex_home/auth.json is not a regular file")
+
+    def launcher_argv(self, argv: tuple[str, ...], *, scratch: Path) -> tuple[str, ...]:
+        """``argv`` (argv[0] is the configured command name) under this call's boundary.
+
+        Allowances are declared by their canonical targets (the launcher re-proves each on
+        the descriptor it grants). The executable stays as configured, so a moving symlink
+        pin refuses. This process's own HOME is protected and its interactive Codex home
+        (``$CODEX_HOME``, else ``~/.codex``) is sealed: neither is ever a dedicated home.
+        """
+        config = self._config
+        operator_home = Path.home()
+        interactive = os.environ.get("CODEX_HOME") or str(operator_home / ".codex")
+        spec = build_ruleset_spec(
+            executable=str(config.executable),
+            executable_sha256=config.executable_sha256,
+            read_write_dirs=_canonical((config.codex_home, scratch)),
+            read_only_paths=_canonical(config.read_only_paths),
+            executable_paths=_canonical(config.executable_paths),
+            protected_roots=(str(operator_home),),
+            sealed_roots=(interactive,),
+        )
+        return boundary_launcher_argv(spec, (str(config.executable), *argv[1:]))
+
+    def _prepare(self, argv: tuple[str, ...], cwd: str) -> tuple[tuple[str, ...], dict[str, str]]:
+        env = {
+            "HOME": cwd,
+            "TMPDIR": cwd,
+            "CODEX_HOME": str(self._config.codex_home),
+            "PATH": "/usr/bin:/bin",
+            "LANG": "C.UTF-8",
+        }
+        return self.launcher_argv(argv, scratch=Path(cwd)), env
+
+    def _checked(self, result: CLIProcessResult) -> CLIProcessResult:
+        if result.exit_code == REFUSAL_EXIT:
+            refusals = [
+                line[len(REFUSAL_MARKER) :].strip()
+                for line in result.stderr.splitlines()
+                if line.startswith(REFUSAL_MARKER)
+            ]
+            if refusals:
+                raise ExternalCLIReadBoundaryError(refusals[0])
+        return result
+
+
+def _canonical(paths: Sequence[Path]) -> tuple[str, ...]:
+    return tuple(os.path.realpath(path) for path in paths)
+
+
+def _require_private_directory(label: str, directory: Path) -> None:
+    """A boundary directory must be a real 0700 directory owned by this user (no symlink)."""
+    try:
+        info = directory.lstat()
+    except OSError as exc:
+        raise ExternalCLIReadBoundaryError(f"{label} unusable: {exc.strerror}") from None
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+        raise ExternalCLIReadBoundaryError(f"{label} must be a directory, not a symlink")
+    if info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) != 0o700:
+        raise ExternalCLIReadBoundaryError(f"{label} must be owned by this user with mode 0700")
 
 
 class RecordingSubprocessRunner:
@@ -1277,7 +1401,16 @@ async def construct_codex_cli_adapter(
 ) -> CodexCLIAdapter:
     if config.kind is not ExternalCLIProviderKind.CODEX:
         raise ValueError(f"unsupported Codex adapter kind: {config.kind}")
-    process_runner = runner if runner is not None else _CodexSubprocessRunner()
+    # Runtime v1.135: the only production Codex runner is the read-boundary runner. An
+    # injected runner is a source/test double; without either, no Codex process may run.
+    if runner is not None:
+        process_runner: ExternalCLISubprocessRunner = runner
+    elif config.read_boundary is not None:
+        process_runner = _CodexReadBoundaryRunner(config.read_boundary)
+    else:
+        raise ExternalCLIReadBoundaryError(
+            "codex provider has no read_boundary configured; refusing to run Codex unconfined"
+        )
     if config.auth_check:
         await _assert_codex_authenticated(config, process_runner)
     return CodexCLIAdapter(
