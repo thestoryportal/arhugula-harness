@@ -1361,3 +1361,20 @@ delegated `laws:prompt` author.
 | 2026-10-02T06:01:52Z | #1633 | 525c31c8dfb6 | merge-gate-spec-conformance | APPROVE | 0 finding(s) | r2 |
 
 | #1633 | 2026-10-02 | docs/a3-proposed-fold-u5-20261001 | pass 3 @525c31c8dfb6d899afac8c2cfaa73d8add2b096a; full diff frombec273d6f15c16397355395e9963d8ab160ccf1f | spec-conformance APPROVE; zero P1/P2 findings | Cycle clean for Proposed documents only. Existing B-307 prose residuals remain OPEN; new nonblocking section-paragraph readability and refusal-reason/condition wording notes are retained in the exact pass3 report and owe extension of B-307 in the next substantive PR first commit. Final gate-record SHA CI and merge-door fixed point still owed; no implementation, clearance or installed acceptance | blast-radius: NOT RUN (graft binary and graph unavailable); inspected listed consumers only |
+| 2026-10-02T10:18:27Z | #1635 | 829caa06150d | merge-gate-concurrency | APPROVE | 0 finding(s) | r1 |
+| 2026-10-02T10:18:32Z | #1635 | 829caa06150d | merge-gate-spec-conformance | BLOCK | 3 finding(s) | r1 |
+| 2026-10-02T10:18:37Z | #1635 | 829caa06150d | merge-gate-witness-adequacy | BLOCK | 4 finding(s) | r1 |
+
+| PR #1635 | 2026-10-02 | docs/a5-proposed-contract-u6-20261002 | pass 1 | codex BLOCK; concurrency APPROVE; spec-conformance BLOCK; witness-adequacy BLOCK | Accepted P2 provenance and Proposed-witness gaps require one fix round; P3 notes carried in one follow-up row, with co-located filing-state correction allowed | blast-radius: NOT RUN (graft unavailable; manual changed-file floor) |
+| 2026-10-02T10:44:26Z | #1635 | 84b896fd8090 | merge-gate-witness-adequacy | BLOCK | 4 finding(s) | r2 |
+
+PR #1635 | 2026-10-02 | docs/a5-proposed-contract-u6-20261002 | pass 2 at84b896fd | Codex APPROVE; witness-adequacy BLOCK (two P2/two P3) | split BLOCK, all four accepted; one documentation correction before required pass3, P3s to B-308 | blast-radius: NOT RUN (graft absent; no runtime symbols changed). Device-node ordering verified against primary upstream v7.2 sources, source reasoning only; actual execution unobserved.
+| 2026-10-02T11:04:55Z | #1635 | 9bfb3b2ebf65 | merge-gate-spec-conformance | APPROVE | 0 finding(s) | r2 |
+
+## PR #1635 · Unit6 pass3 · 2026-10-02 · docs/a5-proposed-contract-u6-20261002
+
+At reviewed head9bfb3b2ebf65c82ad023518246e7dc34d1c614ed, independent Opus5.5/high session26a1d42b returned spec-conformance APPROVE, recorded pass3 exit0. Pass2 at84b896fd was split CodexAPPROVE/witnessBLOCK; both acceptedP2 fixed in9bfb, acceptedP3 carriedB308. NoP1, no escalation or repeatedpass2. Blast-radius: NOT RUN (graft absent; docs/register paths; manual scope inspected, no runtime symbol change). Fullgate0 was atclean829caa06; this is not a claim of a new fullgate, finalCI, clearance or installed acceptance.
+
+Pass3 non-blocking prose notes, accepted for B308/next substantive PR: (1) B308 heading says pass1 but also carries two pass2 notes; (2) planv2.66 device-node source basis names upstreamv7.2 files/hash, but neither is filed in this tree/authority table. Root independently retains exact source pins in private unit6-pass2-kernel-source/provenance.json; running kernel/device proof remains unobserved. No register change afterpass3. B295 empty-APPROVE schema means these prose notes have no canonical finding IDs; this narrative plus full actual report/provenance in LIT retains them until nextPR/checkpoint carry. B306/B307/B308 remain OPEN.
+
+Optional Gemini shadow: NOT RUN. Automatic approval review rejected its possible external private-data export before execution; no mutation or export occurred. Read-only subsequent checks found the GitHub repository PUBLIC and agy absent from the approved PATH. No installation, alternate invocation, flag change or retry. The off-path shadow is not a blocking gate; its unavailable result is explicitly retained.
