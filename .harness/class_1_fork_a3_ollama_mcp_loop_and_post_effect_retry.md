@@ -32,6 +32,13 @@ The review is recorded in `.harness/a3_runtime_fence_fold_authority.md`.
 - **Renumbering.** The claim that the number can change without a content change is withdrawn.
 - **P3 clarifications.** The tools-unsupported discriminator and the projection's required keys are stated as the source implements them.
 
+## Unit5 formal pass1 P2 absorption (Proposed)
+
+- **Ollama offer membership.** The pass1 Codex finding is confirmed by cleared Runtime v1.132 §14.14.8, "Runtime-created contexts outside the CP driver": registered tools omitted from a descended step's `tools[]` can still pass C-RT-38. The historical design verdict's claim that an unoffered tool must be `<unregistered>` is therefore insufficient. Proposed v1.134 now requires a non-memory name to belong to the final Ollama offer, derived from the effective superset after projection and memory injection/collision filtering, before assessment or effects. A registered tool absent from `step.tools` remains eligible if that effective offer includes it. Standard memory rules and Anthropic's recorded residual are preserved. U-RT-157b gains registered-but-unoffered, empty-offer, projection-omission and mixed-memory controls, plus membership-removal/registry-only and declaration-only mutations. [LAW:one-source-of-truth]
+- **HITL carrier routing.** The contradictory cells 6-9 sentence is corrected: signing and `BaseException` exclusions retain their carriers, while a HITL terminal error keeps its identity before effects (cell 7) and becomes a non-provider `PostToolEffectError` after effects (cell 10). This matches `619cab32785927142deb01876c260cbb696ec4b1`'s `ToolEffectFence.guard` and C-RT-16 carrier-before-generic catch order; it is source-derived, not an executed acceptance claim. Provider charging is unchanged; post-effect HITL is never charged or replayed and its half-open trial re-arms with the carrier preserved. U-RT-157a gains paired before/after identity, CP fail-class and half-open controls and mutations; 157b supplies the Ollama cases. [LAW:verifiable-goals]
+
+The pass1 source/spec opinions and historical attachments remain evidence for their pinned heads. These repairs add future criteria only; implementation, independent re-review and clearance remain owed.
+
 ## Open (not decided here)
 
 - The B-84 memory-only arms with no superset keep their registered replay residual.

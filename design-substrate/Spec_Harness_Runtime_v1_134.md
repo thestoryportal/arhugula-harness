@@ -25,7 +25,9 @@ When the extension applies:
 3. **Turn.**
    - Each reply's calls are answered in call order with one `role:"tool"` message per call.
    - Standard memory calls are batch-validated first and then executed by the memory executor.
-   - Every other call goes through C-RT-38 exactly as on Anthropic: assessment, rewrite and palette, audit before disposition, then dispatch.
+   - A well-formed non-memory call is admitted only if its name is among the non-memory tools in the final list sent to Ollama, after superset projection and the existing memory injection/collision filter. A call outside that offer is refused before assessment, rewrite, prompt, response audit or dispatch, even if its tool is registered; the model receives `policy refused this tool call`, with `policy_override` and an `ollama.tool_call.refused` event. This includes an empty offer and entries omitted for lacking `input_schema`. [APPSPEC:condition-effect]
+   - Offer membership is distinct from `step.tools`: a registered tool omitted from that declaration may still be admitted if the effective descended superset offers it. This amends the Ollama arm only; v1.132's §14.14.8 paragraph "Runtime-created contexts outside the CP driver" records the existing C-RT-38 not-offered residual, which remains on Anthropic. Selected standard memory calls retain their existing validation and execution rules.
+   - Each admitted non-memory call then goes through C-RT-38 as on Anthropic: assessment, rewrite and palette, audit before disposition, then dispatch. Membership never substitutes for gate enforcement.
    - The model reads the same text as on Anthropic: the dispatch result (its `response_text`, else sorted JSON); `policy refused this tool call` plus `: <operator text>` for a refusal; and the REJECT text for a skipped call.
    - A call with no name, or whose arguments are not an object (a mapping or a JSON-object string), is answered `policy refused this tool call: the tool call has no name or its arguments are not an object`. It never enters the loop, and it records `policy_override` plus an `ollama.tool_call.refused` event.
    - Usage is summed across turns.
@@ -55,7 +57,7 @@ When the extension applies:
 - **Retry wrapper (C-RT-16).** It never retries this carrier and never advances to another candidate. It sets `retry.terminal="post-tool-effect"` and `retry.post_tool_effect.origin`.
 - **Breaker accounting (amends C-RT-16 §14.6.3/§14.6.4 for this carrier only).** Replay safety and provider health are separate facts. The carrier's `fault` is judged by the existing §14.6.3 rules; only the control flow (no retry, no advance) differs.
   - **`closed` breaker.** A `provider`-origin carrier whose `fault` is not waived under §14.6.3 is charged once, with `breaker.cause` from the existing classification. It can trip the breaker like any other charge. A waived `provider` fault and every `non-provider` carrier record nothing.
-  - **Half-open trial: new §14.6.4 cell 10, "post-tool-effect carrier".** The nine-cell matrix becomes ten. Cells 1-9 are unchanged. Cell 10's outcome depends on the carrier's origin and its `fault`:
+  - **Half-open trial: new §14.6.4 cell 10, "post-tool-effect carrier".** The nine-cell matrix becomes ten. Cells 1-9 retain their dispositions for outcomes that keep their own carriers; a HITL terminal error uses cell 7 before any effect and the non-provider row of cell 10 after an effect. Cell 10's outcome depends on the carrier's origin and its `fault`:
 
     | Carrier | §14.6.3 charge | Breaker disposition | Emission |
     |---|---|---|---|
@@ -65,8 +67,8 @@ When the extension applies:
     | `non-provider` | never charges | as the waived row | as the waived row |
 
   - **Emission while the carrier propagates.** In the two re-arm rows the trial is released while the carrier is still in flight. If emitting the transition fails, the emitter error is attached to the carrier as a note, and the carrier propagates unchanged. This differs from ordinary cell 3, where nothing is in flight and an emitter failure propagates as its own fault. In the two charging rows the transition is emitted as in cells 2 and 5. An emitter failure there propagates as it would in those cells, with the carrier as its context.
-  - In every row the carrier is neither retried nor advanced to another candidate. Cells 6-9 (signing, HITL terminal, tripped fence, cancellation) do not route through cell 10, because those exceptions keep their own carriers (see Exclusions).
-  - No §14.6.3 waiver and no §14.6.4 cell 1-9 is weakened. The earlier "no breaker charge" draft wording is withdrawn.
+  - In every row the carrier is neither retried nor advanced to another candidate. Cells 6, 8 and 9 (signing, tripped fence, cancellation) do not route through cell 10: their exceptions keep their own carriers (see Exclusions). Cell 7's HITL terminal identity is preserved only before any effect; after an effect it becomes a non-provider carrier, still never charged, retried or advanced.
+  - No §14.6.3 waiver or existing cell disposition is weakened. The post-effect HITL routing above is the sole change to cell 7's applicability. The earlier "no breaker charge" draft wording is withdrawn.
 - **Exclusions.** These keep their existing carriers and are never re-wrapped:
   - the audit-signing hard failures;
   - an already-fenced carrier;
@@ -77,7 +79,7 @@ When the extension applies:
 - **Scope limits.**
   - The fence covers dispatches that enter the C-RT-38 Anthropic or Ollama loops. Memory-only arms with no superset keep the registered B-84 residual.
   - The loop also keeps a batch-local record of dispatcher entry. This is what makes an ambiguous or in-batch failure terminal; it hands completed effects to the attempt's state.
-  - A HITL terminal error raised after an effect inside the attempt is recorded as the carrier, not its own `RT-FAIL-*`. It is still neither retried nor advanced.
+  - A HITL terminal error before any effect retains its original identity and `RT-FAIL-*`. After an effect inside the attempt it surfaces as a non-provider `PostToolEffectError`, with the original error as `fault` and `__cause__`; CP records the carrier rather than the original `RT-FAIL-*`. In `closed` it is uncharged; in a half-open trial cell 10 re-arms to `open` with a fresh cooldown, unchanged `fail_count` and `trigger_count = 0`. Both cases remain terminal without retry or candidate advance. [APPSPEC:errors-are-api]
 
 **Acceptance discriminator (source, provider-free).**
 
@@ -90,7 +92,8 @@ When the extension applies:
   - a post-effect provider 529 charges a `closed` breaker once (0 → 1), and in a half-open trial goes 5 → 6, back to `open` with a fresh cooldown, the same as before any effect;
   - a post-effect tool-host error that looks like HTTP never charges the breaker, and its half-open trial is released as inconclusive;
   - a post-effect signing hard failure keeps its own type.
-- On Ollama, the wire carries the projection, and each operator outcome (APPROVE, EDIT including `{}`, REJECT, RESPOND, DENY and evaluator failure) reaches the model as specified.
+  - the same HITL terminal error before and after an AUTO effect, on both providers and with closed and half-open breakers: before, original identity and `RT-FAIL-*` (cell 7); after, a non-provider carrier with that exact error as `fault` and `__cause__` (cell 10). Each makes one attempt and no candidate advance; the before case has zero effects and the after case one. Neither charges; both half-open cases re-arm with a fresh cooldown, unchanged `fail_count` and `trigger_count = 0`.
+- On Ollama, the wire carries the projection, and each operator outcome (APPROVE, EDIT including `{}`, REJECT, RESPOND, DENY and evaluator failure) reaches the model as specified. A model-emitted registered non-memory tool absent from the final offer is refused with no assessment, prompt, response audit or dispatch, including `tools: []` and projection omissions. A tool omitted from `step.tools` but present in the effective descended offer passes this boundary and is still gated. A mixed selected-memory/omitted-MCP batch serves memory and refuses the omitted MCP call in call order.
 - These are source witnesses. Installed Ollama tool-calling (daemon and model capability) and installed audit or signing remain separate gates.
 
 **Scope.** No new contract number, refusal reason, fail class, configuration field, CXA row or cross-axis edge. §14.6.4 gains cell 10 inside C-RT-16. The design authority for the Ollama route and for the fence is recorded, with full SHA256 values and provenance, in `.harness/a3_runtime_fence_fold_authority.md`.

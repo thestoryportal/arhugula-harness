@@ -71,14 +71,14 @@
 
 
 snapshot:
-  total: 300
+  total: 301
   open: 2
   design_substrate_gated: 3
-  registered_finding: 125
+  registered_finding: 126
   operator_gated: 0
   held: 4
   closed: 166
-  identity_digest: b6ac2291dc8a6855
+  identity_digest: 6e8886d8d8b1a32b
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -12259,3 +12259,11 @@ items:
   summary: "PR #1631 pass-3 spec-conformance review raised P2 finding merge-gate-spec-conformance:ab4a398875d521a6747684505e593aa3bab30114:1131c11edac7:1, accepted under the P2 carry rule. The historical acceptance contract .harness/review-evidence/a5-contract-authority/profile-contract-decision-1.md links its ratified B-104 amendment to a relative b104-operator-amendment-proposal-1.md (SHA256 b3ca465ec67a88b4f68a45662e49694659d22551aa0d8a7cf5205be25145de29; LIT cmt-00d96fe1-8671-4eeb-bc32-d0a522ac5449), and says its 19-cluster feature map and 25 historical skip dispositions are grounded in evidence-profile-contract-candidate-refresh-sonnet-1/report.md. Neither file has ever been in the repository. The Information Substrate v1.14 and v1.15 clearance markers repeat the proposal hash and LIT ID but not its text. The review-evidence README says these records make cited provenance readable in the repository, yet the operator selection and both counts cannot be checked at HEAD. This is a portability gap in historical evidence. It says nothing about current B-104 acceptance and is not an implementation defect."
   close_out: "OPEN 2026-10-02. WHAT CLOSES THIS ROW: either the reviewed B-104 amendment proposal (SHA256 b3ca465ec67a88b4f68a45662e49694659d22551aa0d8a7cf5205be25145de29) and the report behind the 19-cluster/25-skip counts are in the repository as portable review evidence whose bytes match their recorded hashes and sources, so the decision record's citations resolve at HEAD; or, for any original that cannot be recovered, a qualified pointer or claim correction grounded in the sources that do exist states which of those claims cannot be checked in the repository. Evidence reconstructed after the fact does not close it, and neither does removing or softening the citations so the gap stops showing. Closing this row says nothing about current B-104 acceptance, installed HITL resume behavior or release clearance; those remain separate gates."
   council: "NO — one historical evidence-portability gap with no new design decision."
+- id: "B-307"
+  title: "PR #1633 A3 authority prose follow-up"
+  status: "registered_finding"
+  pr: "#1633"
+  heading: "### B-307 · PR #1633 A3 authority prose follow-up *(pass-1 P3 carry, 2026-10-02; REGISTERED)*"
+  summary: "PR #1633 pass 1 at 3e9631796b347c92f03dfd924acb7ffe81fdc834 raised Codex P3 finding codex_review_wrapper:3e9631796b347c92f03dfd924acb7ffe81fdc834:9d2b85e59817:1: the authority record's attached-file hash wording conflicts with its qualification that the design-verdict SHA256 belongs to the original payload rather than the Markdown wrapper. The spec-conformance lens approved with separate nonblocking notes: the location header still says outside this repo; the fork's authorizing assignment is not among the attached comment snapshots; its not-yet-reviewed label needs checking against actual review provenance; and the deferred A5/A4 numbering dependency needs checking when those documents land. These are head-bound prose and evidence-portability residuals, not clearance or installed acceptance. The hash wording is an unfired register-pr-prose qualification rule."
+  close_out: "OPEN 2026-10-02. WHAT CLOSES THIS ROW: in the next substantive PR, qualify original-payload versus wrapper hashes and current evidence locations; make the cited authorizing assignment portable from its actual canonical source or state a precise evidenced limit; bind the review-status wording to actual review provenance; and cross-check the deferred A5/A4 numbering dependency when those documents land. Preserve the original payload hash and historical authority. Reconstructed evidence or treating Proposed status/source approval as clearance does not close this row."
+  council: "NO — one bounded prose and provenance follow-up with no new runtime or design decision."
