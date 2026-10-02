@@ -8,11 +8,11 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `d4fabd5db139` |
+| `workspace_state_hash` | `5c581db9b6d4` |
 | `last_refreshed` | 2026-10-02T00:00:00Z |
-| `git_head` | `01cb8d17` —  |
+| `git_head` | `7936da12` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
-| `open_fork_doc_count` | 124 |
+| `open_fork_doc_count` | 125 |
 
 **Hash recipe.** `sha256(git_head[:8] + "|" + sorted_open_pr_csv + "|" + open_fork_doc_count + "|" + latest_retirement_batch_path)[:12]`. See `Project_Roadmap_v1.md` §7.1.
 
@@ -50,11 +50,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #1637 | 2026-10-02 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1635 | 2026-10-02 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1633 | 2026-10-02 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1631 | 2026-10-02 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1629 | 2026-10-01 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
-| PR #1627 | 2026-10-01 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 
 ---
 
