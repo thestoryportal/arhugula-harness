@@ -2085,12 +2085,22 @@ def test_audit_append_refused_when_ledger_record_lacks_lf(tmp_path: Path) -> Non
     path = ledger.handle.canonical_path
     path.write_bytes(path.read_bytes()[:-1])
     before = path.read_bytes()
+    attempts: list[EntryPayload] = []
+    real_append = ledger.append
+
+    def _counting_append(payload: EntryPayload, write_key: WriteKey) -> WriteResult:
+        attempts.append(payload)
+        return real_append(payload, write_key)
+
+    object.__setattr__(ledger, "append", _counting_append)
     writer = RuntimeAuditLedgerWriter(ledger_writer=ledger, time_source=lambda: datetime.now(UTC))
     entry = _make_audit_entry("1" * 64)
 
     with pytest.raises(UnterminatedLedgerTailError):
         writer.append("tenant-A", entry)
 
+    # [LAW:behavior-not-structure] Eventual failure must not hide repeated IS refusals.
+    assert len(attempts) == 1, "tail refusal must propagate on the first IS append attempt"
     assert path.read_bytes() == before
     rows = [
         json.loads(line) for line in writer.sidecar_path.read_text().splitlines() if line.strip()

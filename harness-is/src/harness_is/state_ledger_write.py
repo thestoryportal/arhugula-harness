@@ -397,10 +397,11 @@ def _require_appendable(snapshot: _LedgerSnapshot, path: Path) -> _AppendableLed
 def _read_ledger_unlocked(ledger_handle: JsonlLedgerHandle) -> list[StateLedgerEntry]:
     """Deserialize every persisted entry without taking the cross-process lock.
 
-    Internal — used inside `append_ledger_entry`'s critical section, which
-    already holds the exclusive cross-process lock; taking the shared lock
-    again there would self-deadlock (POSIX `flock` is per open-file-
-    description, not reentrant across a process's own fds).
+    [LAW:comments-carry-meaning] Internal reader wrapper: `read_ledger`
+    already holds the shared cross-process lock. Callers own the lock;
+    reacquiring it here could self-deadlock inside an exclusive section
+    (POSIX `flock` is per open-file-description, not reentrant across a
+    process's own fds).
     """
     return _read_ledger_snapshot_unlocked(ledger_handle).entries
 
