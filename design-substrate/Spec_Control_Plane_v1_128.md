@@ -57,15 +57,25 @@ other nine values and their spellings are unchanged.
 3. **C-CP-25 §25.15 — refused-terminal fail-class rendering (AMENDED).** A PARALLELIZATION or
    ORCHESTRATOR_WORKERS run (and HIERARCHICAL_DELEGATION,
    which reuses it) ended by refused durable children returns FAILED with `resume_refusal` = the union
-   of every recorded refusal's reasons and signing fact, and a fail class rendered from that same value:
+   of the reasons of every refusal recorded before the barrier ended, and the OR of their signing
+   facts, and a fail class rendered from that same value:
    `<family>-child-resume-refused (<sorted reasons>[; audit-signing-failed])` (v1.124 §0.3 format).
 
-### §0.5 At-most-once limit (RESTATED)
+### §0.5 At-most-once and recorded-before-the-barrier limits (RESTATED)
 
-The refused descendant ran no step. At an intermediate ancestor, siblings already dispatched in the
-same resume may have run, under the existing barrier terms (v1.124 §0.4). Every ancestor ends FAILED
-with no new pause capture. The root record is consumed by its started claim, so a second resume of
-it is claim-refused (Runtime C-RT-06; not re-specified here).
+- **At the origin.** The refused descendant ran no step.
+- **At an intermediate ancestor.** Siblings already dispatched in the same resume may have run and
+  completed effects, under the existing barrier terms (v1.124 §0.4). The returned FAILED result
+  therefore cannot certify that no effect completed below it.
+- **Propagation is limited to recorded refusals.** An ancestor's run ends FAILED with this refusal,
+  and no new pause capture, only when the refusal was recorded before that ancestor's owning barrier
+  ended. The v1.124 §0.4 order is preserved without exception: under `proceed`, a refusal still in
+  flight when the barrier deadline cancels its branch is not recorded, and the run is PARTIAL with no
+  `resume_refusal` and no fail-class suffix, even though the refusing child never ran. Nothing from
+  that branch propagates further. The result is not a complete record of refusals, and this delta
+  does not promise late-refusal capture.
+- **The root claim.** The root record is consumed by its started claim, so a second resume of it is
+  claim-refused (Runtime C-RT-06; not re-specified here).
 
 ### §0.6 Preservation
 

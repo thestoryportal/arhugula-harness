@@ -22,6 +22,21 @@ One typed carrier, per the design GO: `ChildResumeRefusal.HITL_GATE_CONFIG_CHANG
 carried refusal typed. Fan-out gate-owning mismatches are typed at origin. Contract deltas:
 CP spec v1.128 / plan v2.56 (U-CP-106), Runtime spec v1.136 / plan v2.67 (U-RT-159), all PROPOSED.
 
+Pass-1 correction (PR #1637, review at `36493604`; root accepted four findings and rejected one).
+All of it is PROPOSED text; no source changed:
+- **Returned versus raised arm.** A FAILED child returned with `resume_refusal` is a completed result,
+  and siblings below it may have completed effects. Under a fail-closed signing failure it now raises
+  `RefusedChildResultAuditSigningError`, which preserves the child result and its `result_ref` as
+  well as the complete refusal. A refusal raised before any child step keeps the refusal-only
+  `RefusedChildAuditSigningError` (Runtime v1.136 §0.1).
+- **Recorded refusals only.** Propagation and the ancestor FAILED outcome apply to refusals recorded
+  before the owning barrier ends. CP v1.124 §0.4's PARTIAL outcome for an in-flight refusal under
+  `proceed` is preserved (CP v1.128 §0.5).
+- **Runtime v1.132 §14.14.8.** Items (b) and (c), the nine-value enumeration and the single-reason
+  carrier, are superseded by Runtime v1.136 §0.3. The cleared file is unchanged.
+- **CP union witness.** Plan v2.56 criterion 3 now requires a two-child disjoint-refusal matrix for
+  both fan-out families, with first- and last-record selection mutants.
+
 Revision note: the Runtime unit was drafted as U-RT-158. A5 keeps that label, so A4's unit is
 U-RT-159, following the fold order A3 (U-RT-157) → A5 (U-RT-158) → A4 (root decision, LIT
 `cmt-fcde66ad-1705-4ba8-bc49-7a4e03d4b0e0`). This is a proposed reconciliation only.
@@ -41,4 +56,8 @@ U-RT-159, following the fold order A3 (U-RT-157) → A5 (U-RT-158) → A4 (root 
 - Runtime v1.134 / plan v2.65 (A3; on main through PR #1633, `763e726585fced31f7c768ee7f503da1955773fd`) and v1.135 / plan v2.66 (A5; Proposed normative fold accepted in LIT `arhugula-harness-trial-193` `cmt-1953a86d-1182-4359-a2ad-1121ac6f9bda`; on main through PR #1635, `01cb8d17b18d7d3b531a75d29d778781f3ac03d1`) are on main and still PROPOSED; the cleared heads remain v1.133 / v2.64. Lineage must be folded
   in the settled order A3 → A5 → A4 before clearance. No head, pointer, marker, register or roadmap edit is made here.
 - Source preparation record (not landing heads, not main evidence): Unit 1 `c71bf24c7a76c292c4e7099b80a3744d60ff46bd` (parent `591bc8256a5fbf95729f69efab5f13f6ad3ad1bc`; typed refusal with all consumers and terminal propagation; 216 ALL non-test changed lines) and Unit 2 `cf1c916f252a4f49450d81898de5055984b6b94c` (parent Unit 1; gate-refusal producers and the public test; 143). **These SHAs, counts and byte-identity claims are historical and must be refreshed when the source lands:** this Proposed document filing carries none of the A4 source or tests, and none is on main. Each unit must be rebased onto the A3/A5 landing (now on main as Proposed), then recounted and re-verified. No formal pass, full gate, CI or main acceptance is inferred from these preparation commits.
+- The pass-1 correction's source work is owed and unobserved: the returned-arm
+  `RefusedChildResultAuditSigningError` with its witnesses and mutants (Runtime plan v2.67 criteria 2
+  and 5), and CP plan v2.56 criterion 3's two-child matrix. The preparation units implement the
+  superseded refusal-only returned arm.
 - Installed N1 and a separate negative-provenance (wrong receipt digest) attempt remain consent-gated.

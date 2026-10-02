@@ -7,16 +7,26 @@ LIT `cmt-fcde66ad-1705-4ba8-bc49-7a4e03d4b0e0`). This is a proposed label reconc
 
 ## U-RT-159 — typed child refusal at the sub-agent dispatch FAILED row (A4)
 
-**Source:** `harness-runtime/src/harness_runtime/lifecycle/sub_agent_dispatch.py` (FAILED + carrier →
-`ChildResumeRefusedError` after best-effort audit; fail-closed signing → `RefusedChildAuditSigningError`
-with the complete refusal; raised-refusal arm forwards the complete refusal);
+**Source:** `harness-runtime/src/harness_runtime/lifecycle/sub_agent_dispatch.py` (returned FAILED +
+carrier → `ChildResumeRefusedError` after best-effort audit; fail-closed signing on that returned arm →
+`RefusedChildResultAuditSigningError` with the complete refusal, the child `RunResult` and its
+resolved `result_ref`; the raised-refusal arm forwards the complete refusal into the refusal-only
+`RefusedChildAuditSigningError`);
 `harness-runtime/src/harness_runtime/lifecycle/audit_signing_errors.py` (`RefusedChildAuditSigningError`
-accepts a `ResumeRefusal`).
+accepts a `ResumeRefusal`; new `RefusedChildResultAuditSigningError`, a member of both
+`ChildResumeRefusedError` and `PostEffectAuditSigningError`).
 
 **Acceptance criteria:**
 1. A FAILED child with a multi-reason refusal raises `ChildResumeRefusedError` carrying every reason.
-2. Under a fail-closed signing failure it raises `RefusedChildAuditSigningError` with every reason,
-   `audit_signing_failed` true, in the signing family, never `PostEffectAuditSigningError`.
+2. Returned arm: under a fail-closed signing failure that FAILED child raises
+   `RefusedChildResultAuditSigningError`. It carries every reason with `audit_signing_failed` true;
+   `effect_class` is `sub-agent-result`; `result` is the child's `RunResult`; and `result_ref`
+   resolves that same payload through the protected result store, or is the unresolvable value when
+   the store write fails. It is an instance of `ChildResumeRefusedError`, of
+   `PostEffectAuditSigningError` and of the typed signing family. The outermost dispatch boundary
+   reports it once, keyed by `result_ref`, and the Control Plane records it as the child's refusal.
+   The fixture's middle fan-out has one sibling complete an effect before another refuses, so a
+   completed result exists. No preparation head carries this criterion.
 3. A FAILED child without the carrier, including one whose text names the reason, raises
    `SubAgentChildFailedError`.
 4. Root ORCHESTRATOR_WORKERS → middle ORCHESTRATOR_WORKERS → leaf, real dispatcher at both hops: a leaf
@@ -28,18 +38,23 @@ accepts a `ResumeRefusal`).
    that final witness remains required. The historical synthesized-leaf observation is not evidence
    for the corrected head or a waiver of this criterion (fork record, Named limits and follow-ups).
 5. Mutations that must fail a test: remapping the carrier to the generic error; setting a carrier on
-   every FAILED child; classifying by fail-class substring; using the completed-effect signing carrier.
+   every FAILED child; classifying by fail-class substring; on the returned arm, raising the
+   refusal-only carrier (drops the result and `result_ref`) or a plain `PostEffectAuditSigningError`
+   (drops the typed refusal); on the raised arm, raising any result-preserving carrier.
 6. Ruff and pyright clean on the touched files; existing B-104 refusal/admission/signing suites pass.
 7. A provider-free public `api.resume` integration with the durable
    claim store asserting the second root resume is claim-refused and zero tool/HITL/webhook effects.
    *Status (corrected):* a source test committed at a preparation head, `harness-runtime/tests/test_public_nested_resume_refusal.py`, targets this criterion; it is unlanded source preparation, not on main, and its evidence limits are recorded in the fork record.
-8. A raised multi-reason `ChildResumeRefusedError` under fail-closed audit signing raises `RefusedChildAuditSigningError` carrying the complete reason set, `audit_signing_failed` true, in the signing family, never the completed-effect carrier (`PostEffectAuditSigningError`).
+8. Raised arm: a raised multi-reason `ChildResumeRefusedError` under fail-closed audit signing raises `RefusedChildAuditSigningError` carrying the complete reason set, `audit_signing_failed` true, in the signing family, never the completed-effect carrier (`PostEffectAuditSigningError`).
    *Witness (Unit 1):* the test `test_a_raised_multi_reason_refusal_with_fail_closed_signing_keeps_every_reason` in `harness-runtime/tests/test_child_resume_refusal_propagation.py`, which exists at the Unit 1 preparation head and is not on main. *Owed:* a discriminating mutation that collapses the raised arm to a single reason (or drops a reason) must turn it red. The fork record keeps a historical observation of such mutants at the preparation head; it is not new-head evidence.
 
 <!-- [APPSPEC:observed-beats-inferred] Historical synthesized-leaf evidence cannot establish the required real-leaf behavior. -->
 Delivery portions (by content; commits are recorded in the fork record): Unit 1 carries the typed
-refusal value with all consumers and terminal propagation, including all U-RT-159 Runtime source,
-criteria 1-3, 5-6 and 8, and the synthesized-leaf propagation portion of criterion 4. Unit 2 adds
+refusal value with all consumers and terminal propagation, including U-RT-159 Runtime source for
+criteria 1, 3, 6 and 8, criterion 5's first three mutations, and the synthesized-leaf propagation portion of criterion 4. Unit 1 implements
+the superseded returned-arm text (the refusal-only carrier), so criterion 2's result-preserving
+carrier, its witnesses and criterion 5's returned-arm mutations are owed source work at the
+applicable head. Unit 2 adds
 the CP gate-refusal producers needed for criterion 4's final real-leaf witness and the public test
 (criterion 7). Criterion 4 therefore crosses both portions; the final real-dispatcher, real-leaf
 witness remains owed at the applicable source head.
