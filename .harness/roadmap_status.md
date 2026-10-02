@@ -8,11 +8,11 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `9a8d1b275955` |
+| `workspace_state_hash` | `d4fabd5db139` |
 | `last_refreshed` | 2026-10-02T00:00:00Z |
-| `git_head` | `763e7265` —  |
+| `git_head` | `01cb8d17` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
-| `open_fork_doc_count` | 123 |
+| `open_fork_doc_count` | 124 |
 
 **Hash recipe.** `sha256(git_head[:8] + "|" + sorted_open_pr_csv + "|" + open_fork_doc_count + "|" + latest_retirement_batch_path)[:12]`. See `Project_Roadmap_v1.md` §7.1.
 
@@ -22,7 +22,7 @@
 
 **Purpose.** Live pointer to the next Claude/Codex-executable frontier. Full round-by-round history (every prior round, verbatim, most-recent-first) lives in the archive below — grep it by PR/`B-`/`R-`-id/round, never read wholesale.
 
-**Current next action (post-#1633).** Unit5 PR #1633 lands Proposed A3 contract repairs and the bounded independent review record at final head1a0578ce; cleared Runtime1.133/Plan2.64 authority and all separate source, marker and installed acceptance obligations remain. B-306 and B-307 remain OPEN; extend B-307 with the exact pass3 prose notes from unit5-pass3-merge-gate-spec-conformance.txt in the next substantive PR first commit. Complete this content merge and its own main CI, one terminating roadmap refresh and that refresh own-main CI before forward shipping. Then reverify ownership, context admission and frozen Unit6 A5 contract evidence against final refreshed main, then Unit6.
+**Current next action (post-#1635).** Current next action (post-#1635): PR #1635 carries Proposed A5 Runtime v1.135/plan v2.66 and its provenance, with B306/B307/B308 still OPEN and no clearance or installed acceptance. Retain the pass3 B308 heading and portable upstream Linux source-provenance notes in the first next substantive PR, fold the queued Unit6 metrics with literal holder identity, and port the preserved A4 typed-resume-refusal Markdown contracts from b2cf0e12 onto the verified final main after the terminating refresh; keep source integration, security markers, Mac S5 durability and final-main B104 proof separate, then Unit7 A4 Proposed contract/evidence shipping.
 
 **Archive.** `.harness/roadmap-next-action-archive.md` (PRIOR rounds only, verbatim as each stood when superseded — the current round lives only in this head; the newest superseded round may lag there until the next content PR archives it, and is always losslessly recoverable from this file's own git history meanwhile).
 
@@ -50,11 +50,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #1635 | 2026-10-02 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1633 | 2026-10-02 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1631 | 2026-10-02 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1629 | 2026-10-01 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1627 | 2026-10-01 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
-| PR #1625 | 2026-10-01 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 
 ---
 
