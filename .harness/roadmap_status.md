@@ -8,11 +8,11 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `56843aeedbbd` |
+| `workspace_state_hash` | `9a8d1b275955` |
 | `last_refreshed` | 2026-10-02T00:00:00Z |
-| `git_head` | `792979f4` —  |
+| `git_head` | `763e7265` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
-| `open_fork_doc_count` | 122 |
+| `open_fork_doc_count` | 123 |
 
 **Hash recipe.** `sha256(git_head[:8] + "|" + sorted_open_pr_csv + "|" + open_fork_doc_count + "|" + latest_retirement_batch_path)[:12]`. See `Project_Roadmap_v1.md` §7.1.
 
@@ -22,7 +22,7 @@
 
 **Purpose.** Live pointer to the next Claude/Codex-executable frontier. Full round-by-round history (every prior round, verbatim, most-recent-first) lives in the archive below — grep it by PR/`B-`/`R-`-id/round, never read wholesale.
 
-**Current next action (post-#1623).** PR #1623 closes the B-104 helper report-loss source fix; installed B-104 acceptance remains pending a final-main artifact and separately consented process/socket witness. The first self-hosted Omarchy release remains solo/team, with audit signing off by default until B1/B2 and installed restart, tamper, key-residence, tenant-isolation, and redaction evidence pass. The approved dc17c69 Docker/gVisor, local Ollama, and Tempo/OTel/Grafana smoke and cleanup are complete (LIT cmt-1452e534-580b-439a-808d-03d842f891bb); further live witnesses need separate consent. MTC and in-place local-signed-ledger migration remain deferred. The next implementable roadmap unit is U-HE-58: demonstrate the real memento ceiling and next-session handoff in attended and headless arms, resolve the two Stop hooks, choose the project ceiling, then U-HE-59.
+**Current next action (post-#1633).** Unit5 PR #1633 lands Proposed A3 contract repairs and the bounded independent review record at final head1a0578ce; cleared Runtime1.133/Plan2.64 authority and all separate source, marker and installed acceptance obligations remain. B-306 and B-307 remain OPEN; extend B-307 with the exact pass3 prose notes from unit5-pass3-merge-gate-spec-conformance.txt in the next substantive PR first commit. Complete this content merge and its own main CI, one terminating roadmap refresh and that refresh own-main CI before forward shipping. Then reverify ownership, context admission and frozen Unit6 A5 contract evidence against final refreshed main, then Unit6.
 
 **Archive.** `.harness/roadmap-next-action-archive.md` (PRIOR rounds only, verbatim as each stood when superseded — the current round lives only in this head; the newest superseded round may lag there until the next content PR archives it, and is always losslessly recoverable from this file's own git history meanwhile).
 
@@ -50,11 +50,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #1633 | 2026-10-02 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1631 | 2026-10-02 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1629 | 2026-10-01 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1627 | 2026-10-01 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1625 | 2026-10-01 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
-| PR #1623 | 2026-10-01 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 
 ---
 
