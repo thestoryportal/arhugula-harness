@@ -1408,3 +1408,8 @@ The initial Antigravity invocation was REVIEWER_UNAVAILABLE because PATH omitted
 The first pass-2 artifact attempt on `ea985177..ea985177` returned REVIEWER_UNAVAILABLE because its diff was empty; its witness returned APPROVE but is deliberately not delivered into an incomplete empty-delta pass. This commit records legitimate review facts only, creating the actual record delta for required pass 2. It changes no source, test or contract. Pass 2 and pass 3 remain owed.
 
 Blast-radius: NOT RUN (graft unavailable). Manual caller inspection covered the Runtime ledger wrapper/audit writer, IS rollback, CP sibling composition, ordinary readers and strict recovery; dynamic consumers are not a claimed complete graph. Source review, source CI and these records do not establish installed R2 durability or full goal closure.
+| 2026-10-02T20:10:19Z | #1639 | 79a8ef7e35df | merge-gate-witness-adequacy | APPROVE | 0 finding(s) | r2 |
+
+## PR #1639 · Unit8 pass 2 · 2026-10-02
+
+The actual gate-record delta `ea985177..79a8ef7e` received Antigravity APPROVE and governed witness-adequacy APPROVE, both canonically delivered into pass 2. There are no accepted pass-2 P1 findings, so no escalation runs. The witness reviewed the exact bound delta and disclosed unavailable pytest execution under the read-only sandbox. Source, tests and contracts are unchanged. Pass 3 remains owed; final-head PR CI and the unchanged merge-door fixed point are still required. Blast-radius: NOT RUN (graft unavailable; manual source caller floor only).
