@@ -1,7 +1,8 @@
 # Spec: Harness Runtime — v1.136 (PROPOSED delta over cleared v1.133)
 
-*Delta-only file. One amendment site: C-RT-17 §14.7.2 step 7, the FAILED row of the sub-agent
-dispatch result mapping. Every other v1.133 and earlier term remains in force.*
+*Delta-only file. Amendment sites: the `RT-FAIL-SUB-AGENT-CHILD-FAILED` rows in the C-RT-17
+§14.7 failure-mode taxonomy and the C-RT-14 §14 Runtime-local fail-class taxonomy, plus the
+composer §14.7.2 step 7 FAILED mapping seam. Every other v1.133 and earlier term remains in force.*
 
 **Status: PROPOSED — not cleared.** No clearance marker, artifact-head row or pointer is filed.
 
@@ -13,7 +14,16 @@ Authority: CP v1.128 §0.3–§0.4 (proposed, same arc); fork record
 
 ## §0 Change-note (v1.133 → v1.136)
 
-### §0.1 C-RT-17 §14.7.2 step 7, FAILED row (AMENDED)
+### §0.1 C-RT-17 / C-RT-14 failure taxonomy rows and §14.7.2 step 7 (AMENDED)
+
+<!-- [APPSPEC:errors-are-api] The caller must distinguish a refused child from a child that ran and failed. -->
+The `RT-FAIL-SUB-AGENT-CHILD-FAILED` row in each taxonomy above is amended to distinguish
+the refusal-carrier arm below from the preserved genuine-failure arm. This Proposed delta also
+supersedes §14.7.2 step 7's historical "do NOT raise" clause for FAILED children: set
+`subagent.result_status = "failed"`, perform the applicable best-effort audit, then raise the
+typed error below. The SUCCESS and DRAINED mappings are unchanged. Resolving that contradiction
+is part of the pending Proposed fold; it does not assert that cleared v1.132/v1.133 already
+resolved it or that this delta is cleared.
 
 When the child workflow returns `RunStatus.FAILED`:
 
@@ -23,9 +33,9 @@ When the child workflow returns `RunStatus.FAILED`:
    raises `RefusedChildAuditSigningError` carrying the complete refusal with `audit_signing_failed`
    true, chained to the signing failure. It never raises `PostEffectAuditSigningError` for a refusal:
    no child effect completed.
-2. **Without `resume_refusal`.** Unchanged: `SubAgentChildFailedError` (and, under a fail-closed signing
-   failure, the existing `PostEffectAuditSigningError` carrier). A fail class that merely contains a
-   refusal reason's text is not a refusal.
+2. **Without `resume_refusal`.** Preserved genuine-failure behavior: `SubAgentChildFailedError`
+   (and, under a fail-closed signing failure, the existing `PostEffectAuditSigningError` carrier).
+   A fail class that merely contains a refusal reason's text is not a refusal.
 
 The existing raised-refusal arm now forwards the complete refusal (not a single reason) into
 `RefusedChildAuditSigningError`. Cancellation and dispatch-fence `BaseException` signals are untouched.

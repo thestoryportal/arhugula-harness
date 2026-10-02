@@ -54,7 +54,8 @@ other nine values and their spellings are unchanged.
    that reject a gate-owning branch's changed configuration return the same refusal. The mismatch is
    typed at its origin; it is never derived from the fail-class text. Every other body mismatch
    (branch count, index, material diff) stays a plain named FAILED with no refusal (named follow-up).
-3. **Refused terminals.** A PARALLELIZATION or ORCHESTRATOR_WORKERS run (and HIERARCHICAL_DELEGATION,
+3. **C-CP-25 §25.15 — refused-terminal fail-class rendering (AMENDED).** A PARALLELIZATION or
+   ORCHESTRATOR_WORKERS run (and HIERARCHICAL_DELEGATION,
    which reuses it) ended by refused durable children returns FAILED with `resume_refusal` = the union
    of every recorded refusal's reasons and signing fact, and a fail class rendered from that same value:
    `<family>-child-resume-refused (<sorted reasons>[; audit-signing-failed])` (v1.124 §0.3 format).
