@@ -1378,3 +1378,18 @@ At reviewed head9bfb3b2ebf65c82ad023518246e7dc34d1c614ed, independent Opus5.5/hi
 Pass3 non-blocking prose notes, accepted for B308/next substantive PR: (1) B308 heading says pass1 but also carries two pass2 notes; (2) planv2.66 device-node source basis names upstreamv7.2 files/hash, but neither is filed in this tree/authority table. Root independently retains exact source pins in private unit6-pass2-kernel-source/provenance.json; running kernel/device proof remains unobserved. No register change afterpass3. B295 empty-APPROVE schema means these prose notes have no canonical finding IDs; this narrative plus full actual report/provenance in LIT retains them until nextPR/checkpoint carry. B306/B307/B308 remain OPEN.
 
 Optional Gemini shadow: NOT RUN. Automatic approval review rejected its possible external private-data export before execution; no mutation or export occurred. Read-only subsequent checks found the GitHub repository PUBLIC and agy absent from the approved PATH. No installation, alternate invocation, flag change or retry. The off-path shadow is not a blocking gate; its unavailable result is explicitly retained.
+| 2026-10-02T16:58:46Z | #1637 | 36493604356a | merge-gate-concurrency | BLOCK | 2 finding(s) | r1 |
+| 2026-10-02T16:58:48Z | #1637 | 36493604356a | merge-gate-spec-conformance | BLOCK | 2 finding(s) | r1 |
+| 2026-10-02T16:58:50Z | #1637 | 36493604356a | merge-gate-witness-adequacy | BLOCK | 1 finding(s) | r1 |
+| 2026-10-02T17:25:53Z | #1637 | 02d5567ba416 | merge-gate-witness-adequacy | APPROVE | 0 finding(s) | r2 |
+| 2026-10-02T17:30:38Z | #1637 | 02d5567ba416 | merge-gate-concurrency | APPROVE | 0 finding(s) | r2 |
+
+## PR #1637 · Unit7 bounded review cycle · 2026-10-02
+
+At pass-1 head `36493604356a9d088a173a128c18e774a81738b4`, Antigravity approved and all three fresh Codex lenses blocked. Root accepted one concurrency P1 and three P2 findings, and rejected the asserted Linux anchor mismatch after fresh upstream bytes reproduced both published hashes and anchors. Correction `02d5567ba416869231945c4090bd8d6b58299e66` resolves the four accepted contract/plan findings and the preparation taxonomy P3. No unresolved Unit7 P3 or prose carry remains; B-306/B-307/B-308 stay open.
+
+Pass 2 reviewed only `36493604..02d5567b`: Antigravity APPROVE and fresh witness-adequacy APPROVE, both recorded. Pass 3 reviewed the full diff against `a82e0aedcf87e3a142849574450a2ee6dfed8d86`: fresh concurrency APPROVE, no findings, recorded. No accepted pass-2 P1 arose, so no escalation ran. Blast-radius: NOT RUN (graft binary/index unavailable; focused source and changed-file inspection, not graph completeness).
+
+The initial pass-1 outfamily attempt was REVIEWER_UNAVAILABLE because the launch PATH omitted the existing agy binary; it performed no review. The corrected-path pass-1 invocation approved through normal approval. Pass-2 disclosure was initially rejected by automatic approval review, then the unchanged invocation was normally approved after the user directly authorized the specific private diff and OAuth agy destination. Original unavailable and rejected records remain preserved.
+
+Current-head narrow documentation checks passed; the complete codex-check at `36493604` remains historical after this contract correction. These are Proposed contracts: the returned-result carrier, real source witnesses, clearance and installed acceptance remain owed. Gate-only landing delta and final-head/main CI must still pass before the unchanged merge door; the immediate terminating roadmap refresh and its own main CI remain owed.

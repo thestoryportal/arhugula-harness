@@ -44,9 +44,13 @@ Root selected portable evidence. The pack at `.harness/review-evidence/a5-contra
   (`e8565b4fe55bc8040c7c824813cb000869c1f13096ff7d9c23bd83372f5974dd`). They are extracted entries, not
   full-byte copies of that export, and a root-export snapshot is not human authority: rows 1 and 2 remain
   agent-relayed records.
+- **One upstream source provenance record:** `linux-v7.2-device-node-basis.md`. It pins the
+  upstream Linux `v7.2` files behind plan v2.66's device-node basis by URL, whole-file SHA256 and
+  line anchors. It is not an authority row, publishes no whole kernel file, and is a source reading,
+  not an observation of the running kernel.
 
 So the pack holds six exact public copies, one derived summary (not a seventh copy), four exact LIT
-snapshots and three extracted LIT entries. Rows 9 and 10 resolve by comment ID only. Host origins are kept for
+snapshots, three extracted LIT entries and one upstream source provenance record. Rows 9 and 10 resolve by comment ID only. Host origins are kept for
 provenance. The exact copies keep their original bytes, including the host paths they quote and generic host facts in their prose (for example, a review's description of the mode and contents of the operator's `~/.codex`). They contain no credential contents and no raw host-capability metadata; publishing them is a root decision to make with that in view.
 The LIT GAPs above are unchanged: copying bytes does not establish a missing LIT link.
 
