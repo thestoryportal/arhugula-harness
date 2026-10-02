@@ -71,14 +71,14 @@
 
 
 snapshot:
-  total: 301
+  total: 302
   open: 2
   design_substrate_gated: 3
-  registered_finding: 126
+  registered_finding: 127
   operator_gated: 0
   held: 4
   closed: 166
-  identity_digest: 6e8886d8d8b1a32b
+  identity_digest: d10917d7a98c599a
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -12267,3 +12267,11 @@ items:
   summary: "PR #1633 pass 1 at 3e9631796b347c92f03dfd924acb7ffe81fdc834 raised Codex P3 finding codex_review_wrapper:3e9631796b347c92f03dfd924acb7ffe81fdc834:9d2b85e59817:1: the authority record's attached-file hash wording conflicts with its qualification that the design-verdict SHA256 belongs to the original payload rather than the Markdown wrapper. The spec-conformance lens approved with separate nonblocking notes: the location header still says outside this repo; the fork's authorizing assignment is not among the attached comment snapshots; its not-yet-reviewed label needs checking against actual review provenance; and the deferred A5/A4 numbering dependency needs checking when those documents land. These are head-bound prose and evidence-portability residuals, not clearance or installed acceptance. The hash wording is an unfired register-pr-prose qualification rule. Pass 3 at 525c31c8dfb6d899afac8c2cfaa73d8add2b096a approved with two additional standalone prose notes: the Runtime v1.132:6526 run-in paragraph lies in §14.14.8, whose heading is Harness-owned durable snapshot persistence; and Spec v1.134 Scope wording No new refusal reason means reused refusal text despite a new offer-membership condition. Source: unit5-pass3-merge-gate-spec-conformance.txt, SHA256 fc0991d574ed962b4b4f4d8a2c74acd5765bd6caa22ce28e7f2e318148150bc3, retained at the root orchestration checkout .local/24h-acceptance/buford-workflow-optimization-20261002/parallel-resume/. These notes have no new structured finding IDs and remain OPEN."
   close_out: "OPEN 2026-10-02. WHAT CLOSES THIS ROW: in the next substantive PR, qualify original-payload versus wrapper hashes and current evidence locations; make the cited authorizing assignment portable from its actual canonical source or state a precise evidenced limit; bind the review-status wording to actual review provenance; and cross-check the deferred A5/A4 numbering dependency when those documents land. Preserve the original payload hash and historical authority. Reconstructed evidence or treating Proposed status/source approval as clearance does not close this row. The pass-3 carry additionally owes an unambiguous pointer to the Runtime v1.132 §14.14.8 run-in paragraph at line 6526 and a qualification that Spec v1.134 reuses refusal reason text while adding an offer-membership refusal condition."
   council: "NO — one bounded prose and provenance follow-up with no new runtime or design decision."
+- id: "B-308"
+  title: "PR #1635 A5 authority and fork prose follow-up"
+  status: "registered_finding"
+  pr: "#1635"
+  heading: "### B-308 · PR #1635 A5 authority and fork prose follow-up *(pass-1 P3 carry, 2026-10-02; REGISTERED)*"
+  summary: "PR #1635 pass 1 at 829caa06150d808cb937923ea6b5d8c41c638e45 raised five P3 prose findings. Three report the same stale filing state in .harness/a5_contract_authority.md (DRAFT and not filed, not yet filed, resolvable only on the preparation host) and the labels inherited from it: codex_review_wrapper:829caa06150d808cb937923ea6b5d8c41c638e45:7073fda93f1f:1, merge-gate-spec-conformance:829caa06150d808cb937923ea6b5d8c41c638e45:cd64cf748c4d:1 and merge-gate-witness-adequacy:829caa06150d808cb937923ea6b5d8c41c638e45:b890ffb31bc9:1. The pass-1 fix round corrected them co-located with the accepted authority P2 fix: the record, the plan v2.66 Authority line, the fork record and the spec v1.135 correction note now say Proposed and not cleared, and the record names its filed location. Two remain. codex_review_wrapper:829caa06150d808cb937923ea6b5d8c41c638e45:76f9ba120299:1: spec v1.135 C-RT-05 launcher step 4 says a symlink in any allowance path component refuses, but the production runner canonicalizes configured grants before the launcher sees them, so that sentence overstates production (spec v1.135's correction note already retains it as P3). merge-gate-spec-conformance:829caa06150d808cb937923ea6b5d8c41c638e45:1110828462da:1: the fork record lists closed review-fix items under its Open heading. These are prose residuals, not clearance or installed acceptance."
+  close_out: "OPEN 2026-10-02. WHAT CLOSES THIS ROW: in the next substantive PR, restate the C-RT-05 launcher step 4 symlink sentence so it matches canonical-target enforcement as the production runner applies it, and move the fork record's closed review-fix items out from under its Open heading. The three stale-filing findings were corrected in the PR #1635 pass-1 fix commit; closing this row confirms that correction at its landed head. Treating Proposed status or source approval as clearance does not close this row."
+  council: "NO — one bounded prose follow-up with no new runtime or design decision."

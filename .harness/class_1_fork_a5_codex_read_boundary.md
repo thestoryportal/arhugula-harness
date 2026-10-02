@@ -1,6 +1,6 @@
 # Fork record — A5 Codex subscription-CLI read boundary
 
-**Class:** 1 (design-substrate amendment), absorbed through a documented bundled back-flow source arc (CLAUDE.md §11.4). The lead orchestrator authorized it under the operator's autonomous full-goal directive (LIT `arhugula-harness-trial-193`, assignment `cmt-51ca3c3b-9a24-4470-951c-6d5862d69ec0`), after an independent design GO. No new H_T primitive or cross-axis edge. The design GO, the reviews and the host observation are pinned in `.harness/a5_contract_authority.md` (draft; not filed).
+**Class:** 1 (design-substrate amendment), absorbed through a documented bundled back-flow source arc (CLAUDE.md §11.4). The lead orchestrator authorized it under the operator's autonomous full-goal directive (LIT `arhugula-harness-trial-193`, assignment `cmt-51ca3c3b-9a24-4470-951c-6d5862d69ec0`), after an independent design GO. No new H_T primitive or cross-axis edge. The design GO, the reviews and the host observation are pinned in `.harness/a5_contract_authority.md` (Proposed; not cleared).
 
 ## Fork
 
