@@ -43,6 +43,7 @@ import hashlib
 import json
 import os
 import threading
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
@@ -202,6 +203,13 @@ class NonMonotonicTimestampError(ValueError):
     """Raised when an entry's timestamp precedes the prior entry's (C-IS-05 §5)."""
 
 
+class UnterminatedLedgerTailError(ValueError):
+    """A new-key append was refused, unwritten, because the final record lacks its LF.
+
+    Appending would join the new line onto that record (C-IS-07 §7.1/§7.3).
+    """
+
+
 class RecoveryAuditError(ValueError):
     """Invalid recovery append request."""
 
@@ -335,21 +343,67 @@ def _deserialize_entry(line: str) -> StateLedgerEntry:
     )
 
 
+@dataclass(frozen=True)
+class _AppendableLedger:
+    """Parsed entries whose file ends where a new line can start."""
+
+    entries: list[StateLedgerEntry]
+
+
+@dataclass(frozen=True)
+class _UnterminatedLedger:
+    """Parsed entries whose final record has no LF after it."""
+
+    entries: list[StateLedgerEntry]
+
+
+_LedgerSnapshot = _AppendableLedger | _UnterminatedLedger
+
+
+def _is_record_line(line: str) -> bool:
+    # [LAW:one-source-of-truth] The reader's blank-line rule also classifies the tail.
+    return bool(line.strip())
+
+
+def _read_ledger_snapshot_unlocked(ledger_handle: JsonlLedgerHandle) -> _LedgerSnapshot:
+    """Parse the ledger once and record whether its last record is LF-terminated.
+
+    `newline=""` keeps CR and CRLF as written, so the tail check sees real framing;
+    encoding and errors match `read_text()`, and `splitlines()` yields the same
+    lines either way.
+    """
+    path = ledger_handle.canonical_path
+    if not path.exists():
+        return _AppendableLedger(entries=[])
+    with path.open("r", newline="") as fh:
+        text = fh.read()
+    entries = [_deserialize_entry(line) for line in text.splitlines() if _is_record_line(line)]
+    if _is_record_line(text.rpartition("\n")[2]):
+        return _UnterminatedLedger(entries=entries)
+    return _AppendableLedger(entries=entries)
+
+
+def _require_appendable(snapshot: _LedgerSnapshot, path: Path) -> _AppendableLedger:
+    match snapshot:
+        case _AppendableLedger():
+            return snapshot
+        case _UnterminatedLedger():
+            raise UnterminatedLedgerTailError(
+                f"ledger {path} ends with a record that lacks its LF; append refused, "
+                "nothing written"
+            )
+
+
 def _read_ledger_unlocked(ledger_handle: JsonlLedgerHandle) -> list[StateLedgerEntry]:
     """Deserialize every persisted entry without taking the cross-process lock.
 
-    Internal — used inside `append_ledger_entry`'s critical section, which
-    already holds the exclusive cross-process lock; taking the shared lock
-    again there would self-deadlock (POSIX `flock` is per open-file-
-    description, not reentrant across a process's own fds).
+    [LAW:comments-carry-meaning] Internal reader wrapper: `read_ledger`
+    already holds the shared cross-process lock. Callers own the lock;
+    reacquiring it here could self-deadlock inside an exclusive section
+    (POSIX `flock` is per open-file-description, not reentrant across a
+    process's own fds).
     """
-    if not ledger_handle.canonical_path.exists():
-        return []
-    return [
-        _deserialize_entry(line)
-        for line in ledger_handle.canonical_path.read_text().splitlines()
-        if line.strip()
-    ]
+    return _read_ledger_snapshot_unlocked(ledger_handle).entries
 
 
 def read_ledger(ledger_handle: JsonlLedgerHandle) -> list[StateLedgerEntry]:
@@ -505,7 +559,9 @@ def append_ledger_entry(
     (acceptance #4); the first payload is preserved. `response_hash` and
     `prior_event_hash` are computed internally before persisting (acceptance
     #6/#8). A timestamp earlier than the prior entry's (beyond clock-skew
-    tolerance) is rejected (acceptance #9).
+    tolerance) is rejected (acceptance #9). A new key whose ledger ends in a
+    record without its LF raises `UnterminatedLedgerTailError` and writes
+    nothing (C-IS-07 §7.1/§7.3); readers still accept that record.
 
     C-IS-07 §7.6 (v1.11): `entry_payload.timestamp == WRITER_OWNED_TIMESTAMP`
     is the writer-owned-sampling opt-in — the persisted timestamp is sampled
@@ -533,10 +589,12 @@ def append_ledger_entry(
     # nested state append (dir -> _WRITE_LOCK); a plain append taking
     # _WRITE_LOCK first and then blocking on that dir deadlocked both.
     with cross_process_write_lock(ledger_handle.canonical_path), _WRITE_LOCK:
-        ledger = _read_ledger_unlocked(ledger_handle)
-        if any(e.idempotency_key == entry_payload.idempotency_key for e in ledger):
+        snapshot = _read_ledger_snapshot_unlocked(ledger_handle)
+        if any(e.idempotency_key == entry_payload.idempotency_key for e in snapshot.entries):
             return WriteResult.IDEMPOTENT_NOOP
-        prior_entry = ledger[-1] if ledger else None
+        # [LAW:parse-dont-validate] Only a proven-appendable ledger reaches the write below.
+        ledger = _require_appendable(snapshot, ledger_handle.canonical_path)
+        prior_entry = ledger.entries[-1] if ledger.entries else None
         # C-IS-07 §7.6 (v1.11) — the WRITER_OWNED_TIMESTAMP sentinel resolves
         # to a fresh sample HERE, inside the lock, so sampling order equals
         # physical-append order (never the raw sentinel — that would always

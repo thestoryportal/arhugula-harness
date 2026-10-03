@@ -25,6 +25,7 @@ from harness_is.state_ledger_entry_schema import (
 from harness_is.state_ledger_write import (
     EntryPayload,
     NonMonotonicTimestampError,
+    UnterminatedLedgerTailError,
     WriteKey,
     WriteKeyMismatchError,
     WriteResult,
@@ -210,3 +211,99 @@ def test_append_multiprocess_writes_serialized(tmp_path: Path) -> None:
     ledger = read_ledger(handle)
     assert len(ledger) == 6
     assert verify_chain(ledger).status is VerificationStatus.VALID
+
+
+# ---------------------------------------------------------------------------
+# C-IS-07 §7.1/§7.3 — a new-key append must not join a record that lacks its
+# LF. The refusal writes nothing; readers and key-only dedup are unchanged.
+# ---------------------------------------------------------------------------
+
+
+def _ledger_with_tail(tmp_path: Path, tail: bytes) -> JsonlLedgerHandle:
+    """One appended entry whose final b"\\n" is replaced by `tail`."""
+    handle = _handle(tmp_path)
+    append_ledger_entry(handle, _payload(0, hour=12), _key(0))
+    terminated = handle.canonical_path.read_bytes()
+    handle.canonical_path.write_bytes(terminated[:-1] + tail)
+    return handle
+
+
+def _assert_one_new_lf_line(before: bytes, after: bytes) -> None:
+    assert after.startswith(before)
+    added = after[len(before) :]
+    assert added.endswith(b"\n")
+    assert added.count(b"\n") == 1
+
+
+def test_new_key_after_terminated_record_appends_exactly_one_line(tmp_path: Path) -> None:
+    handle = _ledger_with_tail(tmp_path, b"\n")
+    before = handle.canonical_path.read_bytes()
+    assert append_ledger_entry(handle, _payload(1, hour=13), _key(1)) is WriteResult.APPENDED
+    _assert_one_new_lf_line(before, handle.canonical_path.read_bytes())
+    ledger = read_ledger(handle)
+    assert [e.action_id for e in ledger] == ["act-0", "act-1"]
+    assert verify_chain(ledger).status is VerificationStatus.VALID
+
+
+@pytest.mark.parametrize("tail", [b"", b"\r", b" "], ids=["no-lf", "bare-cr", "space"])
+def test_new_key_after_record_missing_its_lf_is_refused_without_writing(
+    tmp_path: Path, tail: bytes
+) -> None:
+    handle = _ledger_with_tail(tmp_path, tail)
+    before = handle.canonical_path.read_bytes()
+    with pytest.raises(UnterminatedLedgerTailError):
+        append_ledger_entry(handle, _payload(1, hour=13), _key(1))
+    assert handle.canonical_path.read_bytes() == before
+    # The reader still accepts the complete unterminated record.
+    ledger = read_ledger(handle)
+    assert [e.action_id for e in ledger] == ["act-0"]
+    assert verify_chain(ledger).status is VerificationStatus.VALID
+
+
+def test_same_key_after_record_missing_its_lf_is_idempotent_noop(tmp_path: Path) -> None:
+    handle = _ledger_with_tail(tmp_path, b"")
+    before = handle.canonical_path.read_bytes()
+    assert append_ledger_entry(handle, _payload(0, hour=12), _key(0)) is WriteResult.IDEMPOTENT_NOOP
+    assert handle.canonical_path.read_bytes() == before
+
+
+def test_partial_json_tail_keeps_raw_decode_error_without_writing(tmp_path: Path) -> None:
+    handle = _handle(tmp_path)
+    append_ledger_entry(handle, _payload(0, hour=12), _key(0))
+    handle.canonical_path.write_bytes(handle.canonical_path.read_bytes()[:-10])
+    before = handle.canonical_path.read_bytes()
+    with pytest.raises(json.JSONDecodeError):
+        append_ledger_entry(handle, _payload(1, hour=13), _key(1))
+    assert handle.canonical_path.read_bytes() == before
+    with pytest.raises(json.JSONDecodeError):
+        read_ledger(handle)
+
+
+@pytest.mark.parametrize("initial", [None, b""], ids=["missing", "empty"])
+def test_genesis_append_on_missing_or_empty_ledger(tmp_path: Path, initial: bytes | None) -> None:
+    handle = _handle(tmp_path)
+    if initial is not None:
+        handle.canonical_path.write_bytes(initial)
+    assert append_ledger_entry(handle, _payload(0), _key(0)) is WriteResult.APPENDED
+    raw = handle.canonical_path.read_bytes()
+    assert raw.endswith(b"\n")
+    assert raw.count(b"\n") == 1
+
+
+@pytest.mark.parametrize("tail", [b"\n  ", b"\r\n"], ids=["blank-after-lf", "crlf"])
+def test_new_key_after_lf_terminated_tail_appends(tmp_path: Path, tail: bytes) -> None:
+    handle = _ledger_with_tail(tmp_path, tail)
+    before = handle.canonical_path.read_bytes()
+    assert append_ledger_entry(handle, _payload(1, hour=13), _key(1)) is WriteResult.APPENDED
+    _assert_one_new_lf_line(before, handle.canonical_path.read_bytes())
+    ledger = read_ledger(handle)
+    assert [e.action_id for e in ledger] == ["act-0", "act-1"]
+    assert verify_chain(ledger).status is VerificationStatus.VALID
+
+
+def test_missing_lf_refusal_precedes_timestamp_check(tmp_path: Path) -> None:
+    handle = _ledger_with_tail(tmp_path, b"")
+    before = handle.canonical_path.read_bytes()
+    with pytest.raises(UnterminatedLedgerTailError):
+        append_ledger_entry(handle, _payload(1, hour=3), _key(1))
+    assert handle.canonical_path.read_bytes() == before

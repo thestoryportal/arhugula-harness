@@ -37,6 +37,7 @@ from harness_is.state_ledger_write import (
     WRITER_OWNED_TIMESTAMP,
     EntryPayload,
     NonMonotonicTimestampError,
+    UnterminatedLedgerTailError,
     WriteKey,
     WriteResult,
     read_ledger,
@@ -2065,6 +2066,46 @@ def test_electing_audit_append_still_refusable_under_mixed_population(tmp_path: 
     writer = RuntimeAuditLedgerWriter(ledger_writer=ledger, time_source=lambda: datetime.now(UTC))
     with pytest.raises(NonMonotonicTimestampError):
         writer.append("tenant-A", _make_audit_entry("1" * 64))
+
+
+def test_audit_append_refused_when_ledger_record_lacks_lf(tmp_path: Path) -> None:
+    """C-IS-07 §7.1/§7.3 through the Runtime audit writer: a ledger whose last
+    record lost its LF refuses the IS append without changing the ledger. The
+    sidecar row is already durable, the same residual as any other IS refusal."""
+    ledger = _ledger_writer(tmp_path)
+    ledger.append(
+        EntryPayload(
+            action_id="plain:seed",
+            idempotency_key="plain-seed-1",
+            actor=Actor(actor_class=ActorClass.AGENT, actor_id="test-runtime"),
+            timestamp=WRITER_OWNED_TIMESTAMP,
+        ),
+        WriteKey(thread_id="t-plain", step_id="s-1", idempotency_key="plain-seed-1"),
+    )
+    path = ledger.handle.canonical_path
+    path.write_bytes(path.read_bytes()[:-1])
+    before = path.read_bytes()
+    attempts: list[EntryPayload] = []
+    real_append = ledger.append
+
+    def _counting_append(payload: EntryPayload, write_key: WriteKey) -> WriteResult:
+        attempts.append(payload)
+        return real_append(payload, write_key)
+
+    object.__setattr__(ledger, "append", _counting_append)
+    writer = RuntimeAuditLedgerWriter(ledger_writer=ledger, time_source=lambda: datetime.now(UTC))
+    entry = _make_audit_entry("1" * 64)
+
+    with pytest.raises(UnterminatedLedgerTailError):
+        writer.append("tenant-A", entry)
+
+    # [LAW:behavior-not-structure] Eventual failure must not hide repeated IS refusals.
+    assert len(attempts) == 1, "tail refusal must propagate on the first IS append attempt"
+    assert path.read_bytes() == before
+    rows = [
+        json.loads(line) for line in writer.sidecar_path.read_text().splitlines() if line.strip()
+    ]
+    assert [row["entry"]["entry_hash"] for row in rows] == [entry.entry_hash]
 
 
 def test_per_family_verifier_over_real_sidecar_rehydration(tmp_path: Path) -> None:

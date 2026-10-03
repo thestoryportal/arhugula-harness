@@ -1393,3 +1393,28 @@ Pass 2 reviewed only `36493604..02d5567b`: Antigravity APPROVE and fresh witness
 The initial pass-1 outfamily attempt was REVIEWER_UNAVAILABLE because the launch PATH omitted the existing agy binary; it performed no review. The corrected-path pass-1 invocation approved through normal approval. Pass-2 disclosure was initially rejected by automatic approval review, then the unchanged invocation was normally approved after the user directly authorized the specific private diff and OAuth agy destination. Original unavailable and rejected records remain preserved.
 
 Current-head narrow documentation checks passed; the complete codex-check at `36493604` remains historical after this contract correction. These are Proposed contracts: the returned-result carrier, real source witnesses, clearance and installed acceptance remain owed. Gate-only landing delta and final-head/main CI must still pass before the unchanged merge door; the immediate terminating roadmap refresh and its own main CI remain owed.
+| 2026-10-02T20:01:20Z | #1639 | ea985177b5ad | merge-gate-concurrency | APPROVE | 0 finding(s) | r1 |
+| 2026-10-02T20:01:21Z | #1639 | ea985177b5ad | merge-gate-spec-conformance | APPROVE | 0 finding(s) | r1 |
+| 2026-10-02T20:01:21Z | #1639 | ea985177b5ad | merge-gate-witness-adequacy | APPROVE | 0 finding(s) | r1 |
+
+## PR #1639 · Unit8 pass 1 · 2026-10-02
+
+At source head `ea985177b5ad8da5419fdb3db99f9c9ada6e17c5`, Antigravity and the three governed Codex lenses returned APPROVE without structured findings. All four verdicts are canonically recorded in pass 1. Each Codex lens loaded the full canonical root Laws:Code. Governed reviewers remained read-only and the worktree was frozen. The read-only sandbox prevented pytest startup for these lenses; they report source-level witness reasoning, while the separately attributed exact-head gate ran successfully once (9327 passed, 2658 parity passed, pyright zero errors, and 29 shell suites). PR CI run 37056418327 completed successfully at this source head.
+
+Earlier preliminary lens outputs are preserved outside the product tree and do not deliver into the cycle: required root Laws loading was not established, and an ignored next-action draft was written while they ran. A preliminary spec-lens concern about the copied Unit7 door record was reconciled against the actual outer exception handler: the row preserves its historical producer, failure and query-timeout evidence. Rewriting that observation would change history; the existing handler's C-HE-06 §9 attribution gap remains a forward issue. The preliminary error-list prose note and independent shipping notes remain follow-up evidence rather than invented formal finding IDs.
+
+The initial Antigravity invocation was REVIEWER_UNAVAILABLE because PATH omitted the existing agy directory; the canonical corrected-PATH invocation approved. Automatic approval review initially blocked diff disclosure; the user expressly approved this review and all future permission requests, and the same canonical invocation then passed normal approval. Both original dispositions remain preserved.
+
+The first pass-2 artifact attempt on `ea985177..ea985177` returned REVIEWER_UNAVAILABLE because its diff was empty; its witness returned APPROVE but is deliberately not delivered into an incomplete empty-delta pass. This commit records legitimate review facts only, creating the actual record delta for required pass 2. It changes no source, test or contract. Pass 2 and pass 3 remain owed.
+
+Blast-radius: NOT RUN (graft unavailable). Manual caller inspection covered the Runtime ledger wrapper/audit writer, IS rollback, CP sibling composition, ordinary readers and strict recovery; dynamic consumers are not a claimed complete graph. Source review, source CI and these records do not establish installed R2 durability or full goal closure.
+| 2026-10-02T20:10:19Z | #1639 | 79a8ef7e35df | merge-gate-witness-adequacy | APPROVE | 0 finding(s) | r2 |
+
+## PR #1639 · Unit8 pass 2 · 2026-10-02
+
+The actual gate-record delta `ea985177..79a8ef7e` received Antigravity APPROVE and governed witness-adequacy APPROVE, both canonically delivered into pass 2. There are no accepted pass-2 P1 findings, so no escalation runs. The witness reviewed the exact bound delta and disclosed unavailable pytest execution under the read-only sandbox. Source, tests and contracts are unchanged. Pass 3 remains owed; final-head PR CI and the unchanged merge-door fixed point are still required. Blast-radius: NOT RUN (graft unavailable; manual source caller floor only).
+| 2026-10-02T20:21:29Z | #1639 | 7e7f86774425 | merge-gate-concurrency | APPROVE | 0 finding(s) | r2 |
+
+## PR #1639 · Unit8 pass 3 · 2026-10-02
+
+The governed full concurrency lens returned APPROVE at `7e7f867744258eb8443180001985798fc1e3b118`, with no findings, and its exact-bound verdict was canonically delivered into pass 3. The fresh read-only reviewer loaded full root Laws:Code and traced the real synchronous lock/read/classify/hash/append path. Pytest could not start under the read-only sandbox; execution remains separately attributed to the unchanged source gate. The bounded review cycle is complete. Only these two gate logs may change before landing; final-head PR CI, current-main CI and the unchanged merge-door fixed point remain required. Source approval does not establish installed acceptance. Blast-radius: NOT RUN (graft unavailable; retained manual consumer floor only).
