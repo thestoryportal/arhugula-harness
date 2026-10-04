@@ -39,9 +39,21 @@ The review is recorded in `.harness/a3_runtime_fence_fold_authority.md`.
 
 The pass1 source/spec opinions and historical attachments remain evidence for their pinned heads. These repairs add future criteria only; implementation, independent re-review and clearance remain owed.
 
+## Source reconciliation against main c995ec9f and candidate 47ca58b5 (Proposed)
+
+Main `c995ec9f9fa5945a40ffe30734b859bb6e88e2a8` carries these Proposed documents but none of the A3 source. The committed candidate `47ca58b507133e7c9839e822d5925026c53cc8e9` (`prep/a3-current-controls-20261003`, not on main) implements them. This pass changes text only. It changes no behavior and does not bring back any frozen-2217 text.
+
+- **Description is never null.** On the production path, every projected MCP `description` is a `ToolContract`'s required `str`, which may be empty. Spec v1.134 item 1 cites the registry chain at `c995ec9f`.
+- **Entry differs by provider.** Ollama enters whenever a superset and the loop are bound, including when the step declares no tools. Anthropic keeps main's condition. The cleared v1.132 §14.27 wording is quoted as written, and the bound-loop precondition is attributed to the implementation, not to cleared authority.
+- **Re-prompt residual registered.** An answer that does not dispatch is not an effect. A later transient failure before any effect may therefore be retried, which re-asks the model and may prompt the operator again under new call ids. The lead's disposition is to register this as a nonbehavioral residual. U-RT-157a gains a control that pins it.
+- **Register row named.** The candidate's `retry.post_tool_effect.origin` key needs a row in CP's B-126 wire register. The spec and the plan now name that row and its test pins; it is a CP source change, not a CP contract change.
+- **Citations rebound.** Main facts are cited at `c995ec9f`, A3 behavior at `47ca58b5`, and the A5/A4 lineage is read rather than assumed. The candidate cites spec line 57, so that line must not move.
+
 ## Open (not decided here)
 
 - The B-84 memory-only arms with no superset keep their registered replay residual.
+- A no-dispatch C-RT-38 answer followed by a pre-effect transient failure may be re-asked and re-prompted under new ids (spec v1.134 Scope limits). This is registered, not fenced; fencing answered gates would need its own design change.
+- Landing candidate `47ca58b5` (or any successor), with its source review, CI and main landing, remains owed. Each citation to the candidate must be rechecked at the head that actually lands.
 - Installed Ollama tool-calling (daemon `0.34.3` and model capability), installed audit and signing, and the installed C-RT-38 witness remain separate gates.
 
 ## Clearance

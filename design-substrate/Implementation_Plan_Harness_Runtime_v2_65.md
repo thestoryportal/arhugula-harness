@@ -1,13 +1,13 @@
 # Implementation Plan: Harness Runtime — v2.65 (delta over v2.64)
 
-**Status:** Proposed, as the execution map for Runtime spec v1.134. Number stability follows the spec header: a renumber is not content-neutral and must update the source citations listed in `.harness/a3_runtime_fence_fold_authority.md`. v2.64 is the last cleared head until independent review and a v2.65 clearance marker. Existing unit bodies are unchanged.
+**Status:** Proposed, as the execution map for Runtime spec v1.134. Number stability follows the spec header: a renumber is not content-neutral and must update the source citations listed in `.harness/a3_runtime_fence_fold_authority.md`. v2.64 is the last cleared head until independent review and a v2.65 clearance marker. Existing unit bodies are unchanged. Main `c995ec9f9fa5945a40ffe30734b859bb6e88e2a8` carries this plan but none of U-RT-157's source. The committed candidate `47ca58b507133e7c9839e822d5925026c53cc8e9` (branch `prep/a3-current-controls-20261003`) implements it and is not on main. The plan's criteria are what landing that source must meet; this text does not claim they hold.
 
 ## §0.1 U-RT-157 — Ollama C-RT-38 tool loop and shared post-effect fence
 
 - **Authority:** Runtime spec v1.134 (C-RT-38 §14.27 amendments); fork record `.harness/class_1_fork_a3_ollama_mcp_loop_and_post_effect_retry.md`.
 - **Cluster:** Runtime LLM dispatch and retry.
 - **Dependencies:** the existing C-RT-38 loop, auditor and factory wiring (v1.131), the frozen tool superset (U-1), C-RT-16.
-- No CP, CXA or cross-axis edge.
+- No CXA row or cross-axis edge. The only CP-axis change is one row in CP's B-126 `retry.*` wire register (below); no CP spec, plan or contract changes.
 
 **Source:**
 - `harness-runtime/src/harness_runtime/lifecycle/llm_dispatch.py`:
@@ -19,6 +19,7 @@
 - `harness-runtime/src/harness_runtime/lifecycle/hitl_tool_loop.py`: the dispatcher entry and later batch failures are fenced.
 - `harness-runtime/src/harness_runtime/lifecycle/retry_breaker_fallback.py`: the carrier is never retried or advanced. A `provider`-origin carrier is charged through the existing §14.6.3 waiver and charge path (closed: once unless waived; half-open: §14.6.4 cell 10, charging as cell 2 or 5 or re-arming when waived). A `non-provider` carrier is never charged, and its half-open trial is re-armed with the carrier preserved.
 - `harness-runtime/src/harness_runtime/lifecycle/post_tool_effect.py` (new): `PostToolEffectError` (with `fault` and `origin`), `ToolEffectFailureOrigin` and `ToolEffectFence`. HITL terminal errors retain their identity before effects; after effects they become non-provider carriers under cell 10, preserving `fault` and `__cause__`.
+- `harness-cp/src/harness_cp/retry_fallback_namespace.py`: one `RETRY_WIRE_REGISTER` row for the wrapper's `retry.post_tool_effect.origin`, declared by spec v1.134 line 57. `harness-cp/cp_tests/test_b126_retry_wire_register.py` moves its pinned counts with that row (emitted keys 10 → 11). Without the row, that drift test fails.
 
 **Acceptance criteria:**
 1. `harness-runtime/tests/test_post_tool_effect_replay.py`, through the real retry wrapper, dispatcher and loop: Anthropic and Ollama post-effect 5xx, plus an ambiguous dispatcher raise, give one effect, one attempt and the carrier. A pre-effect 5xx retries on both providers.
@@ -47,7 +48,7 @@
    - the bound;
    - summed usage;
    - malformed calls refused.
-3. The existing dispatch, refusal, loop, factory, retry and C-RT-36/38 suites still pass. The only fixture change gives the fake loop results the real `dispatched` field.
+3. The existing dispatch, refusal, loop, factory, retry and C-RT-36/38 suites still pass. The only fixture change gives the fake loop results the real `dispatched` field; the B-126 register test's pinned counts move with the new register row.
 4. Mutation probes: each of these turns a named test red.
    - removing the wrapper's carrier arm;
    - disabling the fence;
@@ -75,14 +76,15 @@ Installed Ollama tool-calling and installed audit or signing are not claimed.
 U-RT-157 is delivered as two source portions, in order. It is complete only when 157b is verified and criteria 1-5 hold together on the combined head. A head carrying only 157a implements U-RT-157 partially: the Ollama route there still refuses model tool calls as before.
 
 - **157a — shared fence, retry wrapper and Anthropic arm.**
-  - **Source:** `post_tool_effect.py`, `hitl_tool_loop.py` and `retry_breaker_fallback.py` in full. In `llm_dispatch.py`, the attempt-owned fence, its explicit threading, the attempt-wide guard, the Anthropic provider-call and reply-parsing boundary, and the fenced batch helper.
+  - **Source:** `post_tool_effect.py`, `hitl_tool_loop.py` and `retry_breaker_fallback.py` in full, with the B-126 register row and its test counts. In `llm_dispatch.py`, the attempt-owned fence, its explicit threading, the attempt-wide guard, the Anthropic provider-call and reply-parsing boundary, and the fenced batch helper.
   - **Criteria:** the Anthropic and shared cases of criterion 1, criterion 3, and criterion 5.
   - **New controls:** written against the Anthropic arm. These are new tests for this portion, not existing reviewed test nodes:
     - criterion 1's non-provider cases (closed and half-open);
     - the cancellation and tripped-fence identity cases;
     - the before/after-effect terminal HITL identity and cell 7/cell 10 cases;
     - the waived provider-origin cases (closed and half-open);
-    - the re-arm emitter-failure cases.
+    - the re-arm emitter-failure cases;
+    - the registered re-prompt residual (spec v1.134 Scope limits): a REJECT or RESPOND answer followed by a transient continuation failure, through the real wrapper, dispatcher and loop, gives zero effects, no `PostToolEffectError`, one retry and, when the re-asked reply repeats the gated call, one further prompt with a new rewrite record under that reply's call id. This pins the residual as accepted behavior; it does not ask the fence to change.
   - **Mutation probes (criterion 4):** carrier arm, fence disabled, attempt-wide guard, skipped provider charge, charging every origin, provider marked non-provider, signing re-wrap, post-effect HITL exclusion or pre-effect HITL wrapping, the Anthropic half of reply parsing outside the provider boundary, the removed post-effect waiver skip, and the dropped in-flight carrier on re-arm.
 - **157b — Ollama route.**
   - **Source:** the remaining `llm_dispatch.py` changes: route selection, projection and non-memory offer membership, nonce identity, turn, malformed-call refusal, tools-unsupported retry and the provider-neutral result text.
