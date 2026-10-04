@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `0954bcab3ca1` |
-| `last_refreshed` | 2026-10-03T00:00:00Z |
-| `git_head` | `a923682c` —  |
+| `workspace_state_hash` | `ed525c8506fe` |
+| `last_refreshed` | 2026-10-04T00:00:00Z |
+| `git_head` | `ffd6ded9` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 125 |
 
@@ -22,7 +22,7 @@
 
 **Purpose.** Live pointer to the next Claude/Codex-executable frontier. Full round-by-round history (every prior round, verbatim, most-recent-first) lives in the archive below — grep it by PR/`B-`/`R-`-id/round, never read wholesale.
 
-**Current next action (post-#1639).** Unit8 integrates the R2 source refusal for a new ledger key after an unterminated complete record, preserving same-key deduplication and readable ledger bytes; installed R2 durability remains open. Continue the inherited six-category/nine-arc scope from the sealed Buford checkpoint, carrying the independent shipping notes and formal-cycle follow-ups into the next substantive source unit. Keep B306/B307/B308 OPEN until their own evidence and dispositions close them; Proposed A4/A5 contracts confer neither clearance nor installed acceptance. Complete A3/A5/A4/A7 source, consumer and security obligations on verified main, then validate the installed candidate against W4 private grants, W3/S2/R2/R3 recovery and durability, bounded 1/4/8 capacity and Mac S5 host storage/build/restore. Rebuild B-104 at final main with all six phases, wrong-digest negative control and installed H_T proof before the final two-client 60-minute W5/LIT soak. Preserve all worktrees, protected drafts, classifier denials, the pending Mac toolchain answer and DEFERRED physical power loss. Apply the user standing permission in canonical root AGENTS.md and require verified full closure before goal completion, then take the next remaining A3 source unit.
+**Current next action (post-#1641).** After the terminating refresh is verified, resume the separate trial-a3-source-09 candidate at 47ca58b507133e7c9839e822d5925026c53cc8e9 in .worktrees/a3-current-controls-20261003 through fresh LIT ownership and measured admission. Resolve the cell-10 comment and equivalence witness, execute the 157a re-prompt residual control, disposition the CLI cancellation and lane-init changes, and recheck the CP retry-origin register/test and final-head citations. Carry the pass-3 prose notes about B-307 refusal wording, its partial numbering cross-check, and the B-295 schema/prompt conflict into the next substantive PR’s follow-up row. Preserve the full parent193 scope, original deadline/accounting, independent review, required CI, unchanged merge-door and installed acceptance gates; these Proposed documents confer no clearance or installed acceptance.
 
 **Archive.** `.harness/roadmap-next-action-archive.md` (PRIOR rounds only, verbatim as each stood when superseded — the current round lives only in this head; the newest superseded round may lag there until the next content PR archives it, and is always losslessly recoverable from this file's own git history meanwhile).
 
@@ -50,11 +50,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #1641 | 2026-10-04 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1639 | 2026-10-03 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1637 | 2026-10-02 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1635 | 2026-10-02 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1633 | 2026-10-02 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
-| PR #1631 | 2026-10-02 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 
 ---
 
