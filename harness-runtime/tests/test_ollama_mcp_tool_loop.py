@@ -441,6 +441,22 @@ async def test_usage_is_summed_across_tool_turns(tmp_path: Path) -> None:
     assert (attrs["gen_ai.usage.input_tokens"], attrs["gen_ai.usage.output_tokens"]) == (25, 11)
 
 
+async def test_json_object_string_arguments_dispatch_once_as_a_mapping(tmp_path: Path) -> None:
+    """A JSON-object string is an object: it reaches the tool host decoded, exactly once."""
+    client = _OllamaClient()
+    client.responses = [_asks({"function": {"name": "echo", "arguments": '{"value":"x"}'}})]
+    loop, _gate, tools, _ = _loop(tmp_path)
+    dispatcher, _ = _dispatcher(client, loop)
+
+    await _dispatch(dispatcher)
+
+    [call] = tools.calls
+    assert call.tool == "echo" and dict(call.arguments) == {"value": "x"}
+    [answer] = _answers(client)
+    assert answer["tool_name"] == "echo"
+    assert json.loads(answer["content"]) == {"echoed": {"value": "x"}}
+
+
 # --- malformed model calls are refused to the model, never dispatched ----------------------
 
 

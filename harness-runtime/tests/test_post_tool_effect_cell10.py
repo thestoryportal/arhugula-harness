@@ -33,6 +33,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 from .test_post_tool_effect_replay import (
     _first_tool_turn,
     _provider_case,
+    _ProviderOverloaded,
     _run,
     _Tools,
     _ToolsFailingWithHttpShape,
@@ -166,3 +167,28 @@ async def test_a_failing_re_arm_emission_is_noted_on_the_carrier_that_still_prop
     assert emitted == ["open->half_open", "half_open->open"]
     assert _transitions(exporter) == [("open", "half_open", 0)], "the re-arm emission failed"
     assert breaker.state is BreakerState.OPEN and breaker.fail_count == breaker.fail_threshold
+
+
+@pytest.mark.parametrize("origin", ["provider", "non-provider"])
+async def test_post_effect_attempt_span_carries_terminal_and_origin(
+    tmp_path: Path, origin: str
+) -> None:
+    """The exported attempt span, not the error's HTTP shape, names the carrier's origin."""
+    if origin == "provider":
+        tools: _Tools = _Tools()
+        script: list[Any] = [_first_tool_turn("anthropic"), _ProviderOverloaded("overloaded")]
+    else:
+        tools, script = _ToolsFailingWithHttpShape(), [_first_tool_turn("anthropic")]
+    attempts, wrapper, _breaker, step, raised, exporter = _cell10_case(
+        tmp_path, "anthropic", script, tools, half_open=False
+    )
+
+    outcome = await _run(wrapper, "anthropic", step)
+
+    assert isinstance(outcome, PostToolEffectError) and outcome is raised.raised[0]
+    assert outcome.origin == origin and outcome.__cause__ is outcome.fault
+    assert (len(tools.calls), len(attempts.calls)) == (1, 1), "one effect, one attempt"
+    [span] = [s for s in exporter.get_finished_spans() if s.name == "harness.runtime.retry_attempt"]
+    attributes = span.attributes or {}
+    assert attributes["retry.terminal"] == "post-tool-effect"
+    assert attributes["retry.post_tool_effect.origin"] == origin
