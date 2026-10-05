@@ -464,14 +464,14 @@ def test_every_declared_name_has_a_site_outside_its_own_declaration() -> None:
         "declared `retry.*` name(s) with no site outside their own declaration — "
         f"the last producer/consumer went away, or the row should be dropped: {sorted(dead)}"
     )
-    assert len(expected_live) == 13
+    assert len(expected_live) == 14
 
 
 def test_emitted_attribute_keys_match_the_declared_emitted_set() -> None:
     """The PRECISE sweep — the wire's attribute keys, exactly.
 
-    This is `B-126`'s corrected count of TEN, re-derived by a sweep shape
-    independent of the one that produced it: 5 CP-declared + 5 registered.
+    Runtime v1.134 adds one post-effect origin key to `B-126`'s ten:
+    5 CP-declared + 6 registered, re-derived by an independent sweep.
 
     Emission position is resolved by AST — see `_emitted_attribute_keys` for why
     a regex could not, and for the one declared bound.
@@ -484,7 +484,7 @@ def test_emitted_attribute_keys_match_the_declared_emitted_set() -> None:
         f"(unregistered: {sorted(found - expected)}; "
         f"declared-emitted but never set: {sorted(expected - found)})"
     )
-    assert len(found) == 10
+    assert len(found) == 11
 
 
 def test_a_helper_based_emission_is_resolved_not_missed() -> None:
@@ -671,7 +671,7 @@ def test_the_register_is_disjoint_from_the_cp_declared_schema() -> None:
     assert not (_REGISTERED & _CP_DECLARED)
     assert len(_CP_DECLARED) == 5
     assert len(RETRY_NAMESPACE_SCHEMA) == 6  # the sixth is `engine.replay_disposition`
-    assert len(RETRY_WIRE_REGISTER) == 5
+    assert len(RETRY_WIRE_REGISTER) == 6
 
 
 def test_names_are_not_attribute_keys() -> None:
@@ -713,7 +713,7 @@ def test_most_of_the_wire_surface_beyond_cp_is_mandated_not_discretionary() -> N
 
     The row was filed on the premise that these keys ride an unbounded
     telemetry-volume discretion lane. Grounding found the opposite: only
-    `retry.skipped.candidate` is pure discretion; the other six are mandated by
+    `retry.skipped.candidate` is pure discretion; the other five are mandated by
     name. A future arc that re-reads this surface as "all discretionary" fails
     here.
     """

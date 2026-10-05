@@ -39,7 +39,7 @@ LANES="$ROOT/queue/lanes"
 # --- 1. lane id is exported, persisted, and STABLE across sources -------------------
 ID1=$(cd "$ROOT/wt" && source "$INIT" >/dev/null 2>&1 && printf '%s' "$HARNESS_LANE_ID")
 [ -n "$ID1" ] && ok "HARNESS_LANE_ID exported" || bad "no HARNESS_LANE_ID"
-( cd "$ROOT/wt" && source "$INIT" >/dev/null 2>&1 && env | grep -q '^HARNESS_LANE_ID=' ) \
+( cd "$ROOT/wt" && source "$INIT" >/dev/null 2>&1 && printenv HARNESS_LANE_ID >/dev/null ) \
   && ok "HARNESS_LANE_ID is exported into the environment" || bad "lane id not exported"
 [ -s "$ROOT/wt/.harness/.lane-id" ] && ok "lane id persisted at .harness/.lane-id" \
   || bad "lane id not persisted"

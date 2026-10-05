@@ -106,6 +106,10 @@ from harness_runtime.lifecycle.llm_dispatch import (
     LLMDispatchProviderUnregisteredError,
     RoutedPrimaryResolution,
 )
+from harness_runtime.lifecycle.post_tool_effect import (
+    PostToolEffectError,
+    ToolEffectFailureOrigin,
+)
 from harness_runtime.lifecycle.retry_breaker import BreakerStateMachine
 from harness_runtime.memory_tool_executor import (
     MemoryToolExecutionInputError,
@@ -1293,6 +1297,26 @@ class RetryBreakerFallbackDispatcher:
                     inner_span.set_attribute("retry.delay_ms", 0)
                     inner_span.set_attribute("retry.terminal", "audit-signing-fail-closed")
                     raise
+                except PostToolEffectError as exc:
+                    # Runtime v1.134 C-RT-38 post-effect fence: a tool effect of this
+                    # attempt already started, so another attempt (same candidate or
+                    # the next) would re-ask the model and could run it again: never
+                    # retried, never candidate-advanced. Replay safety is not provider
+                    # health, though: a PROVIDER-origin failure is still a provider
+                    # fault and is charged exactly as the generic arm charges it
+                    # (§14.6.3 waivers included). In a half-open trial this is §14.6.4
+                    # cell 10: a charging fault leaves half_open as cell 2 or cell 5
+                    # would; a waived fault, like any non-provider origin, records
+                    # nothing, so the outer BaseException arm re-arms the trial with this
+                    # carrier in flight (`_release_half_open_trial`).
+                    inner_span.set_attribute("retry.delay_ms", 0)
+                    inner_span.set_attribute("retry.terminal", "post-tool-effect")
+                    inner_span.set_attribute("retry.post_tool_effect.origin", exc.origin.value)
+                    if exc.origin is ToolEffectFailureOrigin.PROVIDER:
+                        self._charge_post_effect_provider_fault(
+                            exc, breaker, trial_token, inner_span, outer_span, candidate
+                        )
+                    raise
                 except Exception as exc:
                     last_failure_detail = _failure_detail(exc)
                     # B-38: telemetry-only classification for `breaker.cause`,
@@ -1471,6 +1495,38 @@ class RetryBreakerFallbackDispatcher:
             last_failure_class=last_failure_class or "max-attempts",
             last_failure_detail=last_failure_detail,
         )
+
+    def _charge_post_effect_provider_fault(
+        self,
+        exc: PostToolEffectError,
+        breaker: Any,
+        trial_token: int | None,
+        inner_span: Any,
+        outer_span: Any,
+        candidate: ProviderCandidate,
+    ) -> None:
+        """Charge a terminal provider-origin post-effect failure to the provider breaker.
+
+        The provider exception is the carrier's `fault`; it is charged under the
+        same §14.6.3 waiver rule and `breaker.cause` classification the generic arm
+        applies, so the fence changes control flow (no retry, no advance), never the
+        provider's health accounting.
+        """
+        fault = exc.fault
+        inner_span.set_attribute("retry.cause_attribution", type(fault).__name__)
+        if _classify_provider_exception(fault) is None and _is_breaker_charge_waived(fault):
+            inner_span.set_attribute("retry.breaker_waived.reason", type(fault).__name__)
+            inner_span.set_attribute(
+                "retry.breaker_waived.candidate", f"{candidate.provider}:{candidate.model}"
+            )
+            return
+        transition = breaker.record_failure(
+            cause=_classify_breaker_cause(fault),
+            now=self.monotonic(),
+            trial_token=trial_token,
+        )
+        if transition is not None:
+            self._emit_breaker_transition(transition, outer_span)
 
     def _release_half_open_trial(
         self,

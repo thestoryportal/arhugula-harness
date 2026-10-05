@@ -67,6 +67,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, Final, Protocol, cast, runtime_checkable
+from uuid import uuid4
 
 from harness_as.memory_tool_contracts import MEMORY_TOOL_CONTRACTS, MemoryToolName
 from harness_core import PersonaTier, WorkloadClass
@@ -118,6 +119,7 @@ from harness_runtime.lifecycle.cost_record_sink import SupportsCostRecordAppend
 from harness_runtime.lifecycle.cross_family_cost_tag import provider_family_for_scope_check
 from harness_runtime.lifecycle.external_cli_provider import accepts_explicit_on_wire
 from harness_runtime.lifecycle.hitl_tool_loop import (
+    HITLToolLoopCallResult,
     HITLToolLoopContext,
     ModelToolCall,
     RuntimeHITLToolLoop,
@@ -127,6 +129,7 @@ from harness_runtime.lifecycle.memory_tool_dispatch import (
     execute_with_memory_callbacks,
     step_has_memory_tool,
 )
+from harness_runtime.lifecycle.post_tool_effect import ToolEffectFence
 from harness_runtime.memory_context import (
     RenderedMemoryPromptPacket,
     RuntimeMemoryContext,
@@ -1450,6 +1453,7 @@ class RuntimeLLMDispatcher:
         # the `infer()` composition via this holder — `infer()` returns an
         # InferenceResponse, but the step-output contract is the raw Mapping.
         raw_response: dict[str, Mapping[str, Any]] = {}
+        tool_effect_fence = ToolEffectFence()
 
         async def _provider_dispatch(
             provider: str,
@@ -1477,6 +1481,7 @@ class RuntimeLLMDispatcher:
                 upstream_output=_upstream_output,
                 memory_context=_memory_context,
                 standard_memory_tool_executor=_standard_memory_tool_executor,
+                tool_effect_fence=tool_effect_fence,
             )
             raw_response["value"] = response
             # ProviderDispatchResult is structurally required by `infer()` but
@@ -1502,27 +1507,32 @@ class RuntimeLLMDispatcher:
             RoutingLayer.DECLARATIVE: _declarative_echo
         }
 
-        await infer(
-            envelope,
-            dispatch=_provider_dispatch,
-            manifest=self.routing_manifest or _EMPTY_ROUTING_MANIFEST,
-            # `layer_decisions_override` is the test-only seam (C-CP-02 §2.5.5):
-            # None -> the production map (DECLARATIVE-echo [+ EMBEDDING when a
-            # classifier is injected]). A test injects a sentinel-forcing map to
-            # reach the injected `router`, or an EMBEDDING-only map to reach L2.
-            layer_decisions=(
-                self.layer_decisions_override
-                if self.layer_decisions_override is not None
-                else production_layer_decisions
-            ),
-            # B-LAYER-BUDGET-OVERRIDE — the threaded budgets (DORMANT seam:
-            # `DEFAULT_LAYER_BUDGETS` at production stage-5; an override-bearing
-            # tuple resolves the §3.1 L3 per-persona/per-workload override).
-            budgets=self.budgets,
-            # C-CP-02 §2.5 — production binds None (Layer-3 inert); a test
-            # fixture injects a mock RouterResolutionFn.
-            router=self.router,
-        )
+        # Runtime v1.134 C-RT-38 post-effect fence. [LAW:single-enforcer] ONE effect state
+        # per attempt the C-RT-16 wrapper retries: everything after a started tool effect
+        # in this attempt (later turns, turn capture, bookkeeping) surfaces as
+        # `PostToolEffectError`, never as a retryable failure.
+        with tool_effect_fence.guard():
+            await infer(
+                envelope,
+                dispatch=_provider_dispatch,
+                manifest=self.routing_manifest or _EMPTY_ROUTING_MANIFEST,
+                # `layer_decisions_override` is the test-only seam (C-CP-02 §2.5.5):
+                # None -> the production map (DECLARATIVE-echo [+ EMBEDDING when a
+                # classifier is injected]). A test injects a sentinel-forcing map to
+                # reach the injected `router`, or an EMBEDDING-only map to reach L2.
+                layer_decisions=(
+                    self.layer_decisions_override
+                    if self.layer_decisions_override is not None
+                    else production_layer_decisions
+                ),
+                # B-LAYER-BUDGET-OVERRIDE — the threaded budgets (DORMANT seam:
+                # `DEFAULT_LAYER_BUDGETS` at production stage-5; an override-bearing
+                # tuple resolves the §3.1 L3 per-persona/per-workload override).
+                budgets=self.budgets,
+                # C-CP-02 §2.5 — production binds None (Layer-3 inert); a test
+                # fixture injects a mock RouterResolutionFn.
+                router=self.router,
+            )
         return raw_response["value"]
 
     async def _invoke_provider(
@@ -1539,6 +1549,7 @@ class RuntimeLLMDispatcher:
         upstream_output: Mapping[str, Any] | None = None,
         memory_context: RuntimeMemoryContext | None = None,
         standard_memory_tool_executor: Any = None,
+        tool_effect_fence: ToolEffectFence,
     ) -> Mapping[str, Any]:
         """Provider-SDK dispatch boundary — the injected dispatch callable for
         `infer()` (R-300). Opens the `llm.inference` span (gen_ai.* + routing.*
@@ -1798,6 +1809,7 @@ class RuntimeLLMDispatcher:
                             step_context=step_context,
                             step_id=step_id,
                             persona_tier=self.persona_tier or PersonaTier.SOLO_DEVELOPER,
+                            fence=tool_effect_fence,
                             system=effective_system_prompt,
                             upstream=upstream_output,
                             frozen_tool_superset=_effective_frozen_tool_superset,
@@ -1862,7 +1874,32 @@ class RuntimeLLMDispatcher:
                         memory_context=memory_context,
                         standard_memory_tool_executor=standard_memory_tool_executor,
                     )
-                    if ollama_tools_context is not None:
+                    if (
+                        _effective_frozen_tool_superset is not None
+                        and self.hitl_tool_loop is not None
+                    ):
+                        # Runtime v1.134 C-RT-38: with a superset AND the bound loop the
+                        # model's MCP tools are served through the loop (memory tools, when
+                        # standard, stay with their executor in the same arm).
+                        response, usage_attrs = await _dispatch_ollama_with_hitl_tool_loop(
+                            adapter,
+                            model,
+                            payload,
+                            fence=tool_effect_fence,
+                            superset=_effective_frozen_tool_superset,
+                            hitl_tool_loop=self.hitl_tool_loop,
+                            step_context=step_context,
+                            step_id=step_id,
+                            persona_tier=self.persona_tier or PersonaTier.SOLO_DEVELOPER,
+                            memory_context=ollama_tools_context,
+                            standard_memory_tool_executor=standard_memory_tool_executor,
+                            memory_packet=repair_packet,
+                            degraded_sink=degraded_sink,
+                            wire_sink=wire_sink,
+                            system=effective_system_prompt,
+                            upstream=upstream_output,
+                        )
+                    elif ollama_tools_context is not None:
                         # B-83 (c) — the ollama arm can discover mid-dispatch that
                         # the daemon refuses tools for this model; it then repairs
                         # to the packet itself and publishes the decision into the
@@ -3759,7 +3796,8 @@ def _policy_override_span() -> Generator[Any]:
         yield refusal_span
 
 
-def _anthropic_tool_result_content(result: Any) -> str:
+def _tool_loop_result_content(result: Any) -> str:
+    """What the model reads for one C-RT-38 call result, on every provider route."""
     if result is None:
         return "HITL tool loop did not return a result for this tool call."
     refusal = getattr(result, "refusal", None)
@@ -3785,7 +3823,7 @@ def _anthropic_tool_result_block(tool_use_block: Any, result: Any) -> dict[str, 
     block: dict[str, Any] = {
         "type": "tool_result",
         "tool_use_id": tool_call_id,
-        "content": _anthropic_tool_result_content(result),
+        "content": _tool_loop_result_content(result),
     }
     if (
         result is None
@@ -3832,6 +3870,7 @@ async def _dispatch_anthropic_with_hitl_tool_loop(
     step_context: StepExecutionContext,
     step_id: str,
     persona_tier: PersonaTier,
+    fence: ToolEffectFence,
     system: str | None = None,
     upstream: Mapping[str, Any] | None = None,
     frozen_tool_superset: tuple[Mapping[str, Any], ...] | None = None,
@@ -3840,6 +3879,9 @@ async def _dispatch_anthropic_with_hitl_tool_loop(
     wire_sink: _ProviderWireReachedSink | None = None,
 ) -> tuple[Mapping[str, Any], _UsageAttrs, _AnthropicCacheAttrs, _AnthropicRequestAttrs]:
     """Anthropic provider branch with generic R-CXA-2 HITL tool continuation.
+
+    ``fence`` is the dispatch attempt's own effect fence (Runtime v1.134): this arm
+    records started effects in it and marks its provider calls; the attempt guards the rest.
 
     Non-memory Anthropic ``tool_use`` blocks are adapted into provider-neutral
     ``ModelToolCall`` values, processed by the bound ``RuntimeHITLToolLoop``,
@@ -3869,35 +3911,33 @@ async def _dispatch_anthropic_with_hitl_tool_loop(
     for _turn_index in range(_ANTHROPIC_HITL_MAX_TOOL_TURNS):
         # Construct, then mark, then await (codex R7 [P2-1] — see the sink
         # docstring): a call-time SDK argument rejection stays PRE-wire.
-        pending = adapter.client.messages.create(model=model, **kwargs)
-        _mark_wire_reached(wire_sink)
-        response = await pending
-        tool_use_blocks = _anthropic_tool_use_blocks(response)
-        if not tool_use_blocks:
-            return _anthropic_response_bundle(response, payload, model, kwargs)
-
-        calls = tuple(
-            _model_tool_call_from_anthropic_block(
-                block,
-                payload=payload,
-                provider="anthropic",
-                model=model,
+        # [LAW:single-enforcer] The provider boundary is the call AND the reading of
+        # the provider's own reply (§14.6.3 row 2b): a malformed reply is provider
+        # health whether or not a tool already ran. Tool execution stays outside it.
+        with fence.provider_call():
+            pending = adapter.client.messages.create(model=model, **kwargs)
+            _mark_wire_reached(wire_sink)
+            response = await pending
+            tool_use_blocks = _anthropic_tool_use_blocks(response)
+            if not tool_use_blocks:
+                return _anthropic_response_bundle(response, payload, model, kwargs)
+            calls = tuple(
+                _model_tool_call_from_anthropic_block(
+                    block,
+                    payload=payload,
+                    provider="anthropic",
+                    model=model,
+                )
+                for block in tool_use_blocks
             )
-            for block in tool_use_blocks
-        )
-        results = await hitl_tool_loop.run_tool_calls(calls, context)
-        _record_policy_overrides(results)
+            assistant_content = [
+                dict(_anthropic_block_mapping(block))
+                for block in _anthropic_content_blocks(response)
+            ]
+        results = await _run_fenced_tool_calls(hitl_tool_loop, calls, context, fence)
         result_by_id = {result.tool_call_id: result for result in results}
 
-        messages.append(
-            {
-                "role": "assistant",
-                "content": [
-                    dict(_anthropic_block_mapping(block))
-                    for block in _anthropic_content_blocks(response)
-                ],
-            }
-        )
+        messages.append({"role": "assistant", "content": assistant_content})
         messages.append(
             {
                 "role": "user",
@@ -4919,6 +4959,264 @@ async def _dispatch_ollama_with_standard_memory_tools(
         )
 
     raise _memory_tool_loop_exhausted("Ollama", max_iterations)
+
+
+async def _run_fenced_tool_calls(
+    hitl_tool_loop: RuntimeHITLToolLoop,
+    calls: Sequence[ModelToolCall],
+    context: HITLToolLoopContext,
+    fence: ToolEffectFence,
+) -> tuple[HITLToolLoopCallResult, ...]:
+    """Run one C-RT-38 batch, folding its dispatched effects into this dispatch's fence."""
+    results = await hitl_tool_loop.run_tool_calls(calls, context)
+    fence.record(started=any(result.dispatched for result in results))
+    _record_policy_overrides(results)
+    return results
+
+
+_OLLAMA_TOOLS_UNSUPPORTED_EVENT: Final[str] = "ollama.tools_unsupported"
+"""One span event when the daemon refuses tools on the first call and the C-RT-38 arm
+retries once with none: the projected tools it dropped are counted, never named."""
+
+_OLLAMA_MALFORMED_TOOL_CALL: Final[str] = (
+    f"{_POLICY_REFUSAL_TEXT}: the tool call has no name or its arguments are not an object"
+)
+
+
+def _ollama_tools_from_superset(
+    superset: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """Project the effective frozen tool superset onto Ollama's function-tool wire shape.
+
+    An entry without ``input_schema`` (an Anthropic-native tool type) has no Ollama
+    projection and is dropped.
+    """
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": entry["name"],
+                "description": entry["description"],
+                "parameters": entry["input_schema"],
+            },
+        }
+        for entry in superset
+        if "input_schema" in entry
+    ]
+
+
+def _ollama_call_arguments(call: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    """The call's arguments as an object (a mapping, or a JSON-object string), else None."""
+    function = call.get("function")
+    raw = (
+        cast("Mapping[str, object]", function).get("arguments")
+        if isinstance(function, Mapping)
+        else None
+    )
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except json.JSONDecodeError:
+            return None
+    return cast("Mapping[str, Any]", raw) if isinstance(raw, Mapping) else None
+
+
+def _ollama_refused_answer(
+    name: str | None, *, turn: int, index: int, content: str
+) -> dict[str, Any]:
+    """A refusal answer for one call, recorded exactly like the first-release refusals."""
+    identity = {"tool.call.turn": turn, "tool.call.index": index}
+    with _policy_override_span() as span:
+        span.add_event(
+            _OLLAMA_REFUSED_EVENT,
+            identity if name is None else {**identity, "gen_ai.tool.name": name},
+        )
+    return {"role": "tool", "tool_name": name, "content": content}
+
+
+async def _dispatch_ollama_with_hitl_tool_loop(
+    adapter: Any,
+    model: str,
+    payload: ProviderAgnosticPayload,
+    *,
+    fence: ToolEffectFence,
+    superset: Sequence[Mapping[str, Any]],
+    hitl_tool_loop: RuntimeHITLToolLoop,
+    step_context: StepExecutionContext,
+    step_id: str,
+    persona_tier: PersonaTier,
+    memory_context: RuntimeMemoryContext | None,
+    standard_memory_tool_executor: Any,
+    memory_packet: RenderedMemoryPromptPacket | None,
+    degraded_sink: _DegradedMemoryServeSink,
+    wire_sink: _ProviderWireReachedSink,
+    system: str | None = None,
+    upstream: Mapping[str, Any] | None = None,
+    max_iterations: int = 16,
+) -> tuple[Mapping[str, Any], _UsageAttrs]:
+    """Ollama model-MCP tool continuation through C-RT-38 (Runtime v1.134 §14.27).
+
+    The projected superset REPLACES ``payload.tools`` on the wire, including a descended
+    child's empty one; with standard memory tools the existing memory injection and
+    collision filter apply on top. Every reply's calls are answered in call order: memory
+    calls by the memory executor (batch-validated first), the rest through the bound loop
+    under a harness-minted ``ollama:<nonce>:<turn>:<index>`` id that never reaches the
+    wire (Ollama correlates a result by ``tool_name`` only). With memory tools this arm
+    follows the memory arm's wire-sink rule; without, the plain arm's packet fold and mark.
+    """
+    kwargs = _payload_to_ollama_kwargs(payload, system, upstream)
+    projected = _ollama_tools_from_superset(superset)
+    memory_names = frozenset[str]()
+    if memory_context is None:
+        kwargs["tools"] = projected
+        if memory_packet is not None:
+            _fold_memory_packet_into_system(kwargs, memory_packet)
+    else:
+        kwargs["tools"] = _ollama_tools_with_standard_memory(projected, memory_context)
+        memory_names = _MEMORY_TOOL_NAMES
+    # [LAW:one-source-of-truth] Eligibility derives from the final wire offer,
+    # including descended projection and memory collision filtering.
+    offered_names = frozenset(tool["function"]["name"] for tool in kwargs["tools"]) - memory_names
+    messages = list(kwargs["messages"])
+    kwargs["messages"] = messages
+    context = _hitl_loop_context_from_step(step_context, step_id=step_id, persona_tier=persona_tier)
+    # One nonce per dispatch invocation: a retried step must never reuse an earlier
+    # invocation's tool action ids (the audit treats an existing key as fail-closed).
+    nonce = uuid4().hex
+
+    usage = _NO_USAGE
+    for turn in range(max_iterations):
+        try:
+            # Construct, then mark, then await (codex R7 [P2-1]).
+            with fence.provider_call():
+                pending = adapter.client.chat(model=model, **kwargs)
+                if memory_context is None:
+                    _mark_wire_reached(wire_sink)
+                response = await pending
+        except Exception as exc:
+            # FIRST call only, the daemon's tools refusal: a later one stays fail-loud.
+            if turn != 0 or not _is_ollama_tools_unsupported_error(exc):
+                raise
+            return await _ollama_tools_unsupported_retry(
+                adapter,
+                model,
+                payload,
+                dropped=len(projected),
+                memory_context=memory_context,
+                memory_packet=memory_packet,
+                degraded_sink=degraded_sink,
+                wire_sink=wire_sink,
+                system=system,
+                upstream=upstream,
+            )
+        # [LAW:single-enforcer] Reading the provider's own reply is part of the provider
+        # boundary (§14.6.3 row 2b), kept out of the try above so only the call can take
+        # the first-turn tools fallback. Memory validation and every effect stay outside.
+        with fence.provider_call():
+            usage = _accumulated_usage(usage, _ollama_usage_attrs(response))
+            response_mapping = _response_to_mapping(response)
+            tool_calls = _ollama_tool_calls(response_mapping)
+            if not tool_calls:
+                return (response_mapping, usage)
+            names = [_function_tool_name(call) for call in tool_calls]
+            assistant_message = dict(_ollama_message(response_mapping))
+        # Validate the whole memory batch, then check the bound, then execute (the
+        # memory arm's ordering): nothing runs for a batch that cannot be answered.
+        prepared = (
+            _ollama_prepared_memory_tool_calls(
+                [c for c, n in zip(tool_calls, names, strict=True) if n in memory_names],
+                memory_context=memory_context,
+                step_context=step_context,
+                step_id=step_id,
+                model=model,
+                standard_memory_tool_executor=standard_memory_tool_executor,
+            )
+            if memory_context is not None
+            else ()
+        )
+        if turn + 1 >= max_iterations:
+            _record_ollama_loop_exhausted(turn, len(tool_calls))
+            raise _continuation_loop_exhausted("Ollama C-RT-38 tool loop", max_iterations)
+        memory_calls = iter(prepared)
+        messages.append(assistant_message)
+        for index, (call, name) in enumerate(zip(tool_calls, names, strict=True)):
+            if name in memory_names:
+                with fence.entering_effect():
+                    messages.extend(
+                        _ollama_memory_tool_result_messages(
+                            (next(memory_calls),),
+                            standard_memory_tool_executor=standard_memory_tool_executor,
+                        )
+                    )
+                continue
+            arguments = _ollama_call_arguments(call)
+            if name is None or arguments is None:
+                messages.append(
+                    _ollama_refused_answer(
+                        name, turn=turn, index=index, content=_OLLAMA_MALFORMED_TOOL_CALL
+                    )
+                )
+                continue
+            # [LAW:single-enforcer] Refuse outside the offer before C-RT-38 effects.
+            if name not in offered_names:
+                messages.append(
+                    _ollama_refused_answer(
+                        name, turn=turn, index=index, content=_POLICY_REFUSAL_TEXT
+                    )
+                )
+                continue
+            model_call = ModelToolCall(
+                tool_call_id=f"ollama:{nonce}:{turn}:{index}",
+                tool=name,
+                server="ollama",
+                arguments=arguments,
+                provider="ollama",
+                model=model,
+            )
+            [result] = await _run_fenced_tool_calls(hitl_tool_loop, (model_call,), context, fence)
+            messages.append(
+                {"role": "tool", "tool_name": name, "content": _tool_loop_result_content(result)}
+            )
+
+    raise _continuation_loop_exhausted("Ollama C-RT-38 tool loop", max_iterations)
+
+
+async def _ollama_tools_unsupported_retry(
+    adapter: Any,
+    model: str,
+    payload: ProviderAgnosticPayload,
+    *,
+    dropped: int,
+    memory_context: RuntimeMemoryContext | None,
+    memory_packet: RenderedMemoryPromptPacket | None,
+    degraded_sink: _DegradedMemoryServeSink,
+    wire_sink: _ProviderWireReachedSink,
+    system: str | None,
+    upstream: Mapping[str, Any] | None,
+) -> tuple[Mapping[str, Any], _UsageAttrs]:
+    """One retry with NO tools after the daemon refused them on the first call.
+
+    No tool is dispatched. With memory tools the memory arm's B-83 disposition decides the
+    packet and is published before the retry; without, the plain arm's packet is kept.
+    """
+    from opentelemetry import trace
+
+    trace.get_current_span().add_event(
+        _OLLAMA_TOOLS_UNSUPPORTED_EVENT, {"tool.dropped.count": dropped}
+    )
+    if memory_context is not None:
+        degraded = _degraded_serve_disposition("ollama", memory_context)
+        degraded_sink.value = degraded
+        memory_packet = degraded.rendered
+    return await _dispatch_ollama(
+        adapter,
+        model,
+        payload.model_copy(update={"tools": None}),
+        system=system,
+        upstream=upstream,
+        memory_packet=memory_packet,
+        wire_sink=wire_sink,
+    )
 
 
 #: Substring of the ollama daemon's rejection when a model has no tool template.
