@@ -769,8 +769,10 @@ async def test_real_mcp_teardown_deadline_after_received_result(
             if cancel_during_tool:
                 await tool_started.wait()
                 dispatch.cancel()
-                with pytest.raises(asyncio.CancelledError):
-                    await dispatch
+                # [LAW:behavior-not-structure] Caller expiry must fail rather than
+                # satisfy the witness for dispatch cancellation.
+                await asyncio.wait({dispatch})
+                assert dispatch.cancelled(), dispatch.exception()
             else:
                 with pytest.raises(
                     DaemonResultError, match=r"teardown exceeded the 0\.2s client budget"

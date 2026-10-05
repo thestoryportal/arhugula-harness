@@ -9,8 +9,8 @@ Declares `FallbackAttributeSchema` / `FALLBACK_NAMESPACE_SCHEMA` (9 entries),
 `RetryAttributeSchema` / `RETRY_NAMESPACE_SCHEMA` (6), `RetryAttemptEventField`
 / `RETRY_ATTEMPT_EVENT_SCHEMA` (3), and the `RetryCause` enum (5).
 
-Also declares `RetryWireRegisterEntry` / `RETRY_WIRE_REGISTER` (7) — the
-`retry.*` wire keys declared at Runtime §14.6/§14.9 rather than at C-CP-03 §3.5
+Also declares `RetryWireRegisterEntry` / `RETRY_WIRE_REGISTER` (6) — the
+`retry.*` wire keys declared by Runtime rather than at C-CP-03 §3.5
 — and `RETRY_SPAN_AND_EVENT_NAMES` (3). Register row `B-126`.
 
 **Substitution-mechanism note.** `harness.breaker.*` is substrate-anchored at
@@ -254,6 +254,14 @@ class RetryWireRegisterEntry(BaseModel):
 
 
 RETRY_WIRE_REGISTER: tuple[RetryWireRegisterEntry, ...] = (
+    # [LAW:one-source-of-truth] Register the post-effect carrier's emitted wire key.
+    RetryWireRegisterEntry(
+        attribute_name="retry.post_tool_effect.origin",
+        declaring_authority="Runtime v1.134 §0 post-effect fence, Retry wrapper (C-RT-16)"
+        " (Spec_Harness_Runtime_v1_134.md:57)",
+        binding=True,
+        emitted=True,
+    ),
     RetryWireRegisterEntry(
         attribute_name="retry.skipped.reason",
         declaring_authority="Runtime §14.6 step 4 (Spec_Harness_Runtime_v1.md:4217)",
@@ -293,14 +301,15 @@ RETRY_WIRE_REGISTER: tuple[RetryWireRegisterEntry, ...] = (
 C-CP-03 §3.5 declares the 6-attribute child-span schema above (5 of them
 `retry.`-prefixed; `engine.replay_disposition` is the sixth). Runtime §14.6 and
 §14.9 independently name five MORE `retry.`-prefixed keys at their own step
-bullets and binding terms. The namespace's wire surface is therefore the union
-of two contracts, and the C-CP-24 §24.1 export manifest counts only the first.
+bullets and binding terms; Runtime v1.134 §0 adds the post-effect origin key.
+The namespace's wire surface is therefore the union of two contracts, and
+the C-CP-24 §24.1 export manifest counts only the first.
 
 **This is a REGISTER, not a cap.** The Runtime discretion bullets at
 `Spec_Harness_Runtime_v1.md:4279` and `:5729` state NO upper bound — the lane is
 intentionally unbounded, so a future producer MAY add a key. What it may not do
 is add one *invisibly*: the drift test over this tuple fails until the new key
-is registered here with its authorizing clause. Four of the five rows are
+is registered here with its authorizing clause. Five of the six rows are
 `binding=True`, which is the finding B-126 was filed to surface — the surface is
 mostly *mandated elsewhere*, not discretionary.
 

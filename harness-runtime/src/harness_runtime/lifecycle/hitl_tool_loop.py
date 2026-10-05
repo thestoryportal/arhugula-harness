@@ -26,6 +26,7 @@ from harness_is.state_ledger_write import WriteResult
 from harness_runtime.lifecycle.cp_is_wiring import RuntimeCpIsWiring
 from harness_runtime.lifecycle.effective_palette import compute_effective_palette
 from harness_runtime.lifecycle.hitl_placement import RuntimeHITLPlacementRegistry
+from harness_runtime.lifecycle.post_tool_effect import ToolEffectFence
 
 
 @dataclass(frozen=True, slots=True)
@@ -190,14 +191,21 @@ class RuntimeHITLToolLoop:
         calls: Sequence[ModelToolCall],
         context: HITLToolLoopContext,
     ) -> tuple[HITLToolLoopCallResult, ...]:
-        """Process one journaled model turn's tool calls in provider order."""
+        """Process one journaled model turn's tool calls in provider order.
+
+        [LAW:single-enforcer] The one place a tool effect starts: once any call of the
+        batch has entered the dispatcher, a later failure in the batch (or that dispatch's
+        own, ambiguous failure) raises `PostToolEffectError` so no retry replays the batch.
+        """
+        fence = ToolEffectFence()
         results: list[HITLToolLoopCallResult] = []
         for call in calls:
-            results.append(await self._run_call(call, context))
+            with fence.guard():
+                results.append(await self._run_call(call, context, fence))
         return tuple(results)
 
     async def _run_call(
-        self, call: ModelToolCall, context: HITLToolLoopContext
+        self, call: ModelToolCall, context: HITLToolLoopContext, fence: ToolEffectFence
     ) -> HITLToolLoopCallResult:
         try:
             raw = cast(object, self.assess(call, context))
@@ -222,7 +230,7 @@ class RuntimeHITLToolLoop:
             hitl_required=level is not GateLevel.AUTO,
         )
         if not rewritten.hitl_required:
-            return await self._dispatch(call, context, rewritten, None, None)
+            return await self._dispatch(call, context, rewritten, None, None, fence)
         variant = rewritten.variant
         if variant is None:
             raise RuntimeError("HITL-required rewrite must include a semantic variant")
@@ -279,7 +287,7 @@ class RuntimeHITLToolLoop:
                 model=call.model,
             )
         return await self._dispatch(
-            dispatch_call, context, rewritten, write_result, decision.response
+            dispatch_call, context, rewritten, write_result, decision.response, fence
         )
 
     async def _dispatch(
@@ -289,8 +297,10 @@ class RuntimeHITLToolLoop:
         rewritten: RewrittenToolCall,
         write_result: WriteResult | None,
         gate_response: HITLResponse | None,
+        fence: ToolEffectFence,
     ) -> HITLToolLoopCallResult:
-        dispatch_result = await self.dispatcher.dispatch(call, context)
+        with fence.entering_effect():
+            dispatch_result = await self.dispatcher.dispatch(call, context)
         return HITLToolLoopCallResult(
             tool_call_id=call.tool_call_id,
             rewritten_tool_call=rewritten,

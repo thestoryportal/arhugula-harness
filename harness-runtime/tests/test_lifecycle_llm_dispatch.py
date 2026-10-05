@@ -268,6 +268,11 @@ class _FakeHITLLoopResult:
     tool_call_id: str
     dispatch_result: Mapping[str, Any] | None
 
+    @property
+    def dispatched(self) -> bool:
+        """Mirrors `HITLToolLoopCallResult.dispatched`: a result exists only if it ran."""
+        return self.dispatch_result is not None
+
 
 class _FakeHITLToolLoop:
     def __init__(self, dispatch_results: Mapping[str, Mapping[str, Any]]) -> None:
@@ -1120,6 +1125,11 @@ class _RefusalAwareLoopResult:
     tool_call_id: str
     dispatch_result: Mapping[str, Any] | None
     refusal: Any = None
+
+    @property
+    def dispatched(self) -> bool:
+        """Mirrors `HITLToolLoopCallResult.dispatched`: a result exists only if it ran."""
+        return self.dispatch_result is not None
 
 
 class _RefusingHITLToolLoop:
