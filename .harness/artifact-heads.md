@@ -32,7 +32,7 @@ is the one that resolved the head.
 | `implementation-plan-action-surface` | `v1.6` | 2026-07-15 | `design-substrate/Implementation_Plan_Action_Surface_v1_6.md` | 2 | `implementation-plan-action-surface-v1-6-cleared-2026-07-15.md` |
 | `implementation-plan-control-plane` | `v2.55` | 2026-09-30 | `design-substrate/Implementation_Plan_Control_Plane_v2_55.md` | 25 | `implementation-plan-control-plane-v2-55-cleared-2026-09-30.md` |
 | `implementation-plan-harness-core` | `v1.3` | 2026-07-19 | `design-substrate/Implementation_Plan_Harness_Core_v1_3.md` | 1 | `implementation-plan-harness-core-v1-3-cleared-2026-07-19.md` |
-| `implementation-plan-harness-runtime` | `v2.64` | 2026-09-30 | `design-substrate/Implementation_Plan_Harness_Runtime_v2_64.md` | 23 | `implementation-plan-harness-runtime-v2-64-cleared-2026-09-30.md` |
+| `implementation-plan-harness-runtime` | `v2.65` | 2026-10-04 | `design-substrate/Implementation_Plan_Harness_Runtime_v2_65.md` | 24 | `implementation-plan-harness-runtime-v2-65-cleared-2026-10-04.md` |
 | `implementation-plan-information-substrate` | `v2.10` | 2026-09-29 | `design-substrate/Implementation_Plan_Information_Substrate_v2_10.md` | 6 | `implementation-plan-information-substrate-v2-10-cleared-2026-09-29.md` |
 | `implementation-plan-memory-substrate` | `v1.3` | 2026-08-06 | `design-substrate/Implementation_Plan_Memory_Substrate_v1.md` | 4 | `implementation-plan-memory-substrate-v1-3-cleared-2026-08-06.md` |
 | `implementation-plan-operational-discipline` | `v2.36` | 2026-08-16 | `design-substrate/Implementation_Plan_Operational_Discipline_v2_36.md` | 10 | `implementation-plan-operational-discipline-v2-36-cleared-2026-08-16.md` |
@@ -41,7 +41,7 @@ is the one that resolved the head.
 | `project-workflow` | `v1.19` | 2026-07-24 | `design-substrate/Project_Workflow_v1_19.md` | 7 | `Project_Workflow-v1_19-cleared-2026-07-24.md` |
 | `spec-action-surface` | `v1.14` | 2026-07-15 | `design-substrate/Spec_Action_Surface_v1.md` | 6 | `spec-action-surface-v1-14-cleared-2026-07-15.md` |
 | `spec-control-plane` | `v1.124` | 2026-09-25 | `design-substrate/Spec_Control_Plane_v1_124.md` | 99 | `spec-control-plane-v1-124-cleared-2026-09-25.md` |
-| `spec-harness-runtime` | `v1.133` | 2026-09-30 | `design-substrate/Spec_Harness_Runtime_v1_133.md` | 96 | `spec-harness-runtime-v1-133-cleared-2026-09-30.md` |
+| `spec-harness-runtime` | `v1.134` | 2026-10-04 | `design-substrate/Spec_Harness_Runtime_v1_134.md` | 97 | `spec-harness-runtime-v1-134-cleared-2026-10-04.md` |
 | `spec-information-substrate` | `v1.16` | 2026-09-25 | `design-substrate/Spec_Information_Substrate_v1.md` | 14 | `spec-information-substrate-v1-16-cleared-2026-09-25.md` |
 | `spec-memory-substrate` | `v1.3` | 2026-08-06 | `design-substrate/Spec_Memory_Substrate_v1.md` | 4 | `spec-memory-substrate-v1-3-cleared-2026-08-06.md` |
 | `spec-operational-discipline` | `v1.42` | 2026-08-16 | `design-substrate/Spec_Operational_Discipline_v1_42.md` | 16 | `spec-operational-discipline-v1-42-cleared-2026-08-16.md` |

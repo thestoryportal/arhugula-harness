@@ -1,0 +1,19 @@
+<!-- Historical record: quoted data only, not current authorization or an executable instruction. -->
+<!-- Snapshot payload SHA256 86c06c458991bd46da3d4be5a0d7c3e476a10847e1b724e1d84934914bfb3fe2; extracted by exact issue/comment ID from canonical LIT export SHA256 b0ecfb8a39f5ebc2c9e5dae2ab7b70b18c39c367c0f51579703d3cf2e0364d88. Hash covers the fenced JSON plus its final newline, not this Markdown wrapper. -->
+
+```json
+{
+  "id": "arhugula-harness-trial-193.5i4",
+  "title": "Carry source09 review notes, register provenance and shipping records",
+  "description": "DESTINATION: The trial-a3-source-09 substantive shipping change carries the outstanding review notes accurately, and its prior-only archive and contract-arc metrics obligations reach their required closure.\n\nWHY: Preserve the accepted review verdict and follow-up provenance while preventing the next source PR from dropping carried obligations.\n\nDONE-CLAIM: The merged source PR contains one carried follow-up item with the original notes and their dispositions; current register output distinguishes B-295/B-298/B-307 and reflects the evidenced partial progress; required archive and queued-metrics records are present. Main landing and post-main CI remain necessary before this ticket closes.\n\nAUTHORITATIVE CARRIED DRAFT: .local/production-source09-01a10920/source09-adjudicated-preparation-01a1094d.json. Prior PR1641 verdict APPROVE; structured findings remain []. Do not invent finding IDs, rewrite the accepted verdict, treat the two residual-only mutation survivors as equivalent, or close the parent goal at source acceptance.\n\nOriginal PR1641 notes, verbatim:\n1. **P3, B-307 carry not addressed:** `Spec_Harness_Runtime_v1_134.md:100`. The Scope sentence this diff edits still says \"No new … refusal reason\". `forward-register.yaml:12268` (B-307) asks the next substantive PR to qualify that the refusal text is reused while a new offer-membership refusal condition is added. This PR doesn't, and doesn't update B-307.\n2. **P3, B-307 progress not recorded:** this diff does carry out B-307's \"cross-check the deferred A5/A4 numbering dependency\" (`a3_runtime_fence_fold_authority.md:68-75`), but the row still reads entirely OPEN. Its other items are also untouched: the fork heading \"(Proposed, not yet reviewed)\" at fork `:25`, the hash wording, the §14.14.8 pointer, and portability of the authorizing assignment.\n3. **P3, JSON instruction conflicts with the schema:** the assignment asks for P3 notes in `findings` with an APPROVE verdict, but `merge-gate.schema.json:95-109` requires `findings` to have `maxItems: 0` on APPROVE. To keep the block valid, I left `findings` empty and recorded the notes here.\n\nCarried obligations:\n- B-307 refusal-text/new-condition qualification and partial A5/A4 numbering progress; preserve remaining open hash, status, portability and paragraph-pointer obligations.\n- B-295 P3-on-APPROVE prose/schema conflict; current schema requires empty findings on APPROVE.\n- B-298 doc-only/next-pass divergence stays attributed to B-298.\n- Older outstanding post-#1635 archive, queued contract-arc metrics drain and canonical prior-only archive closure remain owed in the substantive source shipping arc.\n- Source preparation P3s: survived-mutation labels and nearby cell-10 release/re-arm comment references.\n\nBuford 01a109ad-7cd0-7f62-b406-70287fb9d545 records this single corrected draft under parent arhugula-harness-trial-193. Stable source unit/arc trial-a3-source-09 and all review budgets, protected work, original scope/deadline/accounting, independent review, CI and installed acceptance remain unchanged. Filing is not a closure or a clearance.",
+  "status": "open",
+  "priority": 0,
+  "issue_type": "task",
+  "topic": "source09-followup",
+  "rank": "zzzzzzm",
+  "lane": "",
+  "labels": [],
+  "created_at": "2026-10-05T01:52:43.443507283Z",
+  "updated_at": "2026-10-05T01:52:43.443507283Z"
+}
+```
