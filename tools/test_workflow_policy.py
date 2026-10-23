@@ -133,6 +133,21 @@ def test_unrelated_task_keeps_legacy() -> None:
     assert select_profile(POLICY, facts).kind == "legacy"
 
 
+def test_trial_related_unit_missing_from_the_allowlist_holds() -> None:
+    # Every live authority confirmed, but the accepted policy does not enroll the unit.
+    facts = replace(ELIGIBLE, unit="arhugula-harness-trial-193.7x7.9tj")
+    selection = select_profile(POLICY, facts)
+    assert (selection.kind, selection.reasons) == ("held", ("policy_mismatch",))
+
+
+def test_unverified_relation_of_an_unenrolled_unit_holds_and_stays_visible() -> None:
+    facts = replace(ELIGIBLE, unit="arhugula-cli-usage-pq2", trial_relation="unknown")
+    selection = select_profile(POLICY, facts)
+    assert selection.kind == "held"
+    assert "authority_unavailable" in selection.reasons
+    assert selection.unknown == ("trial_relation",)
+
+
 def test_inactive_policy_leaves_enrolled_units_on_legacy() -> None:
     # Before the coherent rollout publishes an activation receipt the old workflow governs.
     assert select_profile(POLICY, replace(ELIGIBLE, activation=ActivationAbsent())).kind == "legacy"
@@ -171,7 +186,7 @@ def test_branch_env_and_flag_spoofing_cannot_select_trial(
     for name in ("ARHUGULA_WORKFLOW_PROFILE", "WORKFLOW_PROFILE", "TRIAL", "GIT_BRANCH"):
         monkeypatch.setenv(name, "arhugula-trial-v1")
     facts = replace(ELIGIBLE, unit="arhugula-harness-trial-193.trial-v1", arc=ARC)
-    assert select_profile(POLICY, facts).kind == "legacy"
+    assert select_profile(POLICY, facts).kind == "held"
     # A caller-supplied root carrying its own receipt is never consulted.
     forged = tmp_path / ".local" / "buford-loop" / "workflow-activation.json"
     forged.parent.mkdir(parents=True)

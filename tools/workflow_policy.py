@@ -7,9 +7,11 @@ that only the canonical orchestration root may publish (WS-01 §3.1, WP-17).
 `select_profile` is a pure decision over that policy and `SelectionFacts` observed by
 the caller's adapters from live LIT, native admission and Git:
 
-- a unit absent from `eligible_units` keeps the unchanged `legacy` workflow;
 - before an activation receipt exists every unit keeps `legacy` — the old workflow
   governs until the coherent rollout publishes one;
+- a unit absent from `eligible_units` (or any unit when the policy is unreadable)
+  keeps the unchanged `legacy` workflow only when LIT verifies it is unrelated to the
+  trial root; trial-related or unverified work holds rather than silently leaving;
 - an enrolled unit selects `trial` only when every authority is confirmed and the
   activation names exactly this policy's digest/version; anything missing, malformed,
   contradicted or mismatched is `held` with WS-18 reason codes, never a silent
@@ -333,17 +335,25 @@ def _enrolled_selection(
     return ProfileSelection("held" if reasons else "trial", tuple(dict.fromkeys(reasons)), unknown)
 
 
+def _outside_policy(facts: SelectionFacts) -> ProfileSelection:
+    """No usable enrollment: legacy only for work LIT verifies is unrelated to the trial."""
+    if facts.trial_relation == "contradicted":
+        return ProfileSelection("legacy", (), ())
+    unknown = ("trial_relation",) if facts.trial_relation == "unknown" else ()
+    return ProfileSelection(
+        "held", ("policy_mismatch",) + _OBSERVATION_REASON[facts.trial_relation], unknown
+    )
+
+
 def select_profile(
     policy: WorkflowPolicy | PolicyDefect, facts: SelectionFacts
 ) -> ProfileSelection:
     """`trial`, `legacy` or `held` for one unit; pure, with no authority of its own."""
     if isinstance(policy, PolicyDefect):
-        # Without a readable policy membership is unknowable: anything that may belong to
-        # the trial holds; only work LIT shows unrelated keeps legacy.
-        if facts.trial_relation == "contradicted":
-            return ProfileSelection("legacy", (), ())
-        return ProfileSelection("held", ("policy_mismatch",), ())
-    entry = policy.member(facts.unit)
-    if entry is None or isinstance(facts.activation, ActivationAbsent):
+        return _outside_policy(facts)
+    if isinstance(facts.activation, ActivationAbsent):
         return ProfileSelection("legacy", (), ())
+    entry = policy.member(facts.unit)
+    if entry is None:
+        return _outside_policy(facts)
     return _enrolled_selection(policy, entry, facts)
