@@ -346,6 +346,8 @@ def test_corrupt_or_unreadable_receipt_is_never_reused(repo: Path) -> None:
     float_version = json.dumps(dict(record, producer={"tool": "pytest", "elapsed": 1.5}))
     bad_scope = json.loads(json.dumps(record))
     bad_scope["inputs"]["manifest"]["scope"] = "somewhere"
+    other_unit = dict(record, unit_id="wrong")
+    other_base = dict(record, subject=dict(record["subject"], base="0" * 40))
 
     for raw in (
         json.dumps(tampered).encode(),
@@ -354,6 +356,8 @@ def test_corrupt_or_unreadable_receipt_is_never_reused(repo: Path) -> None:
         json.dumps(future_major).encode(),
         float_version.encode(),
         json.dumps(bad_scope).encode(),
+        json.dumps(other_unit).encode(),
+        json.dumps(other_base).encode(),
         b"\x00not json",
     ):
         prior = load_receipt(raw)
