@@ -205,7 +205,7 @@ def _decode(raw: bytes, field: str) -> object:
         raise PolicyError(field, f"not JSON: {exc}") from exc
 
 
-def _digest(doc: dict[str, object]) -> str:
+def canonical_digest(doc: dict[str, object]) -> str:
     # WS-08 serialization: UTF-8 JSON, sorted keys, no insignificant whitespace.
     canonical = json.dumps(doc, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return hashlib.sha256(canonical.encode()).hexdigest()
@@ -252,7 +252,7 @@ def parse_policy(raw: bytes) -> WorkflowPolicy:
         eligible_units=_eligible(doc["eligible_units"]),
         rules=MappingProxyType(rules),
         phase_record_versions=_phase_record_versions(doc["compatibility"]),
-        digest=_digest(doc),
+        digest=canonical_digest(doc),
     )
 
 
