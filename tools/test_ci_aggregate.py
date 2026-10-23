@@ -227,7 +227,7 @@ def test_coverage_publishing_is_advisory_and_names_its_binding() -> None:
     after = steps[[s.get("run") for s in steps].index(_PRIMARY_PYTEST) + 1 :]
     assert after, "coverage publishing follows the primary suite"
     for step in after:
-        assert step.get("if") == "always()", step.get("name")
+        assert str(step.get("if")).startswith("always()"), step.get("name")
         assert step.get("continue-on-error") is True, step.get("name")
     upload = next(s for s in after if "upload-artifact" in str(s.get("uses", "")))
     name = upload["with"]["name"]
@@ -235,6 +235,8 @@ def test_coverage_publishing_is_advisory_and_names_its_binding() -> None:
     for part in ("github.event.pull_request.head.sha || github.sha", "run_id", "run_attempt"):
         assert part in name
     assert set(upload["with"]["path"].split()) == {"coverage.xml", "coverage-provenance.json"}
+    # No XML leaves without its manifest: the upload requires the manifest file.
+    assert upload["if"] == "always() && hashFiles('coverage-provenance.json') != ''"
 
 
 def _provenance_step() -> dict[str, Any]:
@@ -253,17 +255,22 @@ def test_provenance_env_keeps_head_base_and_tested_commit_distinct() -> None:
     assert env["COVERAGE_COMMAND"] == _PRIMARY_PYTEST
 
 
-@pytest.mark.parametrize("coverage_produced", [True, False])
+@pytest.mark.parametrize("xml_state", ["present", "missing"])
+@pytest.mark.parametrize("json_state", ["valid", "missing", "malformed"])
 def test_provenance_step_writes_the_manifest_it_summarizes(
-    tmp_path: Path, coverage_produced: bool
+    tmp_path: Path, xml_state: str, json_state: str
 ) -> None:
     # The step's own heredoc program, run under this interpreter in a scratch workspace.
     run = str(_provenance_step()["run"])
     program = run.split("<<'PY'", 1)[1].split("\n", 1)[1].split("\nPY", 1)[0]
     (tmp_path / "uv.lock").write_text("lock\n")
-    if coverage_produced:
-        totals = {"percent_covered_display": "91", "covered_lines": 91, "num_statements": 100}
-        (tmp_path / "coverage.json").write_text(json.dumps({"totals": totals}))
+    totals = {"percent_covered_display": "91", "covered_lines": 91, "num_statements": 100}
+    json_body = {"valid": json.dumps({"totals": totals}), "malformed": "{not json"}
+    if json_state in json_body:
+        (tmp_path / "coverage.json").write_text(json_body[json_state])
+    if xml_state == "present":
+        (tmp_path / "coverage.xml").write_text("<coverage/>")
+    available = (xml_state, json_state) == ("present", "valid")
     env = {
         **os.environ,
         "COVERAGE_HEAD": "h" * 40,
@@ -293,11 +300,15 @@ def test_provenance_step_writes_the_manifest_it_summarizes(
         "platform": manifest["platform"],
         "uv_lock_sha256": hashlib.sha256(b"lock\n").hexdigest(),
         "command": _PRIMARY_PYTEST,
-        "coverage_available": coverage_produced,
+        "coverage_xml": xml_state,
+        "coverage_json": json_state,
+        "coverage_json_error": manifest["coverage_json_error"],
+        "coverage_available": available,
     }
     assert manifest["platform"]
-    assert ("Total line coverage: 91%" in p.stdout) is coverage_produced
-    assert ("Coverage unavailable" in p.stdout) is not coverage_produced
+    assert (manifest["coverage_json_error"] is None) is (json_state != "malformed")
+    assert ("Total line coverage: 91%" in p.stdout) is available
+    assert ("Coverage unavailable" in p.stdout) is not available
 
 
 def test_parity_job_provides_just_and_zsh_then_runs_the_parity_script() -> None:

@@ -155,8 +155,20 @@ jobs:
         run: |
           uv run python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
           import hashlib, json, os, pathlib, platform
-          report = pathlib.Path("coverage.json")
-          totals = json.loads(report.read_text())["totals"] if report.exists() else None
+
+          # Every input's state goes into the manifest, which is written before anything
+          # is rendered, so a broken report can never leave the artifact without it.
+          def read_totals(path):
+              if not path.exists():
+                  return "missing", None, None
+              try:
+                  t = json.loads(path.read_text())["totals"]
+                  return "valid", (t["percent_covered_display"], t["covered_lines"], t["num_statements"]), None
+              except (ValueError, KeyError, TypeError) as exc:
+                  return "malformed", None, repr(exc)
+
+          json_state, totals, json_error = read_totals(pathlib.Path("coverage.json"))
+          xml_state = "present" if pathlib.Path("coverage.xml").exists() else "missing"
           manifest = {
               "head": os.environ["COVERAGE_HEAD"],
               "base": os.environ["COVERAGE_BASE"],
@@ -167,22 +179,27 @@ jobs:
               "platform": f"{platform.system()}-{platform.machine()}",
               "uv_lock_sha256": hashlib.sha256(pathlib.Path("uv.lock").read_bytes()).hexdigest(),
               "command": os.environ["COVERAGE_COMMAND"],
-              "coverage_available": totals is not None,
+              "coverage_xml": xml_state,
+              "coverage_json": json_state,
+              "coverage_json_error": json_error,
+              "coverage_available": xml_state == "present" and json_state == "valid",
           }
           pathlib.Path("coverage-provenance.json").write_text(json.dumps(manifest, indent=2) + "\n")
           print("### Coverage (informational — v1, no threshold)\n")
           print("```json\n" + json.dumps(manifest, indent=2) + "\n```\n")
-          if totals is None:
-              print("_Coverage unavailable: coverage.json was not produced — see the pytest step._")
-          else:
-              print(f"**Total line coverage: {totals['percent_covered_display']}%** "
-                    f"({totals['covered_lines']}/{totals['num_statements']} statements; "
-                    f"branch coverage enabled).\n")
+          if manifest["coverage_available"]:
+              percent, covered, statements = totals
+              print(f"**Total line coverage: {percent}%** ({covered}/{statements} statements; "
+                    "branch coverage enabled).\n")
               print("Threshold enforcement deferred (`fail_under`) until a baseline trend justifies it.")
+          else:
+              print(f"_Coverage unavailable: coverage.xml {xml_state}, coverage.json {json_state}"
+                    " — see the pytest step._")
           PY
 
       - name: Upload coverage.xml artifact with its provenance
-        if: always()
+        # No manifest, no upload: an XML never leaves the runner without its provenance.
+        if: always() && hashFiles('coverage-provenance.json') != ''
         continue-on-error: true
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
