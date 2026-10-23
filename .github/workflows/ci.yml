@@ -140,39 +140,56 @@ jobs:
 
       # R-200-ci-coverage-gating — coverage stays INFORMATIONAL (no threshold, "gather
       # data first"): publishing is advisory, so a coverage hiccup never fails the job.
-      - name: Publish coverage total to job summary
+      # WS-10 §12.2/§12.4: coverage-provenance.json binds the artifact to the PR head, its
+      # base and the tested (for a PR, synthetic merge) commit as distinct fields, plus
+      # workflow/run/attempt, platform, lock digest and command. The job summary is
+      # rendered from that same manifest.
+      - name: Record coverage provenance and publish total to job summary
         if: always()
         continue-on-error: true
         env:
           COVERAGE_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
           COVERAGE_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          COVERAGE_TESTED: ${{ github.sha }}
+          COVERAGE_COMMAND: uv run pytest -m "not e2e" --cov --cov-report=term-missing --cov-report=xml --cov-report=json
         run: |
           uv run python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
           import hashlib, json, os, pathlib, platform
-          p = pathlib.Path("coverage.json")
-          lock = hashlib.sha256(pathlib.Path("uv.lock").read_bytes()).hexdigest()[:12]
+          report = pathlib.Path("coverage.json")
+          totals = json.loads(report.read_text())["totals"] if report.exists() else None
+          manifest = {
+              "head": os.environ["COVERAGE_HEAD"],
+              "base": os.environ["COVERAGE_BASE"],
+              "tested_commit": os.environ["COVERAGE_TESTED"],
+              "workflow": os.environ["GITHUB_WORKFLOW"],
+              "run_id": os.environ["GITHUB_RUN_ID"],
+              "run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
+              "platform": f"{platform.system()}-{platform.machine()}",
+              "uv_lock_sha256": hashlib.sha256(pathlib.Path("uv.lock").read_bytes()).hexdigest(),
+              "command": os.environ["COVERAGE_COMMAND"],
+              "coverage_available": totals is not None,
+          }
+          pathlib.Path("coverage-provenance.json").write_text(json.dumps(manifest, indent=2) + "\n")
           print("### Coverage (informational — v1, no threshold)\n")
-          print(f"head `{os.environ['COVERAGE_HEAD']}` · base `{os.environ['COVERAGE_BASE']}` · "
-                f"{os.environ['GITHUB_WORKFLOW']} run {os.environ['GITHUB_RUN_ID']} "
-                f"attempt {os.environ['GITHUB_RUN_ATTEMPT']} · {platform.system()}-{platform.machine()} · "
-                f"uv.lock `{lock}` · `pytest -m \"not e2e\" --cov`\n")
-          if not p.exists():
+          print("```json\n" + json.dumps(manifest, indent=2) + "\n```\n")
+          if totals is None:
               print("_Coverage unavailable: coverage.json was not produced — see the pytest step._")
           else:
-              t = json.loads(p.read_text())["totals"]
-              print(f"**Total line coverage: {t['percent_covered_display']}%** "
-                    f"({t['covered_lines']}/{t['num_statements']} statements; "
+              print(f"**Total line coverage: {totals['percent_covered_display']}%** "
+                    f"({totals['covered_lines']}/{totals['num_statements']} statements; "
                     f"branch coverage enabled).\n")
               print("Threshold enforcement deferred (`fail_under`) until a baseline trend justifies it.")
           PY
 
-      - name: Upload coverage.xml artifact
+      - name: Upload coverage.xml artifact with its provenance
         if: always()
         continue-on-error: true
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: coverage-xml-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: coverage.xml
+          name: coverage-xml-${{ github.event.pull_request.head.sha || github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            coverage.xml
+            coverage-provenance.json
           if-no-files-found: warn
 
   parity-tests:

@@ -9,11 +9,14 @@ unchanged set of required contexts."""
 
 from __future__ import annotations
 
+import hashlib
 import itertools
+import json
 import os
 import re
 import subprocess
 import sys
+import textwrap
 from pathlib import Path
 from typing import Any
 
@@ -227,8 +230,74 @@ def test_coverage_publishing_is_advisory_and_names_its_binding() -> None:
         assert step.get("if") == "always()", step.get("name")
         assert step.get("continue-on-error") is True, step.get("name")
     upload = next(s for s in after if "upload-artifact" in str(s.get("uses", "")))
-    for part in ("github.sha", "github.run_id", "github.run_attempt"):
-        assert part in upload["with"]["name"]
+    name = upload["with"]["name"]
+    # WS-10 §12.4: a PR's github.sha is the synthetic merge commit, not the reviewed head.
+    for part in ("github.event.pull_request.head.sha || github.sha", "run_id", "run_attempt"):
+        assert part in name
+    assert set(upload["with"]["path"].split()) == {"coverage.xml", "coverage-provenance.json"}
+
+
+def _provenance_step() -> dict[str, Any]:
+    steps = _jobs()["package-tests"]["steps"]
+    [step] = [s for s in steps if "coverage-provenance.json" in str(s.get("run", ""))]
+    return step
+
+
+def test_provenance_env_keeps_head_base_and_tested_commit_distinct() -> None:
+    env = _provenance_step()["env"]
+    assert env["COVERAGE_HEAD"] == "${{ github.event.pull_request.head.sha || github.sha }}"
+    assert (
+        env["COVERAGE_BASE"] == "${{ github.event.pull_request.base.sha || github.event.before }}"
+    )
+    assert env["COVERAGE_TESTED"] == "${{ github.sha }}"
+    assert env["COVERAGE_COMMAND"] == _PRIMARY_PYTEST
+
+
+@pytest.mark.parametrize("coverage_produced", [True, False])
+def test_provenance_step_writes_the_manifest_it_summarizes(
+    tmp_path: Path, coverage_produced: bool
+) -> None:
+    # The step's own heredoc program, run under this interpreter in a scratch workspace.
+    run = str(_provenance_step()["run"])
+    program = run.split("<<'PY'", 1)[1].split("\n", 1)[1].split("\nPY", 1)[0]
+    (tmp_path / "uv.lock").write_text("lock\n")
+    if coverage_produced:
+        totals = {"percent_covered_display": "91", "covered_lines": 91, "num_statements": 100}
+        (tmp_path / "coverage.json").write_text(json.dumps({"totals": totals}))
+    env = {
+        **os.environ,
+        "COVERAGE_HEAD": "h" * 40,
+        "COVERAGE_BASE": "b" * 40,
+        "COVERAGE_TESTED": "m" * 40,
+        "COVERAGE_COMMAND": _PRIMARY_PYTEST,
+        "GITHUB_WORKFLOW": "CI",
+        "GITHUB_RUN_ID": "7",
+        "GITHUB_RUN_ATTEMPT": "2",
+    }
+    p = subprocess.run(
+        [sys.executable, "-c", textwrap.dedent(program)],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert p.returncode == 0, p.stderr
+    manifest = json.loads((tmp_path / "coverage-provenance.json").read_text())
+    assert manifest == {
+        "head": "h" * 40,
+        "base": "b" * 40,
+        "tested_commit": "m" * 40,
+        "workflow": "CI",
+        "run_id": "7",
+        "run_attempt": "2",
+        "platform": manifest["platform"],
+        "uv_lock_sha256": hashlib.sha256(b"lock\n").hexdigest(),
+        "command": _PRIMARY_PYTEST,
+        "coverage_available": coverage_produced,
+    }
+    assert manifest["platform"]
+    assert ("Total line coverage: 91%" in p.stdout) is coverage_produced
+    assert ("Coverage unavailable" in p.stdout) is not coverage_produced
 
 
 def test_parity_job_provides_just_and_zsh_then_runs_the_parity_script() -> None:
