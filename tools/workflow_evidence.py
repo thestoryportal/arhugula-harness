@@ -652,7 +652,32 @@ def _reference(value: object, field: str) -> None:
         raise EvidenceError(field + ".bytes", "must be a nonnegative integer")
 
 
-def _envelope(raw: bytes, record_type: str) -> tuple[dict[str, object], dict[str, object]]:
+@dataclass(frozen=True)
+class RecordIdentity:
+    """What a WS-08 record says it is about; it must agree with the inputs it certifies."""
+
+    policy_id: str
+    policy_version: int
+    unit: str
+    repository: str
+    head: str
+    base: str | None
+
+
+def _manifest_identity(manifest: InputManifest) -> RecordIdentity:
+    return RecordIdentity(
+        policy_id=manifest.policy_id,
+        policy_version=manifest.policy_version,
+        unit=manifest.unit,
+        repository=manifest.repository,
+        head=manifest.head,
+        base=manifest.material_base,
+    )
+
+
+def _envelope(
+    raw: bytes, record_type: str
+) -> tuple[dict[str, object], RecordIdentity, dict[str, object]]:
     """[LAW:single-enforcer] the WS-08 envelope checks every record type shares."""
     doc = _decode(raw)
     _exact_keys(doc, _ENVELOPE_FIELDS, "receipt")
@@ -662,7 +687,6 @@ def _envelope(raw: bytes, record_type: str) -> tuple[dict[str, object], dict[str
         raise EvidenceError("record_type", f"must be {record_type}")
     if doc["result"] not in _RESULTS:
         raise EvidenceError("result", f"must be one of {', '.join(_RESULTS)}")
-    _int(doc["policy_version"], "policy_version")
     _matching(doc["created_at"], _RFC3339_UTC, "created_at")
     _text(doc["record_id"], "record_id")
     _object(doc["producer"], "producer")
@@ -672,44 +696,31 @@ def _envelope(raw: bytes, record_type: str) -> tuple[dict[str, object], dict[str
     _strings(doc["limits"], "limits")
     subject = _object(doc["subject"], "subject")
     _exact_keys(subject, ("repository", "head", "base"), "subject")
-    return doc, _object(doc["inputs"], "inputs")
+    base = subject["base"]
+    # [LAW:parse-dont-validate] the identity is kept, so a consumer compares it, not trusts it.
+    identity = RecordIdentity(
+        policy_id=_text(doc["policy_id"], "policy_id"),
+        policy_version=_int(doc["policy_version"], "policy_version"),
+        unit=_text(doc["unit_id"], "unit_id"),
+        repository=_text(subject["repository"], "subject.repository"),
+        head=_matching(subject["head"], _GIT_OID, "subject.head"),
+        base=None if base is None else _matching(base, _GIT_OID, "subject.base"),
+    )
+    return doc, identity, _object(doc["inputs"], "inputs")
 
 
 def parse_receipt(raw: bytes) -> CheckReceipt:
     """The single checkpoint for a WS-08 check receipt; raises `EvidenceError`."""
-    doc, inputs = _envelope(raw, "check")
+    doc, identity, inputs = _envelope(raw, "check")
     # `_envelope` admitted only a WS-08 result value.
     result = cast(RecordResult, doc["result"])
     _exact_keys(inputs, ("manifest", "manifest_sha256"), "inputs")
     manifest = parse_manifest(inputs["manifest"])
     if _matching(inputs["manifest_sha256"], _SHA256, "inputs.manifest_sha256") != manifest.key:
         raise EvidenceError("inputs.manifest_sha256", "does not match the manifest")
-    if _envelope_identity(doc) != _manifest_identity(manifest, manifest.head):
+    if identity != _manifest_identity(manifest):
         raise EvidenceError("subject", "envelope identity disagrees with its manifest")
     return CheckReceipt(record_id=cast(str, doc["record_id"]), result=result, manifest=manifest)
-
-
-def _envelope_identity(doc: dict[str, object]) -> tuple[object, ...]:
-    subject = cast(dict[str, object], doc["subject"])
-    return (
-        doc["policy_id"],
-        doc["policy_version"],
-        doc["unit_id"],
-        subject["repository"],
-        subject["head"],
-        subject["base"],
-    )
-
-
-def _manifest_identity(manifest: InputManifest, head: str) -> tuple[object, ...]:
-    return (
-        manifest.policy_id,
-        manifest.policy_version,
-        manifest.unit,
-        manifest.repository,
-        head,
-        manifest.material_base,
-    )
 
 
 def load_receipt(raw: bytes) -> CheckReceipt | ReceiptDefect:
@@ -724,7 +735,6 @@ def _record(
     manifest: InputManifest,
     *,
     record_type: str,
-    head: str,
     record_id: str,
     producer: Mapping[str, str],
     created_at: str,
@@ -743,7 +753,7 @@ def _record(
         "created_at": created_at,
         "subject": {
             "repository": manifest.repository,
-            "head": head,
+            "head": manifest.head,
             "base": manifest.material_base,
         },
         "inputs": inputs,
@@ -767,7 +777,6 @@ def check_receipt(
     return _record(
         manifest,
         record_type="check",
-        head=manifest.head,
         record_id=record_id,
         producer=producer,
         created_at=created_at,
@@ -782,12 +791,13 @@ def check_receipt(
 
 @dataclass(frozen=True)
 class EquivalenceReceipt:
-    """A published judgment that a prior result's inputs equal those at another head."""
+    """A published judgment that a prior result's inputs equal those at another head;
+    `identity` is the current manifest the record claims to describe."""
 
     record_id: str
     prior_record: str
     prior_head: str
-    current_head: str
+    identity: RecordIdentity
     key: str
 
 
@@ -809,7 +819,6 @@ def equivalence_record(
     return _record(
         current,
         record_type="equivalence",
-        head=current.head,
         record_id=record_id,
         producer=producer,
         created_at=created_at,
@@ -826,18 +835,17 @@ def equivalence_record(
 
 def parse_equivalence(raw: bytes) -> EquivalenceReceipt:
     """The single checkpoint for a published equivalence record; raises `EvidenceError`."""
-    doc, inputs = _envelope(raw, "equivalence")
+    doc, identity, inputs = _envelope(raw, "equivalence")
     _exact_keys(inputs, _EQUIVALENCE_INPUTS, "inputs")
     if doc["result"] != "passed":
         raise EvidenceError("result", "an equivalence record must be passed")
-    current_head = _matching(inputs["current_head"], _GIT_OID, "inputs.current_head")
-    if cast(dict[str, object], doc["subject"])["head"] != current_head:
+    if _matching(inputs["current_head"], _GIT_OID, "inputs.current_head") != identity.head:
         raise EvidenceError("subject", "head disagrees with inputs.current_head")
     return EquivalenceReceipt(
         record_id=cast(str, doc["record_id"]),
         prior_record=_text(inputs["prior_record"], "inputs.prior_record"),
         prior_head=_matching(inputs["prior_head"], _GIT_OID, "inputs.prior_head"),
-        current_head=current_head,
+        identity=identity,
         key=_matching(inputs["manifest_sha256"], _SHA256, "inputs.manifest_sha256"),
     )
 
@@ -871,12 +879,18 @@ def _differences(prior: CheckReceipt, current: InputManifest) -> list[str]:
 def _equivalence_gap(
     prior: CheckReceipt, current: InputManifest, equivalence: EquivalenceReceipt | None
 ) -> list[str]:
-    """WS-08: reuse across heads needs a published equivalence binding exactly this pair."""
+    """WS-08 §10.1: reuse across heads needs a published equivalence binding exactly this
+    prior record and this current manifest's full identity; any inconsistency refuses."""
     if equivalence is None:
         return [] if prior.manifest.head == current.head else ["equivalence_required"]
-    bound = (equivalence.prior_record, equivalence.prior_head, equivalence.current_head)
-    expected = (prior.record_id, prior.manifest.head, current.head)
-    return [] if bound == expected and equivalence.key == current.key else ["equivalence_mismatch"]
+    bound = (
+        equivalence.prior_record,
+        equivalence.prior_head,
+        equivalence.identity,
+        equivalence.key,
+    )
+    expected = (prior.record_id, prior.manifest.head, _manifest_identity(current), current.key)
+    return [] if bound == expected else ["equivalence_mismatch"]
 
 
 def reuse_result(

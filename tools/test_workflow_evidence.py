@@ -541,3 +541,44 @@ def test_equivalence_is_refused_for_different_inputs(repo: Path) -> None:
             producer={"tool": "workflow_evidence", "version": "1"},
             created_at="2026-10-23T23:45:00Z",
         )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        (("policy_id",), "wrong"),
+        (("policy_version",), 2),
+        (("unit_id",), "wrong"),
+        (("subject", "repository"), "wrong"),
+        (("subject", "base"), "0" * 40),
+    ],
+)
+def test_equivalence_whose_identity_contradicts_the_current_manifest_binds_nothing(
+    repo: Path, tmp_path: Path, field: tuple[str, ...], value: object
+) -> None:
+    prior = _passed_receipt(build_manifest(repo, _request(repo)))
+    _write(repo, "docs/notes.md", "documentation only\n")
+    _git(repo, "commit", "-q", "-am", "docs only")
+    current = build_manifest(repo, _request(repo))
+    record = json.loads(_equivalence_bytes(prior, current, tmp_path))
+    *parents, leaf = field
+    target = record
+    for name in parents:
+        target = target[name]
+    target[leaf] = value
+
+    decision = reuse_result(prior, current, parse_equivalence(json.dumps(record).encode()))
+
+    assert decision.reusable is False
+    assert decision.reasons == ("equivalence_mismatch",)
+
+
+def test_equivalence_whose_heads_disagree_is_refused_at_parse(repo: Path, tmp_path: Path) -> None:
+    prior = _passed_receipt(build_manifest(repo, _request(repo)))
+    _write(repo, "docs/notes.md", "documentation only\n")
+    _git(repo, "commit", "-q", "-am", "docs only")
+    record = json.loads(_equivalence_bytes(prior, build_manifest(repo, _request(repo)), tmp_path))
+    record["inputs"]["current_head"] = "0" * 40
+
+    with pytest.raises(EvidenceError):
+        parse_equivalence(json.dumps(record).encode())
