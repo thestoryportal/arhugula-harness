@@ -33,7 +33,9 @@ from tools.workflow_evidence import (
     WorkingTree,
     build_manifest,
     check_receipt,
+    equivalence_record,
     load_receipt,
+    parse_equivalence,
     parse_receipt,
     reuse_result,
 )
@@ -469,3 +471,73 @@ def test_receipt_from_an_incomplete_manifest_is_never_reused(repo: Path) -> None
 
     assert decision.reusable is False
     assert decision.reasons == ("prior_incomplete",)
+
+
+def test_explicit_input_through_a_symlinked_directory_refuses(repo: Path) -> None:
+    outside = repo.parent / "outside"
+    outside.mkdir()
+    (outside / "secret.txt").write_text("outside bytes\n", encoding="utf-8")
+    (repo / "link").symlink_to("../outside")
+    (repo / "alias").symlink_to("ops")
+
+    for subject in ("link/secret.txt", "alias/core.py"):
+        manifest = build_manifest(repo, _request(repo, explicit=(subject,)))
+        assert subject not in {entry.path for entry in manifest.files}
+        assert "symlink_traversal" in {refusal.code for refusal in manifest.refusals}
+
+
+def _equivalence_bytes(prior: CheckReceipt, current: InputManifest, tmp: Path) -> bytes:
+    record = equivalence_record(
+        prior,
+        current,
+        record_id="equiv-1",
+        producer={"tool": "workflow_evidence", "version": "1"},
+        created_at="2026-10-23T23:45:00Z",
+    )
+    # The producer publishes the record durably; reuse consumes the bytes read back.
+    published = tmp / "equivalence.json"
+    published.write_text(json.dumps(record), encoding="utf-8")
+    return published.read_bytes()
+
+
+def test_cross_head_reuse_requires_a_durable_equivalence_receipt(
+    repo: Path, tmp_path: Path
+) -> None:
+    prior = _passed_receipt(build_manifest(repo, _request(repo)))
+    _write(repo, "docs/notes.md", "documentation only\n")
+    _git(repo, "commit", "-q", "-am", "docs only")
+    current = build_manifest(repo, _request(repo))
+    assert current.head != prior.manifest.head
+    assert current.key == prior.manifest.key
+
+    without = reuse_result(prior, current)
+    assert without.reusable is False
+    assert without.reasons == ("equivalence_required",)
+
+    equivalence = parse_equivalence(_equivalence_bytes(prior, current, tmp_path))
+    bound = reuse_result(prior, current, equivalence)
+    assert bound.reusable is True
+    assert bound.equivalence == "equiv-1"
+
+    # An equivalence for another head or another prior record binds nothing here.
+    _write(repo, "docs/notes.md", "another docs-only commit\n")
+    _git(repo, "commit", "-q", "-am", "docs again")
+    later = build_manifest(repo, _request(repo))
+    stale = reuse_result(prior, later, equivalence)
+    assert stale.reusable is False
+    assert stale.reasons == ("equivalence_mismatch",)
+
+
+def test_equivalence_is_refused_for_different_inputs(repo: Path) -> None:
+    prior = _passed_receipt(build_manifest(repo, _request(repo)))
+    _write(repo, "ops/core.py", "VALUE = 3\n")
+    _git(repo, "commit", "-q", "-am", "source change")
+
+    with pytest.raises(EvidenceError):
+        equivalence_record(
+            prior,
+            build_manifest(repo, _request(repo)),
+            record_id="equiv-2",
+            producer={"tool": "workflow_evidence", "version": "1"},
+            created_at="2026-10-23T23:45:00Z",
+        )

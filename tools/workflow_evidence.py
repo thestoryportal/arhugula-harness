@@ -377,7 +377,19 @@ def _decoded(raw: bytes) -> str | Refusal:
         return Refusal("unsupported_path", repr(raw))
 
 
+def _symlinked_ancestor(root: Path, path: str) -> str | None:
+    """The first directory on `path` that is a symlink; reading through it would traverse."""
+    parts = path.split("/")[:-1]
+    prefixes = ("/".join(parts[: depth + 1]) for depth in range(len(parts)))
+    return next((prefix for prefix in prefixes if (root / prefix).is_symlink()), None)
+
+
 def _read_worktree(root: Path, path: str) -> FileEntry | Refusal:
+    # Git never discovers files beyond a symlink, but an explicit input is read by name:
+    # a symlinked ancestor would silently substitute bytes from wherever it points.
+    ancestor = _symlinked_ancestor(root, path)
+    if ancestor is not None:
+        return Refusal("symlink_traversal", f"{path} passes through symlink {ancestor}")
     full = os.fsencode(root) + b"/" + path.encode()
     try:
         info = os.lstat(full)
@@ -640,51 +652,63 @@ def _reference(value: object, field: str) -> None:
         raise EvidenceError(field + ".bytes", "must be a nonnegative integer")
 
 
-def parse_receipt(raw: bytes) -> CheckReceipt:
-    """The single checkpoint for a WS-08 check receipt; raises `EvidenceError`."""
+def _envelope(raw: bytes, record_type: str) -> tuple[dict[str, object], dict[str, object]]:
+    """[LAW:single-enforcer] the WS-08 envelope checks every record type shares."""
     doc = _decode(raw)
     _exact_keys(doc, _ENVELOPE_FIELDS, "receipt")
     if doc["schema_version"] != SCHEMA_VERSION or type(doc["schema_version"]) is not int:
         raise EvidenceError("schema_version", f"unsupported; expected {SCHEMA_VERSION}")
-    if doc["record_type"] != "check":
-        raise EvidenceError("record_type", "must be check")
-    result = doc["result"]
-    if result not in _RESULTS:
+    if doc["record_type"] != record_type:
+        raise EvidenceError("record_type", f"must be {record_type}")
+    if doc["result"] not in _RESULTS:
         raise EvidenceError("result", f"must be one of {', '.join(_RESULTS)}")
+    _int(doc["policy_version"], "policy_version")
     _matching(doc["created_at"], _RFC3339_UTC, "created_at")
+    _text(doc["record_id"], "record_id")
     _object(doc["producer"], "producer")
     for name in ("artifacts", "supersedes"):
         for index, item in enumerate(_array(doc[name], name)):
             _reference(item, f"{name}[{index}]")
     _strings(doc["limits"], "limits")
-    inputs = _object(doc["inputs"], "inputs")
+    subject = _object(doc["subject"], "subject")
+    _exact_keys(subject, ("repository", "head", "base"), "subject")
+    return doc, _object(doc["inputs"], "inputs")
+
+
+def parse_receipt(raw: bytes) -> CheckReceipt:
+    """The single checkpoint for a WS-08 check receipt; raises `EvidenceError`."""
+    doc, inputs = _envelope(raw, "check")
+    # `_envelope` admitted only a WS-08 result value.
+    result = cast(RecordResult, doc["result"])
     _exact_keys(inputs, ("manifest", "manifest_sha256"), "inputs")
     manifest = parse_manifest(inputs["manifest"])
     if _matching(inputs["manifest_sha256"], _SHA256, "inputs.manifest_sha256") != manifest.key:
         raise EvidenceError("inputs.manifest_sha256", "does not match the manifest")
-    subject = _object(doc["subject"], "subject")
-    identity = (
+    if _envelope_identity(doc) != _manifest_identity(manifest, manifest.head):
+        raise EvidenceError("subject", "envelope identity disagrees with its manifest")
+    return CheckReceipt(record_id=cast(str, doc["record_id"]), result=result, manifest=manifest)
+
+
+def _envelope_identity(doc: dict[str, object]) -> tuple[object, ...]:
+    subject = cast(dict[str, object], doc["subject"])
+    return (
         doc["policy_id"],
         doc["policy_version"],
         doc["unit_id"],
-        subject.get("repository"),
-        subject.get("head"),
-        subject.get("base"),
+        subject["repository"],
+        subject["head"],
+        subject["base"],
     )
-    expected = (
+
+
+def _manifest_identity(manifest: InputManifest, head: str) -> tuple[object, ...]:
+    return (
         manifest.policy_id,
         manifest.policy_version,
         manifest.unit,
         manifest.repository,
-        manifest.head,
+        head,
         manifest.material_base,
-    )
-    if identity != expected or set(subject) != {"repository", "head", "base"}:
-        raise EvidenceError("subject", "envelope identity disagrees with its manifest")
-    return CheckReceipt(
-        record_id=_text(doc["record_id"], "record_id"),
-        result=result,
-        manifest=manifest,
     )
 
 
@@ -694,6 +718,40 @@ def load_receipt(raw: bytes) -> CheckReceipt | ReceiptDefect:
         return parse_receipt(raw)
     except EvidenceError as exc:
         return ReceiptDefect(str(exc))
+
+
+def _record(
+    manifest: InputManifest,
+    *,
+    record_type: str,
+    head: str,
+    record_id: str,
+    producer: Mapping[str, str],
+    created_at: str,
+    result: RecordResult,
+    inputs: dict[str, object],
+    artifacts: list[dict[str, object]],
+) -> dict[str, object]:
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "record_id": record_id,
+        "record_type": record_type,
+        "policy_id": manifest.policy_id,
+        "policy_version": manifest.policy_version,
+        "unit_id": manifest.unit,
+        "producer": dict(producer),
+        "created_at": created_at,
+        "subject": {
+            "repository": manifest.repository,
+            "head": head,
+            "base": manifest.material_base,
+        },
+        "inputs": inputs,
+        "result": result,
+        "artifacts": artifacts,
+        "supersedes": [],
+        "limits": list(_LIMITS),
+    }
 
 
 def check_receipt(
@@ -706,26 +764,82 @@ def check_receipt(
     artifacts: list[dict[str, object]],
 ) -> dict[str, object]:
     """Pure: the WS-08 check record describing one run; its producer publishes it."""
-    return {
-        "schema_version": SCHEMA_VERSION,
-        "record_id": record_id,
-        "record_type": "check",
-        "policy_id": manifest.policy_id,
-        "policy_version": manifest.policy_version,
-        "unit_id": manifest.unit,
-        "producer": dict(producer),
-        "created_at": created_at,
-        "subject": {
-            "repository": manifest.repository,
-            "head": manifest.head,
-            "base": manifest.material_base,
+    return _record(
+        manifest,
+        record_type="check",
+        head=manifest.head,
+        record_id=record_id,
+        producer=producer,
+        created_at=created_at,
+        result=result,
+        inputs={"manifest": manifest.to_json(), "manifest_sha256": manifest.key},
+        artifacts=artifacts,
+    )
+
+
+# --- equivalence -------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class EquivalenceReceipt:
+    """A published judgment that a prior result's inputs equal those at another head."""
+
+    record_id: str
+    prior_record: str
+    prior_head: str
+    current_head: str
+    key: str
+
+
+_EQUIVALENCE_INPUTS = ("prior_record", "prior_head", "current_head", "manifest_sha256")
+
+
+def equivalence_record(
+    prior: CheckReceipt,
+    current: InputManifest,
+    *,
+    record_id: str,
+    producer: Mapping[str, str],
+    created_at: str,
+) -> dict[str, object]:
+    """Pure: the WS-08 equivalence record for identical inputs; refuses any difference."""
+    differences = _differences(prior, current)
+    if differences:
+        raise EvidenceError("equivalence", f"inputs are not equivalent: {', '.join(differences)}")
+    return _record(
+        current,
+        record_type="equivalence",
+        head=current.head,
+        record_id=record_id,
+        producer=producer,
+        created_at=created_at,
+        result="passed",
+        inputs={
+            "prior_record": prior.record_id,
+            "prior_head": prior.manifest.head,
+            "current_head": current.head,
+            "manifest_sha256": current.key,
         },
-        "inputs": {"manifest": manifest.to_json(), "manifest_sha256": manifest.key},
-        "result": result,
-        "artifacts": artifacts,
-        "supersedes": [],
-        "limits": list(_LIMITS),
-    }
+        artifacts=[],
+    )
+
+
+def parse_equivalence(raw: bytes) -> EquivalenceReceipt:
+    """The single checkpoint for a published equivalence record; raises `EvidenceError`."""
+    doc, inputs = _envelope(raw, "equivalence")
+    _exact_keys(inputs, _EQUIVALENCE_INPUTS, "inputs")
+    if doc["result"] != "passed":
+        raise EvidenceError("result", "an equivalence record must be passed")
+    current_head = _matching(inputs["current_head"], _GIT_OID, "inputs.current_head")
+    if cast(dict[str, object], doc["subject"])["head"] != current_head:
+        raise EvidenceError("subject", "head disagrees with inputs.current_head")
+    return EquivalenceReceipt(
+        record_id=cast(str, doc["record_id"]),
+        prior_record=_text(inputs["prior_record"], "inputs.prior_record"),
+        prior_head=_matching(inputs["prior_head"], _GIT_OID, "inputs.prior_head"),
+        current_head=current_head,
+        key=_matching(inputs["manifest_sha256"], _SHA256, "inputs.manifest_sha256"),
+    )
 
 
 # --- reuse -------------------------------------------------------------------------------
@@ -733,25 +847,53 @@ def check_receipt(
 
 @dataclass(frozen=True)
 class ReuseDecision:
-    """`reusable` with WS-18 reason codes; `prior_record` and `key` are the equivalence."""
+    """`reusable` with WS-18 reason codes; the prior record, key and any equivalence
+    record are the reference a reused result carries."""
 
     reusable: bool
     reasons: tuple[str, ...]
     prior_record: str | None
     key: str
+    equivalence: str | None
 
 
-def reuse_result(prior: CheckReceipt | ReceiptDefect, current: InputManifest) -> ReuseDecision:
-    """Reuse a prior result only for identical declared inputs; never runs a command."""
-    if isinstance(prior, ReceiptDefect):
-        return ReuseDecision(False, ("prior_unreadable",), None, current.key)
+def _differences(prior: CheckReceipt, current: InputManifest) -> list[str]:
     then, now = prior.manifest.identity(), current.identity()
-    reasons = (
+    return (
         [refusal.code for refusal in current.refusals]
         + (["prior_incomplete"] if prior.manifest.refusals else [])
         + (["prior_not_passed"] if prior.result != "passed" else [])
         # [LAW:dataflow-not-control-flow] every identity component is compared the same way.
         + [f"{name}_changed" for name in now if then[name] != now[name]]
     )
-    unique = tuple(dict.fromkeys(reasons))
-    return ReuseDecision(not unique, unique, prior.record_id, current.key)
+
+
+def _equivalence_gap(
+    prior: CheckReceipt, current: InputManifest, equivalence: EquivalenceReceipt | None
+) -> list[str]:
+    """WS-08: reuse across heads needs a published equivalence binding exactly this pair."""
+    if equivalence is None:
+        return [] if prior.manifest.head == current.head else ["equivalence_required"]
+    bound = (equivalence.prior_record, equivalence.prior_head, equivalence.current_head)
+    expected = (prior.record_id, prior.manifest.head, current.head)
+    return [] if bound == expected and equivalence.key == current.key else ["equivalence_mismatch"]
+
+
+def reuse_result(
+    prior: CheckReceipt | ReceiptDefect,
+    current: InputManifest,
+    equivalence: EquivalenceReceipt | None = None,
+) -> ReuseDecision:
+    """Reuse a prior result only for identical declared inputs; never runs a command."""
+    if isinstance(prior, ReceiptDefect):
+        return ReuseDecision(False, ("prior_unreadable",), None, current.key, None)
+    reasons = tuple(
+        dict.fromkeys(_differences(prior, current) + _equivalence_gap(prior, current, equivalence))
+    )
+    return ReuseDecision(
+        not reasons,
+        reasons,
+        prior.record_id,
+        current.key,
+        None if equivalence is None else equivalence.record_id,
+    )
