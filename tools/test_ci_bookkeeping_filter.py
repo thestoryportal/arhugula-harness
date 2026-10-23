@@ -24,7 +24,13 @@ _CI_YML = _REPO / ".github" / "workflows" / "ci.yml"
 _SCRIPT = _REPO / "tools" / "ci_bookkeeping_diff.py"
 _PINNED_CHECKOUT = "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5"
 _GATED_JOBS = frozenset(
-    {"test", "coverage", "axis-isolation", "typecheck", "tools-test-coverage-and-codex-loop"}
+    {
+        "package-tests",
+        "parity-tests",
+        "axis-isolation",
+        "typecheck",
+        "tools-test-coverage-and-codex-loop",
+    }
 )
 _GATE_IF = "always() && needs.changes.outputs.bookkeeping != 'true'"
 

@@ -105,9 +105,79 @@ jobs:
             /usr/bin/python3 tools/ci_bookkeeping_diff.py "$BASE" "$HEAD" | tee -a "$GITHUB_OUTPUT"
           fi
 
-  test:
+  # WO-U09 (WS-10 §12.2) — the provider-free package suite and the codex-parity suite run
+  # as two independent jobs after classification; neither waits for the other. The
+  # required context `pytest (all axis packages) — blocking` is the `test` aggregate below,
+  # which decides from both terminal results. Coverage comes from the one package-suite
+  # run: the separate informational job that re-ran the whole suite is gone.
+  package-tests:
     runs-on: ubuntu-latest
-    name: pytest (all axis packages) — blocking
+    name: package tests (all axis packages, with coverage)
+    needs: changes
+    if: always() && needs.changes.outputs.bookkeeping != 'true'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Install uv + Python 3.12
+        uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081 # v5
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Sync workspace (all members)
+        run: uv sync --all-packages
+
+      # Excludes the `e2e` marker — those tests exercise real external services
+      # (Anthropic API etc.) and are gated on credentials not available in CI
+      # per the marker definition in the root pyproject.toml. testpaths in
+      # [tool.pytest.ini_options] cover all 7 workspace packages (the 5 axes +
+      # harness-core + harness-runtime). Coverage config is the root pyproject
+      # [tool.coverage.run]. This step's exit status is the package verdict; the
+      # advisory steps after it cannot change it.
+      - name: Pytest with coverage (excludes e2e)
+        run: uv run pytest -m "not e2e" --cov --cov-report=term-missing --cov-report=xml --cov-report=json
+
+      # R-200-ci-coverage-gating — coverage stays INFORMATIONAL (no threshold, "gather
+      # data first"): publishing is advisory, so a coverage hiccup never fails the job.
+      - name: Publish coverage total to job summary
+        if: always()
+        continue-on-error: true
+        env:
+          COVERAGE_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+          COVERAGE_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          uv run python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import hashlib, json, os, pathlib, platform
+          p = pathlib.Path("coverage.json")
+          lock = hashlib.sha256(pathlib.Path("uv.lock").read_bytes()).hexdigest()[:12]
+          print("### Coverage (informational — v1, no threshold)\n")
+          print(f"head `{os.environ['COVERAGE_HEAD']}` · base `{os.environ['COVERAGE_BASE']}` · "
+                f"{os.environ['GITHUB_WORKFLOW']} run {os.environ['GITHUB_RUN_ID']} "
+                f"attempt {os.environ['GITHUB_RUN_ATTEMPT']} · {platform.system()}-{platform.machine()} · "
+                f"uv.lock `{lock}` · `pytest -m \"not e2e\" --cov`\n")
+          if not p.exists():
+              print("_Coverage unavailable: coverage.json was not produced — see the pytest step._")
+          else:
+              t = json.loads(p.read_text())["totals"]
+              print(f"**Total line coverage: {t['percent_covered_display']}%** "
+                    f"({t['covered_lines']}/{t['num_statements']} statements; "
+                    f"branch coverage enabled).\n")
+              print("Threshold enforcement deferred (`fail_under`) until a baseline trend justifies it.")
+          PY
+
+      - name: Upload coverage.xml artifact
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: coverage-xml-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: coverage.xml
+          if-no-files-found: warn
+
+  parity-tests:
+    runs-on: ubuntu-latest
+    name: codex compatibility regressions (parity suite)
     needs: changes
     if: always() && needs.changes.outputs.bookkeeping != 'true'
     steps:
@@ -132,14 +202,6 @@ jobs:
       - name: Install just
         uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
 
-      # Excludes the `e2e` marker — those tests exercise real external services
-      # (Anthropic API etc.) and are gated on credentials not available in CI
-      # per the marker definition in the root pyproject.toml. testpaths in
-      # [tool.pytest.ini_options] cover all 7 workspace packages (the 5 axes +
-      # harness-core + harness-runtime).
-      - name: Pytest (excludes e2e)
-        run: uv run pytest -m "not e2e"
-
       # tools/hooks/test_lane_init.sh (run by codex-parity-check.sh below) pins a zsh-ONLY
       # regression: lane-init.sh is sourced, and ${BASH_SOURCE[0]} is bash-only. That suite
       # now FAILS when a required shell is absent rather than skipping it, because a skipped
@@ -147,8 +209,30 @@ jobs:
       - name: Install zsh (required by the lane-init portability suite)
         run: sudo apt-get update && sudo apt-get install -y zsh
 
-      - name: Codex compatibility regressions — blocking
+      - name: Codex compatibility regressions
         run: bash tools/codex-parity-check.sh
+
+  test:
+    # The required context. `always()` makes it report on every run, including when a
+    # constituent failed, was canceled or was skipped; `needs:` makes it wait until both
+    # are terminal, so pending is never read as success. tools/ci_aggregate.py holds the
+    # WS-10 §12.2 truth table: only an enumerated row passes, everything else fails.
+    # Stdlib-only under the runner's python3, like the `changes` job — no uv setup.
+    runs-on: ubuntu-latest
+    name: pytest (all axis packages) — blocking
+    needs: [changes, package-tests, parity-tests]
+    if: always()
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Aggregate classification, package and parity results
+        env:
+          CLASSIFIER_RESULT: ${{ needs.changes.result }}
+          BOOKKEEPING: ${{ needs.changes.outputs.bookkeeping }}
+          PACKAGE_RESULT: ${{ needs.package-tests.result }}
+          PARITY_RESULT: ${{ needs.parity-tests.result }}
+        run: /usr/bin/python3 tools/ci_aggregate.py
 
   lint:
     runs-on: ubuntu-latest
@@ -261,63 +345,6 @@ jobs:
 
       - name: Pytest ${{ matrix.test_root }} in isolation (excludes e2e)
         run: uv run --no-sync pytest ${{ matrix.test_root }} -m "not e2e"
-
-  coverage:
-    # R-200-ci-coverage-gating — INFORMATIONAL coverage at PR. v1 posture: NO
-    # threshold ("gather data first" per the roadmap entry); advisory
-    # (continue-on-error) so a coverage hiccup never blocks merge. Re-runs the
-    # non-e2e suite under coverage (config at root pyproject [tool.coverage.run]:
-    # source = the 7 import packages, tests omitted), publishes a one-line total
-    # to the job step-summary (visible on the PR's Checks tab), and uploads
-    # coverage.xml as an artifact for inspection. A `fail_under` threshold +
-    # cross-PR trend (codecov/badge) land only once a baseline justifies it —
-    # the same "advisory until justified, then flip blocking" path the lint +
-    # typecheck jobs already walked (both now blocking).
-    name: coverage (informational) — advisory at v1
-    runs-on: ubuntu-latest
-    continue-on-error: true
-    needs: changes
-    if: always() && needs.changes.outputs.bookkeeping != 'true'
-    steps:
-      - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-
-      - name: Install uv + Python 3.12
-        uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081 # v5
-        with:
-          python-version: "3.12"
-          enable-cache: true
-
-      - name: Sync workspace (all members)
-        run: uv sync --all-packages
-
-      - name: Pytest with coverage (excludes e2e)
-        run: uv run pytest -m "not e2e" --cov --cov-report=term-missing --cov-report=xml --cov-report=json
-
-      - name: Publish coverage total to job summary
-        if: always()
-        run: |
-          uv run python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
-          import json, pathlib
-          p = pathlib.Path("coverage.json")
-          if not p.exists():
-              print("### Coverage\n\n_coverage.json not produced — see the pytest step._")
-          else:
-              t = json.loads(p.read_text())["totals"]
-              print("### Coverage (informational — v1, no threshold)\n")
-              print(f"**Total line coverage: {t['percent_covered_display']}%** "
-                    f"({t['covered_lines']}/{t['num_statements']} statements; "
-                    f"branch coverage enabled).\n")
-              print("Threshold enforcement deferred (`fail_under`) until a baseline trend justifies it.")
-          PY
-
-      - name: Upload coverage.xml artifact
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: coverage-xml
-          path: coverage.xml
-          if-no-files-found: warn
 
   substitution-ledger:
     # R-600-substitution-ledger-schema — the tally-validation gate. Derives the
