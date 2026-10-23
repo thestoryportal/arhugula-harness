@@ -343,7 +343,7 @@ def test_corrupt_or_unreadable_receipt_is_never_reused(repo: Path) -> None:
     duplicate_key = json.dumps(record)[:-1] + ', "result": "passed"}'
     old_fingerprint = dict(record, inputs={"worktree_fingerprint": "0123456789abcdef"})
     future_major = dict(record, schema_version=2)
-    float_version = json.dumps(record).replace('"policy_version": 1', '"policy_version": 1.0', 1)
+    float_version = json.dumps(dict(record, producer={"tool": "pytest", "elapsed": 1.5}))
     bad_scope = json.loads(json.dumps(record))
     bad_scope["inputs"]["manifest"]["scope"] = "somewhere"
 
