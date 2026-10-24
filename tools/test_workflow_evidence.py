@@ -31,6 +31,8 @@ from tools.workflow_evidence import (
     CheckReceipt,
     CheckRequest,
     EvidenceError,
+    Failed,
+    Fails,
     GitTree,
     Index,
     InfrastructureFailed,
@@ -49,6 +51,7 @@ from tools.workflow_evidence import (
     admit_scenario,
     bind_acceptance,
     build_manifest,
+    candidate_gaps,
     check_receipt,
     equivalence_record,
     install_equivalence_record,
@@ -789,6 +792,38 @@ def test_absent_mandatory_facts_are_never_valid_reuse(repo: Path) -> None:
     )
 
 
+@pytest.mark.parametrize(
+    ("group", "name", "value", "gap"),
+    [
+        ("artifact", "origins", "", "artifact.origins_unknown"),
+        ("artifact", "origins", "0 harness modules in site-packages", "artifact.origins_unknown"),
+        ("artifact", WHEEL, "not a digest", "artifact.distribution_unknown"),
+        ("artifact", "installed:harness_core", " ", "artifact.installed_unknown"),
+        ("artifact", "site_packages", "site-packages", "artifact.site_packages_unknown"),
+        ("environment", "python", "python3.12", "environment.python_unknown"),
+        ("environment", "kernel", " ", "environment.kernel_unknown"),
+        ("environment", "resources", "", "environment.resources_unknown"),
+        ("environment", "resources", "pinned", "environment.resources_unknown"),
+    ],
+)
+def test_blank_or_unstructured_facts_are_not_observations(
+    repo: Path, group: str, name: str, value: str, gap: str
+) -> None:
+    override = {name: value}
+    candidate = (
+        _candidate(repo, artifact=override)
+        if group == "artifact"
+        else _candidate(repo, environment=override)
+    )
+
+    assert candidate_gaps(candidate) == (gap,)
+    # Identical on both sides is still not observed, so never valid reuse.
+    reuse = install_reuse(AcceptedInstall(ACCEPTED_RECORD, candidate), candidate)
+    assert (reuse.disposition, reuse.reasons) == ("unknown", (gap,))
+    run = InstalledRun("run-7", "b104-n1", candidate.key, "passed")
+    assert bind_acceptance(run, candidate).reasons == (f"final.{gap}",)
+
+
 def test_installed_acceptance_needs_a_completely_observed_final_candidate(repo: Path) -> None:
     final = _candidate(repo, {"origins": None})
     run = InstalledRun("run-5", "b104-n1", final.key, "passed")
@@ -1079,12 +1114,20 @@ def _without(doc: dict[str, object], *path: str) -> dict[str, object]:
         (lambda d: {**d, "argv": []}, "argv"),
         (lambda d: {**d, "candidate": "unbound"}, "candidate"),
         (lambda d: {**d, "expected": {"outcome": "refuses"}}, "expected"),
+        (lambda d: {**d, "expected": {"outcome": "fails"}}, "expected"),
+        (lambda d: {**d, "expected": {"outcome": "fails", "code": ""}}, "expected.code"),
     ],
 )
 def test_incomplete_scenario_contract_refuses_start(mutate, field: str) -> None:
     with pytest.raises(EvidenceError) as caught:
         parse_scenario_contract(json.dumps(mutate(_contract("f" * 64))).encode())
     assert caught.value.field == field
+
+
+def test_expected_product_failure_parses_as_its_own_outcome() -> None:
+    doc = _contract("f" * 64, expected={"outcome": "fails", "code": "worker_lost"}, thresholds={})
+
+    assert parse_scenario_contract(json.dumps(doc).encode()).expected == Fails("worker_lost")
 
 
 def test_scenario_admission_binds_candidate_prerequisites_and_original_obligations(
@@ -1154,6 +1197,15 @@ def test_scenario_admission_binds_candidate_prerequisites_and_original_obligatio
         (Refuses("resume_refused"), Refused("other_refusal"), True, "failed"),
         (Refuses("resume_refused"), Behaved(), True, "failed"),
         (Refuses("resume_refused"), InfrastructureFailed("mount lost"), True, "error"),
+        (Refuses("resume_refused"), Failed("resume_refused"), True, "failed"),
+        # A specified product failure is its own expected outcome, judged by its code.
+        (Fails("worker_lost"), Failed("worker_lost"), True, "passed"),
+        (Fails("worker_lost"), Failed("worker_lost"), False, "held"),
+        (Fails("worker_lost"), Failed("disk_full"), True, "failed"),
+        (Fails("worker_lost"), Refused("worker_lost"), True, "failed"),
+        (Fails("worker_lost"), Behaved(), True, "failed"),
+        (Fails("worker_lost"), InfrastructureFailed("docker stopped"), True, "error"),
+        (Behaves(), Failed("worker_lost"), True, "failed"),
     ],
 )
 def test_scenario_judgment_passes_only_the_specific_expected_outcome(

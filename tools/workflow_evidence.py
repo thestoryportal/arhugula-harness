@@ -967,28 +967,50 @@ _DISPOSITIONS: tuple[InstallDisposition, ...] = (
 
 Facts = Mapping[str, str | None]
 
-# [LAW:one-source-of-truth] WS-12's mandatory observations of every installed candidate. A
-# name ending in ":" is a family that needs at least one member, every member observed.
-_REQUIRED_FACTS: Mapping[str, tuple[str, ...]] = MappingProxyType(
+# [LAW:one-source-of-truth] WS-12's mandatory observations of every installed candidate and
+# the shape each must have to count as observed: blank or free text is not an observation.
+# A name ending in ":" is a family that needs at least one member, every member observed.
+_ABSOLUTE = re.compile(r"/\S.*")
+_TOKEN = re.compile(r"\S+")
+_REQUIRED_FACTS: Mapping[str, Mapping[str, re.Pattern[str]]] = MappingProxyType(
     {
-        "artifact": ("distribution:", "installed:", "site_packages", "origins"),
-        "environment": ("python", "os", "kernel", "architecture", "resources"),
+        "artifact": {
+            "distribution:": _SHA256,
+            "installed:": re.compile(
+                r"version=\S+; editable=(true|false); record=\d+ verified(, [1-9]\d* differ)?"
+            ),
+            "site_packages": re.compile(r"/\S.*/site-packages"),
+            "origins": re.compile(
+                r"[1-9]\d* harness modules in site-packages|origin check failed: \d+ failures"
+            ),
+        },
+        "environment": {
+            "python": _ABSOLUTE,
+            "os": _TOKEN,
+            "kernel": _TOKEN,
+            "architecture": _TOKEN,
+            # A pin is the digest of the accepted resource-pin record, never a description.
+            "resources": re.compile(r"sha256:[0-9a-f]{64}"),
+        },
     }
 )
 
 
-def _observed(facts: Facts, name: str) -> bool:
+def _observed(facts: Facts, name: str, shape: re.Pattern[str]) -> bool:
     members = [key for key in facts if key.startswith(name)] if name.endswith(":") else [name]
-    return bool(members) and all(facts.get(key) is not None for key in members)
+    values = [facts.get(key) for key in members]
+    return bool(values) and all(
+        value is not None and shape.fullmatch(value) is not None for value in values
+    )
 
 
 def _fact_gaps(candidate: InstalledCandidate) -> list[str]:
     facts = {"artifact": candidate.artifact, "environment": candidate.environment}
     return [
         f"{group}.{name.rstrip(':')}_unknown"
-        for group, names in _REQUIRED_FACTS.items()
-        for name in names
-        if not _observed(facts[group], name)
+        for group, shapes in _REQUIRED_FACTS.items()
+        for name, shape in shapes.items()
+        if not _observed(facts[group], name, shape)
     ]
 
 
@@ -1364,7 +1386,15 @@ class Refuses:
     code: str
 
 
-Expected = Behaves | Refuses
+@dataclass(frozen=True)
+class Fails:
+    """The product is expected to fail in one specified way, named by this code; a bare
+    nonzero exit or an infrastructure failure never proves it."""
+
+    code: str
+
+
+Expected = Behaves | Refuses | Fails
 
 
 @dataclass(frozen=True)
@@ -1443,8 +1473,13 @@ def _expected(value: object) -> Expected:
         case "refuses":
             _exact_keys(doc, ("outcome", "code"), "expected")
             return Refuses(_text(doc["code"], "expected.code"))
+        case "fails":
+            _exact_keys(doc, ("outcome", "code"), "expected")
+            return Fails(_text(doc["code"], "expected.code"))
         case other:
-            raise EvidenceError("expected.outcome", f"must be behaves or refuses, not {other!r}")
+            raise EvidenceError(
+                "expected.outcome", f"must be behaves, refuses or fails, not {other!r}"
+            )
 
 
 def _threshold(value: object, field: str) -> Threshold:
@@ -1488,7 +1523,7 @@ def parse_scenario_contract(raw: bytes) -> ScenarioContract:
         name: _threshold(value, f"thresholds.{name}")
         for name, value in _object(doc["thresholds"], "thresholds").items()
     }
-    # A refusal is judged by its code; meeting criteria needs at least one threshold.
+    # A refusal or failure is judged by its code; meeting criteria needs a threshold.
     if isinstance(expected, Behaves):
         _nonempty(thresholds, "thresholds")
     attribution = _object(doc["attribution"], "attribution")
@@ -1583,13 +1618,20 @@ class Refused:
 
 
 @dataclass(frozen=True)
+class Failed:
+    """The product failed, and its structured result names how."""
+
+    code: str
+
+
+@dataclass(frozen=True)
 class InfrastructureFailed:
     """The run could not exercise the product; it says nothing about product behavior."""
 
     detail: str
 
 
-Outcome = Behaved | Refused | InfrastructureFailed
+Outcome = Behaved | Refused | Failed | InfrastructureFailed
 
 
 @dataclass(frozen=True)
@@ -1600,14 +1642,17 @@ class ScenarioObservation:
 
 
 def judge_scenario(expected: Expected, observation: ScenarioObservation) -> RecordResult:
-    """Pass only the specific expected outcome. Infrastructure failure is an error, never a
-    product pass; a missing post-cleanup observation holds a pass but cannot hide a failure."""
+    """Pass only the specific expected outcome: an expected refusal or product failure
+    passes only with its own code. Infrastructure failure is an error, never product
+    behavior; a missing post-cleanup observation holds a pass but cannot hide a failure."""
     match observation.outcome, expected:
         case InfrastructureFailed(), _:
             return "error"
         case Behaved(), Behaves():
             pass
         case Refused(code=got), Refuses(code=want) if got == want:
+            pass
+        case Failed(code=got), Fails(code=want) if got == want:
             pass
         case _:
             return "failed"
