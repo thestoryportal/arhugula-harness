@@ -2,7 +2,7 @@
 # Hermetic test for precmd-clear-cache.sh (U-HK-03). Builds a throwaway tree with
 # __pycache__/.pyc files (incl. a .venv copy that must be preserved) and drives the
 # hook with test vs non-test commands. Exits non-zero on any failed assertion.
-# Cases 4-6 are the WO-U21 freshness contract any narrower invalidation must keep;
+# Cases 4-7 are the WO-U21 freshness contract any narrower invalidation must keep;
 # pass a candidate hook path as $1 to run the same contract against it.
 
 set -uo pipefail
@@ -97,6 +97,33 @@ run "uv run pytest -q"
 for lane in .worktrees/lane .codex-worktrees/lane; do
   [ "$(value "$lane")" = 2 ] && ok "test cmd makes an edit in $lane visible" || bad "stale pyc served in $lane"
 done
+
+# 7) import origins. Workspace members import from source through an editable .pth in
+# the project's own .venv; an installed (non-editable) copy in site-packages is a
+# separate origin that the hook leaves alone, so which origin loads is the
+# environment's decision, not the cache's. -S keeps the system site dir out.
+site_import() { # prints the VALUE and origin dir of pkg.val as the project's .venv resolves it
+  (cd / && python3 -S -c "import site; site.addsitedir('$REPO/.venv/lib/site-packages')
+import os, pkg.val as m; print(m.VALUE, os.path.dirname(os.path.dirname(m.__file__)))")
+}
+fresh; stale_edit src
+mkdir -p "$REPO/.venv/lib/site-packages"
+printf '%s\n' "$REPO/src" > "$REPO/.venv/lib/site-packages/_editable_impl_pkg.pth"
+[ "$(site_import)" = "1 $REPO/src" ] && ok "precondition: editable source import reads the stale pyc" \
+  || bad "editable stale-pyc precondition no longer holds"
+run "uv run pytest -q"
+[ "$(site_import)" = "2 $REPO/src" ] && ok "test cmd makes an edit behind an editable install visible" \
+  || bad "stale pyc served through the editable install"
+mkdir -p "$REPO/.venv/lib/site-packages/pkg"
+: > "$REPO/.venv/lib/site-packages/pkg/__init__.py"
+printf 'VALUE = 0\n' > "$REPO/.venv/lib/site-packages/pkg/val.py"
+site_import >/dev/null
+run "uv run pytest -q"
+[ "$(site_import)" = "0 $REPO/.venv/lib/site-packages" ] \
+  && ok "an installed copy still shadows the source; the hook leaves origin choice to the environment" \
+  || bad "hook changed which origin loads"
+[ -n "$(find "$REPO/.venv/lib/site-packages/pkg/__pycache__" -name 'val.*.pyc')" ] \
+  && ok "installed copy's pyc preserved" || bad "installed copy's pyc was deleted"
 
 echo "---"; echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1
