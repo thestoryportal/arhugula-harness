@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "policy_id": "arhugula-trial-v1",
+  "policy_version": 1,
+  "lit_project": "arhugula",
+  "trial_root": "arhugula-harness-trial-193",
+  "eligible_units": [],
+  "boundary_rules": {},
+  "check_inputs": {},
+  "artifact_roots": {},
+  "review_rules": {},
+  "compatibility": {"phase_record_versions": [1]}
+}
