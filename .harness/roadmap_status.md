@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `1063731f98b1` |
-| `last_refreshed` | 2026-10-05T00:00:00Z |
-| `git_head` | `8d684b42` —  |
+| `workspace_state_hash` | `5c39f16426e5` |
+| `last_refreshed` | 2026-10-24T00:00:00Z |
+| `git_head` | `e061c58e` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 125 |
 
@@ -22,7 +22,7 @@
 
 **Purpose.** Live pointer to the next Claude/Codex-executable frontier. Full round-by-round history (every prior round, verbatim, most-recent-first) lives in the archive below — grep it by PR/`B-`/`R-`-id/round, never read wholesale.
 
-**Current next action (post-#1643).** After the terminating refresh and its own main CI are verified, complete the bounded A3 source closeout, then resume independent installed A3 acceptance from the bound installed-active continuation under fresh LIT ownership and measured admission. Pin the actual landed revision and build/install provenance; source GO and green CI do not establish installed acceptance. Keep parent arhugula-harness-trial-193 open for its full production-readiness scope and numerical criteria, with the original deadline and goal accounting retained. Carry the open B-309 follow-up in arhugula-harness-trial-193.5i4 and preserve the distinct B-295/B-298 work. Then the next source unit is A5 (`U-RT-158`), followed by A4 (`U-RT-159`), in the recorded A3 → A5 → A4 order: re-ground their existing Proposed contracts and plans against landed main and obtain independent source-consumption clearance before implementation. Preserve protected drafts, all review budgets, required CI, the unchanged merge door and separate installed gates; a newer direct pause governs.
+**Current next action (post-#1647).** Advance queued WO-U05, source-GREEN at 98d8494e with its three spent passes and F1/F2 preserved, from current LIT through reconciliation against actual main, required CI, native landing and immediate terminating refresh. WO-U04 follows the verified U03 and U09 landings; dedicated pairs continue their own eligible released coding/review work. Preserve original findings and spent passes. WO-U15 remains review-quarantined at five spent passes, with no sixth source review or budget reset. Trial activation and populated eligibility remain U23/U24 gates; unrelated production and runtime holds remain.
 
 **Archive.** `.harness/roadmap-next-action-archive.md` (PRIOR rounds only, verbatim as each stood when superseded — the current round lives only in this head; the newest superseded round may lag there until the next content PR archives it, and is always losslessly recoverable from this file's own git history meanwhile).
 
@@ -50,11 +50,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #1647 | 2026-10-24 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
+| PR #1645 | 2026-10-24 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
+| PR #1646 | 2026-10-24 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1643 | 2026-10-05 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1641 | 2026-10-04 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
-| PR #1639 | 2026-10-03 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
-| PR #1637 | 2026-10-02 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
-| PR #1635 | 2026-10-02 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 
 ---
 
