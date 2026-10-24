@@ -7,7 +7,14 @@
   "eligible_units": [],
   "boundary_rules": {},
   "check_inputs": {},
-  "artifact_roots": {},
+  "artifact_roots": {
+    "code_roots": [
+      ".agents", ".claude", ".codex", ".githooks", ".github", "deploy",
+      "harness-as", "harness-core", "harness-cp", "harness-cxa", "harness-is",
+      "harness-od", "harness-runtime", "scaffolding", "tests", "tools"
+    ],
+    "artifact_roots": []
+  },
   "review_rules": {},
   "compatibility": {"phase_record_versions": [1]}
 }
