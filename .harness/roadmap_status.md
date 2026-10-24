@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `97ee71fb2c3e` |
+| `workspace_state_hash` | `cc0b5a5ab742` |
 | `last_refreshed` | 2026-10-24T00:00:00Z |
-| `git_head` | `c3b38341` —  |
+| `git_head` | `64a1017a` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 125 |
 
@@ -22,7 +22,7 @@
 
 **Purpose.** Live pointer to the next Claude/Codex-executable frontier. Full round-by-round history (every prior round, verbatim, most-recent-first) lives in the archive below — grep it by PR/`B-`/`R-`-id/round, never read wholesale.
 
-**Current next action (post-#1654).** Complete the released workflow optimization epic through live LIT arhugula-harness-trial-193. After this WO-U19 terminating refresh and its own-main CI succeed, reconcile WO-U17 PR #1656 onto actual main, preserve both reviewed register blobs, and re-establish exact-head/base CI before landing. WO-U10 correction C 99c90ea8 awaits its reserved fifth independent review and source release; retain fence14, the failed witness rollback, and protected scratch until the applicable gates pass. WO-U14 PR #43 remains blocked by an unadjudicated external finding with all five source passes spent; preserve its uncertain author-delivery boundary. WO-U19 source is landed while installed reuse and acceptance remain UNKNOWN. Continue eligible released work under canonical paired-lanes rules, preserving WO-U06 ownership hold, WO-U15 five-pass quarantine, all original counters, and unrelated Runtime/product holds.
+**Current next action (post-#1656).** Continue the released WO-U01..WO-U25 batch through live LIT arhugula-harness-trial-193 under canonical paired-lanes guidance. After this U17 terminating refresh and successful own-main CI, verify U17 closure conditions and advance WO-U10 at arhugula-harness-trial-193.6cw.nfc: correction C99c90ea8 has final pass5 GREEN and clean writer release; reconcile and land it under fence14, retain the host cleanup boundary before any fence15 witness, then reconcile and land StageB separately. Preserve U14 PR43 external-review hold, U06 ownership hold, U15 five-pass quarantine, all spent review passes, protected scratch and unrelated Runtime/product holds. U19 installed acceptance remains UNKNOWN. Source landing alone is not ticket closure.
 
 **Archive.** `.harness/roadmap-next-action-archive.md` (PRIOR rounds only, verbatim as each stood when superseded — the current round lives only in this head; the newest superseded round may lag there until the next content PR archives it, and is always losslessly recoverable from this file's own git history meanwhile).
 
@@ -43,7 +43,6 @@
 | PR | Branch | R-NNN | Posture |
 |---|---|---|---|
 | #1292 | `fix/codex-hook-contract-recovery` | — | — |
-| #1656 | `integration/wo-u17-20261024` | — | — |
 
 ---
 
@@ -51,11 +50,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #1656 | 2026-10-24 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1654 | 2026-10-24 | WO-U19 reviewed source landed; original own-main CI40077549029 SUCCESS; installed reuse and acceptance remain UNKNOWN |
 | PR #1653 | 2026-10-24 | WO-U10 Stage A merged after independent pass-4 SOURCE GREEN; exact own-main CI 40075373303 succeeded. Fence-15 witness and separate Stage B remain. |
 | PR #1651 | 2026-10-24 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1647 | 2026-10-24 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
-| PR #1645 | 2026-10-24 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 
 ---
 
