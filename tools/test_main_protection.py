@@ -526,6 +526,84 @@ def test_real_tiebreaker_refuses_when_fence_not_live(monkeypatch, capsys):
     assert "fence is not live" in out and "unprotected (404)" in out
 
 
+# gh's `pr create` contract without --head: it finds the pushed head through the current
+# branch's remote-tracking upstream and aborts when that does not resolve.
+_FAKE_GH = """#!/usr/bin/env python3
+import subprocess, sys
+args = sys.argv[1:]
+if args[:2] != ["pr", "create"]:
+    sys.exit(f"fake gh: unexpected {args}")
+if "--head" in args:
+    head = args[args.index("--head") + 1]
+    subprocess.run(["git", "ls-remote", "--exit-code", "--heads", "origin", head], check=True)
+elif subprocess.run(["git", "rev-parse", "--verify", "-q", "@{upstream}"]).returncode:
+    sys.exit("aborted: you must first push the current branch to a remote, or use the --head flag")
+open(sys.argv[0] + ".created", "a").write("pr\\n")
+print("https://github.com/o/r/pull/7")
+"""
+
+# The real remover's local-state classifier, minus its /proc open-reference probe: that
+# probe reports "unknown" on hosts with unreadable same-uid processes (systemd --user),
+# which would make this test measure the host instead of the tiebreaker's scratch state.
+_LOCAL_STATE_REMOVER = """#!/usr/bin/env bash
+. "{lib}"
+if hook_worktree_local_state "$1" >&2; then
+  echo "safe-worktree-remove: target has local state" >&2
+  exit 4
+fi
+git worktree remove "$1"
+"""
+
+
+@pytest.mark.parametrize(
+    "fetch_refspec",
+    ["+refs/heads/*:refs/remotes/origin/*", "+refs/heads/main:refs/remotes/origin/main"],
+)
+def test_real_tiebreaker_opens_its_scratch_pr_and_cleans_up_under_any_fetch_refspec(
+    monkeypatch, tmp_path, capsys, fetch_refspec
+):
+    """The live witness (WO-U10 cmt-9433a06c) ran in a checkout that fetches only named
+    branches: the pushed scratch branch got no remote-tracking ref, so `gh pr create` could
+    not find it, and the unresolvable -u upstream made the worktree remover refuse. The
+    scratch PR must open and every scratch ref/worktree be reaped regardless of the refspec."""
+    clone, _ = _repo_with_main(tmp_path, {"ci.yml": "on: pull_request\n"})
+    _git(clone, "config", "remote.origin.fetch", fetch_refspec)
+    _git(clone, "config", "user.name", "t")
+    _git(clone, "config", "user.email", "t@t")
+    hooks = clone / "tools" / "hooks"
+    hooks.mkdir(parents=True)
+    lib = Path(mp.__file__).resolve().parent / "hooks" / "lib.sh"
+    (hooks / "safe-worktree-remove.sh").write_text(_LOCAL_STATE_REMOVER.format(lib=lib))
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    gh = bin_dir / "gh"
+    gh.write_text(_FAKE_GH)
+    gh.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}:{mp.os.environ['PATH']}")
+    monkeypatch.setattr(mp, "REPO", clone)
+    monkeypatch.setattr(mp.tempfile, "tempdir", str(tmp_path))  # a failed run leaks nothing
+    monkeypatch.setattr(mp, "blocking_contexts", lambda: ["ctx"])
+    monkeypatch.setattr(mp, "current_protection", lambda: {})
+    monkeypatch.setattr(mp, "verify", lambda live, desired: [])
+    # Stop at the first check watch: reaching it proves the scratch PR was created.
+    monkeypatch.setattr(mp, "_watch_checks", lambda pr, wt, contexts: False)
+
+    assert mp.tiebreaker() == 1
+    out = capsys.readouterr().out
+    assert "scratch PR checks did not go green" in out, out
+    assert "cleanup incomplete" not in out, out
+    assert (bin_dir / "gh.created").read_text() == "pr\n"
+
+    def git_out(*args: str) -> str:
+        return subprocess.run(
+            ["git", *args], cwd=clone, capture_output=True, text=True, check=True
+        ).stdout
+
+    assert git_out("ls-remote", "--heads", "origin", "mp-tiebreaker-*") == ""
+    assert git_out("branch", "--list", "mp-tiebreaker-*") == ""
+    assert "mp-tiebreaker-" not in git_out("worktree", "list", "--porcelain")
+
+
 def test_verify_restore_check_accepts_prior_policy_with_reviews():
     """The restore-check compares against the NORMALIZED PRIOR policy, not the §2 target: a
     restored policy carrying reviews/restrictions must verify clean (codex r2 P2)."""

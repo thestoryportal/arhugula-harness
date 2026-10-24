@@ -804,7 +804,10 @@ def tiebreaker() -> int:
         sh("git", "checkout", "-q", "-b", br)
         created_local.append(br)
         sh("git", "commit", "-q", "--allow-empty", "-m", f"chore: main-protection tiebreaker {ts}")
-        sh("git", "push", "-q", "-u", "origin", br)
+        # [LAW:one-source-of-truth] the pushed branch name is the PR head; no upstream is
+        # recorded, because a checkout whose fetch refspec omits scratch branches cannot
+        # resolve one — gh then refuses the PR and the remover refuses the worktree.
+        sh("git", "push", "-q", "origin", br)
         created.append(br)
         url = sh(
             "gh",
@@ -816,6 +819,8 @@ def tiebreaker() -> int:
             "scratch PR; C-HE-08 §4",
             "--base",
             "main",
+            "--head",
+            br,
         )
         pr = url.rsplit("/", 1)[-1]
         print(f"tiebreaker: waiting for checks on #{pr} (strict:true requires up-to-date + green)")
@@ -833,7 +838,7 @@ def tiebreaker() -> int:
         sh("git", "checkout", "-q", "-b", br2, base)
         created_local.append(br2)
         sh("git", "commit", "-q", "--allow-empty", "-m", "ops: stale refresh-shaped commit")
-        sh("git", "push", "-q", "-u", "origin", br2)
+        sh("git", "push", "-q", "origin", br2)
         created.append(br2)
         url2 = sh(
             "gh",
@@ -845,6 +850,8 @@ def tiebreaker() -> int:
             "C-HE-08 §4 stale-branch check",
             "--base",
             "main",
+            "--head",
+            br2,
         )
         pr2 = url2.rsplit("/", 1)[-1]
         # BLOCKED is ambiguous straight after creation — pending or failing required checks
@@ -949,9 +956,8 @@ def tiebreaker() -> int:
         # open, remote branches, local refs, or the temporary worktree behind (codex r1 P3):
         # deleting a remote branch auto-closes its open PR, and an already-deleted/merged
         # branch makes this a no-op. ORDER MATTERS (codex r5 P2): the worktree is removed
-        # FIRST (it holds a checkout of a scratch branch and its -u upstream config; remote
-        # refs deleted first would make the remover classify that upstream as unresolvable
-        # local state and refuse), then local refs, then remote refs. Failures are REPORTED,
+        # FIRST (it holds the checkout of a scratch branch, which `git branch -D` refuses to
+        # delete), then local refs, then remote refs. Failures are REPORTED,
         # not swallowed — silent GC failure would contradict the cleanup contract while
         # looking identical to success (codex r4 P3).
         def _gc_run(cmd: list[str], timeout: float) -> subprocess.CompletedProcess[str]:
@@ -974,9 +980,8 @@ def tiebreaker() -> int:
                 f"WARNING: cleanup incomplete — temporary worktree {wt} was not removed "
                 f"({wtrm.stderr.strip()[:120]})"
             )
-            # Deleting local/remote refs under a RETAINED worktree would strand it with
-            # unresolvable upstreams — exactly the state the ordering exists to prevent.
-            # Leave the refs; they are accounted as leftovers with the worktree (r9 P2).
+            # A RETAINED worktree keeps its scratch branch checked out; its refs and PR stay
+            # with it for inspection and are accounted as leftovers (r9 P2).
             for leftover in [*created_local, *created]:
                 cleanup_failures.append(f"ref {leftover} left for the retained worktree")
             created_local.clear()
