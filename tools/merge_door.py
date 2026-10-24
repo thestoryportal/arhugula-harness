@@ -1455,8 +1455,9 @@ def observe_landing_profile(arc_id: str) -> wp.ProfileSelection:
 
 
 def require_landable(profile: wp.ProfileSelection, arc_id: str) -> None:
-    """[LAW:single-enforcer] the one refusal of a held selection; the CLI calls it before
-    touching any lease, `land` before acquiring one."""
+    """[LAW:single-enforcer] the one refusal of a held selection; the CLI and `profile`
+    call it before touching any lease, `land` on its own observation before any merge
+    attempt."""
     if profile.kind == "held":
         raise ProfileHeld(
             f"{arc_id}: landing profile held {list(profile.reasons)} "
@@ -1538,7 +1539,7 @@ def _merge_once(
 def land(
     pr: int,
     *,
-    profile: wp.ProfileSelection,
+    expected: wp.SelectionKind,
     lane_id: str,
     arc_id: str,
     ground: Ground,
@@ -1546,12 +1547,11 @@ def land(
     lease: dict | None = None,
 ) -> str:
     """Steps (i)–(ix). `lease` is passed on self-resume (reclaimed); otherwise acquired
-    here (one attempt, fail-fast). `profile` is the arc's WO-U03 selection: `legacy` keeps
-    the §4(viii) terminating refresh; `trial` replaces it with a landing receipt for the
-    merge SHA's own green main runs (WS-11); `held` lands nothing."""
-    require_landable(profile, arc_id)
-    if profile.kind == "trial" and refresh is not None:
-        raise DoorFailed(f"{arc_id}: a trial landing has no terminating refresh to drive")
+    here (one attempt, fail-fast). The door observes the arc's WO-U03 selection itself:
+    `legacy` keeps the §4(viii) terminating refresh; `trial` replaces it with a landing
+    receipt for the merge SHA's own green main runs (WS-11); `held` lands nothing.
+    `expected` is the selection the caller prepared its refresh posture for; it grants
+    nothing, and a differing observation refuses before any merge attempt."""
     res = rs.current(arc_id)
     if res is None:
         raise DoorFailed(f"{arc_id}: no reservation")
@@ -1634,6 +1634,17 @@ def land(
         )
     reconciled = False
     try:
+        # [LAW:single-enforcer] eligibility is never a caller input (pass-1 F3): the door
+        # observes it here, inside the adjudication, so a refusal releases a pre-attempt
+        # lease whether this call or the CLI acquired it
+        profile = observe_landing_profile(arc_id)
+        require_landable(profile, arc_id)
+        if profile.kind != expected:
+            raise DoorFailed(
+                f"{arc_id}: landing profile is {profile.kind}, caller expected {expected}"
+            )
+        if profile.kind == "trial" and refresh is not None:
+            raise DoorFailed(f"{arc_id}: a trial landing has no terminating refresh to drive")
         resumed_attempt = lease.get("merge_attempted_at") is not None
         already = resumed_attempt and reconcile_ground(lease, ground) == "MERGED"
         reconciled = reconciled or already
@@ -2219,12 +2230,14 @@ def main(argv: list[str] | None = None) -> int:
                 return 4
             profile = observe_landing_profile(args.arc_id)
             require_landable(profile, args.arc_id)
-            legacy = profile.kind == "legacy"
-            if legacy and not (args.no_refresh or args.refresh_cmd):
-                landp.error("a legacy landing needs --refresh-cmd or --no-refresh")
+            # a legacy landing needs exactly one refresh posture and a trial landing none, so
+            # a wrapper that routed on a different selection is refused before any lease
+            if (profile.kind == "legacy") != bool(args.no_refresh or args.refresh_cmd):
+                posture = {"legacy": "--refresh-cmd or --no-refresh", "trial": "no refresh flag"}
+                landp.error(f"a {profile.kind} landing takes {posture[profile.kind]}")
             ground = default_ground()
             refresh = None
-            if legacy and args.refresh_cmd and not args.no_refresh:
+            if args.refresh_cmd:
 
                 def refresh():
                     out = subprocess.run(
@@ -2286,7 +2299,7 @@ def main(argv: list[str] | None = None) -> int:
                         ),
                         lane_id=args.lane_id,
                     )
-            if legacy and args.no_refresh:
+            if args.no_refresh:
                 # skipping the mandatory §4(viii) continuation is an EXPLICIT posture
                 # carrying the same operator-attention contract as every other owed
                 # recovery (codex r7 P2 → r8 P2): a DURABLE §9 gate row + DEFERRED-HIL,
@@ -2310,7 +2323,7 @@ def main(argv: list[str] | None = None) -> int:
                 )
             out = land(
                 args.pr,
-                profile=profile,
+                expected=profile.kind,
                 lane_id=args.lane_id,
                 arc_id=args.arc_id,
                 ground=ground,

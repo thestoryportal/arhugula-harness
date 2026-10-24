@@ -214,16 +214,20 @@ done
 # (codex r2 P3: a `grep || true` pseudo-assertion would be unconditionally green).
 
 # C-HE-07 hermetic EXECUTION witness for safe-merge.sh (codex r3 P2): the wrapper itself is
-# run — arity/digit validation, env preconditions abort BEFORE delegation, and the exact
-# merge_door.py land delegation (arg-boundary-exact via a stubbed `uv` on PATH; the
-# --refresh-cmd value must arrive as ONE argument). No real merge/door/gh is reachable.
+# run — arity/digit validation, env preconditions abort BEFORE delegation, routing on the
+# door's own `profile` selection (WO-U08), and the exact merge_door.py land delegation
+# (arg-boundary-exact via a stubbed `uv` on PATH; the --refresh-cmd value must arrive as
+# ONE argument). No real merge/door/gh is reachable.
 SMWRAP="$SCRIPT_DIR/safe-merge.sh"
 SMDIR="$REPO/sm"; mkdir -p "$SMDIR/bin"; ( cd "$SMDIR" && git init -q . )
-# Stub uv: answers the wrapper's pre-lease `--help` availability probe (default: flag
-# present; override via SM_HELP_OUT), records any other invocation's argv one-per-line.
+# Stub uv: answers the door's `profile` selection (default legacy; override via SM_PROFILE
+# and its exit status via SM_PROFILE_RC) and the legacy pre-lease `--help` availability
+# probe (default: flag present; override via SM_HELP_OUT), and records any other
+# invocation's argv one-per-line.
 {
   printf '%s\n' '#!/usr/bin/env bash'
   printf '%s\n' 'case "$*" in'
+  printf '%s\n' '  *"merge_door.py profile"*) printf "%s\n" "${SM_PROFILE-legacy}"; exit "${SM_PROFILE_RC:-0}" ;;'
   printf '%s\n' '  *--help*) printf "%s\n" "${SM_HELP_OUT:---emit-refresh-pr-json}" ;;'
   printf '%s\n' '  *) printf "%s\n" "$@" > "$SM_ARGS_OUT" ;;'
   printf '%s\n' 'esac'
@@ -271,9 +275,44 @@ if [ $? -eq 69 ] && [ ! -f "$SMDIR/args" ]; then
 else
   bad "safe-merge ran despite unsupported refresh flag (args: $(cat "$SMDIR/args" 2>/dev/null))"
 fi
-# REAL-CLI posture pin (flipped by U-HE-28 per the U-HE-25 rev note): the real
-# roadmap_status_refresh.py now supports --emit-refresh-pr-json, so the wrapper's
-# pre-lease availability probe PASSES against the REAL repo + REAL uv and delegation
+# WO-U08 trial routing: a trial selection delegates WITHOUT --refresh-cmd and never needs
+# the refresh producer — the probe's flag is absent here and delegation still proceeds.
+rm -f "$SMDIR/args"
+( cd "$SMDIR" && SM_ARGS_OUT="$SMDIR/args" SM_PROFILE=trial SM_HELP_OUT='no such flag here' \
+  PATH="$SMDIR/bin:$PATH" HARNESS_LANE_ID=lane-1 HARNESS_ARC_ID=u-he-25 bash "$SMWRAP" 268 ) >/dev/null 2>&1
+RC=$?
+SM_TRIAL='run
+python
+tools/merge_door.py
+land
+268
+--lane-id
+lane-1
+--arc-id
+u-he-25'
+if [ "$RC" -eq 0 ] && [ "$(cat "$SMDIR/args" 2>/dev/null)" = "$SM_TRIAL" ]; then
+  ok "safe-merge: trial selection delegates land without the refresh producer"
+else
+  bad "safe-merge trial routing drifted (rc=$RC, args: $(cat "$SMDIR/args" 2>/dev/null | tr '\n' ' '))"
+fi
+# A held selection (`profile` exit 6) aborts with that status before any delegation, and
+# output that is neither trial nor legacy aborts exit 70 — no lease, no merge.
+for case_ in '6::' '70:0:bogus'; do
+  want="${case_%%:*}"; rest="${case_#*:}"; prc="${rest%%:*}"; pout="${rest#*:}"
+  rm -f "$SMDIR/args"
+  ( cd "$SMDIR" && SM_ARGS_OUT="$SMDIR/args" SM_PROFILE="$pout" SM_PROFILE_RC="${prc:-6}" \
+    PATH="$SMDIR/bin:$PATH" HARNESS_LANE_ID=lane-1 HARNESS_ARC_ID=u-he-25 bash "$SMWRAP" 268 ) >/dev/null 2>&1
+  RC=$?
+  if [ "$RC" -eq "$want" ] && [ ! -f "$SMDIR/args" ]; then
+    ok "safe-merge: profile '${pout:-<held>}' aborts pre-lease (exit $want, no delegation)"
+  else
+    bad "safe-merge profile '${pout:-<held>}' expected exit $want without delegation, got rc=$RC"
+  fi
+done
+# REAL-CLI posture pin (flipped by U-HE-28 per the U-HE-25 rev note): the real door selects
+# legacy for the witness arc (no activation receipt), the real roadmap_status_refresh.py
+# supports --emit-refresh-pr-json, so the wrapper's pre-lease availability probe PASSES
+# against the REAL repo + REAL uv and delegation
 # proceeds — where the REAL merge_door refuses the nonexistent witness reservation
 # fail-fast (DoorFailed "no reservation" → rc 4) BEFORE any lease is taken or merge
 # attempted. rc 69 here means the flag regressed out of the CLI; rc 0/3/5 would mean

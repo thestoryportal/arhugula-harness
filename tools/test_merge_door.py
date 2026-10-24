@@ -46,12 +46,23 @@ def door(tmp_path, monkeypatch):
     monkeypatch.setattr(rs, "QUEUE_DIR", q)
     # Deterministic deadness on every platform: alive iff it is this very process.
     monkeypatch.setattr(md, "_process_is_alive", lambda pid: pid == os.getpid())
+    # Hermeticity: the door's own WO-U03 observation reads the canonical activation
+    # receipt; every arc is legacy here unless a test enrols it through `selected`.
+    monkeypatch.setattr(md, "observe_landing_profile", lambda arc: LEGACY)
     rs.reserve("pr-1", lane_id="A", branch="b", arc_type="inventing")
     rs.open_with_sensor("pr-1", "A")
     # ship-pr back-fills the merge tuple BEFORE the door (C-HE-03 §3); acquire()
     # cross-checks its inputs against this snapshot (codex r4 P2).
     rs.update_payload("pr-1", {"pr": 1, "head_sha": "a" * 40, "base_sha": "b" * 40})
     return q
+
+
+@pytest.fixture
+def selected(door, monkeypatch):
+    """Arc -> the selection the door observes for it; arcs not named stay legacy."""
+    table: dict[str, wp.ProfileSelection] = {}
+    monkeypatch.setattr(md, "observe_landing_profile", lambda arc: table.get(arc, LEGACY))
+    return table
 
 
 def _open_backfilled(arc: str, lane: str, pr: int) -> None:
@@ -952,7 +963,7 @@ def _land(door, g, **kw):
     rs.update_payload("pr-1", {"attested_merge_tree": "d" * 40})
     return md.land(
         1,
-        profile=LEGACY,
+        expected="legacy",
         lane_id="A",
         arc_id="pr-1",
         ground=g,
@@ -1184,7 +1195,9 @@ def test_refresh_ci_failure_emits_hitl_and_blocks(door, monkeypatch):
 
     g.gh_runs_for_sha = runs
     with pytest.raises(md.DoorBlocked):
-        md.land(1, profile=LEGACY, lane_id="A", arc_id="pr-1", ground=g, refresh=g.add_refresh_pr)
+        md.land(
+            1, expected="legacy", lane_id="A", arc_id="pr-1", ground=g, refresh=g.add_refresh_pr
+        )
     assert md.read_lease()["blocked_reason"] == "refresh_ci_not_green"
     assert (
         "DEFERRED-HIL",
@@ -1216,7 +1229,7 @@ def test_refresh_pr_pending_checks_waited_before_merge(door):
 
     g.gh_runs_for_sha = runs
     rs.update_payload("pr-1", {"attested_merge_tree": "d" * 40})
-    md.land(1, profile=LEGACY, lane_id="A", arc_id="pr-1", ground=g, refresh=g.add_refresh_pr)
+    md.land(1, expected="legacy", lane_id="A", arc_id="pr-1", ground=g, refresh=g.add_refresh_pr)
     assert (2, "r" * 40) in g.merge_calls  # merged only AFTER the wait
     assert polls["n"] >= 3
     assert md.read_lease() is None
@@ -1244,7 +1257,9 @@ def test_refresh_pr_red_checks_block_before_any_merge(door, monkeypatch):
     g.gh_runs_for_sha = runs
     rs.update_payload("pr-1", {"attested_merge_tree": "d" * 40})
     with pytest.raises(md.DoorBlocked):
-        md.land(1, profile=LEGACY, lane_id="A", arc_id="pr-1", ground=g, refresh=g.add_refresh_pr)
+        md.land(
+            1, expected="legacy", lane_id="A", arc_id="pr-1", ground=g, refresh=g.add_refresh_pr
+        )
     assert md.read_lease()["blocked_reason"] == "refresh_pr_ci_not_green"
     assert (2, "r" * 40) not in g.merge_calls
     assert (
@@ -1261,7 +1276,9 @@ def test_continuation_no_reacquire(door, monkeypatch):
     monkeypatch.setattr(md, "acquire", lambda **kw: (acquires.append(1), real(**kw))[1])
     rs.update_payload("pr-1", {"attested_merge_tree": "d" * 40})
     assert (
-        md.land(1, profile=LEGACY, lane_id="A", arc_id="pr-1", ground=g, refresh=g.add_refresh_pr)
+        md.land(
+            1, expected="legacy", lane_id="A", arc_id="pr-1", ground=g, refresh=g.add_refresh_pr
+        )
         == "released"
     )
     assert acquires == [1]
@@ -1283,7 +1300,7 @@ def test_resume_uses_recorded_refresh_never_a_second_pr(door, monkeypatch):
         md.os, "_exit", lambda code: (_ for _ in ()).throw(SystemExit(code))
     )  # in-process stand-in for the kill
     with pytest.raises(SystemExit):
-        md.land(1, profile=LEGACY, lane_id="A", arc_id="pr-1", ground=g, refresh=refresh)
+        md.land(1, expected="legacy", lane_id="A", arc_id="pr-1", ground=g, refresh=refresh)
     monkeypatch.delenv("MERGE_DOOR_TEST_KILL_AFTER")
     lease = md.read_lease()
     assert lease["refresh"] == {
@@ -1292,7 +1309,7 @@ def test_resume_uses_recorded_refresh_never_a_second_pr(door, monkeypatch):
         "merge_attempted_at": lease["refresh"]["merge_attempted_at"],
     }
     assert md.land(
-        1, profile=LEGACY, lane_id="A", arc_id="pr-1", ground=g, refresh=refresh, lease=lease
+        1, expected="legacy", lane_id="A", arc_id="pr-1", ground=g, refresh=refresh, lease=lease
     ) == ("released")
     assert calls == [1]  # refresh() called ONCE across crash + resume
 
@@ -1308,7 +1325,9 @@ def test_resume_readopts_moved_refresh_head_after_fix_commit(door, monkeypatch):
     monkeypatch.setenv("MERGE_DOOR_TEST_KILL_AFTER", "refresh-attempted")
     monkeypatch.setattr(md.os, "_exit", lambda code: (_ for _ in ()).throw(SystemExit(code)))
     with pytest.raises(SystemExit):
-        md.land(1, profile=LEGACY, lane_id="A", arc_id="pr-1", ground=g, refresh=g.add_refresh_pr)
+        md.land(
+            1, expected="legacy", lane_id="A", arc_id="pr-1", ground=g, refresh=g.add_refresh_pr
+        )
     monkeypatch.delenv("MERGE_DOOR_TEST_KILL_AFTER")
     # the fix commit moved the refresh PR's head; the old recorded head stays red
     g.states[2]["headRefOid"] = "s" * 40
@@ -1330,7 +1349,7 @@ def test_resume_readopts_moved_refresh_head_after_fix_commit(door, monkeypatch):
     assert (
         md.land(
             1,
-            profile=LEGACY,
+            expected="legacy",
             lane_id="A",
             arc_id="pr-1",
             ground=g,
@@ -1354,7 +1373,9 @@ def test_resume_refuses_moved_head_that_lost_refresh_identity(door, monkeypatch)
     monkeypatch.setenv("MERGE_DOOR_TEST_KILL_AFTER", "refresh-attempted")
     monkeypatch.setattr(md.os, "_exit", lambda code: (_ for _ in ()).throw(SystemExit(code)))
     with pytest.raises(SystemExit):
-        md.land(1, profile=LEGACY, lane_id="A", arc_id="pr-1", ground=g, refresh=g.add_refresh_pr)
+        md.land(
+            1, expected="legacy", lane_id="A", arc_id="pr-1", ground=g, refresh=g.add_refresh_pr
+        )
     monkeypatch.delenv("MERGE_DOOR_TEST_KILL_AFTER")
     g.states[2]["headRefOid"] = "s" * 40
     g.states[2]["files"] = [{"path": ".harness/roadmap_status.md"}, {"path": "x.py"}]
@@ -1364,7 +1385,7 @@ def test_resume_refuses_moved_head_that_lost_refresh_identity(door, monkeypatch)
     with pytest.raises(md.DoorBlocked, match="identity gate"):
         md.land(
             1,
-            profile=LEGACY,
+            expected="legacy",
             lane_id="A",
             arc_id="pr-1",
             ground=g,
@@ -1404,7 +1425,9 @@ def test_pr_head_wait_ignores_stale_completed_run_while_rerun_pending(door):
 
     g.gh_runs_for_sha = runs
     assert (
-        md.land(1, profile=LEGACY, lane_id="A", arc_id="pr-1", ground=g, refresh=g.add_refresh_pr)
+        md.land(
+            1, expected="legacy", lane_id="A", arc_id="pr-1", ground=g, refresh=g.add_refresh_pr
+        )
         == "released"
     )
     assert (2, "r" * 40) in g.merge_calls
@@ -1420,7 +1443,9 @@ def test_resume_refuses_moved_head_on_retargeted_base(door, monkeypatch):
     monkeypatch.setenv("MERGE_DOOR_TEST_KILL_AFTER", "refresh-attempted")
     monkeypatch.setattr(md.os, "_exit", lambda code: (_ for _ in ()).throw(SystemExit(code)))
     with pytest.raises(SystemExit):
-        md.land(1, profile=LEGACY, lane_id="A", arc_id="pr-1", ground=g, refresh=g.add_refresh_pr)
+        md.land(
+            1, expected="legacy", lane_id="A", arc_id="pr-1", ground=g, refresh=g.add_refresh_pr
+        )
     monkeypatch.delenv("MERGE_DOOR_TEST_KILL_AFTER")
     g.states[2]["headRefOid"] = "s" * 40
     g.states[2]["baseRefName"] = "release-x"  # retargeted during recovery
@@ -1428,7 +1453,7 @@ def test_resume_refuses_moved_head_on_retargeted_base(door, monkeypatch):
     with pytest.raises(md.DoorBlocked, match="identity gate"):
         md.land(
             1,
-            profile=LEGACY,
+            expected="legacy",
             lane_id="A",
             arc_id="pr-1",
             ground=g,
@@ -1447,7 +1472,9 @@ def test_resume_refuses_moved_head_bound_to_another_landing(door, monkeypatch):
     monkeypatch.setenv("MERGE_DOOR_TEST_KILL_AFTER", "refresh-attempted")
     monkeypatch.setattr(md.os, "_exit", lambda code: (_ for _ in ()).throw(SystemExit(code)))
     with pytest.raises(SystemExit):
-        md.land(1, profile=LEGACY, lane_id="A", arc_id="pr-1", ground=g, refresh=g.add_refresh_pr)
+        md.land(
+            1, expected="legacy", lane_id="A", arc_id="pr-1", ground=g, refresh=g.add_refresh_pr
+        )
     monkeypatch.delenv("MERGE_DOOR_TEST_KILL_AFTER")
     g.states[2]["headRefOid"] = "s" * 40
     g.states[2]["title"] = "ops: roadmap status refresh post-#10"
@@ -1455,7 +1482,7 @@ def test_resume_refuses_moved_head_bound_to_another_landing(door, monkeypatch):
     with pytest.raises(md.DoorBlocked, match="identity gate"):
         md.land(
             1,
-            profile=LEGACY,
+            expected="legacy",
             lane_id="A",
             arc_id="pr-1",
             ground=g,
@@ -1493,7 +1520,9 @@ def test_refresh_identity_mutated_during_wait_blocks_without_merge(door, monkeyp
 
     g.gh_runs_for_sha = runs
     with pytest.raises(md.DoorBlocked):
-        md.land(1, profile=LEGACY, lane_id="A", arc_id="pr-1", ground=g, refresh=g.add_refresh_pr)
+        md.land(
+            1, expected="legacy", lane_id="A", arc_id="pr-1", ground=g, refresh=g.add_refresh_pr
+        )
     assert (2, "r" * 40) not in g.merge_calls
     assert md.read_lease()["state"] == "blocked"
 
@@ -1526,7 +1555,9 @@ def test_adoption_record_never_in_a_gap_on_replace_fault(door, monkeypatch):
     monkeypatch.setenv("MERGE_DOOR_TEST_KILL_AFTER", "refresh-attempted")
     monkeypatch.setattr(md.os, "_exit", lambda code: (_ for _ in ()).throw(SystemExit(code)))
     with pytest.raises(SystemExit):
-        md.land(1, profile=LEGACY, lane_id="A", arc_id="pr-1", ground=g, refresh=g.add_refresh_pr)
+        md.land(
+            1, expected="legacy", lane_id="A", arc_id="pr-1", ground=g, refresh=g.add_refresh_pr
+        )
     monkeypatch.delenv("MERGE_DOOR_TEST_KILL_AFTER")
     g.states[2]["headRefOid"] = "s" * 40  # fix commit moved the head -> adoption path
 
@@ -1538,7 +1569,7 @@ def test_adoption_record_never_in_a_gap_on_replace_fault(door, monkeypatch):
     with pytest.raises((md.DoorBlocked, OSError)):
         md.land(
             1,
-            profile=LEGACY,
+            expected="legacy",
             lane_id="A",
             arc_id="pr-1",
             ground=g,
@@ -1561,7 +1592,9 @@ def test_adoption_refuses_symlinked_sidecar(door, monkeypatch):
     monkeypatch.setenv("MERGE_DOOR_TEST_KILL_AFTER", "refresh-attempted")
     monkeypatch.setattr(md.os, "_exit", lambda code: (_ for _ in ()).throw(SystemExit(code)))
     with pytest.raises(SystemExit):
-        md.land(1, profile=LEGACY, lane_id="A", arc_id="pr-1", ground=g, refresh=g.add_refresh_pr)
+        md.land(
+            1, expected="legacy", lane_id="A", arc_id="pr-1", ground=g, refresh=g.add_refresh_pr
+        )
     monkeypatch.delenv("MERGE_DOOR_TEST_KILL_AFTER")
     lease = md.read_lease()
     sidecar = md._sidecar(lease["lease_token"], "refresh")
@@ -1573,7 +1606,7 @@ def test_adoption_refuses_symlinked_sidecar(door, monkeypatch):
     with pytest.raises(md.DoorBlocked, match="containment"):
         md.land(
             1,
-            profile=LEGACY,
+            expected="legacy",
             lane_id="A",
             arc_id="pr-1",
             ground=g,
@@ -1619,7 +1652,9 @@ def test_refresh_head_moved_during_wait_blocks_without_merge(door, monkeypatch):
 
     g.gh_runs_for_sha = runs
     with pytest.raises(md.DoorBlocked):
-        md.land(1, profile=LEGACY, lane_id="A", arc_id="pr-1", ground=g, refresh=g.add_refresh_pr)
+        md.land(
+            1, expected="legacy", lane_id="A", arc_id="pr-1", ground=g, refresh=g.add_refresh_pr
+        )
     assert (2, "r" * 40) not in g.merge_calls
     assert (2, "z" * 40) not in g.merge_calls
 
@@ -1654,7 +1689,9 @@ def test_refresh_files_mutated_during_wait_blocks_without_merge(door, monkeypatc
 
     g.gh_runs_for_sha = runs
     with pytest.raises(md.DoorBlocked):
-        md.land(1, profile=LEGACY, lane_id="A", arc_id="pr-1", ground=g, refresh=g.add_refresh_pr)
+        md.land(
+            1, expected="legacy", lane_id="A", arc_id="pr-1", ground=g, refresh=g.add_refresh_pr
+        )
     assert (2, "r" * 40) not in g.merge_calls
 
 
@@ -2099,7 +2136,7 @@ def test_resume_pass_reissues_at_most_once(door):
     resumed = md.read_lease()
     with pytest.raises(md.DoorBlocked):
         md.land(
-            1, profile=LEGACY, lane_id="A", arc_id="pr-1", ground=g, refresh=None, lease=resumed
+            1, expected="legacy", lane_id="A", arc_id="pr-1", ground=g, refresh=None, lease=resumed
         )
     assert len(g.merge_calls) == 1  # the single §5 re-issue, not the fresh-pass two
 
@@ -2122,7 +2159,7 @@ def test_refresh_intent_without_record_blocks(door):
 
     with pytest.raises(md.DoorBlocked, match="refresh_intent_unresolved"):
         md.land(
-            1, profile=LEGACY, lane_id="A", arc_id="pr-1", ground=g, refresh=refresh, lease=lease
+            1, expected="legacy", lane_id="A", arc_id="pr-1", ground=g, refresh=refresh, lease=lease
         )
     assert calls == []  # refresh() was never invoked past an unresolved intent
 
@@ -2147,7 +2184,7 @@ def test_resumed_refresh_already_merged_never_reissued(door):
     _step_vi()
     resumed = md.read_lease()
     assert md.land(
-        1, profile=LEGACY, lane_id="A", arc_id="pr-1", ground=g, refresh=None, lease=resumed
+        1, expected="legacy", lane_id="A", arc_id="pr-1", ground=g, refresh=None, lease=resumed
     ) == ("released")
     assert g.merge_calls == []  # NOTHING re-issued: both merges were ground-truth MERGED
 
@@ -2187,7 +2224,7 @@ def test_refresh_intent_survives_reclaim(door):
 
     with pytest.raises(md.DoorBlocked, match="refresh_intent_unresolved"):
         md.land(
-            1, profile=LEGACY, lane_id="A", arc_id="pr-1", ground=g, refresh=refresh, lease=fresh
+            1, expected="legacy", lane_id="A", arc_id="pr-1", ground=g, refresh=refresh, lease=fresh
         )
     assert calls == []
 
@@ -2251,7 +2288,7 @@ def test_base_toctou_unblock_is_attested_and_resumable(door):
     successor = md.unblock(pr=1, blocked_at_sha=blocked["blocked_at_sha"], lane_id="A")
     assert successor.get("unblocked_from") == blocked["blocked_at_sha"]
     out = md.land(
-        1, profile=LEGACY, lane_id="A", arc_id="pr-1", ground=g, refresh=None, lease=successor
+        1, expected="legacy", lane_id="A", arc_id="pr-1", ground=g, refresh=None, lease=successor
     )
     assert out == "released"  # attested: the mismatch does not re-block
     assert md.read_lease() is None
@@ -2264,7 +2301,9 @@ def test_land_refuses_a_stale_or_foreign_lease_dict(door):
     lease = md.acquire(lane_id="A", arc_id="pr-1", pr=1, head_sha="a" * 40, base_sha="b" * 40)
     forged = {**lease, "lease_token": "f" * 32}
     with pytest.raises(md.DoorFailed, match="not the door's current lease"):
-        md.land(1, profile=LEGACY, lane_id="A", arc_id="pr-1", ground=g, refresh=None, lease=forged)
+        md.land(
+            1, expected="legacy", lane_id="A", arc_id="pr-1", ground=g, refresh=None, lease=forged
+        )
     assert g.merge_calls == []  # nothing drove the door
     assert md.read_lease()["lease_token"] == lease["lease_token"]
 
@@ -2285,7 +2324,13 @@ def test_refresh_intent_recovery_verbs(door, monkeypatch):
     assert md.main(["record-refresh", "2", "e" * 40, "--lane-id", "A"]) == 4  # head mismatch
     assert md.main(["record-refresh", "2", "r" * 40, "--lane-id", "A"]) == 0
     out = md.land(
-        1, profile=LEGACY, lane_id="A", arc_id="pr-1", ground=g, refresh=None, lease=md.read_lease()
+        1,
+        expected="legacy",
+        lane_id="A",
+        arc_id="pr-1",
+        ground=g,
+        refresh=None,
+        lease=md.read_lease(),
     )
     assert out == "released"  # the recorded refresh unwedged the resume
     assert [c[0] for c in g.merge_calls] == [1, 2]
@@ -2347,7 +2392,7 @@ def test_intent_block_end_to_end_recovery(door, monkeypatch):
     with pytest.raises(md.DoorBlocked, match="refresh_intent_unresolved"):
         md.land(
             1,
-            profile=LEGACY,
+            expected="legacy",
             lane_id="A",
             arc_id="pr-1",
             ground=g,
@@ -2360,7 +2405,7 @@ def test_intent_block_end_to_end_recovery(door, monkeypatch):
     assert md.main(["record-refresh", "2", "r" * 40, "--lane-id", "A"]) == 0
     successor = md.unblock(pr=1, blocked_at_sha=blocked["blocked_at_sha"], lane_id="A")
     out = md.land(
-        1, profile=LEGACY, lane_id="A", arc_id="pr-1", ground=g, refresh=None, lease=successor
+        1, expected="legacy", lane_id="A", arc_id="pr-1", ground=g, refresh=None, lease=successor
     )
     assert out == "released"
     assert [c[0] for c in g.merge_calls] == [1, 2]
@@ -2398,7 +2443,7 @@ def test_land_refuses_a_blocked_resumed_lease(door):
     with pytest.raises(md.DoorBlocked, match="use unblock"):
         md.land(
             1,
-            profile=LEGACY,
+            expected="legacy",
             lane_id="A",
             arc_id="pr-1",
             ground=g,
@@ -2428,7 +2473,7 @@ def test_intent_unresolved_emits_gate_and_hil(door, monkeypatch):
     with pytest.raises(md.DoorBlocked, match="refresh_intent_unresolved"):
         md.land(
             1,
-            profile=LEGACY,
+            expected="legacy",
             lane_id="A",
             arc_id="pr-1",
             ground=g,
@@ -2922,7 +2967,8 @@ def test_tier_counter_resets_on_a_reconciled_cycle(door):
 
     g.gh_merge = merge_hang
     assert (
-        md.land(9, profile=LEGACY, lane_id="A", arc_id="pr-9", ground=g, refresh=None) == "released"
+        md.land(9, expected="legacy", lane_id="A", arc_id="pr-9", ground=g, refresh=None)
+        == "released"
     )
     # the reconciled cycle RESET the counter — nonconsecutive cleans never accumulate
     assert list((md.DOOR / "tier-clean-cycles").iterdir()) == []
@@ -3061,7 +3107,9 @@ def test_resumed_land_ignores_forged_caller_fields(door):
     lease = md.acquire(lane_id="A", arc_id="pr-1", pr=1, head_sha="a" * 40, base_sha="b" * 40)
     forged = {**lease, "unblocked_from": "c" * 40}  # equals the fake merge SHA
     with pytest.raises(md.DoorBlocked, match="base_toctou"):
-        md.land(1, profile=LEGACY, lane_id="A", arc_id="pr-1", ground=g, refresh=None, lease=forged)
+        md.land(
+            1, expected="legacy", lane_id="A", arc_id="pr-1", ground=g, refresh=None, lease=forged
+        )
     assert md.read_lease()["state"] == "blocked"  # detected, never bypassed
 
 
@@ -3138,7 +3186,13 @@ def test_recorded_merged_refresh_never_reissued(door, monkeypatch):
     g.states[2].update(state="MERGED", mergedAt="now", mergeCommit={"oid": "9" * 40})
     assert md.main(["record-refresh", "2", "r" * 40, "--lane-id", "A"]) == 0
     out = md.land(
-        1, profile=LEGACY, lane_id="A", arc_id="pr-1", ground=g, refresh=None, lease=md.read_lease()
+        1,
+        expected="legacy",
+        lane_id="A",
+        arc_id="pr-1",
+        ground=g,
+        refresh=None,
+        lease=md.read_lease(),
     )
     assert out == "released"
     assert [c[0] for c in g.merge_calls] == [1]  # the MERGED refresh was never re-driven
@@ -3163,7 +3217,8 @@ def test_refresh_skipped_cycle_neither_counts_nor_resets_tier(door):
     }
     # a NORMAL merge with the refresh skipped: not reconciled, not refresh-confirmed
     assert (
-        md.land(9, profile=LEGACY, lane_id="A", arc_id="pr-9", ground=g, refresh=None) == "released"
+        md.land(9, expected="legacy", lane_id="A", arc_id="pr-9", ground=g, refresh=None)
+        == "released"
     )
     assert len(list(tcc.iterdir())) == 1  # unchanged: neither counted nor reset
 
@@ -3427,7 +3482,9 @@ def test_persistent_containment_fault_adjudicates_via_release_path(door, monkeyp
     monkeypatch.setattr(g, "gh_view", failing_view)
 
     with pytest.raises(md.DoorBlocked, match="containment"):
-        md.land(1, profile=LEGACY, lane_id="A", arc_id="pr-1", ground=g, refresh=g.add_refresh_pr)
+        md.land(
+            1, expected="legacy", lane_id="A", arc_id="pr-1", ground=g, refresh=g.add_refresh_pr
+        )
 
     blocked = list(md.DOOR.glob("LEASE.*.blocked"))
     assert blocked, "no blocked sidecar: the persistent fault escaped unadjudicated"
@@ -3468,16 +3525,17 @@ def _runs(sha_runs):
 
 def _trial(g, arc="pr-1", pr=1, **kw):
     rs.update_payload(arc, {"attested_merge_tree": "d" * 40})
-    return md.land(pr, profile=TRIAL, lane_id="A", arc_id=arc, ground=g, refresh=None, **kw)
+    return md.land(pr, expected="trial", lane_id="A", arc_id=arc, ground=g, refresh=None, **kw)
 
 
 def _receipts():
     return [json.loads(p.read_text()) for p in sorted(md.DOOR.glob("LEASE.*.landing"))]
 
 
-def test_trial_door_releases_after_own_main_without_refresh(door, monkeypatch):
+def test_trial_door_releases_after_own_main_without_refresh(selected, monkeypatch):
     """No opt-in env, no refresh producer: a trial landing releases on its own green main
     run and names it; the same inputs under legacy still hold for the mandatory refresh."""
+    selected["pr-1"] = TRIAL
     monkeypatch.delenv("MERGE_DOOR_ALLOW_NO_REFRESH")
     g = FakeGround()
     g.gh_runs_for_sha = _runs({"c" * 40: [(501, "completed", "SUCCESS")]})
@@ -3504,16 +3562,66 @@ def test_trial_door_releases_after_own_main_without_refresh(door, monkeypatch):
     rs.update_payload("pr-2", {"attested_merge_tree": "d" * 40})
     g.states[3] = dict(g.states[1], state="OPEN", mergeCommit=None)
     with pytest.raises(md.DoorBlocked, match="refresh_skipped_without_optin"):
-        md.land(3, profile=LEGACY, lane_id="A", arc_id="pr-2", ground=g, refresh=None)
+        md.land(3, expected="legacy", lane_id="A", arc_id="pr-2", ground=g, refresh=None)
     assert len(_receipts()) == 1
 
 
-def test_trial_landing_refuses_a_refresh_producer_before_the_lease(door):
+def test_trial_landing_refuses_a_refresh_producer_before_any_merge(selected):
+    selected["pr-1"] = TRIAL
     g = FakeGround()
     rs.update_payload("pr-1", {"attested_merge_tree": "d" * 40})
     with pytest.raises(md.DoorFailed, match="no terminating refresh"):
-        md.land(1, profile=TRIAL, lane_id="A", arc_id="pr-1", ground=g, refresh=g.add_refresh_pr)
+        md.land(1, expected="trial", lane_id="A", arc_id="pr-1", ground=g, refresh=g.add_refresh_pr)
     assert md.read_lease() is None and g.merge_calls == []
+
+
+def test_direct_land_cannot_forge_a_trial_selection(selected):
+    """Pass-1 F3: the door observes the arc's selection itself. A caller expecting trial
+    for a legacy arc (or legacy for an enrolled one) is refused before any lease, so no
+    constructed selection can drop the refresh coupling."""
+    g = FakeGround()
+    rs.update_payload("pr-1", {"attested_merge_tree": "d" * 40})
+    with pytest.raises(md.DoorFailed, match="landing profile is legacy, caller expected trial"):
+        md.land(1, expected="trial", lane_id="A", arc_id="pr-1", ground=g, refresh=None)
+    selected["pr-1"] = TRIAL
+    with pytest.raises(md.DoorFailed, match="landing profile is trial, caller expected legacy"):
+        md.land(
+            1, expected="legacy", lane_id="A", arc_id="pr-1", ground=g, refresh=g.add_refresh_pr
+        )
+    assert md.read_lease() is None and g.merge_calls == [] and _receipts() == []
+
+
+def test_cli_refuses_a_refresh_posture_the_selection_does_not_use(selected, monkeypatch):
+    """The wrapper routes on `profile`; if the door's own observation then differs, the
+    posture the wrapper prepared is refused before any lease in either direction."""
+    monkeypatch.setattr(md, "default_ground", FakeGround)
+    rs.update_payload("pr-1", {"attested_merge_tree": "d" * 40})
+    selected["pr-1"] = TRIAL
+    for posture in (["--no-refresh"], ["--refresh-cmd", "true"]):
+        with pytest.raises(SystemExit) as exc:
+            md.main(["land", "1", "--lane-id", "A", "--arc-id", "pr-1", *posture])
+        assert exc.value.code == 2
+    assert md.read_lease() is None and _receipts() == []
+
+
+def test_cli_and_door_observations_must_agree(door, monkeypatch):
+    """A selection that changes between the CLI's posture decision and the door's own
+    observation fails before any lease rather than landing on the stale posture."""
+    seen = iter([TRIAL, LEGACY])
+    monkeypatch.setattr(md, "observe_landing_profile", lambda arc: next(seen))
+    monkeypatch.setattr(md, "default_ground", FakeGround)
+    rs.update_payload("pr-1", {"attested_merge_tree": "d" * 40})
+    assert md.main(["land", "1", "--lane-id", "A", "--arc-id", "pr-1"]) == 4
+    assert md.read_lease() is None and _receipts() == []
+
+
+def test_profile_verb_prints_the_selection_or_holds(selected, capsys):
+    selected["pr-2"] = TRIAL
+    assert md.main(["profile", "--arc-id", "pr-1"]) == 0
+    assert md.main(["profile", "--arc-id", "pr-2"]) == 0
+    assert capsys.readouterr().out.split() == ["legacy", "trial"]
+    selected["pr-3"] = HELD
+    assert md.main(["profile", "--arc-id", "pr-3"]) == 6
 
 
 def test_no_refresh_flag_cannot_grant_eligibility(door, monkeypatch):
@@ -3552,7 +3660,7 @@ def test_no_refresh_flag_cannot_grant_eligibility(door, monkeypatch):
     assert md.read_lease() is None
     monkeypatch.setenv("MERGE_DOOR_ALLOW_NO_REFRESH", "1")
     assert md.main(["land", "1", "--lane-id", "A", "--arc-id", "pr-1", "--no-refresh"]) == 0
-    assert observed == ["pr-1"]  # selection came from the arc, not the flag
+    assert observed == ["pr-1", "pr-1"]  # CLI then door, both from the arc, never the flag
     assert _receipts() == []  # the operator bypass is a legacy landing, never a trial one
 
 
@@ -3563,13 +3671,14 @@ def test_held_profile_refuses_before_any_lease(door, monkeypatch):
     assert md.read_lease() is None
     g = FakeGround()
     with pytest.raises(md.ProfileHeld, match="authority_unavailable"):
-        md.land(1, profile=HELD, lane_id="A", arc_id="pr-1", ground=g, refresh=None)
+        md.land(1, expected="held", lane_id="A", arc_id="pr-1", ground=g, refresh=None)
     assert md.read_lease() is None and g.merge_calls == []
 
 
-def test_ambiguous_merge_retains_recovery(door, monkeypatch):
+def test_ambiguous_merge_retains_recovery(selected, monkeypatch):
     """Ambiguous merge, red own-main and pending own-main each keep the trial lease blocked
     for ground-truth recovery; none is released or receipted as a landing."""
+    selected.update({arc: TRIAL for arc in ("pr-1", "arc-failure", "arc-timeout")})
     monkeypatch.delenv("MERGE_DOOR_ALLOW_NO_REFRESH")
     g = FakeGround()
 
@@ -3597,7 +3706,8 @@ def test_ambiguous_merge_retains_recovery(door, monkeypatch):
         assert _receipts() == []
 
 
-def test_trial_own_main_run_must_be_identified(door):
+def test_trial_own_main_run_must_be_identified(selected):
+    selected["pr-1"] = TRIAL
     g = FakeGround()
     g.gh_runs_for_sha = lambda sha: [
         {
@@ -3612,9 +3722,10 @@ def test_trial_own_main_run_must_be_identified(door):
     assert md.read_lease()["state"] == "blocked" and _receipts() == []
 
 
-def test_each_trial_landing_binds_its_own_main_run(door):
+def test_each_trial_landing_binds_its_own_main_run(selected):
     """WT-16: one door owner, stale inputs refuse, and a later landing's red run neither
     replaces nor disturbs an earlier landing's own-main binding."""
+    selected.update({"pr-1": TRIAL, "pr-2": TRIAL})
     g = FakeGround()
     g.gh_runs_for_sha = _runs(
         {"c" * 40: [(11, "completed", "SUCCESS")], "e" * 40: [(12, "completed", "FAILURE")]}
@@ -3652,9 +3763,10 @@ def test_each_trial_landing_binds_its_own_main_run(door):
     assert first[0]["landed_sha"] == "c" * 40 and first[0]["own_main"][0]["run_id"] == 11
 
 
-def test_trial_resume_never_drops_an_outstanding_refresh(door):
+def test_trial_resume_never_drops_an_outstanding_refresh(selected):
     """A lease that began a legacy refresh arc keeps it: a later trial selection blocks
     rather than silently abandoning the owed refresh."""
+    selected["pr-1"] = TRIAL
     g = FakeGround()
     rs.update_payload("pr-1", {"attested_merge_tree": "d" * 40})
     lease = _acq()
@@ -3662,7 +3774,7 @@ def test_trial_resume_never_drops_an_outstanding_refresh(door):
     with pytest.raises(md.DoorBlocked, match="refresh_outstanding"):
         md.land(
             1,
-            profile=TRIAL,
+            expected="trial",
             lane_id="A",
             arc_id="pr-1",
             ground=g,
