@@ -11,6 +11,7 @@ are never hidden by an artifact classification.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
@@ -22,21 +23,45 @@ from pathlib import Path
 import pytest
 
 from tools.workflow_evidence import (
+    AcceptedInstall,
+    AcceptedScenario,
+    Behaved,
+    Behaves,
     Checker,
     CheckReceipt,
     CheckRequest,
     EvidenceError,
+    Failed,
+    Fails,
     GitTree,
     Index,
+    InfrastructureFailed,
     InputManifest,
+    InstalledCandidate,
+    InstalledRun,
+    PrerequisiteState,
     ReceiptDefect,
+    Reference,
+    Refused,
+    Refuses,
+    ScenarioObservation,
+    Threshold,
     WorkingTree,
+    accepted_build_install,
+    admit_scenario,
+    bind_acceptance,
     build_manifest,
+    candidate_gaps,
     check_receipt,
     equivalence_record,
+    install_equivalence_record,
+    install_reuse,
+    judge_scenario,
     load_receipt,
+    observe_install,
     parse_equivalence,
     parse_receipt,
+    parse_scenario_contract,
     reuse_result,
 )
 from tools.workflow_policy import WorkflowPolicy, parse_policy
@@ -586,3 +611,676 @@ def test_equivalence_whose_heads_disagree_is_refused_at_parse(repo: Path, tmp_pa
 
     with pytest.raises(EvidenceError):
         parse_equivalence(json.dumps(record).encode())
+
+
+# --- WO-U19: installed reuse and scenario contracts (WS-12, WS-13; WT-17, WT-19) ---------
+
+ACCEPTED_RECORD = "sha256:" + "b" * 64
+WHEEL = "distribution:harness_core-0.0.0-py3-none-any.whl"
+ARTIFACT: dict[str, str | None] = {
+    WHEEL: "a" * 64,
+    "installed:harness_core": "version=0.0.0; editable=false; record=19 verified",
+    "site_packages": "/exec/venv/lib/python3.12/site-packages",
+    "origins": "339 harness modules in site-packages",
+}
+ENVIRONMENT: dict[str, str | None] = {
+    "python": "/uv/cpython-3.12.14/bin/python3.12",
+    "os": "Linux",
+    "kernel": "7.2.6-1-aarch64-ARCH",
+    "architecture": "aarch64",
+    "resources": "sha256:" + "9" * 64,
+}
+DIFFERING = "version=0.0.0; editable=false; record=18 verified, 1 differ"
+SOURCE_REF = {"uri": "file:///accepted/operating-targets-v1.md", "sha256": "d" * 64, "bytes": 10}
+PINS = "sha256:" + "9" * 64
+
+
+def _installed_request(root: Path) -> CheckRequest:
+    # Installed inputs only: package source plus project/lock. `tools/` is a gate.
+    return _request(
+        root,
+        scope=GitTree("HEAD"),
+        checker=Checker(name="uv-build", version="0.12.21", argv=("uv", "build", "--all")),
+        domains=("ops",),
+        explicit=("pyproject.toml", "uv.lock"),
+    )
+
+
+def _candidate(
+    root: Path,
+    artifact: dict[str, str | None] | None = None,
+    environment: dict[str, str | None] | None = None,
+) -> InstalledCandidate:
+    return InstalledCandidate(
+        source=build_manifest(root, _installed_request(root)),
+        artifact={**ARTIFACT, **(artifact or {})},
+        environment={**ENVIRONMENT, **(environment or {})},
+    )
+
+
+def _accepted(root: Path) -> AcceptedInstall:
+    return AcceptedInstall(ACCEPTED_RECORD, _candidate(root))
+
+
+def _install_equivalence(accepted: AcceptedInstall, current: InstalledCandidate) -> bytes:
+    record = install_equivalence_record(
+        accepted,
+        current,
+        record_id="equiv-install-1",
+        producer={"tool": "workflow_evidence", "version": "1"},
+        created_at="2026-10-24T01:00:00Z",
+    )
+    return json.dumps(record).encode()
+
+
+def test_unchanged_install_is_reused_after_a_session_refresh(repo: Path) -> None:
+    accepted = _accepted(repo)
+    # A refreshed session re-observes the same install; nothing about the session is input.
+    decision = install_reuse(accepted, _candidate(repo))
+
+    assert decision.disposition == "valid"
+    assert decision.reasons == ()
+    assert decision.current_key == decision.accepted_key
+    assert decision.equivalence is None
+
+
+@pytest.mark.parametrize(
+    ("artifact", "environment", "disposition", "reason"),
+    [
+        ({WHEEL: "c" * 64}, {}, "invalid", f"artifact.{WHEEL}_changed"),
+        (
+            {"installed:harness_core": "version=0.0.1; editable=false; record=19 verified"},
+            {},
+            "invalid",
+            "artifact.installed:harness_core_changed",
+        ),
+        (
+            {"site_packages": "/elsewhere/site-packages"},
+            {},
+            "invalid",
+            "artifact.site_packages_changed",
+        ),
+        (
+            {},
+            {"python": "/usr/bin/python3.12"},
+            "impact_review_required",
+            "environment.python_changed",
+        ),
+    ],
+)
+def test_install_reuse_rejects_changed_distribution_or_pins(
+    repo: Path,
+    artifact: dict[str, str | None],
+    environment: dict[str, str | None],
+    disposition: str,
+    reason: str,
+) -> None:
+    decision = install_reuse(_accepted(repo), _candidate(repo, artifact, environment))
+
+    assert decision.disposition == disposition
+    assert decision.reasons == (reason,)
+
+
+def test_changed_installed_inputs_require_impact_review(repo: Path, tmp_path: Path) -> None:
+    accepted = _accepted(repo)
+    _write(repo, "ops/core.py", "VALUE = 2\n")
+    _git(repo, "commit", "-q", "-am", "installed source change")
+    current = _candidate(repo)
+
+    decision = install_reuse(accepted, current)
+    assert decision.disposition == "impact_review_required"
+    assert decision.reasons == ("source.files_changed", "source.equivalence_required")
+    # No equivalence can be produced for a changed installed input.
+    with pytest.raises(EvidenceError):
+        _install_equivalence(accepted, current)
+
+
+@pytest.mark.parametrize(
+    ("accepted_override", "current_override", "disposition", "reasons"),
+    [
+        ({}, {"origins": None}, "unknown", ("artifact.origins_unknown",)),
+        ({"origins": None}, {"origins": None}, "unknown", ("artifact.origins_unknown",)),
+        # A fact beyond the mandatory set, unobserved on both sides, is still not unchanged.
+        ({"kernel": None}, {"kernel": None}, "unknown", ("artifact.kernel_unknown",)),
+        ({}, {"kernel": "7.2.6"}, "unknown", ("artifact.kernel_unknown",)),
+        (
+            {},
+            {"origins": None, WHEEL: "c" * 64},
+            "invalid",
+            (f"artifact.{WHEEL}_changed", "artifact.origins_unknown"),
+        ),
+    ],
+)
+def test_unobserved_install_facts_refuse_reuse_as_unknown(
+    repo: Path,
+    accepted_override: dict[str, str | None],
+    current_override: dict[str, str | None],
+    disposition: str,
+    reasons: tuple[str, ...],
+) -> None:
+    accepted = AcceptedInstall(ACCEPTED_RECORD, _candidate(repo, accepted_override))
+
+    decision = install_reuse(accepted, _candidate(repo, current_override))
+
+    assert decision.disposition == disposition
+    assert decision.reasons == reasons
+
+
+def test_absent_mandatory_facts_are_never_valid_reuse(repo: Path) -> None:
+    source = build_manifest(repo, _installed_request(repo))
+    empty = InstalledCandidate(source, {}, {})
+
+    decision = install_reuse(AcceptedInstall(ACCEPTED_RECORD, empty), empty)
+
+    assert decision.disposition == "unknown"
+    assert decision.reasons == (
+        "artifact.distribution_unknown",
+        "artifact.installed_unknown",
+        "artifact.site_packages_unknown",
+        "artifact.origins_unknown",
+        "environment.python_unknown",
+        "environment.os_unknown",
+        "environment.kernel_unknown",
+        "environment.architecture_unknown",
+        "environment.resources_unknown",
+    )
+
+
+@pytest.mark.parametrize(
+    ("group", "name", "value", "gap"),
+    [
+        ("artifact", "origins", "", "artifact.origins_unknown"),
+        ("artifact", "origins", "0 harness modules in site-packages", "artifact.origins_unknown"),
+        ("artifact", WHEEL, "not a digest", "artifact.distribution_unknown"),
+        ("artifact", "installed:harness_core", " ", "artifact.installed_unknown"),
+        ("artifact", "site_packages", "site-packages", "artifact.site_packages_unknown"),
+        ("environment", "python", "python3.12", "environment.python_unknown"),
+        ("environment", "kernel", " ", "environment.kernel_unknown"),
+        ("environment", "resources", "", "environment.resources_unknown"),
+        ("environment", "resources", "pinned", "environment.resources_unknown"),
+    ],
+)
+def test_blank_or_unstructured_facts_are_not_observations(
+    repo: Path, group: str, name: str, value: str, gap: str
+) -> None:
+    override = {name: value}
+    candidate = (
+        _candidate(repo, artifact=override)
+        if group == "artifact"
+        else _candidate(repo, environment=override)
+    )
+
+    assert candidate_gaps(candidate) == (gap,)
+    # Identical on both sides is still not observed, so never valid reuse.
+    reuse = install_reuse(AcceptedInstall(ACCEPTED_RECORD, candidate), candidate)
+    assert (reuse.disposition, reuse.reasons) == ("unknown", (gap,))
+    run = InstalledRun("run-7", "b104-n1", candidate.key, "passed")
+    assert bind_acceptance(run, candidate).reasons == (f"final.{gap}",)
+
+
+EDITABLE = "version=0.0.0; editable=true; record=19 verified"
+
+
+@pytest.mark.parametrize(
+    ("name", "value", "gap"),
+    [
+        ("origins", "origin check failed: 1 failures", "artifact.origins_failed"),
+        ("origins", "origin check failed: 0 failures", "artifact.origins_failed"),
+        ("installed:harness_core", DIFFERING, "artifact.installed_failed"),
+        ("installed:harness_core", EDITABLE, "artifact.installed_failed"),
+    ],
+)
+def test_failed_install_observations_are_never_complete(
+    repo: Path, name: str, value: str, gap: str
+) -> None:
+    """WS-12: a failed origin check, a RECORD difference or an editable install is an
+    observed defect - it must refuse reuse and acceptance, never count as identified."""
+    candidate = _candidate(repo, artifact={name: value})
+
+    assert candidate_gaps(candidate) == (gap,)
+    # Identical on both sides is still a defective install: invalid, not merely unknown.
+    reuse = install_reuse(AcceptedInstall(ACCEPTED_RECORD, candidate), candidate)
+    assert (reuse.disposition, reuse.reasons) == ("invalid", (gap,))
+    # An accepted good install whose current observation failed names both facts.
+    worse = install_reuse(_accepted(repo), candidate)
+    assert (worse.disposition, worse.reasons) == ("invalid", (f"artifact.{name}_changed", gap))
+    run = InstalledRun("run-8", "b104-n1", candidate.key, "passed")
+    binding = bind_acceptance(run, candidate)
+    assert (binding.accepted, binding.reasons) == (False, (f"final.{gap}",))
+
+
+@pytest.mark.parametrize(
+    ("named", "anonymous", "keep_named", "gap"),
+    [
+        (WHEEL, "distribution:", False, "artifact.distribution_unknown"),
+        (WHEEL, "distribution: ", False, "artifact.distribution_unknown"),
+        (WHEEL, "distribution:dist/x.whl", False, "artifact.distribution_unknown"),
+        ("installed:harness_core", "installed:", False, "artifact.installed_unknown"),
+        ("installed:harness_core", "installed:harness core", False, "artifact.installed_unknown"),
+        # An anonymous member beside an identified one still leaves the family unidentified.
+        (WHEEL, "distribution:", True, "artifact.distribution_unknown"),
+        ("installed:harness_core", "installed:", True, "artifact.installed_unknown"),
+    ],
+)
+def test_family_members_must_name_their_distribution_or_package(
+    repo: Path, named: str, anonymous: str, keep_named: bool, gap: str
+) -> None:
+    """WS-12: an anonymous hash or package cannot bind an exact installed artifact."""
+    artifact = {key: value for key, value in ARTIFACT.items() if keep_named or key != named}
+    artifact[anonymous] = ARTIFACT[named]
+    candidate = InstalledCandidate(
+        build_manifest(repo, _installed_request(repo)), artifact, ENVIRONMENT
+    )
+
+    assert candidate_gaps(candidate) == (gap,)
+    reuse = install_reuse(AcceptedInstall(ACCEPTED_RECORD, candidate), candidate)
+    assert (reuse.disposition, reuse.reasons) == ("unknown", (gap,))
+    run = InstalledRun("run-9", "b104-n1", candidate.key, "passed")
+    binding = bind_acceptance(run, candidate)
+    assert (binding.accepted, binding.reasons) == (False, (f"final.{gap}",))
+
+
+def test_zero_verified_record_files_is_not_a_record_verification(repo: Path) -> None:
+    candidate = _candidate(
+        repo,
+        artifact={"installed:harness_core": "version=0.0.0; editable=false; record=0 verified"},
+    )
+
+    assert candidate_gaps(candidate) == ("artifact.installed_unknown",)
+
+
+def test_installed_acceptance_needs_a_completely_observed_final_candidate(repo: Path) -> None:
+    final = _candidate(repo, {"origins": None})
+    run = InstalledRun("run-5", "b104-n1", final.key, "passed")
+
+    binding = bind_acceptance(run, final)
+
+    assert binding.accepted is False
+    assert binding.reasons == ("final.artifact.origins_unknown",)
+    unpinned = _candidate(repo, environment={"resources": None})
+    assert bind_acceptance(
+        InstalledRun("run-6", "b104-n1", unpinned.key, "passed"), unpinned
+    ).reasons == ("final.environment.resources_unknown",)
+
+
+def test_gate_only_equivalence_cannot_claim_new_install(repo: Path) -> None:
+    accepted = _accepted(repo)
+    run = InstalledRun("run-1", "b104-n1", accepted.candidate.key, "passed")
+    _write(repo, "tools/checker.py", "print('gate log only')\n")
+    _git(repo, "commit", "-q", "-am", "gate-only revision")
+    final = _candidate(repo)
+    assert final.source.key == accepted.candidate.source.key
+    assert final.key != accepted.candidate.key
+
+    without = install_reuse(accepted, final)
+    assert without.disposition == "impact_review_required"
+    assert without.reasons == ("source.equivalence_required",)
+    # The older run is not an unqualified install of the later revision.
+    assert bind_acceptance(run, final).reasons == ("candidate_mismatch",)
+
+    equivalence = parse_equivalence(_install_equivalence(accepted, final))
+    carried = install_reuse(accepted, final, equivalence)
+    assert carried.disposition == "valid"
+    binding = bind_acceptance(run, final, carried)
+    assert binding.accepted is True
+    assert (binding.final_head, binding.run_candidate, binding.equivalence) == (
+        final.source.head,
+        accepted.candidate.key,
+        "equiv-install-1",
+    )
+
+    # The same equivalence cannot carry the run to a rebuilt artifact.
+    rebuilt = _candidate(repo, {WHEEL: "c" * 64})
+    changed = install_reuse(accepted, rebuilt, equivalence)
+    assert changed.disposition == "invalid"
+    assert bind_acceptance(run, rebuilt, changed).reasons == ("reuse_invalid",)
+
+
+def test_source_or_build_proof_never_substitutes_for_installed_acceptance(repo: Path) -> None:
+    final = _candidate(repo)
+    source_proof = _passed_receipt(build_manifest(repo, _request(repo)))
+    other = InstalledRun("run-2", "b104-n1", "e" * 64, "passed")
+
+    assert bind_acceptance(source_proof, final).reasons == (
+        "source_proof_is_not_installed_acceptance",
+    )
+    assert bind_acceptance(_accepted(repo), final).reasons == (
+        "build_proof_is_not_installed_acceptance",
+    )
+    assert bind_acceptance(InstalledRun("run-3", "s", final.key, "failed"), final).reasons == (
+        "run_not_passed",
+    )
+    assert bind_acceptance(other, final).reasons == ("candidate_mismatch",)
+    # A valid reuse for a different accepted candidate carries nothing to this run.
+    unrelated = install_reuse(_accepted(repo), final)
+    assert bind_acceptance(other, final, unrelated).reasons == ("candidate_mismatch",)
+    direct = bind_acceptance(InstalledRun("run-4", "s", final.key, "passed"), final)
+    assert (direct.accepted, direct.equivalence) == (True, None)
+
+
+def _record_line(site: Path, rel: str) -> str:
+    digest = base64.urlsafe_b64encode(hashlib.sha256((site / rel).read_bytes()).digest())
+    return f"{rel},sha256={digest.rstrip(b'=').decode()},{(site / rel).stat().st_size}"
+
+
+def _native_install(tmp_path: Path, head: str) -> tuple[Path, bytes, bytes]:
+    """An existing install plus native accepted evidence in its own schema."""
+    exec_root = tmp_path / "exec"
+    (exec_root / "dist").mkdir(parents=True)
+    wheel = exec_root / "dist" / "harness_core-0.0.0-py3-none-any.whl"
+    wheel.write_bytes(b"wheel bytes")
+    site = exec_root / "venv" / "lib" / "python3.12" / "site-packages"
+    info = site / "harness_core-0.0.0.dist-info"
+    info.mkdir(parents=True)
+    (site / "harness_core").mkdir()
+    (site / "harness_core" / "__init__.py").write_text("VALUE = 1\n", encoding="utf-8")
+    (info / "METADATA").write_text("Name: harness-core\nVersion: 0.0.0\n", encoding="utf-8")
+    lines = [
+        _record_line(site, rel) for rel in ("harness_core/__init__.py", f"{info.name}/METADATA")
+    ]
+    (info / "RECORD").write_text(
+        "\n".join([*lines, f"{info.name}/RECORD,,"]) + "\n", encoding="utf-8"
+    )
+    interpreter = tmp_path / "cpython" / "python3.12"
+    interpreter.parent.mkdir()
+    interpreter.write_text("", encoding="utf-8")
+    (exec_root / "venv" / "bin").mkdir()
+    (exec_root / "venv" / "bin" / "python").symlink_to(interpreter)
+    result = json.dumps(
+        {
+            "inputs_verified_before": {"main": f"{head}, 0 tracked/untracked changes"},
+            "artifacts": {
+                "dist_sha256_file": {
+                    "content": [f"{hashlib.sha256(b'wheel bytes').hexdigest()}  {wheel.name}"]
+                }
+            },
+            "installed": {
+                "python_realpath": str(interpreter),
+                "site_packages": str(site),
+                "harness_modules_loaded": 339,
+                "all_modules_in_site": True,
+                "v1_failures": [],
+                "dists": {
+                    "harness-core": {
+                        "direct_url": None,
+                        "record_files_verified": 2,
+                        "version": "0.0.0",
+                    }
+                },
+            },
+        }
+    ).encode()
+    acceptance = json.dumps(
+        {
+            "status": "BUILD_INSTALL_EVIDENCE_ACCEPTED_ONLY",
+            "result": {
+                "path": "/retained/execution-result.json",
+                "sha256": hashlib.sha256(result).hexdigest(),
+                "bytes": len(result),
+            },
+        }
+    ).encode()
+    return exec_root, acceptance, result
+
+
+def test_native_accepted_build_matches_the_observed_install(repo: Path, tmp_path: Path) -> None:
+    source = build_manifest(repo, _installed_request(repo))
+    exec_root, acceptance, result = _native_install(tmp_path, source.head)
+    accepted = accepted_build_install(acceptance, result, source)
+    assert accepted.record_id == "sha256:" + hashlib.sha256(acceptance).hexdigest()
+
+    def observed(origins: str | None, resources: str | None = PINS) -> InstalledCandidate:
+        artifact, environment = observe_install(
+            exec_root, ("harness_core",), origins=origins, resources=resources
+        )
+        return InstalledCandidate(source, artifact, environment)
+
+    origins = "339 harness modules in site-packages"
+    current = observed(origins)
+    assert {k: current.environment[k] for k in ("os", "kernel", "architecture")} == {
+        "os": os.uname().sysname,
+        "kernel": os.uname().release,
+        "architecture": os.uname().machine,
+    }
+    # The native acceptance records no host or resource pins, so it can never be valid
+    # reuse: those facts were not observed when the build was accepted.
+    assert install_reuse(accepted, current).reasons == (
+        "environment.architecture_unknown",
+        "environment.kernel_unknown",
+        "environment.os_unknown",
+        "environment.resources_unknown",
+    )
+    pinned = AcceptedInstall(
+        accepted.record_id,
+        InstalledCandidate(source, accepted.candidate.artifact, current.environment),
+    )
+    assert install_reuse(pinned, current).disposition == "valid"
+    # The origin check needs the installed interpreter; until observed it stays unknown.
+    assert install_reuse(pinned, observed(None)).reasons == ("artifact.origins_unknown",)
+    assert install_reuse(pinned, observed(origins, None)).reasons == (
+        "environment.resources_unknown",
+    )
+
+    site = exec_root / "venv" / "lib" / "python3.12" / "site-packages"
+    (site / "harness_core" / "__init__.py").write_text("VALUE = 2\n", encoding="utf-8")
+    tampered = install_reuse(pinned, observed(origins))
+    assert tampered.disposition == "invalid"
+    # The changed bytes are also an observed RECORD difference: a defect, not a new pin.
+    assert tampered.reasons == (
+        "artifact.installed:harness_core_changed",
+        "artifact.installed_failed",
+    )
+
+
+def test_native_accepted_build_refuses_inconsistent_evidence(repo: Path, tmp_path: Path) -> None:
+    source = build_manifest(repo, _installed_request(repo))
+    _, acceptance, result = _native_install(tmp_path, source.head)
+    pending = json.loads(acceptance)
+    pending["status"] = "BUILD_INSTALL_PENDING"
+    negated = {**json.loads(acceptance), "status": "NOT_BUILD_INSTALL_EVIDENCE_ACCEPTED_ONLY"}
+    _write(repo, "ops/core.py", "VALUE = 9\n")
+    _git(repo, "commit", "-q", "-am", "later head")
+    later = build_manifest(repo, _installed_request(repo))
+
+    for args, field in (
+        ((acceptance, result + b" ", source), "acceptance.result"),
+        ((json.dumps(pending).encode(), result, source), "acceptance.status"),
+        ((json.dumps(negated).encode(), result, source), "acceptance.status"),
+        ((acceptance, result, later), "inputs_verified_before.main"),
+    ):
+        with pytest.raises(EvidenceError) as caught:
+            accepted_build_install(*args)
+        assert caught.value.field == field
+
+
+def _contract(candidate: str, **overrides: object) -> dict[str, object]:
+    doc: dict[str, object] = {
+        "schema_version": 1,
+        "scenario": "soak-60",
+        "version": "v12",
+        "acceptance": ["WO-RUN-07", "WT-19"],
+        "candidate": candidate,
+        "run": "soak-60-run-1",
+        "argv": ["harness", "run", "--workload", "accepted"],
+        "cwd": "/home/robbo/Work/arhugula-build-eval",
+        "environment": {"OLLAMA_HOST": "127.0.0.1:11434"},
+        "requires": ["systemd user transient service", "offline models"],
+        "workload": SOURCE_REF,
+        "expected": {"outcome": "behaves"},
+        "thresholds": {"soak_minutes": {"value": "60", "source": SOURCE_REF}},
+        "timeout": {"value": "75", "source": SOURCE_REF},
+        "resources": {
+            "process-group": {"owner": "runtime", "reclaim": "kill owned group, verify none"}
+        },
+        "attribution": {"author": "profile-coder", "witness": "runtime"},
+        "evidence": "/mnt/mac/arhugula-artifacts/soak-60",
+        "observations": {
+            "start": "service active, owned group recorded",
+            "precleanup": "no owned process",
+            "postcleanup": "no owned survivor",
+        },
+    }
+    doc.update(overrides)
+    return doc
+
+
+def _without(doc: dict[str, object], *path: str) -> dict[str, object]:
+    copy = json.loads(json.dumps(doc))
+    *parents, leaf = path
+    target = copy
+    for name in parents:
+        target = target[name]
+    del target[leaf]
+    return copy
+
+
+@pytest.mark.parametrize(
+    ("mutate", "field"),
+    [
+        *(
+            (lambda d, name=name: _without(d, name), "contract")
+            for name in (
+                "scenario",
+                "version",
+                "acceptance",
+                "candidate",
+                "run",
+                "cwd",
+                "environment",
+                "requires",
+                "workload",
+                "expected",
+                "timeout",
+                "attribution",
+                "observations",
+            )
+        ),
+        (lambda d: {**d, "acceptance": []}, "acceptance"),
+        (lambda d: {**d, "version": ""}, "version"),
+        (lambda d: {**d, "run": " "}, "run"),
+        (lambda d: {**d, "cwd": "relative/dir"}, "cwd"),
+        (lambda d: {**d, "requires": []}, "requires"),
+        (lambda d: _without(d, "timeout", "source"), "timeout"),
+        (lambda d: _without(d, "thresholds", "soak_minutes", "source"), "thresholds.soak_minutes"),
+        (lambda d: {**d, "thresholds": {}}, "thresholds"),
+        (lambda d: {**d, "resources": {}}, "resources"),
+        (
+            lambda d: _without(d, "resources", "process-group", "reclaim"),
+            "resources.process-group",
+        ),
+        (
+            lambda d: {**d, "resources": {"process-group": {"owner": "", "reclaim": "kill"}}},
+            "resources.process-group.owner",
+        ),
+        (lambda d: _without(d, "attribution", "witness"), "attribution"),
+        (
+            lambda d: {**d, "attribution": {"author": "runtime", "witness": "runtime"}},
+            "attribution.witness",
+        ),
+        (lambda d: {**d, "evidence": " "}, "evidence"),
+        (lambda d: _without(d, "observations", "start"), "observations"),
+        (lambda d: _without(d, "observations", "postcleanup"), "observations"),
+        (lambda d: {**d, "argv": []}, "argv"),
+        (lambda d: {**d, "candidate": "unbound"}, "candidate"),
+        (lambda d: {**d, "expected": {"outcome": "refuses"}}, "expected"),
+        (lambda d: {**d, "expected": {"outcome": "fails"}}, "expected"),
+        (lambda d: {**d, "expected": {"outcome": "fails", "code": ""}}, "expected.code"),
+    ],
+)
+def test_incomplete_scenario_contract_refuses_start(mutate, field: str) -> None:
+    with pytest.raises(EvidenceError) as caught:
+        parse_scenario_contract(json.dumps(mutate(_contract("f" * 64))).encode())
+    assert caught.value.field == field
+
+
+def test_expected_product_failure_parses_as_its_own_outcome() -> None:
+    doc = _contract("f" * 64, expected={"outcome": "fails", "code": "worker_lost"}, thresholds={})
+
+    assert parse_scenario_contract(json.dumps(doc).encode()).expected == Fails("worker_lost")
+
+
+def test_scenario_admission_binds_candidate_prerequisites_and_original_obligations(
+    repo: Path,
+) -> None:
+    candidate = _candidate(repo)
+    source = Reference(**SOURCE_REF)
+    accepted = AcceptedScenario(
+        workload=source,
+        thresholds={"soak_minutes": Threshold("60", source)},
+        timeout=Threshold("75", source),
+    )
+    ready: dict[str, PrerequisiteState] = {
+        "systemd user transient service": "ready",
+        "offline models": "ready",
+    }
+
+    def admit(
+        doc: dict[str, object],
+        against: InstalledCandidate = candidate,
+        register: dict[str, PrerequisiteState] = ready,
+    ) -> tuple[str, ...]:
+        contract = parse_scenario_contract(json.dumps(doc).encode())
+        return admit_scenario(contract, against, accepted, register)
+
+    assert admit(_contract(candidate.key)) == ()
+    shortened = {"soak_minutes": {"value": "30", "source": SOURCE_REF}}
+    assert admit(_contract(candidate.key, thresholds=shortened)) == (
+        "threshold.soak_minutes_differs",
+    )
+    extra = {
+        **shortened,
+        "soak_minutes": {"value": "60", "source": SOURCE_REF},
+        "rss_mb": shortened["soak_minutes"],
+    }
+    assert admit(_contract(candidate.key, thresholds=extra)) == ("threshold.rss_mb_differs",)
+    other_source = {**SOURCE_REF, "sha256": "e" * 64}
+    assert admit(_contract(candidate.key, timeout={"value": "75", "source": other_source})) == (
+        "timeout_differs",
+    )
+    assert admit(_contract(candidate.key, workload=other_source)) == ("workload_differs",)
+    assert admit(_contract("e" * 64)) == ("candidate_mismatch",)
+    unobserved = _candidate(repo, {"origins": None})
+    assert admit(_contract(unobserved.key), unobserved) == ("candidate.artifact.origins_unknown",)
+    # Missing, denied or unregistered prerequisites refuse start; only `ready` admits.
+    assert admit(
+        _contract(candidate.key),
+        register={"systemd user transient service": "denied", "offline models": "missing"},
+    ) == (
+        "prerequisite.systemd user transient service_denied",
+        "prerequisite.offline models_missing",
+    )
+    assert admit(_contract(candidate.key), register={"offline models": "ready"}) == (
+        "prerequisite.systemd user transient service_unknown",
+    )
+
+
+@pytest.mark.parametrize(
+    ("expected", "outcome", "cleaned", "result"),
+    [
+        (Behaves(), Behaved(), True, "passed"),
+        (Behaves(), Behaved(), False, "held"),
+        (Behaves(), Refused("timeout"), True, "failed"),
+        (Behaves(), Refused("timeout"), False, "failed"),
+        (Behaves(), InfrastructureFailed("docker stopped"), True, "error"),
+        (Refuses("resume_refused"), Refused("resume_refused"), True, "passed"),
+        (Refuses("resume_refused"), Refused("other_refusal"), True, "failed"),
+        (Refuses("resume_refused"), Behaved(), True, "failed"),
+        (Refuses("resume_refused"), InfrastructureFailed("mount lost"), True, "error"),
+        (Refuses("resume_refused"), Failed("resume_refused"), True, "failed"),
+        # A specified product failure is its own expected outcome, judged by its code.
+        (Fails("worker_lost"), Failed("worker_lost"), True, "passed"),
+        (Fails("worker_lost"), Failed("worker_lost"), False, "held"),
+        (Fails("worker_lost"), Failed("disk_full"), True, "failed"),
+        (Fails("worker_lost"), Refused("worker_lost"), True, "failed"),
+        (Fails("worker_lost"), Behaved(), True, "failed"),
+        (Fails("worker_lost"), InfrastructureFailed("docker stopped"), True, "error"),
+        (Behaves(), Failed("worker_lost"), True, "failed"),
+    ],
+)
+def test_scenario_judgment_passes_only_the_specific_expected_outcome(
+    expected, outcome, cleaned: bool, result: str
+) -> None:
+    reference = Reference(**SOURCE_REF)
+    observation = ScenarioObservation(outcome, reference, reference if cleaned else None)
+
+    assert judge_scenario(expected, observation) == result
