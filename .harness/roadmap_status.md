@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `770418a45d4f` |
+| `workspace_state_hash` | `a0be7fde10f0` |
 | `last_refreshed` | 2026-10-24T00:00:00Z |
-| `git_head` | `9dba859a` —  |
+| `git_head` | `57aef444` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 125 |
 
@@ -22,7 +22,7 @@
 
 **Purpose.** Live pointer to the next Claude/Codex-executable frontier. Full round-by-round history (every prior round, verbatim, most-recent-first) lives in the archive below — grep it by PR/`B-`/`R-`-id/round, never read wholesale.
 
-**Current next action (post-#1651).** After fresh Buford admission, advance queued WO-U13, then WO-U16 and the held-capability WO-U22 disposition, from current live LIT through exact-main reconciliation and their required review, CI, own-main and applicable acceptance gates. WO-U05 lands as an inactive boundary interface; its three spent source passes and resolved F1/F2 remain preserved, while producer contracts and U23/U24 activation stay held. The three existing pairs continue independently eligible released work with their own verified Memento continuations and admission; U06 retains its three spent passes and direct correction/review cycle. WO-U15 remains review-quarantined at five spent passes with F1-F3 blocking and no sixth correction/review or budget reset. Preserve protected carriers, retained denials and unrelated production/runtime holds.
+**Current next action (post-#1653).** Finish WO-U10 through the reviewed staged sequence in live LIT arhugula-harness-trial-193.6cw.nfc: Stage A PR #1653 has landed with successful own-main CI; after this terminating refresh and its own-main CI, apply and witness the reviewed 15-context protection from a checkout equal to actual main, then separately reconcile, verify and land Stage B. Reconcile the reviewed WO-U19 H PR #1654 and WO-U17 H candidate against then-current main; admit WO-U14 integration from its exact released O candidate. Preserve original spent review passes, WO-U06 hook ownership hold, WO-U15 five-pass quarantine, protected work and unrelated Runtime/product holds. Continue the remaining released units through their live dependencies; source GREEN alone does not close a ticket.
 
 **Archive.** `.harness/roadmap-next-action-archive.md` (PRIOR rounds only, verbatim as each stood when superseded — the current round lives only in this head; the newest superseded round may lag there until the next content PR archives it, and is always losslessly recoverable from this file's own git history meanwhile).
 
@@ -43,6 +43,7 @@
 | PR | Branch | R-NNN | Posture |
 |---|---|---|---|
 | #1292 | `fix/codex-hook-contract-recovery` | — | — |
+| #1654 | `integrate/buford-wo-u19-20261024` | — | — |
 
 ---
 
@@ -50,11 +51,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #1653 | 2026-10-24 | WO-U10 Stage A merged after independent pass-4 SOURCE GREEN; exact own-main CI 40075373303 succeeded. Fence-15 witness and separate Stage B remain. |
 | PR #1651 | 2026-10-24 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1647 | 2026-10-24 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1645 | 2026-10-24 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1646 | 2026-10-24 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
-| PR #1643 | 2026-10-05 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 
 ---
 
