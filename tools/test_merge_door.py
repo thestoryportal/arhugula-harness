@@ -19,6 +19,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import ci_result_binding as cb
 import finding_record as fr
 import merge_door as md
 import reservations as rs
@@ -883,6 +884,12 @@ class FakeGround:
             }
         }
         self.tree, self.ci, self.merge_calls, self.t = tree, ci, [], 0.0
+        self.binding = cb.CiBindingDecision("passed", ("binding_exact",), "fake")
+        self.exact_ci_calls: list[tuple[int, str, str]] = []
+
+    def exact_ci(self, pr, head, base):
+        self.exact_ci_calls.append((pr, head, base))
+        return self.binding
 
     def gh_view(self, pr):
         return dict(self.states[pr])
@@ -1689,6 +1696,31 @@ def test_wait_for_door_survives_a_lost_yield_row(door, monkeypatch, capsys):
     assert "ROW LOST" in err and md.LEASE_HELD_YIELD_CAUSE in err
 
 
+def _exact_ci_gh_cases(state: Path) -> str:
+    """WO-U10 shim cases for merge_door's exact-CI observer: PR branch/url, one completed
+    run whose binding notice names the PR's own head/base, and its one required job."""
+    meta = {"headRefName": "feat/x", "url": "https://github.com/o/r/pull/1"}
+    run = {
+        "id": 1,
+        "run_attempt": 1,
+        "event": "pull_request",
+        "status": "completed",
+        "path": ".github/workflows/ci.yml",
+        "repository": {"full_name": "o/r"},
+    }
+    job = {"id": 5, "name": "pytest — blocking", "status": "completed", "conclusion": "success"}
+    notice = (
+        "import json,sys; s=json.load(open(sys.argv[1])); h,b=s['headRefOid'],s['baseRefOid'];"
+        " print(json.dumps([{'title':'ci-binding','message':json.dumps({'head':h,'base':b,"
+        "'tested':'9'*40,'parents':[b,h],'workflow_blob':'b'*40})}]))"
+    )
+    return f"""  *"--json headRefName,url"*) echo '{json.dumps(meta)}' ;;
+  *"api repos/o/r/actions/workflows/ci.yml/runs"*) echo '{json.dumps({"workflow_runs": [run]})}' ;;
+  *"api repos/o/r/actions/runs/1/attempts/1/jobs"*) echo '{json.dumps({"jobs": [job]})}' ;;
+  *"api repos/o/r/check-runs/5/annotations"*) python3 -c "{notice}" "{state}" ;;
+"""
+
+
 def _fake_gh(bindir: Path, state: Path, log: Path, tree: str, state2: Path | None = None) -> None:
     """A `gh` + `git` shim on PATH: pr view answers from state.json; pr merge appends to
     merge-calls.log and flips state.json to MERGED; run list reports success; git
@@ -1709,7 +1741,7 @@ PY2B
     (bindir / "gh").write_text(
         f"""#!/usr/bin/env bash
 case "$*" in
-{pr2_cases}  *"pr view"*) cat "{state}" ;;
+{pr2_cases}{_exact_ci_gh_cases(state)}  *"pr view"*) cat "{state}" ;;
   *"pr merge"*) echo "$*" >> "{log}"; python3 - <<'PY2'
 import json
 p = "{state}"
@@ -1738,6 +1770,7 @@ case "$1 $2" in
     if [ -f "{fetched}" ]; then echo "{"b" * 40}"; else echo "unknown revision" >&2; exit 128; fi ;;
   "rev-parse "*) echo "{"b" * 40}" ;;
   "worktree list") echo "worktree /x" ;;
+  "show {tree}:.github/workflows/ci.yml") echo "    name: pytest — blocking" ;;
   *) exec /usr/bin/git "$@" ;;
 esac
 """
@@ -1789,7 +1822,7 @@ def test_e2e_refresh_continuation_through_real_producer_cli(door, tmp_path):
         f"""#!/usr/bin/env bash
 case "$*" in
   *"pr list"*) echo -n "" ;;
-  *"pr view 2"*) cat "{state2}" ;;
+{_exact_ci_gh_cases(state)}  *"pr view 2"*) cat "{state2}" ;;
   *"pr view"*) cat "{state}" ;;
   *"pr create"*) echo "https://github.com/o/r/pull/2" ;;
   *"pr merge 2"*) echo "$*" >> "{log}"; python3 - <<'PY2B'
@@ -1839,6 +1872,7 @@ case "$1 $2" in
   "rev-parse {"c" * 40}^1") echo "{"b" * 40}" ;;
   "rev-parse HEAD") echo "{"r" * 40}" ;;
   "rev-parse "*) echo "{"b" * 40}" ;;
+  "show "*":.github/workflows/ci.yml") echo "    name: pytest — blocking" ;;
   *) exec /usr/bin/git "$@" ;;
 esac
 """
@@ -3284,3 +3318,18 @@ def test_persistent_containment_fault_adjudicates_via_release_path(door, monkeyp
 
     blocked = list(md.DOOR.glob("LEASE.*.blocked"))
     assert blocked, "no blocked sidecar: the persistent fault escaped unadjudicated"
+
+
+@pytest.mark.parametrize(
+    ("result", "raised"),
+    [("held", md.DoorBlocked), ("failed", md.DoorFailed), ("error", md.DoorFailed)],
+)
+def test_merge_requires_exact_ci_binding_for_the_lease_head_and_base(door, result, raised):
+    """WO-U10: a non-passing exact binding (e.g. only an old-base green exists) never
+    reaches gh pr merge, and the decision is asked for the lease's own head/base."""
+    g = FakeGround()
+    g.binding = cb.CiBindingDecision(result, ("binding_stale",), "no_matching_run")
+    with pytest.raises(raised, match="ci_binding_"):
+        _land(door, g)
+    assert g.merge_calls == []
+    assert g.exact_ci_calls == [(1, "a" * 40, "b" * 40)]

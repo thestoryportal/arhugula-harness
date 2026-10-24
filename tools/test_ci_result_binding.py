@@ -32,6 +32,8 @@ from ci_result_binding import (
     observe_run,
     parse_run_evidence,
     pending_timeout_decision,
+    reconcile_pr_binding,
+    required_contexts,
     validate_ci_binding,
     validate_dispatch,
 )
@@ -198,6 +200,36 @@ def test_unfinished_run_is_pending_not_a_result():
 def test_malformed_notice_is_rejected_loudly():
     with pytest.raises(BindingInputError, match=r"notice\.base"):
         parse_run_evidence(_run_payload(1), _jobs(), _notice(base="main"))
+
+
+def test_retarget_dispatches_once_and_reconciles_pending_run():
+    dispatched: list[int] = []
+    old = _evidence(run_id=100, base=BASE)
+    held = reconcile_pr_binding(_expected(NEW_BASE), [old], lambda: dispatched.append(1))
+    assert (held.result, held.detail, dispatched) == (
+        "held",
+        "dispatched exact head/base verification",
+        [1],
+    )
+    # The dispatched run is queued and has not reported its binding yet: no second launch.
+    queued = _evidence(run_id=101, status="queued", notice=False)
+    again = reconcile_pr_binding(_expected(NEW_BASE), [old, queued], lambda: dispatched.append(2))
+    assert (again.result, again.reason_codes, dispatched) == ("held", ("check_pending",), [1])
+    # Once it reports the new base and succeeds, the binding passes without dispatch.
+    done = _evidence(run_id=101, base=NEW_BASE)
+    assert (
+        reconcile_pr_binding(_expected(NEW_BASE), [old, done], lambda: dispatched.append(3)).result
+        == "passed"
+    )
+    assert dispatched == [1]
+
+
+def test_required_contexts_come_from_the_shipped_workflow():
+    names = required_contexts((_WORKFLOWS / "ci.yml").read_text())
+    assert REQUIRED <= names
+    assert "classify diff (bookkeeping fast path)" not in names
+    with pytest.raises(BindingInputError):
+        required_contexts("jobs: {}\n")
 
 
 # --- bounded observation ---------------------------------------------------------------

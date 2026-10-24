@@ -172,6 +172,35 @@ def bind_runs(expected: ExpectedBinding, runs: Sequence[RunEvidence]) -> CiBindi
     return validate_ci_binding(expected, max(matching, key=lambda r: (r.run_id, r.run_attempt)))
 
 
+CI_WORKFLOW = ".github/workflows/ci.yml"
+_UNBOUND = "0" * 40
+
+
+def required_contexts(workflow_text: str) -> frozenset[str]:
+    """The required contexts the workflow itself declares: every job named `... — blocking`
+    (the same rule the split-brain backstop derives required PR contexts from)."""
+    names = frozenset(re.findall(r"^    name: (.+ — blocking)\s*$", workflow_text, re.MULTILINE))
+    if not names:
+        raise BindingInputError("workflow declares no `— blocking` job names")
+    return names
+
+
+def reconcile_pr_binding(
+    expected: ExpectedBinding, runs: Sequence[RunEvidence], dispatch: Callable[[], None]
+) -> CiBindingDecision:
+    """The integration observer's one step: decide the current run, and when none matches
+    the exact head/base, dispatch verification for them - unless an unfinished run that has
+    not yet reported its binding exists, which may be that verification (reconciled before
+    launch instead of duplicated)."""
+    decision = bind_runs(expected, runs)
+    if decision.detail != "no_matching_run":
+        return decision
+    if any(r.status != "completed" and r.head_sha == _UNBOUND for r in runs):
+        return _decision("held", "check_pending", "unbound run in progress")
+    dispatch()
+    return _decision("held", "check_pending", "dispatched exact head/base verification")
+
+
 # --- dispatch inputs ------------------------------------------------------------------
 
 
@@ -232,7 +261,7 @@ def parse_run_evidence(
     records zero SHAs, so it can never match any expected binding.
     """
     recorded = json.loads(notice) if notice is not None else {}
-    unknown = "0" * 40
+    unknown = _UNBOUND
     repo = run["repository"]
     assert isinstance(repo, Mapping)
     return RunEvidence(
