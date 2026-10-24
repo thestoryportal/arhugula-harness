@@ -1637,7 +1637,9 @@ def test_ci_pins_split_brain_job() -> None:
     )
     job = ci["jobs"]["split-brain"]
     assert job["name"] == "split-brain ledger backstop — blocking"
-    assert "if" not in job  # runs on PRs too; a push-only blocking job bricks PR merges
+    # runs on PRs too (a push-only blocking job bricks PR merges); WO-U10 adds only the
+    # cancellation guard that every binding-dependent job carries
+    assert job.get("if", "${{ !cancelled() }}") == "${{ !cancelled() }}"
     step = job["steps"][-1]
     assert step.get("shell") == "bash"  # -eo pipefail: a jq error inside the pipeline fails
     run = step["run"]
@@ -2335,8 +2337,8 @@ def _ci_guard_argv(base: str, head: str) -> list[str]:
     ]
     run = (
         step["run"]
-        .replace("${{ github.event.pull_request.base.sha || github.event.before }}", base)
-        .replace("${{ github.event.pull_request.head.sha || github.sha }}", head)
+        .replace("${{ needs.changes.outputs.base }}", base)
+        .replace("${{ needs.changes.outputs.head }}", head)
     )
     assert "${{" not in run, f"unrecognised CI ref expression: {run}"
     argv = shlex.split(run)

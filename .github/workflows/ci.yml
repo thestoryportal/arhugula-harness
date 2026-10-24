@@ -32,12 +32,28 @@ name: CI
 
 on:
   pull_request:
-    # `edited` included so a PR retitled to (or from) the reserved
-    # `ops: roadmap status refresh ` prefix re-runs the refresh-shape gate
-    # against the new title (codex round-10 on the U-CTX-03 arc).
+    # WO-U10 (WS-10 §12.3) staged activation (WT-14 bootstrap): `edited` stays until main's
+    # fence requires the `PR title shape (metadata gate) — blocking` context, because until
+    # then a retitle is checked only by this run's required arc-ledger job. The activation
+    # commit then drops `edited`: metadata edits run .github/workflows/pr-metadata.yml under
+    # its own group and check name, so a body edit never restarts or cancels this run.
     types: [opened, synchronize, reopened, edited]
   push:
     branches: [main]
+  # A retargeted base invalidates the old binding even when the head is unchanged. The
+  # integration observer dispatches this workflow on the PR branch with exactly these
+  # inputs; the `changes` job proves them equal to the live PR before anything runs.
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Same-repository open PR number
+        required: true
+      expected_head:
+        description: Full PR head SHA the dispatcher observed
+        required: true
+      expected_base:
+        description: Full PR base SHA the dispatcher observed
+        required: true
 
 # Cancel superseded runs on the same ref so a fast push series doesn't queue -- EXCEPT on
 # `main`, where the group is keyed by SHA: the merge door (C-HE-06 §4(vii)) holds its lease
@@ -45,9 +61,13 @@ on:
 # cancel lane A's run. Tradeoff (stated): cancel-in-progress is effectively off for main
 # pushes; under N-lane cadence full runs can queue -- the door emits a NOTIFY when > 2 are
 # in progress.
+#
+# WO-U10: PR runs (pull_request and retarget dispatch alike) group by PR number, so a newer
+# head or base supersedes only that PR's older code run; main groups by landed SHA and
+# never cancels, so every landing keeps its own run.
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.workflow }}-${{ github.event_name == 'push' && github.sha || github.event.pull_request.number || inputs.pr_number }}
+  cancel-in-progress: ${{ github.event_name != 'push' }}
 
 permissions:
   contents: read
@@ -69,8 +89,16 @@ jobs:
     # job uses: this job decides whether five checks run, so a movable tag is a bypass.
     name: classify diff (bookkeeping fast path)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read # verify-dispatch reads the live PR
     outputs:
       bookkeeping: ${{ steps.classify.outputs.bookkeeping }}
+      # [LAW:one-source-of-truth] the ONE binding every job below checks out and reports:
+      # head/base under review and the commit actually tested (WS-10 §12.4).
+      head: ${{ steps.bind.outputs.head }}
+      base: ${{ steps.bind.outputs.base }}
+      tested: ${{ steps.bind.outputs.tested }}
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -78,6 +106,44 @@ jobs:
           # Both SHAs must be present: base...head is the PR's own changes (merge-base
           # to head), so a base that moved since branching never widens the diff.
           fetch-depth: 0
+
+      - name: Bind head/base/tested commit (WO-U10 exact CI binding)
+        id: bind
+        # Fails without publishing a binding when the tested commit is not exactly what
+        # the event claims: a PR run must test the merge of head onto base, a main run the
+        # landed SHA, and a dispatch must name the live same-repository PR's head/base.
+        # The binding notice itself is published after classification (below).
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          REPO: ${{ github.repository }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          BEFORE: ${{ github.event.before }}
+          IN_PR: ${{ inputs.pr_number }}
+          IN_HEAD: ${{ inputs.expected_head }}
+          IN_BASE: ${{ inputs.expected_base }}
+        run: |
+          case "$EVENT" in
+            workflow_dispatch)
+              /usr/bin/python3 tools/ci_result_binding.py verify-dispatch --repository "$REPO" \
+                --pr-number "$IN_PR" --expected-head "$IN_HEAD" --expected-base "$IN_BASE"
+              git fetch --no-tags origin "+refs/pull/$IN_PR/merge:refs/ci/tested"
+              git checkout --detach refs/ci/tested
+              head="$IN_HEAD" base="$IN_BASE" want="$IN_BASE $IN_HEAD" ;;
+            pull_request) head="$PR_HEAD" base="$PR_BASE" want="$PR_BASE $PR_HEAD" ;;
+            push) head="$GITHUB_SHA" base="$BEFORE" want="" ;;
+            *) echo "ci-binding: unsupported event $EVENT" >&2; exit 2 ;;
+          esac
+          tested="$(git rev-parse HEAD)"
+          parents="$(git rev-list --parents -n 1 HEAD | cut -s -d' ' -f2-)"
+          if [ "$EVENT" = push ] && [ "$tested" != "$head" ]; then
+            echo "ci-binding: tested $tested is not the landed $head" >&2; exit 1
+          elif [ "$EVENT" != push ] && [ "$parents" != "$want" ]; then
+            echo "ci-binding: tested parents '$parents' != base/head '$want'" >&2; exit 1
+          fi
+          printf 'head=%s\nbase=%s\ntested=%s\nparents=%s\n' "$head" "$base" "$tested" "$parents" | tee -a "$GITHUB_OUTPUT"
 
       - name: Classify base...head
         id: classify
@@ -94,8 +160,8 @@ jobs:
         # to the base classifier, so running from head IS running from base.
         shell: bash
         env:
-          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
-          HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+          BASE: ${{ steps.bind.outputs.base }}
+          HEAD: ${{ steps.bind.outputs.head }}
         run: |
           self_changed="$(git diff --name-only --no-renames "$BASE...$HEAD" -- tools/ci_bookkeeping_diff.py .github/workflows/ci.yml)"
           if [ -n "$self_changed" ]; then
@@ -104,6 +170,27 @@ jobs:
           else
             /usr/bin/python3 tools/ci_bookkeeping_diff.py "$BASE" "$HEAD" | tee -a "$GITHUB_OUTPUT"
           fi
+
+      - name: Publish binding notice (WO-U10)
+        # Runs even when classification failed, so the run still binds its inputs; an
+        # empty `bookkeeping` then proves no classification and accepts no skip.
+        # `workflow_blob` is the definition that actually executed - the workflow file at
+        # github.workflow_sha (a dispatch runs the PR branch's file, not the merge tree's),
+        # so tools/ci_result_binding.py can compare it with the merge tree's workflow.
+        if: ${{ !cancelled() && steps.bind.outcome == 'success' }}
+        shell: bash
+        env:
+          HEAD_SHA: ${{ steps.bind.outputs.head }}
+          BASE_SHA: ${{ steps.bind.outputs.base }}
+          TESTED: ${{ steps.bind.outputs.tested }}
+          PARENTS: ${{ steps.bind.outputs.parents }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+          BOOKKEEPING: ${{ steps.classify.outputs.bookkeeping }}
+        run: |
+          git cat-file -e "$WORKFLOW_SHA^{commit}" || git fetch --no-tags --depth=1 origin "$WORKFLOW_SHA"
+          blob="$(git rev-parse "$WORKFLOW_SHA:.github/workflows/ci.yml")"
+          plist="$(printf '"%s",' $PARENTS)"
+          echo "::notice title=ci-binding::{\"head\": \"$HEAD_SHA\", \"base\": \"$BASE_SHA\", \"tested\": \"$TESTED\", \"parents\": [${plist%,}], \"workflow_sha\": \"$WORKFLOW_SHA\", \"workflow_blob\": \"$blob\", \"bookkeeping\": \"$BOOKKEEPING\"}"
 
   # WO-U09 (WS-10 §12.2) — the provider-free package suite and the codex-parity suite run
   # as two independent jobs after classification; neither waits for the other. The
@@ -118,6 +205,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ needs.changes.outputs.tested }}
 
       - name: Install uv + Python 3.12
         uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081 # v5
@@ -149,9 +238,9 @@ jobs:
         if: always()
         continue-on-error: true
         env:
-          COVERAGE_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
-          COVERAGE_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
-          COVERAGE_TESTED: ${{ github.sha }}
+          COVERAGE_HEAD: ${{ needs.changes.outputs.head }}
+          COVERAGE_BASE: ${{ needs.changes.outputs.base }}
+          COVERAGE_TESTED: ${{ needs.changes.outputs.tested }}
           COVERAGE_COMMAND: uv run pytest -m "not e2e" --cov --cov-report=term-missing --cov-report=xml --cov-report=json
         run: |
           uv run python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
@@ -211,7 +300,7 @@ jobs:
         continue-on-error: true
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: coverage-xml-${{ github.event.pull_request.head.sha || github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: coverage-xml-${{ needs.changes.outputs.head }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             coverage.xml
             coverage-provenance.json
@@ -226,6 +315,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
+          ref: ${{ needs.changes.outputs.tested }}
           # Stop-hook parity verifies terminating-refresh file shape against HEAD's parent.
           fetch-depth: 0
 
@@ -267,6 +357,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ needs.changes.outputs.tested }}
 
       - name: Aggregate classification, package and parity results
         env:
@@ -277,6 +369,8 @@ jobs:
         run: /usr/bin/python3 tools/ci_aggregate.py
 
   lint:
+    needs: changes
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     name: ruff (lint + format) — blocking
     # Blocking as of R-200-ci-lint-typecheck-blocking — the tree is ruff-clean
@@ -285,6 +379,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
+          ref: ${{ needs.changes.outputs.tested }}
           fetch-depth: 0
 
       - name: Install uv + Python 3.12
@@ -314,6 +409,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ needs.changes.outputs.tested }}
 
       - name: Install uv + Python 3.12
         uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081 # v5
@@ -372,6 +469,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ needs.changes.outputs.tested }}
 
       - name: Install uv + Python 3.12
         uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081 # v5
@@ -389,6 +488,8 @@ jobs:
         run: uv run --no-sync pytest ${{ matrix.test_root }} -m "not e2e"
 
   substitution-ledger:
+    needs: changes
+    if: ${{ !cancelled() }}
     # R-600-substitution-ledger-schema — the tally-validation gate. Derives the
     # bucket counts + canonical integers from `.harness/substitutions.yaml` (the
     # single source of truth) and FAILS on an impossible tally: a bucket sum != 54,
@@ -404,6 +505,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ needs.changes.outputs.tested }}
 
       - name: Install uv + Python 3.12
         uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081 # v5
@@ -422,6 +525,8 @@ jobs:
         run: uv run python -m pytest test_substitution_ledger.py -q
 
   claude-md-citations:
+    needs: changes
+    if: ${{ !cancelled() }}
     # R-CTX-1 U-CTX-14 — the CLAUDE.md §-citation resolution gate. Invariant I-1 requires
     # canonical citations to resolve, and Arc 5 relocates root CLAUDE.md §-bodies into
     # governance packs; this job is what makes that relocation safe. It inventories every
@@ -442,6 +547,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ needs.changes.outputs.tested }}
 
       - name: Install uv + Python 3.12
         uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081 # v5
@@ -465,6 +572,8 @@ jobs:
           test_claude_md_citation_resolver.py test_governance_router.py -q
 
   arc-ledger:
+    needs: changes
+    if: ${{ !cancelled() }}
     # R-FS-1 roadmap overhaul — the arc-ledger tally-validation gate (byte-parallel to the
     # substitution-ledger job above). Derives every R-FS-1 arc + unit count from the single
     # source `.harness/arc-ledger.yaml` and FAILS on an impossible/stale tally: a frozen arc
@@ -485,6 +594,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
+          ref: ${{ needs.changes.outputs.tested }}
           # FULL history: roadmap_status_refresh.py --check's terminating-refresh
           # shape gate (U-CTX-03 AC #2) needs HEAD's PARENT — on a depth-1 clone
           # `git show HEAD` lists the ENTIRE tree (parentless root-commit diff),
@@ -535,6 +645,8 @@ jobs:
           test_module_path_guard.py test_leg_selfcheck.py test_roadmap_ritual_smoke.py -q
 
   semantic-overlay:
+    needs: changes
+    if: ${{ !cancelled() }}
     # R-IF-112 — the spec ↔ code ↔ CXA-seam ↔ substitution overlay drift gate.
     # Deterministically re-derives the overlay from HEAD (parseable docstring cites +
     # the code-resident PATTERN_P1_SEAMS enumeration + substitutions.yaml) and FAILS on
@@ -549,6 +661,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ needs.changes.outputs.tested }}
 
       - name: Install uv + Python 3.12
         uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081 # v5
@@ -583,6 +697,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ needs.changes.outputs.tested }}
 
       - name: Install uv + Python 3.12
         uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081 # v5
@@ -604,6 +720,9 @@ jobs:
       - name: CI aggregate regression tests (independent required witness)
         run: uv run python -m pytest tools/test_ci_aggregate.py -q
 
+      - name: CI result binding + metadata routing tests (WO-U10)
+        run: uv run python -m pytest tools/test_ci_result_binding.py -q
+
       - name: Codex loop tests (kept out of the parity gate on latency)
         run: uv run python -m pytest tools/test_codex_loop.py -q
 
@@ -611,6 +730,8 @@ jobs:
         run: uv run python -m pytest tools/test_review_loop_gate.py -q
 
   q1-review-gate:
+    needs: changes
+    if: ${{ !cancelled() }}
     # R-CL-Q1 — provider-free structured review artifact gate. This tool lives
     # outside pytest's 7 package testpaths, so CI pins its tests explicitly.
     runs-on: ubuntu-latest
@@ -618,6 +739,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ needs.changes.outputs.tested }}
 
       - name: Install uv + Python 3.12
         uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081 # v5
@@ -635,6 +758,8 @@ jobs:
         run: uv run python tools/q1_review_gate.py --schema | uv run python -m json.tool >/dev/null
 
   q3-evidence-and-closure-gate:
+    needs: changes
+    if: ${{ !cancelled() }}
     # B-35 (.harness/forward-register.yaml) — these tools/*.py test modules
     # lived outside pytest's 7 package testpaths with no CI job of their own,
     # so a real, currently-red qa_evidence_matrix.py --check gap (12 contracts
@@ -645,6 +770,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ needs.changes.outputs.tested }}
 
       - name: Install uv + Python 3.12
         uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081 # v5
@@ -666,6 +793,8 @@ jobs:
         run: uv run python tools/closure_gate.py --check
 
   gate-log-consistency:
+    needs: changes
+    if: ${{ !cancelled() }}
     # B-230 Task 1 — the fast path above skips pytest (which runs
     # tools/test_merge_gate_log.py through codex-parity-check.sh) on exactly the commits
     # that append gate rows, and no other job ran the C-HE-23 §2 JSONL↔Markdown
@@ -682,6 +811,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ needs.changes.outputs.tested }}
 
       - name: Install uv + Python 3.12
         uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081 # v5
@@ -696,6 +827,8 @@ jobs:
         run: uv run python tools/merge_gate_log.py check
 
   codex-context-guard:
+    needs: changes
+    if: ${{ !cancelled() }}
     # R-600-codex-context-guard — Codex-side context-rot gate. The guard is stdlib-only
     # so the runtime check uses /usr/bin/python3; pytest still runs under uv for the
     # repo's pinned Python/test environment. Hard failures include root-checkout edits,
@@ -706,6 +839,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
+          ref: ${{ needs.changes.outputs.tested }}
           # FULL history (not the default shallow depth-1). The guard's `--base-ref`
           # diff AND `_lag_expected()` (which runs `git show --name-only HEAD` to confirm
           # a refresh-tip changed ONLY roadmap_status.md) both need HEAD's PARENT
@@ -728,14 +862,16 @@ jobs:
       - name: Codex context guard runtime check
         run: >
           /usr/bin/python3 tools/codex_context_guard.py check
-          --base-ref "${{ github.event.pull_request.base.sha || github.event.before }}"
-          --head-ref "${{ github.event.pull_request.head.sha || github.sha }}"
+          --base-ref "${{ needs.changes.outputs.base }}"
+          --head-ref "${{ needs.changes.outputs.head }}"
           --allow-roadmap-drift
 
       - name: Codex context guard tests
         run: uv run python -m pytest tools/test_codex_context_guard.py -q
 
   split-brain:
+    needs: changes
+    if: ${{ !cancelled() }}
     # U-HE-33 / C-HE-12 §2 — SPLIT_BRAIN_LEDGER CI backstop: one arc row per `arc_id`
     # in the metrics ledger (C-HE-25). The plan sketched this job gated to pushes on
     # main; as built it runs on PRs too — `main_protection.blocking_contexts()` derives
@@ -755,6 +891,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ needs.changes.outputs.tested }}
       - name: one arc row per arc_id
         # `shell: bash` gives -eo pipefail (the default runner shell has neither), so a
         # jq error INSIDE the pipeline fails the job; the all-objects check refuses
@@ -768,6 +906,8 @@ jobs:
           [ -z "$dups" ] || { echo "SPLIT_BRAIN_LEDGER: $dups"; exit 1; }
 
   clearance-corpus:
+    needs: changes
+    if: ${{ !cancelled() }}
     # R-CTX-1 / U-CTX-10 — the clearance-marker frontmatter gate. `.harness/clearance/*.md`
     # markers are the version-binding half of the X-AL-3 enforcement triad (root CLAUDE.md
     # §4.5), and 70 of them were unparseable YAML at the arc's grounding sweep (an unquoted
@@ -784,6 +924,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ needs.changes.outputs.tested }}
 
       - name: Install uv + Python 3.12
         uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081 # v5
