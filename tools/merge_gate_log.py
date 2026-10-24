@@ -67,11 +67,18 @@ _LENS_RE = re.compile(r"^merge-gate-[a-z-]+$")
 #: The round column makes each line's identity exact -- two same-second reruns at one head,
 #: lens and verdict are distinct lines (codex R9 P2). The legacy per-PR narrative rows
 #: (`| #NNNN | <date> | <branch> | ... |`) do not match it.
-_MD_ROW = re.compile(
-    r"^\|\s*(?P<ts>\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ)\s*\|\s*#(?P<pr>\d+)\s*\|\s*"
-    r"(?P<head>[0-9a-f]{12})\s*\|\s*(?P<lens>merge-gate-[a-z-]+)\s*\|\s*"
-    r"(?P<verdict>APPROVE|BLOCK)\s*\|\s*(?P<n>\d+) finding\(s\)\s*\|\s*r(?P<round>\d+)\s*\|"
-)
+def _md_shape(terminals: str) -> re.Pattern[str]:
+    return re.compile(
+        r"^\|\s*(?P<ts>\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ)\s*\|\s*#(?P<pr>\d+)\s*\|\s*"
+        r"(?P<head>[0-9a-f]{12})\s*\|\s*(?P<lens>merge-gate-[a-z-]+)\s*\|\s*"
+        rf"(?P<verdict>{terminals})\s*\|\s*(?P<n>\d+) finding\(s\)\s*\|\s*r(?P<round>\d+)\s*\|"
+    )
+
+
+_MD_ROW = _md_shape("APPROVE|BLOCK")
+#: Every line `_md_line` writes, REVIEWER_UNAVAILABLE included: the only md content a trial
+#: landing may append.
+_MD_LINE = _md_shape("|".join(rw.TERMINAL_STATES))
 #: The lens contract's trailing line (merge-gate SKILL.md "Parsing -- fail closed"): EXACTLY
 #: `VERDICT: APPROVE` or `VERDICT: BLOCK: <reason>` -- a FULL-line match, so `VERDICT: APPROVE
 #: or BLOCK` / `VERDICT: APPROVE (tentative)` are ambiguous, not approvals (codex R6 P1), and a
@@ -746,8 +753,45 @@ def binding_path(lens: str, values: Mapping[str, str]) -> Path:
     return LENS_SCRATCH / f"merge-gate-binding-{lens}-{digest}.json"
 
 
-#: The only files a post-gate "log-only" commit may touch (C-HE-23 §2 sibling + human view).
-GATE_ROW_FILES = frozenset({".harness/merge-gate-log.jsonl", ".harness/merge-gate-log.md"})
+#: What a trial landing may append after the reviewed head: verdict and receipt observations,
+#: and adjudications accepting a finding. Releasing a finding, a proof or a demotion is a
+#: judgment the reviewed cycle never made, so it reopens judgment instead of transferring.
+_TRANSFERABLE_ROWS = frozenset({
+    ("finding", None), ("no_finding", None), ("reviewer_unavailable", None),
+    ("finding_adjudication", "accepted"),
+})
+
+
+def _parse_rows(text: str) -> list[dict]:
+    return [json.loads(line) for line in text.splitlines() if line.strip()]
+
+
+def _check_appended_rows(before: str, lines: list[str]) -> None:
+    rows = _parse_rows(before)
+    for line in lines:
+        row = json.loads(line)
+        # [LAW:single-enforcer] the log's own write-time checkpoint decides row legality
+        fr.validate(row)
+        fr._check_against_prior_rows(row, rows)
+        if (row["record_kind"], row["disposition"]) not in _TRANSFERABLE_ROWS:
+            raise ValueError(f"{row['record_kind']} {row['disposition']} is not transferable")
+        rows.append(row)
+
+
+def _check_appended_md(before: str, lines: list[str]) -> None:
+    for line in lines:
+        if not _MD_LINE.fullmatch(line):
+            raise ValueError(f"{line!r} is not a structured gate line")
+
+
+#: The only files a post-gate "log-only" commit may touch (C-HE-23 §2 sibling + human view),
+#: each with the check its appended lines pass before a trial approval transfers.
+_GATE_LOG_ROWS = ".harness/merge-gate-log.jsonl"
+_GATE_ROW_CHECKS = {
+    _GATE_LOG_ROWS: _check_appended_rows,
+    ".harness/merge-gate-log.md": _check_appended_md,
+}
+GATE_ROW_FILES = frozenset(_GATE_ROW_CHECKS)
 
 
 def _blob(repo: Path, ref: str, path: str) -> bytes:
@@ -792,8 +836,8 @@ def _binding_at(repo: Path, base: str, ref: str) -> tuple[str, str]:
 @dataclass(frozen=True)
 class LandingDelta:
     """The reviewed and final (head, digest) bindings, both computed over one base, and what
-    between them is not a gate-row append. Empty `changed` proves a gate-row-only landing
-    delta between exactly those bindings."""
+    between them is not a permitted gate-row append. Empty `changed` proves a transferable
+    gate-row-only landing delta between exactly those bindings."""
 
     reviewed: tuple[str, str]
     final: tuple[str, str]
@@ -805,22 +849,36 @@ def landing_proof(
     repo: Path | None = None,
 ) -> LandingDelta:
     """The trial transfer proof: both (head, digest) bindings computed here over one base,
-    with `landing_delta` between them. An unresolvable ref raises; it is never a clean delta."""
+    with `landing_delta` between them plus every appended gate-row line a transfer does not
+    permit. An unresolvable ref raises; it is never a clean delta."""
     repo = repo or REPO
     reviewed, final = (_binding_at(repo, base, ref) for ref in (reviewed_head, final_head))
-    return LandingDelta(reviewed, final, tuple(landing_delta(reviewed[0], final[0], repo)))
+    changed = landing_delta(reviewed[0], final[0], repo)
+    for path, check in _GATE_ROW_CHECKS.items():
+        before, after = (_blob(repo, ref, path) for ref in (reviewed[0], final[0]))
+        # a non-append is already in `changed`; only an append's new lines are judged here
+        appended = after[len(before):] if after.startswith(before) else b""
+        try:
+            check(before.decode("utf-8"), appended.decode("utf-8").splitlines())
+        except ValueError as exc:
+            changed.append(f"{path} (not a permitted gate-row append: {exc})")
+    return LandingDelta(reviewed, final, tuple(sorted(changed)))
 
 
 def trial_review_decision(
-    rows: list[dict], *, policy: rlg.TrialPolicy, unit: str, arc: str,
-    authors: frozenset[str], doc_only: bool, final_head: str = "HEAD",
-    base: str = rlg.FULL_DIFF_REF, repo: Path | None = None,
+    *, policy: rlg.TrialPolicy, unit: str, arc: str, authors: frozenset[str], doc_only: bool,
+    final_head: str = "HEAD", base: str = rlg.FULL_DIFF_REF, repo: Path | None = None,
 ) -> rlg.TrialReviewDecision:
-    """The trial approval boundary over Git: `final_head`'s binding, and whether the recorded
-    reviewed binding's approval transfers onto it, are computed here and never supplied."""
+    """The trial approval boundary over Git: the gate log committed at `final_head`, its
+    binding, and whether the recorded reviewed binding's approval transfers onto it are all
+    computed here and never supplied."""
+    repo = repo or REPO
+    # [LAW:no-ambient-temporal-coupling] one resolved commit supplies both the rows and the
+    # proof's final binding, so a moving ref cannot pair one head's log with another's diff
+    final = rw._git(repo, "rev-parse", "--verify", f"{final_head}^{{commit}}")
+    rows = _parse_rows(_blob(repo, final, _GATE_LOG_ROWS).decode("utf-8"))
     done = rlg.replay(rows, arc, doc_only=doc_only).completed_by
-    proof = landing_proof(final_head if done is None else done.head_sha, final_head,
-                          base=base, repo=repo)
+    proof = landing_proof(final if done is None else done.head_sha, final, base=base, repo=repo)
     # [LAW:effects-at-boundaries] the pure reducer judges one exact binding; when Git proves
     # only gate rows follow the reviewed head, it judges that head's Git-derived binding, so an
     # approval lands on final only if the recorded review named exactly those bytes

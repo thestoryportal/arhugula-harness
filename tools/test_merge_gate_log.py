@@ -450,8 +450,32 @@ def test_landing_delta_transfers_only_over_gate_row_files(tmp_path: Path):
     ]
 
 
+_TRIAL_ARC = "b-000-test"
+_TRIAL_TS = "2026-01-01T00:00:00Z"
+
+
+def _observe(jl: Path, head: str, digest: str, producer: str, *, arc: str = _TRIAL_ARC,
+             cycle_pass: str | None = None, severity: str | None = None) -> dict:
+    """One schema-valid observation as its writer records it: a `finding` at `severity`, else a
+    clean `no_finding`."""
+    kind, sev, ft = (("finding", severity, "terminal-block") if severity
+                     else ("no_finding", "info", "clean-approve"))
+    return fr.append_observation(
+        dict(location=producer, observed_evidence="observed", expected_contract="contract",
+             severity=sev, finding_type=ft, lineage_claim="fresh", producer=producer),
+        fr.Envelope(record_kind=kind, ts=_TRIAL_TS, arc_id=arc, lane_id="h-w-1", head_sha=head,
+                    base_sha=B, diff_digest=digest, round_n=1, cycle_pass=cycle_pass),
+        jl)
+
+
+def _adjudicate(jl: Path, finding: dict, disposition: str, ts: str) -> None:
+    fr.append_row({**finding, "record_kind": "finding_adjudication", "ts": ts,
+                   "disposition": disposition, "disposition_actor": "claude_absorber"}, jl)
+
+
 def _landing_repo(tmp_path: Path):
-    """A topic branch off `main`: a reviewed commit changing code.py, then a gate-row append."""
+    """A topic branch off `main`: a reviewed commit changing code.py, then one appended verdict
+    row and its structured md line."""
     repo = tmp_path / "r"
     repo.mkdir()
     g = lambda *a: subprocess.run(  # noqa: E731
@@ -460,8 +484,12 @@ def _landing_repo(tmp_path: Path):
     g("config", "user.email", "t@t")
     g("config", "user.name", "t")
     (repo / ".harness").mkdir()
-    log = repo / ".harness" / "merge-gate-log.jsonl"
-    log.write_text('{"a": 1}\n')
+    jl, md = repo / ".harness" / "merge-gate-log.jsonl", repo / ".harness" / "merge-gate-log.md"
+    _observe(jl, H, D, LENS, arc="pr-1")
+    # a release recorded before the review is history, not part of the landing delta
+    _adjudicate(jl, _observe(jl, H, D, LENS, arc="pr-1", severity="P3"), "rejected",
+                "2026-01-02T00:00:00Z")
+    md.write_text(mgl._md_line(_TRIAL_TS, 1, H, LENS, "APPROVE", 0, 1))
     g("add", "-A")
     g("commit", "-qm", "base")
     g("checkout", "-qb", "topic")
@@ -469,7 +497,9 @@ def _landing_repo(tmp_path: Path):
     g("add", "-A")
     g("commit", "-qm", "reviewed")
     reviewed = g("rev-parse", "HEAD")
-    log.write_text('{"a": 1}\n{"b": 2}\n')
+    _observe(jl, reviewed, D, LENS, arc="pr-2")
+    with md.open("a") as fh:
+        fh.write(mgl._md_line(_TRIAL_TS, 2, reviewed, LENS, "REVIEWER_UNAVAILABLE", 0, 1))
     g("commit", "-qam", "gate rows")
     return repo, g, reviewed, g("rev-parse", "HEAD")
 
@@ -495,38 +525,72 @@ def test_landing_proof_binds_the_reviewed_and_final_bindings(tmp_path: Path):
         mgl.landing_proof("not-a-ref", "HEAD", base="main", repo=repo)
 
 
-def _clean_trial_cycle(arc: str, head: str, digest: str) -> list[dict]:
-    """Independent passes 1, 2 and 3 completing one trial cycle on exactly (head, digest)."""
+def _trial_cycle(jl: Path, head: str, digest: str, *, finding: str | None = None) -> list[dict]:
+    """Independent passes 1, 2 and 3 on exactly (head, digest), committed to the gate log; pass
+    1's loop reviewer raises a `finding`-severity observation when one is given."""
     passes = {"1": ["codex_review_wrapper", *rlg.LENSES],
               "2": ["codex_review_wrapper", rlg._WITNESS_LENS], "3": [rlg.LENSES[0]]}
-    return [dict(arc_id=arc, cycle_pass=p, head_sha=head, diff_digest=digest, producer=producer,
-                 record_kind="no_finding", round_n=1)
+    return [_observe(jl, head, digest, producer, cycle_pass=p,
+                     severity=finding if (p, producer) == ("1", "codex_review_wrapper") else None)
             for p, producers in passes.items() for producer in producers]
 
 
-def test_trial_approval_transfers_only_across_a_git_proven_gate_row_delta(tmp_path: Path):
-    """WO-U07 F1 (review pass 2): the approval boundary derives the landing proof from Git, so
-    no caller-asserted empty delta carries approval across an unreviewed source change."""
-    repo, g, reviewed, _ = _landing_repo(tmp_path)
-    arc = "b-000-test"
+def _trial_decision(repo: Path, final_head: str = "HEAD") -> rlg.TrialReviewDecision:
     policy = rlg.parse_trial_policy({"version": "wo-u07-trial-v1", "units": {"u07": {
-        "arcs": [arc], "legacy": {"rounds": [], "p1_streak": 0, "stopped": False}}}})
+        "arcs": [_TRIAL_ARC], "legacy": {"rounds": [], "p1_streak": 0, "stopped": False}}}})
+    return mgl.trial_review_decision(
+        policy=policy, unit="u07", arc=_TRIAL_ARC, authors=frozenset({"claude"}), doc_only=False,
+        final_head=final_head, base="main", repo=repo)
 
-    def state(rows: list[dict], final_head: str = "HEAD") -> str:
-        return mgl.trial_review_decision(
-            rows, policy=policy, unit="u07", arc=arc, authors=frozenset({"claude"}),
-            doc_only=False, final_head=final_head, base="main", repo=repo).state
 
-    recorded = mgl.landing_proof(reviewed, reviewed, base="main", repo=repo).reviewed
-    clean = _clean_trial_cycle(arc, *recorded)
-    assert state([]) == "unreviewed"
-    assert state(clean, reviewed) == "approved"  # the exact reviewed binding
-    assert state(clean) == "approved"  # only gate rows were appended since
-    misrecorded = _clean_trial_cycle(arc, reviewed, "d" * 64)  # not the reviewed head's diff
-    assert state(misrecorded, reviewed) == state(misrecorded) == "binding_stale"
-    (repo / "code.py").write_text("x = 2\n")  # the reviewer's repro: an unreviewed final edit
+def test_trial_approval_transfers_only_across_a_git_proven_gate_row_delta(tmp_path: Path):
+    """WO-U07 F1 (review pass 2): the approval boundary reads the committed gate log and derives
+    the landing proof from Git, so no caller-asserted delta carries approval across an
+    unreviewed source change."""
+    repo, g, reviewed, _ = _landing_repo(tmp_path)
+    jl = repo / ".harness" / "merge-gate-log.jsonl"
+    assert _trial_decision(repo).state == "unreviewed"
+    g("checkout", "-qb", "misrecorded")
+    _trial_cycle(jl, reviewed, "d" * 64)  # not the reviewed head's diff
+    g("commit", "-qam", "verdict rows")
+    assert _trial_decision(repo).state == "binding_stale"
+    g("checkout", "-q", "topic")
+    _trial_cycle(jl, *mgl.landing_proof(reviewed, reviewed, base="main", repo=repo).reviewed)
+    g("commit", "-qam", "verdict rows")
+    assert _trial_decision(repo).state == "approved"  # only verdict rows follow the review
+    (repo / "code.py").write_text("x = 2\n")  # pass 2 repro: an unreviewed final edit
     g("commit", "-qam", "sneaky")
-    assert state(clean) == "binding_stale"
+    assert _trial_decision(repo).state == "binding_stale"
+
+
+def test_trial_transfer_refuses_appended_rows_that_release_a_finding(tmp_path: Path):
+    """WO-U07 F3 (review pass 3): only verdict/receipt rows and finding acceptances the log's own
+    writer admits ride a transfer; a malformed or releasing disposition reopens judgment."""
+    repo, g, reviewed, _ = _landing_repo(tmp_path)
+    jl, md = repo / ".harness" / "merge-gate-log.jsonl", repo / ".harness" / "merge-gate-log.md"
+    recorded = mgl.landing_proof(reviewed, reviewed, base="main", repo=repo).reviewed
+    cycle = _trial_cycle(jl, *recorded, finding="P2")
+    p2 = next(r for r in cycle if r["record_kind"] == "finding")
+    _adjudicate(jl, p2, "accepted", "2026-01-02T00:00:00Z")  # tightening rides the transfer
+    g("commit", "-qam", "verdicts")
+    blocked = _trial_decision(repo)
+    assert blocked.state == "changes_required" and blocked.blocking_findings == (p2["finding_id"],)
+    released = json.dumps({"record_kind": "finding_adjudication", "finding_id": p2["finding_id"],
+                           "disposition": "rejected"})
+    appends = {
+        "malformed": lambda: jl.write_text(jl.read_text() + released + "\n"),  # the pass 3 repro
+        "rejected": lambda: _adjudicate(jl, p2, "rejected", "2026-01-03T00:00:00Z"),
+        "downgraded": lambda: jl.write_text(  # a well-formed retry rewriting the report's core
+            jl.read_text() + json.dumps({**p2, "severity": "P3"}, sort_keys=True) + "\n"),
+        "narrative": lambda: md.write_text(md.read_text() + "| #9 | waived |\n"),
+    }
+    for name, append in appends.items():
+        g("checkout", "-qb", name, "topic")
+        append()
+        g("commit", "-qam", name)
+        d = _trial_decision(repo)
+        assert d.state != "approved" and "binding_stale" in d.reasons, name
+        assert mgl.landing_proof(reviewed, "HEAD", base="main", repo=repo).changed, name
 
 
 def test_one_lens_sibling_never_vouches_for_another_lens(tmp_path: Path):
