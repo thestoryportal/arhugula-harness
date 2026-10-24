@@ -8,6 +8,12 @@
 # Enable: git config core.hooksPath .githooks
 # (See .githooks/README.md for setup details.)
 
+# WO-U06: the trial commit gate runs first, for every commit however the command that
+# made it was spelled, and blocks unless it passes. Legacy work exits 0 there and
+# continues to the advisory check below unchanged.
+ROOT=$(git rev-parse --show-toplevel) || exit 1
+/usr/bin/python3 "$ROOT/tools/workflow_commit.py" pre-commit --root "$ROOT" || exit $?
+
 STAGED=$(git diff --cached --name-only --diff-filter=AM 2>/dev/null || true)
 
 DESIGN_SUBSTRATE_STAGED=$(echo "$STAGED" | grep '^design-substrate/' || true)

@@ -298,27 +298,26 @@ def pre_commit(payload: dict[str, Any]) -> int:
     command = tool_input.get("command") if isinstance(tool_input, dict) else None
     if payload.get("tool_name") != "Bash" or not isinstance(command, str):
         return 0
+    if not COMMIT_RE.search(command):
+        return 0
 
     cwd = project_dir(payload)
-    # WO-U06: every commit the command makes, in any spelling, is routed by its own
-    # repository; trial commits check their actual staged scope, never whole-project
-    # Pyright or release closeout, and an unreadable commit effect holds unless no
-    # worktree can select trial.
+    # WO-U06: Git's pre-commit hook gates a trial commit however it is spelled, over the
+    # index Git records (tools/workflow_commit.py), so a trial commit runs neither
+    # whole-project Pyright nor release closeout here; legacy work keeps this gate.
     try:
-        outcome = workflow_commit.command_outcome(command, cwd, created_at=workflow_commit.now())
-        legacy_gate = bool(COMMIT_RE.search(command)) and isinstance(
-            workflow_commit.profile_at(cwd), workflow_commit.Legacy
-        )
+        profile = workflow_commit.profile_at(cwd)
     except (ValueError, OSError, subprocess.CalledProcessError) as exc:
         print(f"Codex hook adapter: workflow profile unreadable: {exc}", file=sys.stderr)
         return 2
-    if outcome.result != "passed":
-        print(
-            "\n".join((*outcome.detail, f"reason_codes: {', '.join(outcome.reasons)}")),
-            file=sys.stderr,
-        )
-        return 2
-    return legacy_pre_commit(cwd) if legacy_gate else 0
+    match profile:
+        case workflow_commit.Legacy():
+            return legacy_pre_commit(cwd)
+        case workflow_commit.Held(reasons=reasons):
+            print(f"trial selection held: {', '.join(reasons)}", file=sys.stderr)
+            return 2
+        case workflow_commit.Trial():
+            return 0
 
 
 def legacy_pre_commit(cwd: Path) -> int:

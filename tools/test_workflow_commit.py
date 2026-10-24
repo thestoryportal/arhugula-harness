@@ -1,26 +1,31 @@
 """WO-U06 / WP-04 — proportionate trial commits without duplicate unchanged local gates
 (spec WS-07, WS-08 §10.1-10.2; verification WT-10, WT-11 local part).
 
-A trial commit is found in any command spelling and routed by its own repository. It
-inspects the actual index, refuses commit modes that record anything else, and runs the
-proportionate local set from the repository root: Ruff and the behavior test for changed
-Python, the CI record producers and parsers for records, and the named risk expansion —
-never whole-project Pyright or closeout. Checks read a snapshot of the index, so unstaged
-work neither reaches nor blocks them; a staged path whose worktree bytes differ from the
-index, or a change to the index while they run, holds. An identical check runs once; any
-material input change, checker identity included, runs it again; failed, unavailable or
-corrupt results never pass. A commit after or alongside an effect, or one the reader
-cannot follow, holds unless no worktree can select trial. An unreadable policy holds
-enrolled work. Legacy work keeps the existing gate.
+Git's pre-commit hook runs the trial gate for every commit, however the command that
+makes it is spelled, and only a worktree where Git runs that hook can select trial. The
+gate holds a commit whose staging is implicit, inspects the actual index and runs the
+proportionate local set: Ruff and the behavior test for changed Python, the CI record
+producers and parsers for records, and the named risk expansion — never whole-project
+Pyright or closeout. Checks run in a Git checkout of exactly the staged tree, so unstaged
+work neither reaches nor blocks them while Git-reading checks still work; a staged path
+whose worktree bytes differ from the index, or a change to the index while they run,
+holds. Every check receives only the pinned environment its receipt records. An
+identical check runs once; any material input change, checker identity or environment
+pin included, runs it again; failed, unavailable or corrupt results never pass. An
+unreadable policy holds enrolled work. Legacy work keeps the existing gates.
 """
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import importlib.util
 import json
+import os
+import shutil
 import subprocess
-from collections.abc import Sequence
+import sys
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 import pytest
@@ -28,9 +33,9 @@ import pytest
 from tools import workflow_boundaries as wb
 from tools import workflow_commit as wc
 from tools.workflow_policy import (
-    ActivationAbsent,
-    ActivationDefect,
+    EligibleUnit,
     PolicyDefect,
+    ProfileSelection,
     WorkflowPolicy,
     load_policy,
 )
@@ -38,6 +43,7 @@ from tools.workflow_policy import (
 UNIT = "arhugula-harness-trial-193.7x7.nff"
 CREATED = "2026-10-24T00:00:00.000000Z"
 REPO_ROOT = Path(__file__).resolve().parent.parent
+ENV = {"HOME": "/home/t", "PATH": "/usr/bin:/bin"}
 
 
 def _policy() -> WorkflowPolicy:
@@ -75,7 +81,7 @@ class FakeRuff:
     malformed stdin, and every other check passes unless `exit_code` overrides it. A
     `--version` probe answers from `versions` by the program asked (`ruff`, `bash`, `uv`,
     `python`), else `version`; None means unavailable. Each check records the files its
-    directory held when it ran."""
+    directory held and the environment it received."""
 
     def __init__(
         self, version: bytes = b"ruff 0.0.1", exit_code: int | None = None, **versions: bytes | None
@@ -84,9 +90,15 @@ class FakeRuff:
         self.checks: list[list[str]] = []
         self.cwds: list[Path] = []
         self.files: list[dict[str, str]] = []
+        self.environments: list[dict[str, str]] = []
 
     def __call__(
-        self, argv: Sequence[str], stdin: bytes, cwd: Path, timeout: float
+        self,
+        argv: Sequence[str],
+        stdin: bytes,
+        cwd: Path,
+        timeout: float,
+        environment: Mapping[str, str],
     ) -> subprocess.CompletedProcess[bytes]:
         if argv[-1] == "--version":
             answer = self.versions.get(argv[-2], self.version)
@@ -94,6 +106,7 @@ class FakeRuff:
             return subprocess.CompletedProcess(argv, code, out, b"")
         self.checks.append(list(argv))
         self.cwds.append(cwd)
+        self.environments.append(dict(environment))
         self.files.append(
             {
                 str(path.relative_to(cwd)): path.read_text()
@@ -115,8 +128,8 @@ def ruff_runs(fake: FakeRuff) -> list[list[str]]:
     return [argv for argv in fake.checks if "ruff" in argv]
 
 
-def commit(root: Path, ruff: FakeRuff) -> wc.Outcome:
-    return wc.commit_outcome(root, TRIAL, created_at=CREATED, run=ruff)
+def commit(root: Path, ruff: FakeRuff, environment: Mapping[str, str] = ENV) -> wc.Outcome:
+    return wc.commit_outcome(root, TRIAL, created_at=CREATED, environment=environment, run=ruff)
 
 
 def stage(root: Path, path: str, text: str) -> None:
@@ -201,13 +214,13 @@ def test_index_change_while_checks_run_holds(repo: Path) -> None:
     ruff = FakeRuff()
 
     def restaging(
-        argv: Sequence[str], stdin: bytes, cwd: Path, timeout: float
+        argv: Sequence[str], stdin: bytes, cwd: Path, timeout: float, env: Mapping[str, str]
     ) -> subprocess.CompletedProcess[bytes]:
         if "pytest" in argv:
             stage(repo, "tools/b.py", "y = 2\n")
-        return ruff(argv, stdin, cwd, timeout)
+        return ruff(argv, stdin, cwd, timeout, env)
 
-    outcome = wc.commit_outcome(repo, TRIAL, created_at=CREATED, run=restaging)
+    outcome = wc.commit_outcome(repo, TRIAL, created_at=CREATED, environment=ENV, run=restaging)
     assert (outcome.result, outcome.reasons) == ("held", ("binding_stale",))
 
 
@@ -338,7 +351,12 @@ def test_exhausted_budget_holds_instead_of_racing_the_hook_timeout(repo: Path) -
     stage(repo, "tools/b.py", "y = 1\n")
     ticks = iter(range(0, 10_000, 1_000))
     outcome = wc.commit_outcome(
-        repo, TRIAL, created_at=CREATED, run=FakeRuff(), clock=lambda: float(next(ticks))
+        repo,
+        TRIAL,
+        created_at=CREATED,
+        environment=ENV,
+        run=FakeRuff(),
+        clock=lambda: float(next(ticks)),
     )
     assert (outcome.result, outcome.reasons) == ("held", ("check_pending",))
 
@@ -358,7 +376,9 @@ def test_stop_reuses_a_result_for_identical_unchanged_subjects(repo: Path) -> No
     (repo / "tools" / "a.py").write_text("x = 2\n")
     ruff = FakeRuff()
     for _ in range(2):
-        assert wc.stop_outcome(repo, TRIAL, created_at=CREATED, run=ruff) == wc.PASSED
+        assert (
+            wc.stop_outcome(repo, TRIAL, created_at=CREATED, environment=ENV, run=ruff) == wc.PASSED
+        )
     assert len(ruff.checks) == 2
 
 
@@ -387,10 +407,10 @@ def test_material_change_runs_the_check_again(repo: Path, mutate) -> None:  # ty
 def test_head_move_runs_the_check_again(repo: Path) -> None:
     (repo / "tools" / "a.py").write_text("x = 2\n")
     ruff = FakeRuff()
-    wc.stop_outcome(repo, TRIAL, created_at=CREATED, run=ruff)
+    wc.stop_outcome(repo, TRIAL, created_at=CREATED, environment=ENV, run=ruff)
     stage(repo, "docs/note.md", "record\n")
     git(repo, "commit", "-qm", "record")
-    wc.stop_outcome(repo, TRIAL, created_at=CREATED, run=ruff)
+    wc.stop_outcome(repo, TRIAL, created_at=CREATED, environment=ENV, run=ruff)
     assert len(ruff.checks) == 4
 
 
@@ -483,180 +503,6 @@ def test_unreadable_policy_holds_an_arc_bound_worktree(
     assert isinstance(wc.worktree_profile(repo), wc.Held)
 
 
-def _no_aliases(_root: Path, _name: str) -> str | None:
-    return None
-
-
-@pytest.mark.parametrize(
-    ("command", "args"),
-    [
-        ("git commit -m x", ("-m", "x")),
-        ("git -C {repo} commit -m x", ("-m", "x")),
-        ("cd {repo} && git commit -m x", ("-m", "x")),
-        ("(cd {repo}; git commit -qm x) && ls", ("-qm", "x")),
-        ("rtk /usr/bin/git --no-pager commit -m x 2>&1 | tail", ("-m", "x")),
-        ("env A=1 git commit -m x", ("-m", "x")),
-        ("echo $(git commit -m x)", ("-m", "x")),
-        ("git commit -F - <<'EOF'\nsubject; git push\nEOF", ("-F", "-")),
-        ("g'it' commit -m x", ("-m", "x")),
-        ('bash -c "git -C {repo} commit -m x"', ("-m", "x")),
-        ('echo "$(git commit -m x)"', ("-m", "x")),
-        ("echo `git commit -m x`", ("-m", "x")),
-        ("timeout 5 git commit -m x", ("-m", "x")),
-        ("nice -n 5 git commit -m x", ("-m", "x")),
-        ("env -C {repo} git commit -m x", ("-m", "x")),
-        ("eval git commit -m x", ("-m", "x")),
-        ("git status && git commit -m x && git push", ("-m", "x")),
-    ],
-)
-def test_commit_spellings_are_found_with_their_directory(
-    repo: Path, tmp_path: Path, command: str, args: tuple[str, ...]
-) -> None:
-    """F1: every supported spelling reaches the gate, rooted where git runs."""
-    cwd = tmp_path if "{repo}" in command else repo
-    commits = wc.read_commits(command.format(repo=repo), cwd, _no_aliases)
-    assert commits == (wc.CommitCommand(repo, args),)
-
-
-def test_substituted_message_is_one_commit(repo: Path) -> None:
-    command = "git commit -qm \"$(cat <<'EOF'\nfix (x) `y`\nEOF\n)\""
-    commits = wc.read_commits(command, repo, _no_aliases)
-    assert not isinstance(commits, wc.Unreadable)
-    assert [(c.root, c.args[0]) for c in commits] == [(repo, "-qm")]
-
-
-def test_alias_resolves_to_its_commit(repo: Path) -> None:
-    aliases = {"ci": "commit -q", "c2": "ci"}
-    commits = wc.read_commits("git c2 -m x", repo, lambda _r, name: aliases.get(name))
-    assert commits == (wc.CommitCommand(repo, ("-q", "-m", "x")),)
-
-
-@pytest.mark.parametrize(
-    "command",
-    [
-        "GIT_DIR=elsewhere git commit -m x",
-        "git -c alias.ci=commit ci -m x",
-        "git --git-dir=x commit -m x",
-        "cd $TARGET && git commit -m x",
-        "git commit -F - <<EOF\nnever ends",
-        "git commit -m 'unbalanced",
-        "$GIT commit -m x",
-        "g?t commit -m x",
-        "git $(echo commit) -m x",
-        'bash -c "$CMD"',
-        "{ git commit -m x; }",
-        "xargs git commit -m x",
-        "python3 -c 'import os; os.system(\"git commit\")'",
-        "echo git commit | bash",
-        "env --bogus git commit -m x",
-        "git commit -F - <<EOF\n$(date)\nEOF",
-        "export GIT_INDEX_FILE=x; git commit -m x",
-    ],
-)
-def test_commit_effect_that_cannot_be_read_is_unreadable(repo: Path, command: str) -> None:
-    assert isinstance(wc.read_commits(command, repo, _no_aliases), wc.Unreadable)
-
-
-@pytest.mark.parametrize(
-    "command",
-    [
-        "git add a.py && git commit -m x",
-        "git add a.py; git commit -m x",
-        'git commit -m "$(git add a.py)"',
-        "echo x > f; git commit -m x",
-        "bash x.sh && git commit -m x",
-        "git commit -m x | tee log",
-        "git commit -m x &",
-        "git commit -qm a && git commit --amend -qm b",
-    ],
-)
-def test_commit_after_or_alongside_an_effect_is_unreadable(repo: Path, command: str) -> None:
-    """F1: the gate inspects the index before the command runs, so anything that can
-    change it first, or at the same time, makes the commit record unchecked bytes."""
-    assert isinstance(wc.read_commits(command, repo, _no_aliases), wc.Unreadable)
-
-
-@pytest.mark.parametrize(
-    "command",
-    ["git status", "ls -la", "git log --oneline | head", "echo commit", "cd $X && git status"],
-)
-def test_commands_without_a_commit_make_none(repo: Path, command: str) -> None:
-    assert wc.read_commits(command, repo, _no_aliases) == ()
-
-
-@pytest.mark.parametrize(
-    "args",
-    [("-am", "x"), ("-a", "-m", "x"), ("--only", "a.py"), ("-m", "x", "a.py"), ("-i", "a.py"),
-     ("--patch",), ("--pathspec-from-file=f",), ("-m", "x", "--", "a.py"), ("--no-verify",)],
-)  # fmt: skip
-def test_commit_modes_that_change_what_is_recorded_are_refused(args: tuple[str, ...]) -> None:
-    """F2: only an explicit-staging commit records exactly the inspected index."""
-    assert wc.commit_selection(args) is not None
-
-
-@pytest.mark.parametrize(
-    "args",
-    [(), ("-m", "x"), ("-qm", "x"), ("--amend", "--no-edit"), ("-F", "-"), ("--message=x",),
-     ("-s", "-m", "x")],
-)  # fmt: skip
-def test_explicit_staging_commit_modes_are_accepted(args: tuple[str, ...]) -> None:
-    assert wc.commit_selection(args) is None
-
-
-def _trial_at(repo: Path):  # type: ignore[no-untyped-def]
-    return lambda root: TRIAL if root == repo else wc.Legacy()
-
-
-def test_commit_all_cannot_record_unchecked_worktree_bytes(
-    repo: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """F2 reproduction: `-am` would commit an unstaged invalid file the index lacks."""
-    monkeypatch.setattr(wc, "worktree_profile", _trial_at(repo))
-    (repo / "tools" / "a.py").write_text("x = (\n")
-    outcome = wc.command_outcome("git commit -am x", repo, created_at=CREATED, run=FakeRuff())
-    assert (outcome.result, outcome.reasons) == ("held", ("invalid_input",))
-
-
-@pytest.mark.parametrize(
-    "spelling",
-    [
-        "git -C {repo} commit -m x",
-        "cd {repo}/tools && git commit -m x",
-        'bash -c "git -C {repo} commit -m x"',
-        "g'it' -C {repo} commit -m x",
-    ],
-)
-def test_commit_spelled_elsewhere_is_gated_by_its_repository(
-    repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, spelling: str
-) -> None:
-    """F1 reproduction: neither the cwd nor a subdirectory hides the trial worktree."""
-    monkeypatch.setattr(wc, "worktree_profile", _trial_at(repo))
-    stage(repo, "tools/b.py", "y = 1  # LINT_BAD\n")
-    command = spelling.format(repo=repo)
-    outcome = wc.command_outcome(command, tmp_path, created_at=CREATED, run=FakeRuff())
-    assert (outcome.result, outcome.reasons) == ("failed", ("check_failed",))
-
-
-@pytest.mark.parametrize(
-    ("policy", "activation", "result"),
-    [
-        (_policy, ActivationAbsent, "passed"),
-        (_policy, lambda: ActivationDefect("unreadable"), "held"),
-        (lambda: PolicyDefect("unreadable"), ActivationAbsent, "held"),
-    ],
-    ids=["dormant", "activation-present", "policy-unreadable"],
-)
-def test_unreadable_command_passes_only_while_no_worktree_can_select_trial(
-    repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, policy, activation, result: str
-) -> None:  # type: ignore[no-untyped-def]
-    """F1 reproduction: an unreadable command may record into any worktree, so it holds
-    from every directory once any can select trial."""
-    monkeypatch.setattr(wc, "observe_policy", policy)
-    monkeypatch.setattr(wc, "read_activation", activation)
-    for cwd in (repo, tmp_path):
-        assert wc.command_outcome("xargs git commit -m x", cwd, created_at=CREATED).result == result
-
-
 def _adapter():  # type: ignore[no-untyped-def]
     path = REPO_ROOT / ".codex" / "hooks" / "codex_hook_adapter.py"
     spec = importlib.util.spec_from_file_location("codex_hook_adapter", path)
@@ -678,14 +524,10 @@ def _recording(adapter, calls: list[list[str]]):  # type: ignore[no-untyped-def]
     return run
 
 
-def _trial_adapter(monkeypatch: pytest.MonkeyPatch, profile: object, ruff: FakeRuff):  # type: ignore[no-untyped-def]
+def _adapter_at(monkeypatch: pytest.MonkeyPatch, profile: object):  # type: ignore[no-untyped-def]
     adapter, calls = _adapter(), []
     monkeypatch.setattr(adapter, "run_bounded", _recording(adapter, calls))
-    monkeypatch.setattr(adapter.workflow_commit, "worktree_profile", profile)
-    gate = adapter.workflow_commit.commit_outcome
-    monkeypatch.setattr(
-        adapter.workflow_commit, "commit_outcome", lambda *a, **k: gate(*a, **{**k, "run": ruff})
-    )
+    monkeypatch.setattr(adapter.workflow_commit, "worktree_profile", lambda _root: profile)
     monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
     return adapter, calls
 
@@ -700,38 +542,25 @@ def test_legacy_commit_keeps_the_existing_pyright_gate(
     assert calls == [["uv", "run", "pyright"], ["git", "rev-parse", "--show-toplevel"]]
 
 
-def test_commit_does_not_require_release_closeout(
-    repo: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    ruff = FakeRuff()
-    adapter, calls = _trial_adapter(monkeypatch, _trial_at(repo), ruff)
-    stage(repo, "tools/b.py", "y = 1\n")
+def test_trial_commit_defers_to_the_git_gate(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """No Pyright, closeout or suite before a trial commit: Git's hook gates it."""
+    adapter, calls = _adapter_at(monkeypatch, TRIAL)
+    monkeypatch.setattr(
+        adapter.workflow_commit, "commit_outcome", lambda *_a, **_k: pytest.fail("gated twice")
+    )
+    stage(repo, "tools/b.py", "y = 1  # LINT_BAD\n")
     assert adapter.pre_commit(_payload(repo)) == 0
-    assert calls == []  # no Pyright, no closeout, no suite
-    assert len(ruff_runs(ruff)) == 2
+    assert calls == []
 
 
-@pytest.mark.parametrize(
-    "profile", [wc.Held(("authority_unavailable",)), "failed"], ids=["held", "failed"]
-)
-def test_trial_commit_blocks_on_a_held_or_failed_outcome(
-    repo: Path, monkeypatch: pytest.MonkeyPatch, profile: object
+def test_held_commit_blocks_without_the_legacy_gate(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    chosen = TRIAL if profile == "failed" else profile
-    adapter, calls = _trial_adapter(monkeypatch, lambda _root: chosen, FakeRuff())
-    stage(repo, "tools/b.py", "y = 1  # LINT_BAD\n")
+    adapter, calls = _adapter_at(monkeypatch, wc.Held(("commit_gate_unbound",)))
     assert adapter.pre_commit(_payload(repo)) == 2
-    assert calls == []  # never falls through to the legacy gate
-
-
-def test_adapter_gates_a_commit_spelled_from_another_directory(
-    repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    adapter, calls = _trial_adapter(monkeypatch, _trial_at(repo), FakeRuff())
-    stage(repo, "tools/b.py", "y = 1  # LINT_BAD\n")
-    assert adapter.pre_commit(_payload(tmp_path, f"cd {repo} && git commit -m x")) == 2
     assert adapter.pre_commit(_payload(repo, "git status")) == 0
     assert calls == []
+    assert "commit_gate_unbound" in capsys.readouterr().err
 
 
 def test_stop_cli_reports_legacy_for_unbound_work(repo: Path) -> None:
@@ -749,3 +578,275 @@ def test_bytes_changed_after_observation_hold(repo: Path, monkeypatch: pytest.Mo
     outcome = commit(repo, ruff)
     assert (outcome.result, outcome.reasons) == ("held", ("binding_stale",))
     assert ruff_runs(ruff) == []
+
+
+# --- the Git commit boundary -------------------------------------------------------------
+
+
+HOOK = REPO_ROOT / ".githooks" / "pre-commit"
+
+
+def head(root: Path) -> str:
+    return subprocess.run(
+        ["git", "-C", str(root), "rev-parse", "HEAD"], capture_output=True, text=True, check=True
+    ).stdout.strip()
+
+
+def _gated(repo: Path, gate_exit: int) -> Path:
+    """`repo` with the real pre-commit hook enabled and, in place of the gate, a stand-in
+    that records its arguments and exits `gate_exit`."""
+    (repo / ".githooks").mkdir()
+    shutil.copy2(HOOK, repo / ".githooks" / "pre-commit")
+    log = repo.parent / "gate.log"
+    (repo / "tools" / "workflow_commit.py").write_text(
+        "import sys\n"
+        f"open({str(log)!r}, 'a').write(' '.join(sys.argv[1:]) + '\\n')\n"
+        f"sys.exit({gate_exit})\n"
+    )
+    git(repo, "config", "core.hooksPath", ".githooks")
+    return log
+
+
+@pytest.mark.parametrize(("gate_exit", "recorded"), [(0, True), (3, False), (4, False)])
+def test_a_commit_inside_a_script_runs_the_gate(repo: Path, gate_exit: int, recorded: bool) -> None:
+    """F1 reproduction: Git runs the gate for a commit the Bash command text never shows,
+    and the commit records only when the gate passes."""
+    log = _gated(repo, gate_exit)
+    stage(repo, "tools/b.py", "y = 1\n")
+    script = repo.parent / "hidden.sh"
+    script.write_text(f"git -C {repo} commit -qm hidden\n")
+    before = head(repo)
+    subprocess.run(["bash", str(script)], capture_output=True, check=False)
+    assert log.read_text() == f"pre-commit --root {repo.resolve()}\n"
+    assert (head(repo) != before) is recorded
+
+
+def test_a_passing_gate_keeps_the_advisory_hook(repo: Path) -> None:
+    _gated(repo, 0)
+    stage(repo, "design-substrate/x.md", "design\n")
+    proc = subprocess.run(
+        ["git", "-C", str(repo), "commit", "-qm", "x"], capture_output=True, text=True
+    )
+    assert proc.returncode == 0
+    assert "X-AL-3 advisory" in proc.stdout + proc.stderr
+
+
+def _record_staging(root: Path, out: Path) -> None:
+    """A pre-commit hook in `root` that writes the gate's staging verdict for the index
+    Git hands it."""
+    probe = root.parent / "staging_probe.py"
+    probe.write_text(
+        "import os, sys\nfrom pathlib import Path\n"
+        f"sys.path.insert(0, {str(REPO_ROOT)!r})\n"
+        "from tools import workflow_commit as wc\n"
+        "outcome = wc.recorded_index(Path.cwd(), os.environ.get('GIT_INDEX_FILE'))\n"
+        f"Path({str(out)!r}).write_text(outcome.result)\n"
+    )
+    hooks = root.parent / "probe-hooks"
+    hooks.mkdir(exist_ok=True)
+    (hooks / "pre-commit").write_text(f"#!/bin/sh\nexec {sys.executable} -I {probe}\n")
+    (hooks / "pre-commit").chmod(0o755)
+    git(root, "config", "core.hooksPath", str(hooks))
+
+
+@pytest.mark.parametrize(
+    ("args", "result"),
+    [
+        (("-m", "x"), "passed"),
+        (("-am", "x"), "held"),
+        (("-m", "x", "--", "tools/a.py"), "held"),
+        (("-m", "x", "-i", "tools/a.py"), "held"),
+    ],
+    ids=["staged", "all", "only", "include"],
+)
+def test_only_a_commit_of_the_staged_index_is_explicit(
+    repo: Path, args: tuple[str, ...], result: str
+) -> None:
+    """F1/F2 with real Git: the index Git records is the repository's own index only when
+    staging was explicit."""
+    out = repo.parent / "staging"
+    _record_staging(repo, out)
+    stage(repo, "tools/b.py", "y = 1\n")
+    (repo / "tools" / "a.py").write_text("x = 2\n")
+    subprocess.run(["git", "-C", str(repo), "commit", "-q", *args], check=True)
+    assert out.read_text() == result
+
+
+def test_a_linked_worktree_commit_of_its_staged_index_is_explicit(repo: Path) -> None:
+    out = repo.parent / "staging"
+    _record_staging(repo, out)
+    linked = repo.parent / "linked"
+    git(repo, "worktree", "add", "-q", str(linked))
+    stage(linked, "tools/b.py", "y = 1\n")
+    subprocess.run(["git", "-C", str(linked), "commit", "-qm", "x"], check=True)
+    assert out.read_text() == "passed"
+
+
+def _enrolled(monkeypatch: pytest.MonkeyPatch, repo: Path) -> None:
+    policy = dataclasses.replace(_policy(), eligible_units=(EligibleUnit(UNIT, "u06"),))
+    monkeypatch.setattr(wc, "observe_policy", lambda: policy)
+    monkeypatch.setattr(wc, "select_profile", lambda *_: ProfileSelection("trial", (), ()))
+    _bind_arc(repo)
+
+
+def test_trial_requires_git_to_run_the_gate(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """F1: a worktree where Git would not run the gate cannot select trial."""
+    _enrolled(monkeypatch, repo)
+    assert wc.worktree_profile(repo) == wc.Held(("commit_gate_unbound",))
+    git(repo, "config", "core.hooksPath", "elsewhere")
+    assert wc.worktree_profile(repo) == wc.Held(("commit_gate_unbound",))
+    git(repo, "config", "core.hooksPath", ".githooks")
+    assert wc.worktree_profile(repo) == wc.Held(("commit_gate_unbound",))  # no hook there
+    (repo / ".githooks").mkdir()
+    shutil.copy2(HOOK, repo / ".githooks" / "pre-commit")
+    assert isinstance(wc.worktree_profile(repo), wc.Trial)
+    for unbound in (
+        ("config", "core.hooksPath", "elsewhere"),
+        ("config", "--unset", "core.hooksPath"),
+    ):
+        git(repo, *unbound)  # the gate is there, but Git would not run it
+        assert wc.worktree_profile(repo) == wc.Held(("commit_gate_unbound",))
+
+
+@pytest.mark.parametrize(
+    ("profile", "text", "code"),
+    [
+        (wc.Legacy(), "y = 1  # LINT_BAD\n", 0),
+        (wc.Held(("commit_gate_unbound",)), "y = 1\n", 3),
+        (TRIAL, "y = 1\n", 0),
+        (TRIAL, "y = 1  # LINT_BAD\n", 4),
+    ],
+    ids=["legacy", "held", "trial-passed", "trial-failed"],
+)
+def test_pre_commit_exit_code_is_the_outcome(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, profile: object, text: str, code: int
+) -> None:
+    ruff = FakeRuff()
+    monkeypatch.setattr(wc, "worktree_profile", lambda _root: profile)
+    gate = wc.commit_outcome
+    monkeypatch.setattr(wc, "commit_outcome", lambda *a, **k: gate(*a, **{**k, "run": ruff}))
+    monkeypatch.delenv("GIT_INDEX_FILE", raising=False)
+    stage(repo, "tools/b.py", text)
+    assert wc.main(["pre-commit", "--root", str(repo)]) == code
+
+
+def test_pre_commit_holds_implicit_staging_before_any_check(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(wc, "worktree_profile", lambda _root: TRIAL)
+    monkeypatch.setattr(wc, "commit_outcome", lambda *_a, **_k: pytest.fail("checked"))
+    monkeypatch.setenv("GIT_INDEX_FILE", str(repo / ".git" / "index.lock"))
+    assert wc.main(["pre-commit", "--root", str(repo)]) == 3
+
+
+# --- the index snapshot ------------------------------------------------------------------
+
+
+def test_snapshot_is_a_git_checkout_of_the_staged_tree(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """F5 reproduction: `git ls-files` and `git grep --cached`, which the selected test
+    and record producer call, see exactly the staged tree inside the snapshot, under the
+    hook's own Git variables, and the root keeps its refs and worktrees."""
+    git(repo, "remote", "add", "origin", "https://github.com/o/r.git")
+    stage(repo, "tools/b.py", "STAGED = 1\n")
+    (repo / "tools" / "b.py").write_text("UNSTAGED = 1\n")
+    (repo / "tools" / "scratch.py").write_text("UNTRACKED = 1\n")
+    refs = subprocess.run(["git", "-C", str(repo), "show-ref"], capture_output=True).stdout
+    monkeypatch.setenv("GIT_DIR", str(repo / ".git"))
+    monkeypatch.setenv("GIT_INDEX_FILE", ".git/index")
+    environment = wc.checker_environment(os.environ)
+    with wc.index_snapshot(repo, environment) as snapshot:
+
+        def inside(*args: str) -> str:
+            proc = subprocess.run(
+                ["git", *args], cwd=snapshot, env=environment, capture_output=True, text=True
+            )
+            return proc.stdout
+
+        tracked = [
+            "pyproject.toml",
+            "tools/a.py",
+            "tools/b.py",
+            "tools/test_a.py",
+            "tools/test_b.py",
+        ]
+        assert inside("ls-files").split() == tracked
+        assert inside("grep", "--cached", "-l", "-e", "STAGED", "-e", "UNTRACKED").split() == [
+            "tools/b.py"
+        ]
+        assert inside("rev-parse", "HEAD").strip() == head(repo)
+        assert inside("diff", "--cached", "--name-only").split() == ["tools/b.py"]
+        assert inside("diff", "--name-only") == ""
+        assert inside("remote", "get-url", "origin").strip() == "https://github.com/o/r.git"
+        assert (snapshot / "tools" / "b.py").read_text() == "STAGED = 1\n"
+        assert not (snapshot / "tools" / "scratch.py").exists()
+    monkeypatch.delenv("GIT_DIR")
+    monkeypatch.delenv("GIT_INDEX_FILE")
+    assert subprocess.run(["git", "-C", str(repo), "show-ref"], capture_output=True).stdout == refs
+    listed = subprocess.run(
+        ["git", "-C", str(repo), "worktree", "list", "--porcelain"], capture_output=True, text=True
+    ).stdout
+    assert listed.count("worktree ") == 1
+
+
+# --- the checker environment -------------------------------------------------------------
+
+
+def test_checks_receive_only_the_pinned_environment(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """F7: a check receives exactly the variables its manifest pins, never BASH_ENV,
+    interpreter, uv or Git variables from the caller."""
+    stage(repo, "tools/b.py", "y = 1\n")
+    for name in ("BASH_ENV", "ENV", "PYTHONPATH", "UV_PYTHON", "GIT_INDEX_FILE", "PYTEST_ADDOPTS"):
+        monkeypatch.setenv(name, "/elsewhere")
+    environment = wc.checker_environment(os.environ)
+    assert set(environment) <= set(wc.CHECK_VARIABLES)
+    assert environment["PATH"] == os.environ["PATH"]
+    monkeypatch.delenv("GIT_INDEX_FILE")  # the gate's own Git calls read the real index
+    ruff = FakeRuff()
+    assert commit(repo, ruff, environment) == wc.PASSED
+    assert ruff.environments == [environment] * 3
+
+
+def test_a_changed_environment_pin_runs_the_check_again(repo: Path) -> None:
+    stage(repo, "tools/b.py", "y = 1\n")
+    ruff = FakeRuff()
+    for path in ("/usr/bin:/bin", "/usr/bin:/bin", "/opt/bin:/usr/bin:/bin"):
+        assert commit(repo, ruff, {**ENV, "PATH": path}) == wc.PASSED
+    assert len(ruff.checks) == 6
+
+
+def test_a_shell_test_runs_without_the_callers_bash_startup(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """F7 reproduction with real Bash: a BASH_ENV that fails a direct run never reaches the
+    check, so the receipt describes the run, and a later BASH_ENV change, which the check
+    still never reads, reuses it."""
+    failing, passing = repo.parent / "fail.sh", repo.parent / "pass.sh"
+    failing.write_text("exit 1\n")
+    passing.write_text("true\n")
+    stage(repo, "scripts/gate.sh", "true\n")
+    stage(repo, "scripts/test_gate.sh", "true\n")
+    runs: list[tuple[list[str], Mapping[str, str]]] = []
+
+    def counting(
+        argv: Sequence[str], stdin: bytes, cwd: Path, timeout: float, env: Mapping[str, str]
+    ) -> subprocess.CompletedProcess[bytes]:
+        runs.append((list(argv), env))
+        return wc.run_bounded(argv, stdin, cwd, timeout, env)
+
+    for bash_env in (failing, passing):
+        monkeypatch.setenv("BASH_ENV", str(bash_env))
+        direct = subprocess.run(["bash", "scripts/test_gate.sh"], cwd=repo, check=False)
+        assert direct.returncode == (1 if bash_env == failing else 0)
+        outcome = wc.commit_outcome(
+            repo, TRIAL, created_at=CREATED, environment=wc.checker_environment(os.environ),
+            run=counting,
+        )  # fmt: skip
+        assert outcome == wc.PASSED
+    assert [argv for argv, _ in runs if argv[-1] != "--version"] == [
+        ["bash", "scripts/test_gate.sh"]
+    ]
+    assert all("BASH_ENV" not in env for _, env in runs)
