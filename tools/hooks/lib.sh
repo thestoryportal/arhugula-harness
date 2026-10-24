@@ -749,7 +749,7 @@ _hook_worktree_open_references() {
     rc=$?
     # [LAW:parse-dont-validate] only the observer's exact contract counts as an answer.
     case "$rc:$output" in
-      0:*) printf '%s\n' "$output" | grep -Eqx '[0-9]+' || return 2
+      0:*) [[ "$output" =~ ^[0-9]+$ ]] || return 2
         printf '%s\n' "$output"; return 0 ;;
       10:) return 1 ;;
       *) return 2 ;;
