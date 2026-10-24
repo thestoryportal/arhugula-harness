@@ -232,7 +232,7 @@ def test_coverage_publishing_is_advisory_and_names_its_binding() -> None:
     upload = next(s for s in after if "upload-artifact" in str(s.get("uses", "")))
     name = upload["with"]["name"]
     # WS-10 §12.4: a PR's github.sha is the synthetic merge commit, not the reviewed head.
-    for part in ("github.event.pull_request.head.sha || github.sha", "run_id", "run_attempt"):
+    for part in ("needs.changes.outputs.head", "run_id", "run_attempt"):
         assert part in name
     assert set(upload["with"]["path"].split()) == {"coverage.xml", "coverage-provenance.json"}
     # [LAW:verifiable-goals] A pathname alone cannot certify a complete manifest.
@@ -248,11 +248,11 @@ def _provenance_step() -> dict[str, Any]:
 
 def test_provenance_env_keeps_head_base_and_tested_commit_distinct() -> None:
     env = _provenance_step()["env"]
-    assert env["COVERAGE_HEAD"] == "${{ github.event.pull_request.head.sha || github.sha }}"
+    assert env["COVERAGE_HEAD"] == "${{ needs.changes.outputs.head }}"
     assert (
-        env["COVERAGE_BASE"] == "${{ github.event.pull_request.base.sha || github.event.before }}"
+        env["COVERAGE_BASE"] == "${{ needs.changes.outputs.base }}"
     )
-    assert env["COVERAGE_TESTED"] == "${{ github.sha }}"
+    assert env["COVERAGE_TESTED"] == "${{ needs.changes.outputs.tested }}"
     assert env["COVERAGE_COMMAND"] == _PRIMARY_PYTEST
 
 
