@@ -42,6 +42,7 @@ tools/test_concurrency_surface.py \
   tools/test_workflow_policy.py \
   tools/test_workflow_evidence.py \
   tools/test_workflow_boundaries.py \
+  tools/test_workflow_commit.py \
   tools/test_finding_record.py \
   tools/test_refresh_classes.py \
   tools/test_lanes_verify.py \

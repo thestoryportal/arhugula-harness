@@ -15,6 +15,10 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT))
+
+from tools import workflow_commit  # noqa: E402 -- resolved from this checkout's root
+
 DEFAULT_UV_CACHE_DIR = "/tmp/arhugula-uv-cache"
 PATCH_FILE_RE = re.compile(r"^\*\*\* (?:Add|Update) File:\s+(.+?)\s*$", re.MULTILINE)
 COMMIT_RE = re.compile(r"^\s*(?:(?:/usr/local/bin/)?rtk\s+)?(?:/usr/bin/)?git\s+commit(?:\s|$)")
@@ -298,6 +302,33 @@ def pre_commit(payload: dict[str, Any]) -> int:
         return 0
 
     cwd = project_dir(payload)
+    try:
+        profile = workflow_commit.worktree_profile(cwd)
+    except ValueError as exc:
+        print(f"Codex hook adapter: workflow profile unreadable: {exc}", file=sys.stderr)
+        return 2
+    match profile:
+        case workflow_commit.Trial():
+            # WO-U06: a trial commit checks its actual staged scope and changed subjects,
+            # never whole-project Pyright or release closeout.
+            outcome = workflow_commit.commit_outcome(cwd, profile, created_at=workflow_commit.now())
+            if outcome.result == "passed":
+                return 0
+            print(
+                "\n".join((*outcome.detail, f"reason_codes: {', '.join(outcome.reasons)}")),
+                file=sys.stderr,
+            )
+            return 2
+        case workflow_commit.Held(reasons=reasons):
+            print(
+                f"Codex hook adapter: trial selection held: {', '.join(reasons)}", file=sys.stderr
+            )
+            return 2
+        case workflow_commit.Legacy():
+            return legacy_pre_commit(cwd)
+
+
+def legacy_pre_commit(cwd: Path) -> int:
     env = os.environ.copy()
     env.setdefault("UV_CACHE_DIR", DEFAULT_UV_CACHE_DIR)
     # Preserve the canonical Claude hook's two independent gates: static typing and an

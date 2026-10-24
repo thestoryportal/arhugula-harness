@@ -32,6 +32,23 @@ PAYLOAD=$(hook_read_stdin)
 ACTIVE=$(hook_json "$PAYLOAD" '.stop_hook_active')
 [ "$ACTIVE" = "true" ] && exit 0
 
+# WO-U06: trial-profile work checks its changed subjects through the reusable producer,
+# so an unchanged turn reruns nothing; legacy work falls through to the gate below.
+ROUTE=$(hook_bounded 60 /usr/bin/python3 "$(dirname "${BASH_SOURCE[0]}")/../workflow_commit.py" stop --root "$PROJECT_DIR")
+ROUTE_RC=$?
+PROFILE=$(printf '%s' "$ROUTE" | jq -r '.profile // empty' 2>/dev/null)
+if [ "$ROUTE_RC" -ne 0 ] || [ -z "$PROFILE" ]; then
+  jq -nc --arg r "[stop-gate] could not determine the workflow profile (exit ${ROUTE_RC}): ${ROUTE}" \
+    '{"decision":"block","reason":$r}'
+  exit 0
+fi
+if [ "$PROFILE" != "legacy" ]; then
+  [ "$(printf '%s' "$ROUTE" | jq -r '.result')" = "passed" ] && exit 0
+  jq -nc --argjson o "$ROUTE" \
+    '{"decision":"block","reason":("[stop-gate] " + $o.profile + " changed-subject check " + $o.result + " (" + ($o.reason_codes | join(", ")) + "):\n" + ($o.detail | join("\n")))}'
+  exit 0
+fi
+
 # Changed .py files vs HEAD: tracked (staged + unstaged, exclude deletions) PLUS
 # untracked-but-not-ignored. A new .py Claude just wrote isn't in `git diff HEAD`
 # until staged, so without the ls-files arm the most common edit path (create a

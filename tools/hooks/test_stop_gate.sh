@@ -124,5 +124,35 @@ OUT=$(PATH="$REPO/bin:/usr/bin:/bin" UV_CACHE_OBS="$REPO/uv-cache-observed" run 
   && ok "uv-backed lint uses repo-safe cache" \
   || bad "unsafe uv cache: $(cat "$REPO/uv-cache-observed")"
 
+# WO-U06: trial routing. A copied hook beside a stub router (the real router selects
+# legacy until activation): a passed trial outcome allows the stop without running ruff,
+# any other outcome blocks with its reasons, and an undeterminable profile blocks.
+STUB="$(mktemp -d)"; mkdir -p "$STUB/tools/hooks"
+cp "$SCRIPT_DIR/stop-gate.sh" "$SCRIPT_DIR/lib.sh" "$STUB/tools/hooks/"
+cat > "$STUB/tools/workflow_commit.py" <<'PY'
+import pathlib, sys
+here = pathlib.Path(__file__)
+sys.stdout.write(here.with_suffix(".out").read_text())
+sys.exit(int(here.with_suffix(".rc").read_text()))
+PY
+route() { # $1 = router stdout, $2 = router exit
+  printf '%s' "$1" > "$STUB/tools/workflow_commit.out"
+  printf '%s' "$2" > "$STUB/tools/workflow_commit.rc"
+  printf '{"stop_hook_active":false}' \
+    | PATH="$REPO/bin:$PATH" CLAUDE_PROJECT_DIR="$REPO" bash "$STUB/tools/hooks/stop-gate.sh"
+}
+printf 'x = 1  # LINT_BAD\n' > "$REPO/mod.py"
+OUT=$(route '{"profile":"trial","result":"passed","reason_codes":[],"detail":[]}' 0)
+[ -z "$OUT" ] && ok "trial passed outcome allows stop without the legacy lint" || bad "trial pass blocked: $OUT"
+OUT=$(route '{"profile":"trial","result":"failed","reason_codes":["check_failed"],"detail":["mod.py: ruff-check: finding"]}' 0)
+printf '%s' "$OUT" | grep -q '"decision":"block"' && printf '%s' "$OUT" | grep -q 'check_failed' \
+  && ok "trial failed outcome blocks with its reason" || bad "trial failure not blocked: $OUT"
+OUT=$(route '{"profile":"held","result":"held","reason_codes":["authority_unavailable"],"detail":[]}' 0)
+printf '%s' "$OUT" | grep -q 'authority_unavailable' && ok "held selection blocks" || bad "held not blocked: $OUT"
+OUT=$(route 'not json' 1)
+printf '%s' "$OUT" | grep -q 'could not determine the workflow profile' \
+  && ok "undeterminable profile blocks" || bad "router failure fell through: $OUT"
+rm -rf "$STUB"
+
 echo "---"; echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1
