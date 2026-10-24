@@ -689,13 +689,7 @@ def test_unchanged_install_is_reused_after_a_session_refresh(repo: Path) -> None
     [
         ({WHEEL: "c" * 64}, {}, "invalid", f"artifact.{WHEEL}_changed"),
         (
-            {"installed:harness_core": DIFFERING},
-            {},
-            "invalid",
-            "artifact.installed:harness_core_changed",
-        ),
-        (
-            {"installed:harness_core": "version=0.0.0; editable=true; record=19 verified"},
+            {"installed:harness_core": "version=0.0.1; editable=false; record=19 verified"},
             {},
             "invalid",
             "artifact.installed:harness_core_changed",
@@ -822,6 +816,46 @@ def test_blank_or_unstructured_facts_are_not_observations(
     assert (reuse.disposition, reuse.reasons) == ("unknown", (gap,))
     run = InstalledRun("run-7", "b104-n1", candidate.key, "passed")
     assert bind_acceptance(run, candidate).reasons == (f"final.{gap}",)
+
+
+EDITABLE = "version=0.0.0; editable=true; record=19 verified"
+
+
+@pytest.mark.parametrize(
+    ("name", "value", "gap"),
+    [
+        ("origins", "origin check failed: 1 failures", "artifact.origins_failed"),
+        ("origins", "origin check failed: 0 failures", "artifact.origins_failed"),
+        ("installed:harness_core", DIFFERING, "artifact.installed_failed"),
+        ("installed:harness_core", EDITABLE, "artifact.installed_failed"),
+    ],
+)
+def test_failed_install_observations_are_never_complete(
+    repo: Path, name: str, value: str, gap: str
+) -> None:
+    """WS-12: a failed origin check, a RECORD difference or an editable install is an
+    observed defect - it must refuse reuse and acceptance, never count as identified."""
+    candidate = _candidate(repo, artifact={name: value})
+
+    assert candidate_gaps(candidate) == (gap,)
+    # Identical on both sides is still a defective install: invalid, not merely unknown.
+    reuse = install_reuse(AcceptedInstall(ACCEPTED_RECORD, candidate), candidate)
+    assert (reuse.disposition, reuse.reasons) == ("invalid", (gap,))
+    # An accepted good install whose current observation failed names both facts.
+    worse = install_reuse(_accepted(repo), candidate)
+    assert (worse.disposition, worse.reasons) == ("invalid", (f"artifact.{name}_changed", gap))
+    run = InstalledRun("run-8", "b104-n1", candidate.key, "passed")
+    binding = bind_acceptance(run, candidate)
+    assert (binding.accepted, binding.reasons) == (False, (f"final.{gap}",))
+
+
+def test_zero_verified_record_files_is_not_a_record_verification(repo: Path) -> None:
+    candidate = _candidate(
+        repo,
+        artifact={"installed:harness_core": "version=0.0.0; editable=false; record=0 verified"},
+    )
+
+    assert candidate_gaps(candidate) == ("artifact.installed_unknown",)
 
 
 def test_installed_acceptance_needs_a_completely_observed_final_candidate(repo: Path) -> None:
@@ -1000,7 +1034,11 @@ def test_native_accepted_build_matches_the_observed_install(repo: Path, tmp_path
     (site / "harness_core" / "__init__.py").write_text("VALUE = 2\n", encoding="utf-8")
     tampered = install_reuse(pinned, observed(origins))
     assert tampered.disposition == "invalid"
-    assert tampered.reasons == ("artifact.installed:harness_core_changed",)
+    # The changed bytes are also an observed RECORD difference: a defect, not a new pin.
+    assert tampered.reasons == (
+        "artifact.installed:harness_core_changed",
+        "artifact.installed_failed",
+    )
 
 
 def test_native_accepted_build_refuses_inconsistent_evidence(repo: Path, tmp_path: Path) -> None:

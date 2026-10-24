@@ -43,7 +43,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
-from typing import Literal, cast
+from typing import Literal, NamedTuple, cast
 
 from tools.workflow_policy import WorkflowPolicy, canonical_digest
 
@@ -966,22 +966,37 @@ _DISPOSITIONS: tuple[InstallDisposition, ...] = (
 )
 
 Facts = Mapping[str, str | None]
+Graded = list[tuple[InstallDisposition, str]]
 
-# [LAW:one-source-of-truth] WS-12's mandatory observations of every installed candidate and
-# the shape each must have to count as observed: blank or free text is not an observation.
-# A name ending in ":" is a family that needs at least one member, every member observed.
-_ABSOLUTE = re.compile(r"/\S.*")
-_TOKEN = re.compile(r"\S+")
-_REQUIRED_FACTS: Mapping[str, Mapping[str, re.Pattern[str]]] = MappingProxyType(
+
+class _Shape(NamedTuple):
+    """How one fact reads when it verifies the install, and when it observes a defect."""
+
+    verified: re.Pattern[str]
+    failed: re.Pattern[str] = re.compile(r"(?!)")  # most facts have no defect form
+
+
+# [LAW:one-source-of-truth] WS-12's mandatory observations of every installed candidate.
+# Only the verified shape completes a fact; an observed defect (failed origin check, RECORD
+# difference, editable install) is invalid, and blank or free text is not an observation.
+# A name ending in ":" is a family that needs at least one member, every member verified.
+_ABSOLUTE = _Shape(re.compile(r"/\S.*"))
+_TOKEN = _Shape(re.compile(r"\S+"))
+_REQUIRED_FACTS: Mapping[str, Mapping[str, _Shape]] = MappingProxyType(
     {
         "artifact": {
-            "distribution:": _SHA256,
-            "installed:": re.compile(
-                r"version=\S+; editable=(true|false); record=\d+ verified(, [1-9]\d* differ)?"
+            "distribution:": _Shape(_SHA256),
+            "installed:": _Shape(
+                re.compile(r"version=\S+; editable=false; record=[1-9]\d* verified"),
+                re.compile(
+                    r"version=\S+; editable=(true; record=\d+ verified(, [1-9]\d* differ)?"
+                    r"|false; record=\d+ verified, [1-9]\d* differ)"
+                ),
             ),
-            "site_packages": re.compile(r"/\S.*/site-packages"),
-            "origins": re.compile(
-                r"[1-9]\d* harness modules in site-packages|origin check failed: \d+ failures"
+            "site_packages": _Shape(re.compile(r"/\S.*/site-packages")),
+            "origins": _Shape(
+                re.compile(r"[1-9]\d* harness modules in site-packages"),
+                re.compile(r"origin check failed: \d+ failures"),
             ),
         },
         "environment": {
@@ -990,27 +1005,34 @@ _REQUIRED_FACTS: Mapping[str, Mapping[str, re.Pattern[str]]] = MappingProxyType(
             "kernel": _TOKEN,
             "architecture": _TOKEN,
             # A pin is the digest of the accepted resource-pin record, never a description.
-            "resources": re.compile(r"sha256:[0-9a-f]{64}"),
+            "resources": _Shape(re.compile(r"sha256:[0-9a-f]{64}")),
         },
     }
 )
+_GAP_GRADES: Mapping[str, InstallDisposition] = MappingProxyType(
+    {"failed": "invalid", "unknown": "unknown"}
+)
 
 
-def _observed(facts: Facts, name: str, shape: re.Pattern[str]) -> bool:
+def _state(value: str | None, shape: _Shape) -> str:
+    if value is not None and shape.verified.fullmatch(value):
+        return "verified"
+    return "failed" if value is not None and shape.failed.fullmatch(value) else "unknown"
+
+
+def _states(facts: Facts, name: str, shape: _Shape) -> set[str]:
     members = [key for key in facts if key.startswith(name)] if name.endswith(":") else [name]
-    values = [facts.get(key) for key in members]
-    return bool(values) and all(
-        value is not None and shape.fullmatch(value) is not None for value in values
-    )
+    return {_state(facts.get(key), shape) for key in members} or {"unknown"}
 
 
-def _fact_gaps(candidate: InstalledCandidate) -> list[str]:
+def _fact_gaps(candidate: InstalledCandidate) -> Graded:
     facts = {"artifact": candidate.artifact, "environment": candidate.environment}
     return [
-        f"{group}.{name.rstrip(':')}_unknown"
+        (grade, f"{group}.{name.rstrip(':')}_{state}")
         for group, shapes in _REQUIRED_FACTS.items()
         for name, shape in shapes.items()
-        if not _observed(facts[group], name, shape)
+        for state, grade in _GAP_GRADES.items()
+        if state in _states(facts[group], name, shape)
     ]
 
 
@@ -1018,7 +1040,7 @@ def candidate_gaps(candidate: InstalledCandidate) -> tuple[str, ...]:
     """[LAW:single-enforcer] every mandatory observation `candidate` lacks; empty means it
     is completely identified and may be reused, admitted or accepted."""
     return tuple(f"source.{refusal.code}" for refusal in candidate.source.refusals) + tuple(
-        _fact_gaps(candidate)
+        code for _, code in _fact_gaps(candidate)
     )
 
 
@@ -1068,9 +1090,6 @@ class InstallReuse:
     equivalence: str | None
 
 
-Graded = list[tuple[InstallDisposition, str]]
-
-
 def _graded(grade: InstallDisposition, codes: Iterable[str]) -> Graded:
     return [(grade, code) for code in codes]
 
@@ -1109,7 +1128,8 @@ def install_reuse(
         + _fact_reasons(
             "environment", then.environment, current.environment, "impact_review_required"
         )
-        + _graded("unknown", _fact_gaps(then) + _fact_gaps(current))
+        + _fact_gaps(then)
+        + _fact_gaps(current)
     )
     worst = min((_DISPOSITIONS.index(grade) for grade, _ in graded), default=len(_DISPOSITIONS) - 1)
     return InstallReuse(
