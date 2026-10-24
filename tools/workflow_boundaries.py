@@ -15,8 +15,12 @@ pre-action success can never stand in for an action that has not happened.
 `main` serves `workflow status|check` for `codex_context_guard.py`: it reads the boundary
 manifest, verifies each referenced producer record by size and SHA-256, and publishes an
 immutable receipt only for a passing check. Only WS-08 check receipts have an adapter
-here; requirements sourced from LIT, review, CI, remote readback or the merge door hold
-until their producers' adapters exist. Until the coherent activation (WP-17) every unit
+here, and one proves a requirement only when it records the checker invocation and scope
+the tracked policy's `boundary_rules` contracts for that requirement; the tracked policy
+contracts none yet, so every check requirement holds. Requirements sourced from LIT,
+review, CI, remote readback or the merge door hold until their producers' adapters
+exist. `status` reports a stored receipt only when its bytes are exactly what this guard
+publishes for its own parsed inputs. Until the coherent activation (WP-17) every unit
 selects `legacy`, so the interface is inactive.
 """
 
@@ -39,8 +43,10 @@ from tools.workflow_policy import (
     CANONICAL_ROOT,
     POLICY_VERSION,
     PROFILE_ID,
+    PolicyDefect,
     ProfileSelection,
     SelectionFacts,
+    WorkflowPolicy,
     canonical_digest,
     load_policy,
     read_activation,
@@ -79,6 +85,8 @@ BOUNDARIES: tuple[Boundary, ...] = ("prepare", "develop", "publish", "integrate"
 _UNIT = re.compile(r"[a-z0-9][a-z0-9._-]*")
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 _GIT_OID = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
+_SCOPE = re.compile(r"working_tree|index|git_tree")
+_TIMESTAMP = "%Y-%m-%dT%H:%M:%S.%fZ"
 
 
 class BoundaryError(ValueError):
@@ -223,6 +231,13 @@ _HELD_REASON: Mapping[Source, ReasonCode] = MappingProxyType(
 )
 
 
+_CHECK_REQUIREMENTS = frozenset(
+    req.name for reqs in _REQUIREMENTS.values() for req in reqs if req.source == "check"
+)
+# WS-08: staged source is proved only by a check over the index, never the worktree.
+_FIXED_SCOPE: Mapping[str, str] = MappingProxyType({"staged_scope": "index"})
+
+
 def requirements(step: Step) -> tuple[Requirement, ...]:
     return _REQUIREMENTS[step]
 
@@ -316,8 +331,8 @@ def evaluate_boundary(request: BoundaryRequest, facts: BoundaryFacts) -> Boundar
 
 def boundary_record(
     request: BoundaryRequest,
-    facts: BoundaryFacts,
-    record_type: RecordType,
+    subject: Subject,
+    observations: Mapping[str, Reference],
     *,
     created_at: str,
 ) -> dict[str, object]:
@@ -325,25 +340,17 @@ def boundary_record(
     from completion, and its inputs bind every producer record it consumed."""
     body: dict[str, object] = {
         "schema_version": SCHEMA_VERSION,
-        "record_type": record_type,
+        "record_type": _RECORD_TYPE[type(request.step)],
         "policy_id": PROFILE_ID,
         "policy_version": POLICY_VERSION,
         "unit_id": request.unit,
         "producer": {"tool": "codex_context_guard workflow", "version": str(SCHEMA_VERSION)},
         "created_at": created_at,
-        "subject": {
-            "repository": facts.subject.repository,
-            "head": facts.subject.head,
-            "base": facts.subject.base,
-        },
+        "subject": {"repository": subject.repository, "head": subject.head, "base": subject.base},
         "inputs": {
             "boundary": request.boundary,
             "point": request.point,
-            "observations": {
-                name: observed.record.to_json()
-                for name, observed in sorted(facts.observations.items())
-                if isinstance(observed, Verified)
-            },
+            "observations": {name: ref.to_json() for name, ref in sorted(observations.items())},
         },
         "result": "passed",
         "artifacts": [],
@@ -396,6 +403,70 @@ def _reference(value: object, field: str) -> Reference:
     return Reference(uri, _matching(doc["sha256"], _SHA256, field + ".sha256"), size)
 
 
+def _subject(value: object, field: str) -> Subject:
+    doc = _object(value, field)
+    _exact_keys(doc, ("repository", "head", "base"), field)
+    repository, base = doc["repository"], doc["base"]
+    if not isinstance(repository, str) or not repository:
+        raise BoundaryError(field + ".repository", "must be a nonempty string")
+    return Subject(
+        repository,
+        _matching(doc["head"], _GIT_OID, field + ".head"),
+        None if base is None else _matching(base, _GIT_OID, field + ".base"),
+    )
+
+
+@dataclass(frozen=True)
+class CheckContract:
+    """The one checker invocation, over one scope, whose receipt proves a check requirement."""
+
+    checker: str
+    argv: tuple[str, ...]
+    scope: str
+
+
+@dataclass(frozen=True)
+class CheckRules:
+    """The tracked policy as a check consumes it: each check requirement's contract and the
+    policy digest every consumed receipt must have been produced under."""
+
+    policy_digest: str | None
+    contracts: Mapping[str, CheckContract]
+
+
+def _contract(value: object, name: str) -> CheckContract:
+    field = f"policy.boundary_rules.checks.{name}"
+    if name not in _CHECK_REQUIREMENTS:
+        raise BoundaryError(field, "is not a check requirement")
+    doc = _object(value, field)
+    _exact_keys(doc, ("checker", "argv", "scope"), field)
+    checker, argv = doc["checker"], doc["argv"]
+    if not isinstance(checker, str) or not checker:
+        raise BoundaryError(field + ".checker", "must be a nonempty string")
+    args = cast(list[object], argv) if isinstance(argv, list) else []
+    if not args or not all(isinstance(arg, str) and arg for arg in args):
+        raise BoundaryError(field + ".argv", "must be a nonempty array of nonempty strings")
+    scope = _matching(doc["scope"], _SCOPE, field + ".scope")
+    if _FIXED_SCOPE.get(name, scope) != scope:
+        raise BoundaryError(field + ".scope", f"must be {_FIXED_SCOPE[name]}")
+    return CheckContract(checker, tuple(cast(list[str], args)), scope)
+
+
+def parse_check_rules(policy: WorkflowPolicy | PolicyDefect) -> CheckRules:
+    """The single checkpoint for `boundary_rules`, the WP-04 part of the tracked policy."""
+    if isinstance(policy, PolicyDefect):
+        # Selection already holds on a defective policy, and it contracts no producer.
+        return CheckRules(None, MappingProxyType({}))
+    rules = dict(policy.rules["boundary_rules"])
+    if not set(rules) <= {"checks"}:
+        raise BoundaryError("policy.boundary_rules", "may contain only checks")
+    checks = _object(rules.get("checks", {}), "policy.boundary_rules.checks")
+    return CheckRules(
+        policy.digest,
+        MappingProxyType({name: _contract(value, name) for name, value in checks.items()}),
+    )
+
+
 @dataclass(frozen=True)
 class Claim:
     """One manifest observation: the producer it names and the record it points at."""
@@ -433,11 +504,6 @@ def parse_manifest(raw: bytes, request: BoundaryRequest) -> BoundaryManifest:
     ):
         if doc[name] != expected:
             raise BoundaryError(f"manifest.{name}", f"must be {expected!r} for this check")
-    subject = _object(doc["subject"], "manifest.subject")
-    _exact_keys(subject, ("repository", "head", "base"), "manifest.subject")
-    repository, base = subject["repository"], subject["base"]
-    if not isinstance(repository, str) or not repository:
-        raise BoundaryError("manifest.subject.repository", "must be a nonempty string")
     by_name = {req.name: req for req in requirements(request.step)}
     claims: list[Claim] = []
     for name, value in _object(doc["observations"], "manifest.observations").items():
@@ -452,14 +518,7 @@ def parse_manifest(raw: bytes, request: BoundaryRequest) -> BoundaryManifest:
         if claim["source"] != requirement.source:
             raise BoundaryError(field + ".source", f"must be {requirement.source}")
         claims.append(Claim(requirement, _reference(claim["record"], field + ".record")))
-    return BoundaryManifest(
-        Subject(
-            repository,
-            _matching(subject["head"], _GIT_OID, "manifest.subject.head"),
-            None if base is None else _matching(base, _GIT_OID, "manifest.subject.base"),
-        ),
-        tuple(claims),
-    )
+    return BoundaryManifest(_subject(doc["subject"], "manifest.subject"), tuple(claims))
 
 
 _CHECK_RESULT: Mapping[str, Shortfall] = MappingProxyType(
@@ -471,7 +530,9 @@ _CHECK_RESULT: Mapping[str, Shortfall] = MappingProxyType(
 )
 
 
-def observe(claim: Claim, request: BoundaryRequest, subject: Subject) -> Observed:
+def observe(
+    claim: Claim, request: BoundaryRequest, subject: Subject, rules: CheckRules
+) -> Observed:
     """[LAW:effects-at-boundaries] read and verify the one producer record a claim names."""
     record = claim.record
     try:
@@ -487,23 +548,45 @@ def observe(claim: Claim, request: BoundaryRequest, subject: Subject) -> Observe
     if isinstance(receipt, ReceiptDefect):
         raise BoundaryError(f"observations.{claim.requirement.name}.record", str(receipt))
     manifest = receipt.manifest
-    if (manifest.unit, manifest.repository, manifest.head) != (
-        request.unit,
-        subject.repository,
-        subject.head,
-    ) or manifest.material_base not in (None, subject.base):
-        return Shortfall("held", "binding_stale")
-    return _CHECK_RESULT.get(receipt.result, Verified(record))
+    contract = rules.contracts.get(claim.requirement.name)
+    # [LAW:single-enforcer] the manifest's requirement label proves nothing: only the
+    # invocation the policy contracts for this requirement, over this unit's exact subject
+    # and under the current policy, can verify it. The first unmet condition is reported.
+    unmet = (
+        (contract is None, Shortfall("held", "check_pending")),
+        (
+            (manifest.unit, manifest.repository, manifest.head)
+            != (request.unit, subject.repository, subject.head)
+            or manifest.material_base not in (None, subject.base),
+            Shortfall("held", "binding_stale"),
+        ),
+        (manifest.policy_digest != rules.policy_digest, Shortfall("held", "policy_mismatch")),
+        (
+            CheckContract(manifest.checker.name, manifest.checker.argv, manifest.scope) != contract,
+            Shortfall("held", "identity_mismatch"),
+        ),
+    )
+    return next(
+        (shortfall for missed, shortfall in unmet if missed),
+        _CHECK_RESULT.get(receipt.result, Verified(record)),
+    )
 
 
-def observe_selection(unit: str, repository: str) -> ProfileSelection:
-    """[LAW:effects-at-boundaries] the WP-02 selection from the tracked policy and canonical
-    activation. LIT trial relation and native admission have no adapter yet, so they stay
-    unknown and enrolled work holds rather than passing on an unread authority."""
+def observe_policy() -> WorkflowPolicy | PolicyDefect:
+    """[LAW:effects-at-boundaries] the tracked policy, read once per check."""
     try:
         raw: bytes | None = POLICY_PATH.read_bytes()
     except FileNotFoundError:
         raw = None
+    return load_policy(raw)
+
+
+def observe_selection(
+    policy: WorkflowPolicy | PolicyDefect, unit: str, repository: str
+) -> ProfileSelection:
+    """[LAW:effects-at-boundaries] the WP-02 selection from the policy and canonical
+    activation. LIT trial relation and native admission have no adapter yet, so they stay
+    unknown and enrolled work holds rather than passing on an unread authority."""
     facts = SelectionFacts(
         repository=repository,
         unit=unit,
@@ -512,12 +595,16 @@ def observe_selection(unit: str, repository: str) -> ProfileSelection:
         admission="unknown",
         activation=read_activation(),
     )
-    return select_profile(load_policy(raw), facts)
+    return select_profile(policy, facts)
+
+
+def _serialized(record: dict[str, object]) -> bytes:
+    return json.dumps(record, sort_keys=True, separators=(",", ":")).encode()
 
 
 def publish(record: dict[str, object]) -> dict[str, str]:
     """[LAW:effects-at-boundaries] write one immutable receipt; never overwrite another."""
-    raw = json.dumps(record, sort_keys=True, separators=(",", ":")).encode()
+    raw = _serialized(record)
     path = RECEIPT_ROOT / f"{record['record_id']}.json"
     RECEIPT_ROOT.mkdir(parents=True, exist_ok=True)
     with path.open("xb") as handle:
@@ -526,45 +613,69 @@ def publish(record: dict[str, object]) -> dict[str, str]:
 
 
 @dataclass(frozen=True)
-class Observation:
-    """One boundary's last verified receipt in the store."""
+class StoredReceipt:
+    """A stored receipt proved to be exactly what `publish` writes for its own inputs."""
 
-    boundary: Boundary
+    request: BoundaryRequest
     created_at: str
     state: dict[str, object]
 
 
-def _stored(path: Path, unit: str) -> Observation | None:
-    """A stored receipt for `unit`, None for another unit's; a corrupt one raises."""
+def parse_stored(path: Path) -> StoredReceipt:
+    """The single checkpoint for a stored boundary receipt; raises `BoundaryError`.
+
+    [LAW:one-source-of-truth] `boundary_record` is the receipt's only definition: the parsed
+    inputs are rendered again, and the stored bytes and file name must equal that rendering,
+    so every envelope field and the record_id digest of the body are verified at once."""
+    field = str(path)
     raw = path.read_bytes()
     try:
-        doc = _object(json.loads(raw, object_pairs_hook=_no_duplicates), str(path))
-        inputs = _object(doc["inputs"], f"{path}.inputs")
-        step = _STEPS[(cast(str, inputs["boundary"]), cast("str | None", inputs["point"]))]
-        if doc["record_type"] != _RECORD_TYPE[type(step)] or doc["result"] != "passed":
-            raise BoundaryError(str(path), "record type or result disagrees with its step")
-    except (KeyError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as exc:
-        raise BoundaryError(str(path), f"not a boundary receipt: {exc}") from exc
-    if doc.get("unit_id") != unit:
-        return None
-    return Observation(
-        step.boundary,
-        str(doc["created_at"]),
+        doc = _object(json.loads(raw, object_pairs_hook=_no_duplicates), field)
+        inputs = _object(doc["inputs"], field + ".inputs")
+        request = parse_request(
+            cast(str, doc["unit_id"]),
+            cast(str, inputs["boundary"]),
+            cast("str | None", inputs["point"]),
+        )
+        observed = _object(inputs["observations"], field + ".inputs.observations")
+        created_at = cast(str, doc["created_at"])
+        datetime.strptime(created_at, _TIMESTAMP)  # the one format, so order is chronological
+        record = boundary_record(
+            request,
+            _subject(doc["subject"], field + ".subject"),
+            {
+                name: _reference(ref, f"{field}.inputs.observations.{name}")
+                for name, ref in observed.items()
+            },
+            created_at=created_at,
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise BoundaryError(field, f"not a boundary receipt: {exc}") from exc
+    # A passing receipt binds a record for every requirement of its step, no more or fewer.
+    if set(observed) != {req.name for req in requirements(request.step)}:
+        raise BoundaryError(field, "does not bind exactly its boundary's requirements")
+    if raw != _serialized(record) or path.name != f"{record['record_id']}.json":
+        raise BoundaryError(field, "is not the receipt this guard publishes for its inputs")
+    return StoredReceipt(
+        request,
+        created_at,
         {
-            "record_type": doc["record_type"],
-            "point": inputs["point"],
+            "record_type": record["record_type"],
+            "point": request.point,
             "receipt": {"uri": str(path), "sha256": hashlib.sha256(raw).hexdigest()},
         },
     )
 
 
 def observed_state(unit: str) -> dict[str, object]:
-    """Each boundary's last verified receipt for `unit`, or `unknown`; reads only."""
-    paths = sorted(RECEIPT_ROOT.glob("*.json"))  # an absent store globs to no receipts
-    found = [obs for obs in (_stored(path, unit) for path in paths) if obs is not None]
+    """Each boundary's last verified receipt for `unit`, or `unknown`; reads only. Any
+    store entry that is not a verified receipt raises, so status never reports past it."""
+    stored = [parse_stored(path) for path in sorted(RECEIPT_ROOT.glob("*.json"))]
     latest: dict[str, object] = {boundary: "unknown" for boundary in BOUNDARIES}
-    for obs in sorted(found, key=lambda o: o.created_at):
-        latest[obs.boundary] = obs.state
+    for receipt in sorted(
+        (r for r in stored if r.request.unit == unit), key=lambda r: r.created_at
+    ):
+        latest[receipt.request.boundary] = receipt.state
     return latest
 
 
@@ -626,11 +737,13 @@ def _check(
 ) -> tuple[dict[str, object], int]:
     request = parse_request(unit, boundary, point)
     manifest = parse_manifest(manifest_path.read_bytes(), request)
+    policy = observe_policy()
+    rules = parse_check_rules(policy)
     facts = BoundaryFacts(
-        selection=observe_selection(request.unit, manifest.subject.repository),
+        selection=observe_selection(policy, request.unit, manifest.subject.repository),
         subject=manifest.subject,
         observations={
-            claim.requirement.name: observe(claim, request, manifest.subject)
+            claim.requirement.name: observe(claim, request, manifest.subject, rules)
             for claim in manifest.claims
         },
     )
@@ -639,8 +752,13 @@ def _check(
         return _wire(
             unit, request, decision.result, decision.reasons, None, _NEXT_ACTION[decision.result]
         ), _EXIT[decision.result]
-    created_at = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-    record = boundary_record(request, facts, decision.record_type, created_at=created_at)
+    verified = {
+        name: observed.record
+        for name, observed in facts.observations.items()
+        if isinstance(observed, Verified)
+    }
+    created_at = datetime.now(UTC).strftime(_TIMESTAMP)
+    record = boundary_record(request, facts.subject, verified, created_at=created_at)
     try:
         receipt = publish(record)
     except OSError as exc:
