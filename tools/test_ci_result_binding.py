@@ -612,6 +612,15 @@ def test_code_events_still_trigger_code_verification():
     }
 
 
+def test_metadata_gate_reports_on_every_pr_head():
+    """WT-14: the title gate is a required context, so it must report on every new head
+    (not only after an edit) or strict protection would wait on it forever."""
+    meta = _workflow("pr-metadata.yml")
+    for action in ("opened", "synchronize", "reopened", "edited"):
+        assert _triggers(meta, "pull_request", action)
+    assert set(_on(meta)) == {"pull_request"}
+
+
 def test_title_edit_reruns_the_title_dependent_check():
     meta = _workflow("pr-metadata.yml")
     commands = " ".join(

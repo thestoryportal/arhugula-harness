@@ -5,9 +5,11 @@ name: PR metadata
 # re-runs only the title-dependent refresh-shape gate. This workflow has its own
 # concurrency group and its own check name: it can never publish under, or stand in for,
 # a required code-check context. A title or body edit never satisfies a missing code run.
+# The title gate is itself a required context (tools/main_protection.py), so it also runs
+# on every new head; otherwise a never-edited PR would wait on it forever.
 on:
   pull_request:
-    types: [edited]
+    types: [opened, synchronize, reopened, edited]
 
 concurrency:
   group: pr-metadata-${{ github.event.pull_request.number }}
@@ -18,7 +20,7 @@ permissions:
 
 jobs:
   title-shape:
-    name: PR title shape (metadata gate)
+    name: PR title shape (metadata gate) — blocking
     runs-on: ubuntu-latest
     steps:
       - name: Checkout

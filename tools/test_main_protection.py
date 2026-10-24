@@ -25,6 +25,70 @@ def test_blocking_contexts_derived_from_ci_yml():
     assert len(ctx) >= 12
 
 
+_WORKFLOWS = Path(mp.__file__).resolve().parent.parent / ".github" / "workflows"
+_LIVE_CODE_CONTEXTS = 14  # the WO-U01 inventory: every ci.yml `— blocking` job
+
+
+def _blocking_names(workflow: str) -> set[str]:
+    jobs = mp.yaml.safe_load((_WORKFLOWS / workflow).read_text())["jobs"].values()
+    return {j["name"] for j in jobs if str(j.get("name", "")).endswith("— blocking")}
+
+
+def test_required_contexts_include_the_pr_metadata_title_gate():
+    """WO-U10/WT-14: the title-dependent gate lives in pr-metadata.yml under its own check
+    name, so the fence must require it alongside the code contexts — not reject it as extra."""
+    ctx = mp.blocking_contexts()
+    meta = _blocking_names("pr-metadata.yml")
+    assert meta, "pr-metadata.yml must declare its title gate as a `— blocking` job"
+    assert meta <= set(ctx)
+    assert set(ctx) == _blocking_names("ci.yml") | meta
+    assert len(ctx) == _LIVE_CODE_CONTEXTS + len(meta)
+
+
+def test_verify_requires_the_metadata_context_on_the_live_fence():
+    """The live probe shape: 14 code contexts verified clean while the required metadata
+    context was absent, and adding it was rejected as extra. Both verdicts must invert."""
+    desired = mp.desired_payload(mp.blocking_contexts())
+    code_only = sorted(_blocking_names("ci.yml"))
+    meta = sorted(_blocking_names("pr-metadata.yml"))
+    incomplete = _live_get(mp.desired_payload(code_only))
+    complete = _live_get(mp.desired_payload(code_only + meta))
+    assert mp.verify(complete, desired) == []
+    assert mp.verify(incomplete, desired) == [f"contexts differ: missing={meta} extra=[]"]
+
+
+@pytest.mark.parametrize(
+    "trigger",
+    [
+        "on:\n  pull_request:\n    types: [edited]\n",
+        "on:\n  push:\n    branches: [main]\n",
+        "on:\n  pull_request:\n    types: [opened, reopened, edited]\n",
+    ],
+)
+def test_required_workflow_must_report_on_every_pr_head(tmp_path, trigger):
+    """A required context that does not run on opened/synchronize/reopened never reports
+    on a fresh head, so strict protection would block every merge: refuse to derive it."""
+    wf = tmp_path / "gate.yml"
+    wf.write_text(trigger + "jobs:\n  g:\n    name: g — blocking\n    runs-on: x\n")
+    with pytest.raises(mp.RequiredWorkflowError, match=r"gate\.yml"):
+        mp.blocking_contexts((wf,))
+
+
+@pytest.mark.parametrize(
+    "trigger",
+    [
+        "on: pull_request\n",
+        "on: [push, pull_request]\n",
+        "on:\n  pull_request:\n",
+        "on:\n  pull_request:\n    types: [opened, synchronize, reopened, edited]\n",
+    ],
+)
+def test_required_workflow_reporting_on_every_pr_head_is_accepted(tmp_path, trigger):
+    wf = tmp_path / "gate.yml"
+    wf.write_text(trigger + "jobs:\n  g:\n    name: g — blocking\n    runs-on: x\n")
+    assert mp.blocking_contexts((wf,)) == ["g — blocking"]
+
+
 def test_desired_payload_shape():
     p = mp.desired_payload(["a — blocking"])
     assert p["required_pull_request_reviews"] is None
