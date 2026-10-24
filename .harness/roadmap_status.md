@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `1bc39baa5063` |
+| `workspace_state_hash` | `730266d72d76` |
 | `last_refreshed` | 2026-10-24T00:00:00Z |
-| `git_head` | `cb061ac4` —  |
+| `git_head` | `82231c02` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 125 |
 
@@ -43,7 +43,6 @@
 | PR | Branch | R-NNN | Posture |
 |---|---|---|---|
 | #1292 | `fix/codex-hook-contract-recovery` | — | — |
-| #1645 | `feat/profile-coder-wo-u09` | — | — |
 | #1647 | `feat/wo-u04-workflow-evidence` | — | — |
 
 ---
@@ -52,11 +51,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #1645 | 2026-10-24 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1646 | 2026-10-24 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1643 | 2026-10-05 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1641 | 2026-10-04 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1639 | 2026-10-03 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
-| PR #1637 | 2026-10-02 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 
 ---
 
