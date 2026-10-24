@@ -849,6 +849,37 @@ def test_failed_install_observations_are_never_complete(
     assert (binding.accepted, binding.reasons) == (False, (f"final.{gap}",))
 
 
+@pytest.mark.parametrize(
+    ("named", "anonymous", "keep_named", "gap"),
+    [
+        (WHEEL, "distribution:", False, "artifact.distribution_unknown"),
+        (WHEEL, "distribution: ", False, "artifact.distribution_unknown"),
+        (WHEEL, "distribution:dist/x.whl", False, "artifact.distribution_unknown"),
+        ("installed:harness_core", "installed:", False, "artifact.installed_unknown"),
+        ("installed:harness_core", "installed:harness core", False, "artifact.installed_unknown"),
+        # An anonymous member beside an identified one still leaves the family unidentified.
+        (WHEEL, "distribution:", True, "artifact.distribution_unknown"),
+        ("installed:harness_core", "installed:", True, "artifact.installed_unknown"),
+    ],
+)
+def test_family_members_must_name_their_distribution_or_package(
+    repo: Path, named: str, anonymous: str, keep_named: bool, gap: str
+) -> None:
+    """WS-12: an anonymous hash or package cannot bind an exact installed artifact."""
+    artifact = {key: value for key, value in ARTIFACT.items() if keep_named or key != named}
+    artifact[anonymous] = ARTIFACT[named]
+    candidate = InstalledCandidate(
+        build_manifest(repo, _installed_request(repo)), artifact, ENVIRONMENT
+    )
+
+    assert candidate_gaps(candidate) == (gap,)
+    reuse = install_reuse(AcceptedInstall(ACCEPTED_RECORD, candidate), candidate)
+    assert (reuse.disposition, reuse.reasons) == ("unknown", (gap,))
+    run = InstalledRun("run-9", "b104-n1", candidate.key, "passed")
+    binding = bind_acceptance(run, candidate)
+    assert (binding.accepted, binding.reasons) == (False, (f"final.{gap}",))
+
+
 def test_zero_verified_record_files_is_not_a_record_verification(repo: Path) -> None:
     candidate = _candidate(
         repo,

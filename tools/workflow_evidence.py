@@ -970,28 +970,33 @@ Graded = list[tuple[InstallDisposition, str]]
 
 
 class _Shape(NamedTuple):
-    """How one fact reads when it verifies the install, and when it observes a defect."""
+    """How one fact reads when it verifies the install, and when it observes a defect.
+    A family fact (`member` set) is every key `<name><member>`: at least one, each named."""
 
     verified: re.Pattern[str]
     failed: re.Pattern[str] = re.compile(r"(?!)")  # most facts have no defect form
+    member: re.Pattern[str] | None = None
 
+
+# A distribution file's basename or an installed package's name - never empty or a path.
+_MEMBER = re.compile(r"[A-Za-z0-9][\w.+-]*")
 
 # [LAW:one-source-of-truth] WS-12's mandatory observations of every installed candidate.
 # Only the verified shape completes a fact; an observed defect (failed origin check, RECORD
 # difference, editable install) is invalid, and blank or free text is not an observation.
-# A name ending in ":" is a family that needs at least one member, every member verified.
 _ABSOLUTE = _Shape(re.compile(r"/\S.*"))
 _TOKEN = _Shape(re.compile(r"\S+"))
 _REQUIRED_FACTS: Mapping[str, Mapping[str, _Shape]] = MappingProxyType(
     {
         "artifact": {
-            "distribution:": _Shape(_SHA256),
+            "distribution:": _Shape(_SHA256, member=_MEMBER),
             "installed:": _Shape(
                 re.compile(r"version=\S+; editable=false; record=[1-9]\d* verified"),
                 re.compile(
                     r"version=\S+; editable=(true; record=\d+ verified(, [1-9]\d* differ)?"
                     r"|false; record=\d+ verified, [1-9]\d* differ)"
                 ),
+                _MEMBER,
             ),
             "site_packages": _Shape(re.compile(r"/\S.*/site-packages")),
             "origins": _Shape(
@@ -1021,8 +1026,14 @@ def _state(value: str | None, shape: _Shape) -> str:
 
 
 def _states(facts: Facts, name: str, shape: _Shape) -> set[str]:
-    members = [key for key in facts if key.startswith(name)] if name.endswith(":") else [name]
-    return {_state(facts.get(key), shape) for key in members} or {"unknown"}
+    if shape.member is None:
+        return {_state(facts.get(name), shape)}
+    # [LAW:parse-dont-validate] an unnamed member identifies nothing, whatever its value.
+    members = [key.removeprefix(name) for key in facts if key.startswith(name)]
+    return {
+        _state(facts[name + member], shape) if shape.member.fullmatch(member) else "unknown"
+        for member in members
+    } or {"unknown"}
 
 
 def _fact_gaps(candidate: InstalledCandidate) -> Graded:
