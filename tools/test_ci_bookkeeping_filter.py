@@ -353,6 +353,8 @@ def test_changes_step_fails_loud_on_an_empty_range(tmp_path: Path):
 
 def test_gate_log_consistency_is_unconditional_and_blocking():
     job = _jobs()["gate-log-consistency"]
-    assert "if" not in job and "needs" not in job
+    # WO-U10: it checks out the binding `changes` publishes, so it waits for that job,
+    # but no classifier output can skip it - only workflow cancellation stops it.
+    assert job["needs"] == "changes" and job["if"] == "${{ !cancelled() }}"
     assert str(job["name"]).endswith("— blocking")
     assert any("tools/merge_gate_log.py check" in str(s.get("run", "")) for s in _steps(job))

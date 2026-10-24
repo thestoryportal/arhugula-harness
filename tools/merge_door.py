@@ -30,6 +30,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import ci_result_binding as cb
 import reservations as rs
 from arc_metrics import QUEUE_DIR, REPO, _process_is_alive, ci_is_green, publish_exclusive
 
@@ -1007,6 +1008,9 @@ class Ground:
     git_merge_tree: Callable[[str, str], str]
     git_first_parent: Callable[[str], str]
     codex_worktree_present: Callable[[], bool]
+    #: WO-U10: (pr, head, base) -> the exact CI binding decision for those inputs; may
+    #: dispatch one verification run when no run matches (cb.reconcile_pr_binding).
+    exact_ci: Callable[[int, str, str], cb.CiBindingDecision]
     clock: Callable[[], float] = field(default=time.monotonic)
     sleep: Callable[[float], None] = field(default=time.sleep)
 
@@ -1115,6 +1119,55 @@ def default_ground() -> Ground:
         # git worktree presence probe, not a QUEUE_DIR store literal)
         return ("/.codex-worktrees" + "/") in out
 
+    def exact_ci(pr, head, base):
+        # The run must have executed the workflow of the head-onto-base merge, so the
+        # expected blob and required contexts come from that merge tree, not from main.
+        # The head's own workflow blob says whether a dispatch on the PR branch could.
+        tree = git_merge_tree(base, head)
+        spec = f"{tree}:{cb.CI_WORKFLOW}"
+        git = ["git", "-C", str(REPO)]
+
+        def git_out(*args: str) -> str:
+            return subprocess.run([*git, *args], capture_output=True, text=True, check=True).stdout
+
+        text = git_out("show", spec)
+        blob = git_out("rev-parse", spec).strip()
+        head_blob = git_out("rev-parse", f"{head}:{cb.CI_WORKFLOW}").strip()
+        meta = json.loads(
+            _gh("pr", "view", str(pr), "--json", "headRefName,url", timeout=30).stdout
+        )
+        repository = "/".join(meta["url"].split("/")[3:5])
+        expected = cb.ExpectedBinding(
+            repository,
+            head,
+            base,
+            "merge_candidate",
+            cb.CI_WORKFLOW,
+            blob,
+            cb.required_checks(text),
+        )
+
+        def dispatch():
+            p = _gh(
+                "workflow",
+                "run",
+                Path(cb.CI_WORKFLOW).name,
+                "--ref",
+                meta["headRefName"],
+                "-f",
+                f"pr_number={pr}",
+                "-f",
+                f"expected_head={head}",
+                "-f",
+                f"expected_base={base}",
+                timeout=60,
+            )
+            if p.returncode != 0:
+                raise RuntimeError(f"gh workflow run failed: {p.stderr.strip()}")
+
+        runs = cb.fetch_runs(repository, head, Path(cb.CI_WORKFLOW).name)
+        return cb.reconcile_pr_binding(expected, runs, head_blob, dispatch)
+
     return Ground(
         gh_view,
         gh_merge,
@@ -1123,6 +1176,7 @@ def default_ground() -> Ground:
         git_merge_tree,
         git_first_parent,
         codex_worktree_present,
+        exact_ci,
     )
 
 
@@ -1230,6 +1284,17 @@ def local_base_cas_check(head_sha: str, attested_tree: str | None, ground: Groun
             f"local-base-cas-check: merge-tree {tree[:12]} != attested "
             f"{str(attested_tree)[:12]} -- base moved; re-gate (R-23)"
         )
+
+
+def require_exact_ci(pr: int, head_sha: str, base_sha: str, ground: Ground) -> None:
+    """WO-U10: merge only on a run that verified exactly this head onto this base.
+    A same-named green from an older base, attempt or workflow never counts; held
+    (pending, stale, just dispatched) blocks for a later pass, failed/error fails."""
+    d = ground.exact_ci(pr, head_sha, base_sha)
+    if d.result == "passed":
+        return
+    why = f"ci_binding_{d.result}:{','.join(d.reason_codes)}:{d.detail}"
+    raise DoorBlocked(why) if d.result == "held" else DoorFailed(why)
 
 
 def verify_head_base(lease: dict, ground: Ground) -> dict:
@@ -1463,6 +1528,7 @@ def land(
                 reconciled = True
             else:
                 local_base_cas_check(head_sha, attested, ground)
+                require_exact_ci(pr, head_sha, lease["base_sha"], ground)
                 _kill_after("verify")
                 main_budget = 2
                 if resumed_attempt:
