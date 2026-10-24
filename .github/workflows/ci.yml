@@ -32,10 +32,12 @@ name: CI
 
 on:
   pull_request:
-    # WO-U10 (WS-10 §12.3): code events only. Metadata edits (title/body) run
-    # .github/workflows/pr-metadata.yml under its own group and check name, so a body
-    # edit never restarts or cancels this run; a retitle re-runs only the title gate.
-    types: [opened, synchronize, reopened]
+    # WO-U10 (WS-10 §12.3) staged activation (WT-14 bootstrap): `edited` stays until main's
+    # fence requires the `PR title shape (metadata gate) — blocking` context, because until
+    # then a retitle is checked only by this run's required arc-ledger job. The activation
+    # commit then drops `edited`: metadata edits run .github/workflows/pr-metadata.yml under
+    # its own group and check name, so a body edit never restarts or cancels this run.
+    types: [opened, synchronize, reopened, edited]
   push:
     branches: [main]
   # A retargeted base invalidates the old binding even when the head is unchanged. The

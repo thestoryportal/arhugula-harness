@@ -73,6 +73,32 @@ def blocking_contexts(workflows: tuple[Path, ...] = REQUIRED_WORKFLOWS) -> list[
     return sorted(names)
 
 
+def _unlanded_workflows(
+    repo: Path = REPO, workflows: tuple[Path, ...] = REQUIRED_WORKFLOWS
+) -> list[str]:
+    """Required workflows whose checkout copy is not what origin/main runs. The tiebreaker's
+    scratch PR runs main's own workflows, so the fence may only require contexts derived
+    from workflows main already carries: land them first, then apply (WT-14 bootstrap)."""
+
+    def git(*args: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(["git", *args], capture_output=True, text=True, timeout=60, cwd=repo)
+
+    fetched = git("fetch", "-q", "origin", "main")
+    if fetched.returncode != 0:
+        raise SystemExit(f"cannot read origin/main workflows: {fetched.stderr.strip()}")
+    unlanded: list[str] = []
+    for path in workflows:
+        rel = path.relative_to(repo).as_posix()
+        here = git("hash-object", "--", rel)
+        if here.returncode != 0:
+            raise SystemExit(f"cannot hash {rel}: {here.stderr.strip()}")
+        # A workflow absent on main (non-zero exit) is as unlanded as a different blob.
+        on_main = git("rev-parse", "--verify", "-q", f"origin/main:{rel}")
+        if on_main.returncode != 0 or on_main.stdout.strip() != here.stdout.strip():
+            unlanded.append(rel)
+    return unlanded
+
+
 def desired_payload(contexts: list[str]) -> dict[str, object]:
     # `restrictions` is a REQUIRED nullable field on the PUT (Codex round-5 P1).
     return {
@@ -486,6 +512,14 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--confirm", action="store_true")
     p.add_argument("--approved-digest", default=None)
     a = p.parse_args(argv)
+    if a.cmd in ("apply", "tiebreaker"):
+        unlanded = _unlanded_workflows()
+        if unlanded:
+            raise SystemExit(
+                f"{a.cmd} refused: origin/main does not run this checkout's {unlanded}; the "
+                "fence would require contexts the tiebreaker's scratch PR cannot report — "
+                "land these workflows first, then apply"
+            )
     desired = desired_payload(blocking_contexts())
     if a.cmd == "verify":
         if _gh("auth", "status").returncode != 0:

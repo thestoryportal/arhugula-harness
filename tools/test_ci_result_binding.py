@@ -585,11 +585,17 @@ def _group(wf: dict[str, Any], ctx: dict[str, Any]) -> tuple[str, bool]:
     return _render(conc["group"], ctx), _render(conc["cancel-in-progress"], ctx) == "True"
 
 
-def test_body_edit_preserves_inflight_code_run():
+def test_code_workflow_keeps_edit_routing_until_the_title_gate_is_required():
+    """WT-14 bootstrap: until main's fence requires the metadata title gate, a retitle must
+    still re-run the code workflow, whose required arc-ledger job checks the title. The
+    activation commit removes `edited` here only after that protection is live."""
     ci, meta = _workflow("ci.yml"), _workflow("pr-metadata.yml")
-    # A body or title edit arrives as pull_request/edited.
-    assert not _triggers(ci, "pull_request", "edited")
+    assert _triggers(ci, "pull_request", "edited")
     assert _triggers(meta, "pull_request", "edited")
+
+
+def test_metadata_run_cannot_cancel_or_impersonate_the_code_run():
+    ci, meta = _workflow("ci.yml"), _workflow("pr-metadata.yml")
     # The metadata run lives in its own group, so it can never cancel the code run.
     code_group, _ = _group(ci, _ctx("pull_request", ci["name"], pr=1651))
     meta_group, _ = _group(meta, _ctx("pull_request", meta["name"], pr=1651))
