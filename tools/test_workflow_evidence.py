@@ -24,6 +24,7 @@ import pytest
 
 from tools.workflow_evidence import (
     AcceptedInstall,
+    AcceptedScenario,
     Behaved,
     Behaves,
     Checker,
@@ -36,6 +37,7 @@ from tools.workflow_evidence import (
     InputManifest,
     InstalledCandidate,
     InstalledRun,
+    PrerequisiteState,
     ReceiptDefect,
     Reference,
     Refused,
@@ -618,9 +620,16 @@ ARTIFACT: dict[str, str | None] = {
     "site_packages": "/exec/venv/lib/python3.12/site-packages",
     "origins": "339 harness modules in site-packages",
 }
-ENVIRONMENT: dict[str, str | None] = {"python": "/uv/cpython-3.12.14/bin/python3.12"}
+ENVIRONMENT: dict[str, str | None] = {
+    "python": "/uv/cpython-3.12.14/bin/python3.12",
+    "os": "Linux",
+    "kernel": "7.2.6-1-aarch64-ARCH",
+    "architecture": "aarch64",
+    "resources": "sha256:" + "9" * 64,
+}
 DIFFERING = "version=0.0.0; editable=false; record=18 verified, 1 differ"
 SOURCE_REF = {"uri": "file:///accepted/operating-targets-v1.md", "sha256": "d" * 64, "bytes": 10}
+PINS = "sha256:" + "9" * 64
 
 
 def _installed_request(root: Path) -> CheckRequest:
@@ -734,6 +743,8 @@ def test_changed_installed_inputs_require_impact_review(repo: Path, tmp_path: Pa
     [
         ({}, {"origins": None}, "unknown", ("artifact.origins_unknown",)),
         ({"origins": None}, {"origins": None}, "unknown", ("artifact.origins_unknown",)),
+        # A fact beyond the mandatory set, unobserved on both sides, is still not unchanged.
+        ({"kernel": None}, {"kernel": None}, "unknown", ("artifact.kernel_unknown",)),
         ({}, {"kernel": "7.2.6"}, "unknown", ("artifact.kernel_unknown",)),
         (
             {},
@@ -756,6 +767,40 @@ def test_unobserved_install_facts_refuse_reuse_as_unknown(
 
     assert decision.disposition == disposition
     assert decision.reasons == reasons
+
+
+def test_absent_mandatory_facts_are_never_valid_reuse(repo: Path) -> None:
+    source = build_manifest(repo, _installed_request(repo))
+    empty = InstalledCandidate(source, {}, {})
+
+    decision = install_reuse(AcceptedInstall(ACCEPTED_RECORD, empty), empty)
+
+    assert decision.disposition == "unknown"
+    assert decision.reasons == (
+        "artifact.distribution_unknown",
+        "artifact.installed_unknown",
+        "artifact.site_packages_unknown",
+        "artifact.origins_unknown",
+        "environment.python_unknown",
+        "environment.os_unknown",
+        "environment.kernel_unknown",
+        "environment.architecture_unknown",
+        "environment.resources_unknown",
+    )
+
+
+def test_installed_acceptance_needs_a_completely_observed_final_candidate(repo: Path) -> None:
+    final = _candidate(repo, {"origins": None})
+    run = InstalledRun("run-5", "b104-n1", final.key, "passed")
+
+    binding = bind_acceptance(run, final)
+
+    assert binding.accepted is False
+    assert binding.reasons == ("final.artifact.origins_unknown",)
+    unpinned = _candidate(repo, environment={"resources": None})
+    assert bind_acceptance(
+        InstalledRun("run-6", "b104-n1", unpinned.key, "passed"), unpinned
+    ).reasons == ("final.environment.resources_unknown",)
 
 
 def test_gate_only_equivalence_cannot_claim_new_install(repo: Path) -> None:
@@ -884,18 +929,41 @@ def test_native_accepted_build_matches_the_observed_install(repo: Path, tmp_path
     accepted = accepted_build_install(acceptance, result, source)
     assert accepted.record_id == "sha256:" + hashlib.sha256(acceptance).hexdigest()
 
-    def observed(origins: str | None) -> InstalledCandidate:
-        artifact, environment = observe_install(exec_root, ("harness_core",), origins)
+    def observed(origins: str | None, resources: str | None = PINS) -> InstalledCandidate:
+        artifact, environment = observe_install(
+            exec_root, ("harness_core",), origins=origins, resources=resources
+        )
         return InstalledCandidate(source, artifact, environment)
 
     origins = "339 harness modules in site-packages"
-    assert install_reuse(accepted, observed(origins)).disposition == "valid"
+    current = observed(origins)
+    assert {k: current.environment[k] for k in ("os", "kernel", "architecture")} == {
+        "os": os.uname().sysname,
+        "kernel": os.uname().release,
+        "architecture": os.uname().machine,
+    }
+    # The native acceptance records no host or resource pins, so it can never be valid
+    # reuse: those facts were not observed when the build was accepted.
+    assert install_reuse(accepted, current).reasons == (
+        "environment.architecture_unknown",
+        "environment.kernel_unknown",
+        "environment.os_unknown",
+        "environment.resources_unknown",
+    )
+    pinned = AcceptedInstall(
+        accepted.record_id,
+        InstalledCandidate(source, accepted.candidate.artifact, current.environment),
+    )
+    assert install_reuse(pinned, current).disposition == "valid"
     # The origin check needs the installed interpreter; until observed it stays unknown.
-    assert install_reuse(accepted, observed(None)).reasons == ("artifact.origins_unknown",)
+    assert install_reuse(pinned, observed(None)).reasons == ("artifact.origins_unknown",)
+    assert install_reuse(pinned, observed(origins, None)).reasons == (
+        "environment.resources_unknown",
+    )
 
     site = exec_root / "venv" / "lib" / "python3.12" / "site-packages"
     (site / "harness_core" / "__init__.py").write_text("VALUE = 2\n", encoding="utf-8")
-    tampered = install_reuse(accepted, observed(origins))
+    tampered = install_reuse(pinned, observed(origins))
     assert tampered.disposition == "invalid"
     assert tampered.reasons == ("artifact.installed:harness_core_changed",)
 
@@ -905,6 +973,7 @@ def test_native_accepted_build_refuses_inconsistent_evidence(repo: Path, tmp_pat
     _, acceptance, result = _native_install(tmp_path, source.head)
     pending = json.loads(acceptance)
     pending["status"] = "BUILD_INSTALL_PENDING"
+    negated = {**json.loads(acceptance), "status": "NOT_BUILD_INSTALL_EVIDENCE_ACCEPTED_ONLY"}
     _write(repo, "ops/core.py", "VALUE = 9\n")
     _git(repo, "commit", "-q", "-am", "later head")
     later = build_manifest(repo, _installed_request(repo))
@@ -912,6 +981,7 @@ def test_native_accepted_build_refuses_inconsistent_evidence(repo: Path, tmp_pat
     for args, field in (
         ((acceptance, result + b" ", source), "acceptance.result"),
         ((json.dumps(pending).encode(), result, source), "acceptance.status"),
+        ((json.dumps(negated).encode(), result, source), "acceptance.status"),
         ((acceptance, result, later), "inputs_verified_before.main"),
     ):
         with pytest.raises(EvidenceError) as caught:
@@ -923,16 +993,28 @@ def _contract(candidate: str, **overrides: object) -> dict[str, object]:
     doc: dict[str, object] = {
         "schema_version": 1,
         "scenario": "soak-60",
+        "version": "v12",
+        "acceptance": ["WO-RUN-07", "WT-19"],
         "candidate": candidate,
+        "run": "soak-60-run-1",
         "argv": ["harness", "run", "--workload", "accepted"],
+        "cwd": "/home/robbo/Work/arhugula-build-eval",
         "environment": {"OLLAMA_HOST": "127.0.0.1:11434"},
-        "capability": "systemd user transient service",
+        "requires": ["systemd user transient service", "offline models"],
         "workload": SOURCE_REF,
         "expected": {"outcome": "behaves"},
         "thresholds": {"soak_minutes": {"value": "60", "source": SOURCE_REF}},
-        "resources": {"process-group": "runtime"},
+        "timeout": {"value": "75", "source": SOURCE_REF},
+        "resources": {
+            "process-group": {"owner": "runtime", "reclaim": "kill owned group, verify none"}
+        },
+        "attribution": {"author": "profile-coder", "witness": "runtime"},
         "evidence": "/mnt/mac/arhugula-artifacts/soak-60",
-        "cleanup": {"precleanup": "no owned process", "postcleanup": "no owned survivor"},
+        "observations": {
+            "start": "service active, owned group recorded",
+            "precleanup": "no owned process",
+            "postcleanup": "no owned survivor",
+        },
     }
     doc.update(overrides)
     return doc
@@ -951,14 +1033,49 @@ def _without(doc: dict[str, object], *path: str) -> dict[str, object]:
 @pytest.mark.parametrize(
     ("mutate", "field"),
     [
-        (lambda d: _without(d, "candidate"), "contract"),
-        (lambda d: _without(d, "expected"), "contract"),
+        *(
+            (lambda d, name=name: _without(d, name), "contract")
+            for name in (
+                "scenario",
+                "version",
+                "acceptance",
+                "candidate",
+                "run",
+                "cwd",
+                "environment",
+                "requires",
+                "workload",
+                "expected",
+                "timeout",
+                "attribution",
+                "observations",
+            )
+        ),
+        (lambda d: {**d, "acceptance": []}, "acceptance"),
+        (lambda d: {**d, "version": ""}, "version"),
+        (lambda d: {**d, "run": " "}, "run"),
+        (lambda d: {**d, "cwd": "relative/dir"}, "cwd"),
+        (lambda d: {**d, "requires": []}, "requires"),
+        (lambda d: _without(d, "timeout", "source"), "timeout"),
         (lambda d: _without(d, "thresholds", "soak_minutes", "source"), "thresholds.soak_minutes"),
         (lambda d: {**d, "thresholds": {}}, "thresholds"),
         (lambda d: {**d, "resources": {}}, "resources"),
-        (lambda d: {**d, "resources": {"process-group": ""}}, "resources.process-group"),
+        (
+            lambda d: _without(d, "resources", "process-group", "reclaim"),
+            "resources.process-group",
+        ),
+        (
+            lambda d: {**d, "resources": {"process-group": {"owner": "", "reclaim": "kill"}}},
+            "resources.process-group.owner",
+        ),
+        (lambda d: _without(d, "attribution", "witness"), "attribution"),
+        (
+            lambda d: {**d, "attribution": {"author": "runtime", "witness": "runtime"}},
+            "attribution.witness",
+        ),
         (lambda d: {**d, "evidence": " "}, "evidence"),
-        (lambda d: _without(d, "cleanup", "postcleanup"), "cleanup"),
+        (lambda d: _without(d, "observations", "start"), "observations"),
+        (lambda d: _without(d, "observations", "postcleanup"), "observations"),
         (lambda d: {**d, "argv": []}, "argv"),
         (lambda d: {**d, "candidate": "unbound"}, "candidate"),
         (lambda d: {**d, "expected": {"outcome": "refuses"}}, "expected"),
@@ -970,12 +1087,28 @@ def test_incomplete_scenario_contract_refuses_start(mutate, field: str) -> None:
     assert caught.value.field == field
 
 
-def test_scenario_admission_binds_candidate_and_original_thresholds(repo: Path) -> None:
+def test_scenario_admission_binds_candidate_prerequisites_and_original_obligations(
+    repo: Path,
+) -> None:
     candidate = _candidate(repo)
-    accepted = {"soak_minutes": Threshold("60", Reference(**SOURCE_REF))}
+    source = Reference(**SOURCE_REF)
+    accepted = AcceptedScenario(
+        workload=source,
+        thresholds={"soak_minutes": Threshold("60", source)},
+        timeout=Threshold("75", source),
+    )
+    ready: dict[str, PrerequisiteState] = {
+        "systemd user transient service": "ready",
+        "offline models": "ready",
+    }
 
-    def admit(doc: dict[str, object], against: InstalledCandidate = candidate) -> tuple[str, ...]:
-        return admit_scenario(parse_scenario_contract(json.dumps(doc).encode()), against, accepted)
+    def admit(
+        doc: dict[str, object],
+        against: InstalledCandidate = candidate,
+        register: dict[str, PrerequisiteState] = ready,
+    ) -> tuple[str, ...]:
+        contract = parse_scenario_contract(json.dumps(doc).encode())
+        return admit_scenario(contract, against, accepted, register)
 
     assert admit(_contract(candidate.key)) == ()
     shortened = {"soak_minutes": {"value": "30", "source": SOURCE_REF}}
@@ -988,9 +1121,25 @@ def test_scenario_admission_binds_candidate_and_original_thresholds(repo: Path) 
         "rss_mb": shortened["soak_minutes"],
     }
     assert admit(_contract(candidate.key, thresholds=extra)) == ("threshold.rss_mb_differs",)
+    other_source = {**SOURCE_REF, "sha256": "e" * 64}
+    assert admit(_contract(candidate.key, timeout={"value": "75", "source": other_source})) == (
+        "timeout_differs",
+    )
+    assert admit(_contract(candidate.key, workload=other_source)) == ("workload_differs",)
     assert admit(_contract("e" * 64)) == ("candidate_mismatch",)
     unobserved = _candidate(repo, {"origins": None})
-    assert admit(_contract(unobserved.key), unobserved) == ("candidate_unknown",)
+    assert admit(_contract(unobserved.key), unobserved) == ("candidate.artifact.origins_unknown",)
+    # Missing, denied or unregistered prerequisites refuse start; only `ready` admits.
+    assert admit(
+        _contract(candidate.key),
+        register={"systemd user transient service": "denied", "offline models": "missing"},
+    ) == (
+        "prerequisite.systemd user transient service_denied",
+        "prerequisite.offline models_missing",
+    )
+    assert admit(_contract(candidate.key), register={"offline models": "ready"}) == (
+        "prerequisite.systemd user transient service_unknown",
+    )
 
 
 @pytest.mark.parametrize(

@@ -967,6 +967,38 @@ _DISPOSITIONS: tuple[InstallDisposition, ...] = (
 
 Facts = Mapping[str, str | None]
 
+# [LAW:one-source-of-truth] WS-12's mandatory observations of every installed candidate. A
+# name ending in ":" is a family that needs at least one member, every member observed.
+_REQUIRED_FACTS: Mapping[str, tuple[str, ...]] = MappingProxyType(
+    {
+        "artifact": ("distribution:", "installed:", "site_packages", "origins"),
+        "environment": ("python", "os", "kernel", "architecture", "resources"),
+    }
+)
+
+
+def _observed(facts: Facts, name: str) -> bool:
+    members = [key for key in facts if key.startswith(name)] if name.endswith(":") else [name]
+    return bool(members) and all(facts.get(key) is not None for key in members)
+
+
+def _fact_gaps(candidate: InstalledCandidate) -> list[str]:
+    facts = {"artifact": candidate.artifact, "environment": candidate.environment}
+    return [
+        f"{group}.{name.rstrip(':')}_unknown"
+        for group, names in _REQUIRED_FACTS.items()
+        for name in names
+        if not _observed(facts[group], name)
+    ]
+
+
+def candidate_gaps(candidate: InstalledCandidate) -> tuple[str, ...]:
+    """[LAW:single-enforcer] every mandatory observation `candidate` lacks; empty means it
+    is completely identified and may be reused, admitted or accepted."""
+    return tuple(f"source.{refusal.code}" for refusal in candidate.source.refusals) + tuple(
+        _fact_gaps(candidate)
+    )
+
 
 @dataclass(frozen=True)
 class InstalledCandidate:
@@ -1055,6 +1087,7 @@ def install_reuse(
         + _fact_reasons(
             "environment", then.environment, current.environment, "impact_review_required"
         )
+        + _graded("unknown", _fact_gaps(then) + _fact_gaps(current))
     )
     worst = min((_DISPOSITIONS.index(grade) for grade, _ in graded), default=len(_DISPOSITIONS) - 1)
     return InstallReuse(
@@ -1130,9 +1163,9 @@ def _carry_gap(
 def bind_acceptance(
     proof: Proof, final: InstalledCandidate, carried: InstallReuse | None = None
 ) -> AcceptanceBinding:
-    """WS-12: only a passed installed run of the final candidate - or of an accepted
-    candidate carried to it by a valid reuse - is installed acceptance. Source checks and
-    build/install proof never are."""
+    """WS-12: only a passed installed run of a completely observed final candidate - or of
+    an accepted candidate carried to it by a valid reuse - is installed acceptance. Source
+    checks and build/install proof never are."""
     match proof:
         case CheckReceipt():
             reasons, run = ["source_proof_is_not_installed_acceptance"], None
@@ -1141,6 +1174,7 @@ def bind_acceptance(
         case InstalledRun():
             not_passed = [] if proof.result == "passed" else ["run_not_passed"]
             reasons, run = not_passed + _carry_gap(proof, final, carried), proof
+    reasons += [f"final.{gap}" for gap in candidate_gaps(final)]
     carried_by = (
         carried.equivalence
         if run is not None and carried is not None and run.candidate_key == carried.accepted_key
@@ -1160,6 +1194,10 @@ def bind_acceptance(
 # --- native install evidence: the only effects in this section ---------------------------
 
 
+# The native acceptance's own status for accepted build/install evidence; nothing else is.
+_ACCEPTED_BUILD = "BUILD_INSTALL_EVIDENCE_ACCEPTED_ONLY"
+
+
 def _package(name: str) -> str:
     """Distribution name in its installed (dist-info) spelling."""
     return name.replace("-", "_")
@@ -1177,7 +1215,7 @@ def accepted_build_install(
     `execution-result.json` it pins): read in their own schema, never rewritten. Raises
     `EvidenceError` when the pair is inconsistent or names another source head."""
     accepted = _decode(acceptance)
-    if "ACCEPTED" not in _text(accepted.get("status"), "acceptance.status"):
+    if _text(accepted.get("status"), "acceptance.status") != _ACCEPTED_BUILD:
         raise EvidenceError("acceptance.status", "is not an accepted build/install")
     pinned = _object(accepted.get("result"), "acceptance.result")
     _exact_keys(pinned, ("path", "sha256", "bytes"), "acceptance.result")
@@ -1275,11 +1313,12 @@ def _installed(site: Path, package: str) -> str | None:
 
 
 def observe_install(
-    exec_root: Path, packages: tuple[str, ...], origins: str | None
+    exec_root: Path, packages: tuple[str, ...], *, origins: str | None, resources: str | None
 ) -> tuple[Facts, Facts]:
-    """[LAW:effects-at-boundaries] read an existing install's artifact and toolchain facts
-    by hashing files; it never runs the installed interpreter. `origins` comes from an
-    installed origin check's receipt, or `None` while that check has not been observed."""
+    """[LAW:effects-at-boundaries] read an existing install's artifact, toolchain and host
+    facts by hashing files and asking the kernel; it never runs the installed interpreter.
+    `origins` and `resources` come from an installed origin check's receipt and the accepted
+    resource pins, or `None` while not observed."""
     site = next(iter(sorted((exec_root / "venv" / "lib").glob("python3.*/site-packages"))), None)
     distributions: dict[str, str | None] = {
         f"distribution:{path.name}": _sha256(path.read_bytes())
@@ -1299,7 +1338,14 @@ def observe_install(
             "origins": origins,
         }
     )
-    environment = {"python": os.path.realpath(python) if python.exists() else None}
+    host = os.uname()
+    environment = {
+        "python": os.path.realpath(python) if python.exists() else None,
+        "os": host.sysname,
+        "kernel": host.release,
+        "architecture": host.machine,
+        "resources": resources,
+    }
     return MappingProxyType(artifact), MappingProxyType(environment)
 
 
@@ -1328,22 +1374,40 @@ class Threshold:
 
 
 @dataclass(frozen=True)
+class Resource:
+    """Who owns one process, container, service or durable state, and how it is reclaimed."""
+
+    owner: str
+    reclaim: str
+
+
+@dataclass(frozen=True)
 class ScenarioContract:
-    """Everything a scenario needs before it may start (WS-13): the exact candidate, argv
-    and environment, the capability it uses, its accepted workload, outcome and threshold
-    sources, the owner of every resource it touches, where evidence goes, and what the
-    pre- and post-cleanup observations record."""
+    """Everything WS-13 §15.2 requires before a scenario may start: its identity, version
+    and acceptance IDs; the exact candidate and run; literal argv, cwd and environment
+    allowlist; the prerequisites it requires; its accepted workload, outcome, thresholds and
+    timeout with their sources; the owner and reclamation of every resource it touches; its
+    author and separate witness; where evidence goes; and what the start, pre- and
+    post-cleanup observations record."""
 
     scenario: str
+    version: str
+    acceptance: tuple[str, ...]
     candidate: str
+    run: str
     argv: tuple[str, ...]
+    cwd: str
     environment: Mapping[str, str]
-    capability: str
+    requires: tuple[str, ...]
     workload: Reference
     expected: Expected
     thresholds: Mapping[str, Threshold]
-    resources: Mapping[str, str]
+    timeout: Threshold
+    resources: Mapping[str, Resource]
+    author: str
+    witness: str
     evidence: str
+    start: str
     precleanup: str
     postcleanup: str
 
@@ -1351,16 +1415,22 @@ class ScenarioContract:
 _CONTRACT_FIELDS = (
     "schema_version",
     "scenario",
+    "version",
+    "acceptance",
     "candidate",
+    "run",
     "argv",
+    "cwd",
     "environment",
-    "capability",
+    "requires",
     "workload",
     "expected",
     "thresholds",
+    "timeout",
     "resources",
+    "attribution",
     "evidence",
-    "cleanup",
+    "observations",
 )
 
 
@@ -1377,81 +1447,127 @@ def _expected(value: object) -> Expected:
             raise EvidenceError("expected.outcome", f"must be behaves or refuses, not {other!r}")
 
 
-def _threshold(name: str, value: object) -> Threshold:
-    doc = _object(value, f"thresholds.{name}")
-    _exact_keys(doc, ("value", "source"), f"thresholds.{name}")
+def _threshold(value: object, field: str) -> Threshold:
+    doc = _object(value, field)
+    _exact_keys(doc, ("value", "source"), field)
     return Threshold(
-        _text(doc["value"], f"thresholds.{name}.value"),
-        _reference(doc["source"], f"thresholds.{name}.source"),
+        _text(doc["value"], f"{field}.value"), _reference(doc["source"], f"{field}.source")
     )
 
 
-def _nonempty(items: dict[str, object], field: str) -> dict[str, object]:
+def _resource(value: object, field: str) -> Resource:
+    doc = _object(value, field)
+    _exact_keys(doc, ("owner", "reclaim"), field)
+    return Resource(
+        _text(doc["owner"], f"{field}.owner"), _text(doc["reclaim"], f"{field}.reclaim")
+    )
+
+
+def _nonempty[T](items: T, field: str) -> T:
     if not items:
         raise EvidenceError(field, "must not be empty")
     return items
 
 
+def _absolute(value: object, field: str) -> str:
+    path = _text(value, field)
+    if not Path(path).is_absolute():
+        raise EvidenceError(field, "must be an absolute path")
+    return path
+
+
 def parse_scenario_contract(raw: bytes) -> ScenarioContract:
-    """The single checkpoint a scenario passes before it may start; a missing candidate,
-    criterion, threshold source, resource owner, evidence destination or cleanup
-    observation raises `EvidenceError` naming it."""
+    """The single checkpoint a scenario passes before it may start: any missing or empty
+    §15.2 obligation raises `EvidenceError` naming it."""
     doc = _decode(raw)
     _exact_keys(doc, _CONTRACT_FIELDS, "contract")
     if doc["schema_version"] != SCHEMA_VERSION or type(doc["schema_version"]) is not int:
         raise EvidenceError("schema_version", f"must be {SCHEMA_VERSION}")
     expected = _expected(doc["expected"])
     thresholds = {
-        name: _threshold(name, value)
+        name: _threshold(value, f"thresholds.{name}")
         for name, value in _object(doc["thresholds"], "thresholds").items()
     }
+    # A refusal is judged by its code; meeting criteria needs at least one threshold.
     if isinstance(expected, Behaves):
-        _nonempty(dict(thresholds), "thresholds")
-    cleanup = _object(doc["cleanup"], "cleanup")
-    _exact_keys(cleanup, ("precleanup", "postcleanup"), "cleanup")
+        _nonempty(thresholds, "thresholds")
+    attribution = _object(doc["attribution"], "attribution")
+    _exact_keys(attribution, ("author", "witness"), "attribution")
+    author = _text(attribution["author"], "attribution.author")
+    witness = _text(attribution["witness"], "attribution.witness")
+    if witness == author:
+        raise EvidenceError("attribution.witness", "must be independent of the author")
+    observations = _object(doc["observations"], "observations")
+    _exact_keys(observations, ("start", "precleanup", "postcleanup"), "observations")
     resources = _nonempty(_object(doc["resources"], "resources"), "resources")
-    argv = _strings(doc["argv"], "argv")
-    if not argv:
-        raise EvidenceError("argv", "must not be empty")
     return ScenarioContract(
         scenario=_text(doc["scenario"], "scenario"),
+        version=_text(doc["version"], "version"),
+        acceptance=_nonempty(_strings(doc["acceptance"], "acceptance"), "acceptance"),
         candidate=_matching(doc["candidate"], _SHA256, "candidate"),
-        argv=argv,
+        run=_text(doc["run"], "run"),
+        argv=_nonempty(_strings(doc["argv"], "argv"), "argv"),
+        cwd=_absolute(doc["cwd"], "cwd"),
         environment=MappingProxyType(
             {
                 k: _text(v, f"environment.{k}")
                 for k, v in _object(doc["environment"], "environment").items()
             }
         ),
-        capability=_text(doc["capability"], "capability"),
+        requires=_nonempty(_strings(doc["requires"], "requires"), "requires"),
         workload=_reference(doc["workload"], "workload"),
         expected=expected,
         thresholds=MappingProxyType(thresholds),
-        resources=MappingProxyType({k: _text(v, f"resources.{k}") for k, v in resources.items()}),
+        timeout=_threshold(doc["timeout"], "timeout"),
+        resources=MappingProxyType(
+            {k: _resource(v, f"resources.{k}") for k, v in resources.items()}
+        ),
+        author=author,
+        witness=witness,
         evidence=_text(doc["evidence"], "evidence"),
-        precleanup=_text(cleanup["precleanup"], "cleanup.precleanup"),
-        postcleanup=_text(cleanup["postcleanup"], "cleanup.postcleanup"),
+        start=_text(observations["start"], "observations.start"),
+        precleanup=_text(observations["precleanup"], "observations.precleanup"),
+        postcleanup=_text(observations["postcleanup"], "observations.postcleanup"),
     )
+
+
+# WS-13 §15.1 prerequisite register states; only `ready` lets a dependent scenario start.
+PrerequisiteState = Literal["ready", "missing", "denied", "unknown"]
+
+
+@dataclass(frozen=True)
+class AcceptedScenario:
+    """The original accepted obligations a scenario contract must copy unchanged."""
+
+    workload: Reference
+    thresholds: Mapping[str, Threshold]
+    timeout: Threshold
 
 
 def admit_scenario(
-    contract: ScenarioContract, candidate: InstalledCandidate, accepted: Mapping[str, Threshold]
+    contract: ScenarioContract,
+    candidate: InstalledCandidate,
+    accepted: AcceptedScenario,
+    prerequisites: Mapping[str, PrerequisiteState],
 ) -> tuple[str, ...]:
-    """Why `contract` may not start against `candidate`; empty means admitted. The
-    accepted thresholds are the original obligations: none may be dropped, added or
-    changed, so a shortened soak or relaxed bound refuses."""
-    unobserved = (
-        candidate.source.refusals
-        or None in candidate.artifact.values()
-        or None in candidate.environment.values()
-    )
+    """Why `contract` may not start against `candidate`; empty means admitted. Every
+    required prerequisite must be registered `ready`, and the accepted workload, timeout and
+    thresholds are the original obligations: none may be dropped, added or changed, so a
+    shortened soak or relaxed bound refuses."""
     return (
         (() if contract.candidate == candidate.key else ("candidate_mismatch",))
-        + (("candidate_unknown",) if unobserved else ())
+        + tuple(f"candidate.{gap}" for gap in candidate_gaps(candidate))
+        + tuple(
+            f"prerequisite.{name}_{prerequisites.get(name, 'unknown')}"
+            for name in contract.requires
+            if prerequisites.get(name) != "ready"
+        )
+        + (() if contract.workload == accepted.workload else ("workload_differs",))
+        + (() if contract.timeout == accepted.timeout else ("timeout_differs",))
         + tuple(
             f"threshold.{name}_differs"
-            for name in _utf8_order(tuple(set(accepted) | set(contract.thresholds)))
-            if contract.thresholds.get(name) != accepted.get(name)
+            for name in _utf8_order(tuple(set(accepted.thresholds) | set(contract.thresholds)))
+            if contract.thresholds.get(name) != accepted.thresholds.get(name)
         )
     )
 
