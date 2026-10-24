@@ -780,6 +780,25 @@ def landing_delta(
     return sorted(bad)
 
 
+def _binding_at(repo: Path, base: str, ref: str) -> tuple[str, str]:
+    # [LAW:one-source-of-truth] exception: rw.code_binding's digest formula, which binds only
+    # the checked-out HEAD; the reviewed head is a commit, not the worktree.
+    head = rw._git(repo, "rev-parse", "--verify", f"{ref}^{{commit}}")
+    merge_base = rw._git(repo, "merge-base", base, head)
+    return head, hashlib.sha256(rw.bound_diff(repo, merge_base, head)).hexdigest()
+
+
+def landing_proof(
+    reviewed_head: str, final_head: str = "HEAD", *, base: str = rlg.FULL_DIFF_REF,
+    repo: Path | None = None,
+) -> rlg.LandingDelta:
+    """The trial reducer's transfer proof: both (head, digest) bindings computed here over one
+    base, with `landing_delta` between them. An unresolvable ref raises; it is never a clean
+    delta."""
+    repo = repo or REPO
+    reviewed, final = (_binding_at(repo, base, ref) for ref in (reviewed_head, final_head))
+    return rlg.LandingDelta(reviewed, final, tuple(landing_delta(reviewed[0], final[0], repo)))
+
 def _read_text(arg: str) -> str:
     """`-` (stdin) or a REGULAR file that RESOLVES under `.harness/tmp/` -- the documented
     scratch dir. A relative path is the only shape the permission guard auto-allows, and a

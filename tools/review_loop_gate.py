@@ -736,10 +736,12 @@ class TrialPolicy:
 
 @dataclass(frozen=True)
 class LandingDelta:
-    """`merge_gate_log.landing_delta(reviewed_head, final)`: empty `changed` proves a
-    gate-row-only landing delta."""
+    """`merge_gate_log.landing_proof`: the reviewed and final (head, digest) bindings, both
+    computed by the checker over one base, and what between them is not a gate-row append.
+    Empty `changed` proves a gate-row-only landing delta between exactly those bindings."""
 
-    reviewed_head: str
+    reviewed: tuple[str, str]
+    final: tuple[str, str]
     changed: tuple[str, ...]
 
 
@@ -841,13 +843,28 @@ def trial_review_decision(
         _PASS_REVIEWERS[k[0]] - (judged[k].delivered if k in judged else frozenset())
         for k in pending if not (k in judged and judged[k].complete)))))
     head = done.head_sha if done is not None else binding.head_sha
-    blocking = sorted({f["finding_id"] for r in runs if r.complete and r.head_sha == head
+
+    def unverified(member: str, run: PassRun) -> bool:
+        # A finding's obligation ends only where its own arc's cycle reviewed past it: a
+        # later arc's clean passes never judged that finding. Earlier heads of this arc
+        # await its correction review; an earlier arc carries all but what its completed
+        # cycle verified past.
+        if member == arc:
+            return run.head_sha == head
+        closing = completing_run(rows, member)
+        return closing is None or run.head_sha == closing.head_sha
+
+    blocking = sorted({f["finding_id"] for a in policy.units[unit] for r in pass_runs(rows, a)
+                       if r.complete and unverified(a, r)
                        for f in r.findings
                        if f["severity"] in ("P1", "P2")
                        and disposed.get(f["finding_id"]) == "accepted"})
-    transfers = done is not None and (
-        done.head_sha == binding.head_sha
-        or binding.landing == LandingDelta(done.head_sha, ())
+    # [LAW:one-source-of-truth] an approval names (head, digest): the same head with another
+    # reviewed diff, or a delta not bound to both bindings, transfers nothing
+    reviewed = (done.head_sha, done.diff_digest) if done is not None else None
+    final = (binding.head_sha, binding.diff_digest)
+    transfers = reviewed is not None and (
+        reviewed == final or binding.landing == LandingDelta(reviewed, final, ())
     )
     approved = transfers and not unjudged and not blocking and not undisposed
     stopped = legacy.stopped or streak >= TRIAL_P1_STOP

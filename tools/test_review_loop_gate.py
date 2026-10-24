@@ -3990,12 +3990,13 @@ _TRIAL_PRODUCERS = {
 }
 
 
-def _trial_rows(cycle_pass, *, arc=ARC, head=HEAD, producers=None, finding=None):
+def _trial_rows(cycle_pass, *, arc=ARC, head=HEAD, digest=DIGEST, producers=None,
+                finding=None):
     """One reviewer set delivering on (arc, pass, head); `finding` is (id, severity,
     disposition) carried by the first producer, disposition None = not adjudicated."""
     producers = _TRIAL_PRODUCERS[cycle_pass] if producers is None else producers
     rows = [
-        dict(arc_id=arc, cycle_pass=cycle_pass, head_sha=head, diff_digest=DIGEST,
+        dict(arc_id=arc, cycle_pass=cycle_pass, head_sha=head, diff_digest=digest,
              producer=p, record_kind="no_finding", round_n=1)
         for p in producers
     ]
@@ -4016,8 +4017,8 @@ def _policy(legacy_rounds=(), p1_streak=0, stopped=False, arcs=(ARC,), unit="u07
     })
 
 
-def _binding(head=HEAD, authors=("claude",), landing=None):
-    return rlg.TrialBinding(head_sha=head, diff_digest=DIGEST, authors=frozenset(authors),
+def _binding(head=HEAD, digest=DIGEST, authors=("claude",), landing=None):
+    return rlg.TrialBinding(head_sha=head, diff_digest=digest, authors=frozenset(authors),
                             doc_only=False, landing=landing)
 
 
@@ -4101,16 +4102,49 @@ def test_consolidated_review_requires_complete_concerns():
     assert _trial(_CLEAN_CYCLE).state == "approved"
 
 
-def test_only_proven_gate_row_delta_transfers_approval():
-    final = "e" * 40
+def test_only_a_gate_row_delta_bound_to_both_bindings_transfers_approval():
+    reviewed, final = (HEAD, DIGEST), ("e" * 40, "x" * 64)
     landed = _trial(_CLEAN_CYCLE, binding=_binding(
-        head=final, landing=rlg.LandingDelta(reviewed_head=HEAD, changed=())))
+        *final, landing=rlg.LandingDelta(reviewed=reviewed, final=final, changed=())))
     assert landed.state == "approved"
-    for landing in (None, rlg.LandingDelta(HEAD, ("tools/review_loop_gate.py",)),
-                    rlg.LandingDelta(HEAD, (".harness/merge-gate-log.md (not an append)",)),
-                    rlg.LandingDelta("f" * 40, ())):
-        d = _trial(_CLEAN_CYCLE, binding=_binding(head=final, landing=landing))
+    rewritten = ".harness/merge-gate-log.md (not an append)"
+    for landing in (None, rlg.LandingDelta(reviewed, final, ("tools/review_loop_gate.py",)),
+                    rlg.LandingDelta(reviewed, final, (rewritten,)),
+                    rlg.LandingDelta(("f" * 40, DIGEST), final, ()),
+                    rlg.LandingDelta((HEAD, "b" * 64), final, ()),
+                    rlg.LandingDelta(reviewed, ("f" * 40, "x" * 64), ()),
+                    rlg.LandingDelta(reviewed, ("e" * 40, "y" * 64), ())):
+        d = _trial(_CLEAN_CYCLE, binding=_binding(*final, landing=landing))
         assert d.state == "binding_stale" and "binding_stale" in d.reasons
+
+
+def test_same_head_with_another_reviewed_diff_does_not_inherit_approval():
+    # [LAW:behavior-not-structure] F1: the approval names (head, digest), never head alone
+    other = ("a" * 40, "b" * 64)
+    clean = (_trial_rows("1", digest=other[1]) + _trial_rows("2", digest=other[1])
+             + _trial_rows("3", digest=other[1]))
+    assert _trial(clean, binding=_binding(*other)).state == "approved"
+    d = _trial(clean, binding=_binding(HEAD, DIGEST))
+    assert d.state == "binding_stale" and "binding_stale" in d.reasons
+
+
+def test_prior_member_arc_finding_blocks_until_its_own_cycle_verifies_it():
+    # F2: a later arc's clean passes never reviewed an earlier arc's accepted finding
+    prior = "b-001-prior"
+    raised = _trial_rows("1", arc=prior, head="f" * 40, finding=("fp2", "P2", "accepted"))
+    policy = _policy(arcs=(prior, ARC))
+    d = _trial(raised + _CLEAN_CYCLE, policy=policy)
+    assert d.state == "changes_required" and d.blocking_findings == ("fp2",)
+    assert "review_blocked" in d.reasons and not d.admit_launch
+    verified = raised + _trial_rows("2", arc=prior, head="9" * 40) + _trial_rows(
+        "3", arc=prior, head="9" * 40)
+    assert _trial(verified + _CLEAN_CYCLE, policy=policy).state == "approved"
+    at_close = (_trial_rows("1", arc=prior) + _trial_rows("2", arc=prior) + _trial_rows(
+        "3", arc=prior, finding=("fp1", "P2", "accepted")))
+    d = _trial(at_close + _trial_rows("1"), policy=policy)
+    assert d.state == "changes_required" and d.blocking_findings == ("fp1",)
+    rejected = _trial_rows("1", arc=prior, head="f" * 40, finding=("fp2", "P2", "rejected"))
+    assert _trial(rejected + _CLEAN_CYCLE, policy=policy).state == "approved"
 
 
 def test_substantive_findings_never_become_followups():

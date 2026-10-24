@@ -18,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import finding_record as fr
 import merge_gate_log as mgl
+import review_loop_gate as rlg
 import review_wrapper_common as rw
 
 H, B, D = "a" * 40, "b" * 40, "c" * 64
@@ -448,6 +449,45 @@ def test_landing_delta_transfers_only_over_gate_row_files(tmp_path: Path):
         ".harness/merge-gate-log.md (not an append: rewritten, truncated or removed)"
     ]
 
+
+def test_landing_proof_binds_the_reviewed_and_final_bindings(tmp_path: Path):
+    """WO-U07 F1: the checker computes both (head, digest) bindings over one base, so the
+    reducer's transfer proof cannot name another final head or another reviewed diff."""
+    import hashlib
+
+    repo = tmp_path / "r"
+    repo.mkdir()
+    g = lambda *a: subprocess.run(  # noqa: E731
+        ["git", *a], cwd=repo, capture_output=True, text=True, check=True).stdout.strip()
+    g("init", "-q", "-b", "main")
+    g("config", "user.email", "t@t")
+    g("config", "user.name", "t")
+    (repo / ".harness").mkdir()
+    log = repo / ".harness" / "merge-gate-log.jsonl"
+    log.write_text('{"a": 1}\n')
+    g("add", "-A")
+    g("commit", "-qm", "base")
+    g("checkout", "-qb", "topic")
+    (repo / "code.py").write_text("x = 1\n")
+    g("add", "-A")
+    g("commit", "-qm", "reviewed")
+    reviewed = g("rev-parse", "HEAD")
+    log.write_text('{"a": 1}\n{"b": 2}\n')
+    g("commit", "-qam", "gate rows")
+    final = g("rev-parse", "HEAD")
+
+    def binding(head: str) -> tuple[str, str]:
+        base = g("merge-base", "main", head)
+        return head, hashlib.sha256(rw.bound_diff(repo, base, head)).hexdigest()
+
+    proof = mgl.landing_proof(reviewed, "HEAD", base="main", repo=repo)
+    assert proof == rlg.LandingDelta(binding(reviewed), binding(final), ())
+    (repo / "code.py").write_text("x = 2\n")
+    g("commit", "-qam", "sneaky")
+    sneaky = mgl.landing_proof(reviewed, "HEAD", base="main", repo=repo)
+    assert sneaky.final == binding(g("rev-parse", "HEAD")) and sneaky.changed == ("code.py",)
+    with pytest.raises(subprocess.CalledProcessError):
+        mgl.landing_proof("not-a-ref", "HEAD", base="main", repo=repo)
 
 def test_one_lens_sibling_never_vouches_for_another_lens(tmp_path: Path):
     md, jl = tmp_path / "log.md", tmp_path / "log.jsonl"
