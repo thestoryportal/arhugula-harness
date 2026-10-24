@@ -16,7 +16,6 @@ import os
 import re
 import subprocess
 import sys
-import textwrap
 from pathlib import Path
 from typing import Any
 
@@ -159,6 +158,7 @@ def test_aggregate_keeps_the_required_name_and_waits_for_every_input() -> None:
     assert job["if"] == "always()"
     assert sorted(job["needs"]) == ["changes", "package-tests", "parity-tests"]
     assert "continue-on-error" not in job
+    assert not _aggregate_step(job).get("continue-on-error", False)
 
 
 def test_aggregate_env_wires_each_input_to_its_own_job() -> None:
@@ -235,8 +235,9 @@ def test_coverage_publishing_is_advisory_and_names_its_binding() -> None:
     for part in ("github.event.pull_request.head.sha || github.sha", "run_id", "run_attempt"):
         assert part in name
     assert set(upload["with"]["path"].split()) == {"coverage.xml", "coverage-provenance.json"}
-    # No XML leaves without its manifest: the upload requires the manifest file.
-    assert upload["if"] == "always() && hashFiles('coverage-provenance.json') != ''"
+    # [LAW:verifiable-goals] A pathname alone cannot certify a complete manifest.
+    assert upload["if"] == "always() && steps.coverage_provenance.outputs.valid == 'true'"
+    assert _provenance_step()["id"] == "coverage_provenance"
 
 
 def _provenance_step() -> dict[str, Any]:
@@ -260,9 +261,6 @@ def test_provenance_env_keeps_head_base_and_tested_commit_distinct() -> None:
 def test_provenance_step_writes_the_manifest_it_summarizes(
     tmp_path: Path, xml_state: str, json_state: str
 ) -> None:
-    # The step's own heredoc program, run under this interpreter in a scratch workspace.
-    run = str(_provenance_step()["run"])
-    program = run.split("<<'PY'", 1)[1].split("\n", 1)[1].split("\nPY", 1)[0]
     (tmp_path / "uv.lock").write_text("lock\n")
     totals = {"percent_covered_display": "91", "covered_lines": 91, "num_statements": 100}
     json_body = {"valid": json.dumps({"totals": totals}), "malformed": "{not json"}
@@ -271,24 +269,11 @@ def test_provenance_step_writes_the_manifest_it_summarizes(
     if xml_state == "present":
         (tmp_path / "coverage.xml").write_text("<coverage/>")
     available = (xml_state, json_state) == ("present", "valid")
-    env = {
-        **os.environ,
-        "COVERAGE_HEAD": "h" * 40,
-        "COVERAGE_BASE": "b" * 40,
-        "COVERAGE_TESTED": "m" * 40,
-        "COVERAGE_COMMAND": _PRIMARY_PYTEST,
-        "GITHUB_WORKFLOW": "CI",
-        "GITHUB_RUN_ID": "7",
-        "GITHUB_RUN_ATTEMPT": "2",
-    }
-    p = subprocess.run(
-        [sys.executable, "-c", textwrap.dedent(program)],
-        cwd=tmp_path,
-        env=env,
-        capture_output=True,
-        text=True,
-    )
+    p = _run_provenance(tmp_path)
     assert p.returncode == 0, p.stderr
+    summary = (tmp_path / "summary").read_text()
+    assert p.stdout == ""
+    assert (tmp_path / "output").read_text() == "valid=true\n"
     manifest = json.loads((tmp_path / "coverage-provenance.json").read_text())
     assert manifest == {
         "head": "h" * 40,
@@ -307,8 +292,69 @@ def test_provenance_step_writes_the_manifest_it_summarizes(
     }
     assert manifest["platform"]
     assert (manifest["coverage_json_error"] is None) is (json_state != "malformed")
-    assert ("Total line coverage: 91%" in p.stdout) is available
-    assert ("Coverage unavailable" in p.stdout) is not available
+    assert json.dumps(manifest, indent=2) in summary
+    assert ("Total line coverage: 91%" in summary) is available
+    assert ("Coverage unavailable" in summary) is not available
+
+
+def _run_provenance(tmp_path: Path) -> subprocess.CompletedProcess[str]:
+    # Execute the complete shell step, including its summary redirection.
+    run = str(_provenance_step()["run"]).replace("uv run python", sys.executable)
+    env = {
+        **os.environ,
+        "COVERAGE_HEAD": "h" * 40,
+        "COVERAGE_BASE": "b" * 40,
+        "COVERAGE_TESTED": "m" * 40,
+        "COVERAGE_COMMAND": _PRIMARY_PYTEST,
+        "GITHUB_WORKFLOW": "CI",
+        "GITHUB_RUN_ID": "7",
+        "GITHUB_RUN_ATTEMPT": "2",
+        "GITHUB_STEP_SUMMARY": str(tmp_path / "summary"),
+        "GITHUB_OUTPUT": str(tmp_path / "output"),
+        "PYTHONPATH": str(tmp_path),
+    }
+    (tmp_path / "output").touch()
+    return subprocess.run(
+        ["bash", "-eo", "pipefail", "-c", run],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+
+@pytest.mark.parametrize("failure", ["interrupted", "short-write"])
+def test_incomplete_provenance_is_never_published(tmp_path: Path, failure: str) -> None:
+    (tmp_path / "uv.lock").write_text("lock\n")
+    # Inject the disk failure below the real publication program. A short write
+    # returns normally, so successful publication must also validate persisted JSON.
+    (tmp_path / "sitecustomize.py").write_text(
+        "from pathlib import Path\n"
+        "original = Path.write_text\n"
+        "def write(self, data, *args, **kwargs):\n"
+        "    if 'coverage-provenance' in self.name:\n"
+        "        original(self, '{partial', *args, **kwargs)\n"
+        + (
+            "        raise OSError('interrupted write')\n"
+            if failure == "interrupted"
+            else "        return 8\n"
+        )
+        + "    return original(self, data, *args, **kwargs)\n"
+        "Path.write_text = write\n"
+    )
+    p = _run_provenance(tmp_path)
+    assert p.returncode != 0, p.stdout + p.stderr
+    assert not (tmp_path / "coverage-provenance.json").exists()
+    assert (tmp_path / "output").read_text() == ""
+
+
+def test_summary_redirection_failure_cannot_authorize_upload(tmp_path: Path) -> None:
+    (tmp_path / "uv.lock").write_text("lock\n")
+    (tmp_path / "summary").mkdir()
+    p = _run_provenance(tmp_path)
+    assert p.returncode != 0
+    assert not (tmp_path / "coverage-provenance.json").exists()
+    assert (tmp_path / "output").read_text() == ""
 
 
 def test_parity_job_provides_just_and_zsh_then_runs_the_parity_script() -> None:
@@ -318,6 +364,19 @@ def test_parity_job_provides_just_and_zsh_then_runs_the_parity_script() -> None:
     assert any(u.startswith("extractions/setup-just@") for u in uses)
     assert any("apt-get install -y zsh" in r for r in runs)
     assert runs[-1] == "bash tools/codex-parity-check.sh"
+    job = _jobs()["parity-tests"]
+    assert not job.get("continue-on-error", False)
+    assert not steps[-1].get("continue-on-error", False)
+
+
+def test_reducer_regressions_have_an_independently_required_blocking_job() -> None:
+    job = _jobs()["tools-test-coverage-and-codex-loop"]
+    assert job["name"] in _REQUIRED_CONTEXTS
+    assert job["needs"] == "changes"
+    assert not job.get("continue-on-error", False)
+    [step] = [s for s in job["steps"] if "test_ci_aggregate.py" in str(s.get("run", ""))]
+    assert step["run"] == "uv run python -m pytest tools/test_ci_aggregate.py -q"
+    assert not step.get("continue-on-error", False)
 
 
 def test_required_context_names_are_unchanged() -> None:

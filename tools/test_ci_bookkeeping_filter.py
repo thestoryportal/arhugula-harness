@@ -32,7 +32,9 @@ _GATED_JOBS = frozenset(
         "tools-test-coverage-and-codex-loop",
     }
 )
-_GATE_IF = "always() && needs.changes.outputs.bookkeeping != 'true'"
+_GATE_IF = (
+    "always() && (needs.changes.result != 'success' || needs.changes.outputs.bookkeeping != 'true')"
+)
 
 
 # --- classifier contract (the plan's four tests) -------------------------------------
@@ -205,6 +207,20 @@ def test_gated_jobs_need_changes_and_carry_the_always_guard():
     for name in _GATED_JOBS:
         assert jobs[name]["needs"] == "changes", name
         assert jobs[name]["if"] == _GATE_IF, name
+
+
+@pytest.mark.parametrize("job_id", sorted(_GATED_JOBS))
+@pytest.mark.parametrize("result", ["success", "failure", "cancelled", "skipped", ""])
+@pytest.mark.parametrize("bookkeeping", ["true", "false", "", "malformed"])
+def test_skip_requires_successful_classification(job_id: str, result: str, bookkeeping: str):
+    expression = str(_jobs()[job_id]["if"])
+    expression = expression.replace("always()", "True")
+    expression = expression.replace("needs.changes.result", repr(result))
+    expression = expression.replace("needs.changes.outputs.bookkeeping", repr(bookkeeping))
+    expression = expression.replace("&&", " and ").replace("||", " or ")
+    assert eval(expression, {"__builtins__": {}}, {}) is not (
+        result == "success" and bookkeeping == "true"
+    )
 
 
 def test_changes_job_is_pinned_and_has_no_uv_setup():

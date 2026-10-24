@@ -114,7 +114,7 @@ jobs:
     runs-on: ubuntu-latest
     name: package tests (all axis packages, with coverage)
     needs: changes
-    if: always() && needs.changes.outputs.bookkeeping != 'true'
+    if: always() && (needs.changes.result != 'success' || needs.changes.outputs.bookkeeping != 'true')
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -138,13 +138,14 @@ jobs:
       - name: Pytest with coverage (excludes e2e)
         run: uv run pytest -m "not e2e" --cov --cov-report=term-missing --cov-report=xml --cov-report=json
 
-      # R-200-ci-coverage-gating — coverage stays INFORMATIONAL (no threshold, "gather
-      # data first"): publishing is advisory, so a coverage hiccup never fails the job.
+      # R-200-ci-coverage-gating — post-pytest publication is advisory (no threshold).
+      # The primary coverage-enabled pytest process above retains its blocking exit.
       # WS-10 §12.2/§12.4: coverage-provenance.json binds the artifact to the PR head, its
       # base and the tested (for a PR, synthetic merge) commit as distinct fields, plus
       # workflow/run/attempt, platform, lock digest and command. The job summary is
       # rendered from that same manifest.
       - name: Record coverage provenance and publish total to job summary
+        id: coverage_provenance
         if: always()
         continue-on-error: true
         env:
@@ -156,8 +157,8 @@ jobs:
           uv run python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
           import hashlib, json, os, pathlib, platform
 
-          # Every input's state goes into the manifest, which is written before anything
-          # is rendered, so a broken report can never leave the artifact without it.
+          # [LAW:effects-at-boundaries] Publish complete, persisted JSON atomically;
+          # only its validation receipt authorizes the advisory artifact upload.
           def read_totals(path):
               if not path.exists():
                   return "missing", None, None
@@ -184,7 +185,14 @@ jobs:
               "coverage_json_error": json_error,
               "coverage_available": xml_state == "present" and json_state == "valid",
           }
-          pathlib.Path("coverage-provenance.json").write_text(json.dumps(manifest, indent=2) + "\n")
+          serialized = json.dumps(manifest, indent=2) + "\n"
+          temporary = pathlib.Path(".coverage-provenance.json.tmp")
+          temporary.write_text(serialized)
+          if json.loads(temporary.read_text()) != manifest:
+              raise ValueError("persisted coverage provenance differs from its inputs")
+          temporary.replace("coverage-provenance.json")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              print("valid=true", file=output)
           print("### Coverage (informational — v1, no threshold)\n")
           print("```json\n" + json.dumps(manifest, indent=2) + "\n```\n")
           if manifest["coverage_available"]:
@@ -198,8 +206,8 @@ jobs:
           PY
 
       - name: Upload coverage.xml artifact with its provenance
-        # No manifest, no upload: an XML never leaves the runner without its provenance.
-        if: always() && hashFiles('coverage-provenance.json') != ''
+        # [LAW:parse-dont-validate] Consume the validated publication receipt.
+        if: always() && steps.coverage_provenance.outputs.valid == 'true'
         continue-on-error: true
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -213,7 +221,7 @@ jobs:
     runs-on: ubuntu-latest
     name: codex compatibility regressions (parity suite)
     needs: changes
-    if: always() && needs.changes.outputs.bookkeeping != 'true'
+    if: always() && (needs.changes.result != 'success' || needs.changes.outputs.bookkeeping != 'true')
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -298,7 +306,7 @@ jobs:
     runs-on: ubuntu-latest
     name: pyright (strict) — blocking
     needs: changes
-    if: always() && needs.changes.outputs.bookkeeping != 'true'
+    if: always() && (needs.changes.result != 'success' || needs.changes.outputs.bookkeeping != 'true')
     # Blocking as of R-200-ci-lint-typecheck-blocking (pyright half) — the tree
     # is pyright-clean (0 errors) tree-wide. New findings fail the PR. See header
     # note for the drive-clean approach (test-dir executionEnvironments + src
@@ -349,7 +357,7 @@ jobs:
     name: axis isolation — harness-${{ matrix.axis }}
     runs-on: ubuntu-latest
     needs: changes
-    if: always() && needs.changes.outputs.bookkeeping != 'true'
+    if: always() && (needs.changes.result != 'success' || needs.changes.outputs.bookkeeping != 'true')
     strategy:
       fail-fast: false
       matrix:
@@ -571,7 +579,7 @@ jobs:
     runs-on: ubuntu-latest
     name: tools/ test coverage guard + codex-loop tests — blocking
     needs: changes
-    if: always() && needs.changes.outputs.bookkeeping != 'true'
+    if: always() && (needs.changes.result != 'success' || needs.changes.outputs.bookkeeping != 'true')
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -590,6 +598,11 @@ jobs:
 
       - name: Coverage-guard tests
         run: uv run python -m pytest tools/test_tools_test_coverage_guard.py -q
+
+      # [LAW:verifiable-goals] This required job independently rejects a reducer
+      # regression even when that reducer would incorrectly accept failed parity.
+      - name: CI aggregate regression tests (independent required witness)
+        run: uv run python -m pytest tools/test_ci_aggregate.py -q
 
       - name: Codex loop tests (kept out of the parity gate on latency)
         run: uv run python -m pytest tools/test_codex_loop.py -q
