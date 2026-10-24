@@ -295,3 +295,12 @@ def test_stop_cli_reports_legacy_for_unbound_work(repo: Path) -> None:
         ["python3", str(script), "stop", "--root", str(repo)], capture_output=True, text=True
     )
     assert (proc.returncode, json.loads(proc.stdout)) == (0, {"profile": "legacy"})
+
+
+def test_bytes_changed_after_observation_hold(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    stage(repo, "tools/b.py", "y = 1\n")
+    monkeypatch.setattr(wc, "_subject_bytes", lambda *_: b"y = 2\n")
+    ruff = FakeRuff()
+    outcome = commit(repo, ruff)
+    assert (outcome.result, outcome.reasons) == ("held", ("binding_stale",))
+    assert ruff.checks == []
