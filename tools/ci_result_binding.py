@@ -26,6 +26,7 @@ from typing import Literal
 
 Result = Literal["passed", "held", "failed", "error"]
 SubjectKind = Literal["merge_candidate", "landed_commit"]
+Classification = Literal["bookkeeping", "substantive"]
 
 BINDING_NOTICE_TITLE = "ci-binding"
 _SHA = re.compile(r"[0-9a-f]{40}")
@@ -57,6 +58,25 @@ class JobResult:
 
 
 @dataclass(frozen=True)
+class BookkeepingFastPath:
+    """Required jobs the workflow skips on a validated bookkeeping diff (`skippable`),
+    and the job whose success makes that classification valid (`classifier`)."""
+
+    classifier: str
+    skippable: frozenset[str]
+
+
+@dataclass(frozen=True)
+class RequiredChecks:
+    """The contexts a run must satisfy, as the workflow itself declares them. A skip
+    outside the fast path's set, or without its classifier proof, is never a pass;
+    a workflow without a fast path admits no skip at all."""
+
+    required: frozenset[str]
+    fast_path: BookkeepingFastPath | None
+
+
+@dataclass(frozen=True)
 class ExpectedBinding:
     """The inputs a merge decision needs verified. `subject` says what the run must
     have executed: the synthetic merge of head onto base (PR) or the landed SHA (main).
@@ -69,22 +89,30 @@ class ExpectedBinding:
     subject: SubjectKind
     workflow_path: str
     workflow_blob: str
-    required_jobs: frozenset[str]
+    checks: RequiredChecks
 
 
 @dataclass(frozen=True)
 class RunEvidence:
+    """One run as GitHub records it (`run_head_sha`, event, status, jobs) plus the
+    binding its `changes` job reported. `workflow_sha` is the commit whose workflow
+    definition actually executed (`github.workflow_sha`); `workflow_blob` is that
+    definition's blob, not the blob of whatever tree the run later checked out."""
+
     repository: str
     event: str
     run_id: int
     run_attempt: int
     workflow_path: str
     status: str
+    run_head_sha: str
     head_sha: str
     base_sha: str
     tested_sha: str
     tested_parents: tuple[str, ...]
+    workflow_sha: str
     workflow_blob: str
+    classification: Classification | None
     jobs: tuple[JobResult, ...]
 
 
@@ -114,11 +142,16 @@ def identity_mismatches(expected: ExpectedBinding, run: RunEvidence) -> list[str
         if expected.subject == "merge_candidate"
         else run.event == "push" and run.tested_sha == expected.head_sha
     )
+    # GitHub runs a pull_request workflow from the merge commit it tests, and a
+    # dispatch or push workflow from the run's own head commit; a reported workflow
+    # commit that is neither did not define this run.
+    workflow_source = run.tested_sha if run.event == "pull_request" else run.run_head_sha
     pairs = {
         "repository": (run.repository, expected.repository),
         "head_sha": (run.head_sha, expected.head_sha),
         "base_sha": (run.base_sha, expected.base_sha),
         "workflow_path": (run.workflow_path, expected.workflow_path),
+        "workflow_sha": (run.workflow_sha, workflow_source),
         "workflow_blob": (run.workflow_blob, expected.workflow_blob),
     }
     bad = [name for name, (seen, want) in pairs.items() if seen != want]
@@ -130,16 +163,20 @@ def validate_ci_binding(expected: ExpectedBinding, observed: RunEvidence) -> CiB
 
     Stale identity holds (new verification is needed, the old result stays recorded);
     an unfinished run holds; only a completed run whose every required job concluded
-    `success` exactly once passes. An unexpected skip, a missing job or any other
-    conclusion fails. Pending is never success and never a test failure (WS-10 §12.5).
+    `success` exactly once passes, except that a job the workflow skips on validated
+    bookkeeping may be `skipped` when the run's classifier succeeded and reported
+    bookkeeping. Any other skip, a missing job or any other conclusion fails. Pending
+    is never success and never a test failure (WS-10 §12.5).
     """
     bad = identity_mismatches(expected, observed)
     if bad:
         return _decision("held", "binding_stale", "mismatched " + ",".join(bad), observed)
+    checks, fast = expected.checks, expected.checks.fast_path
     by_name: dict[str, list[JobResult]] = {}
     for job in observed.jobs:
         by_name.setdefault(job.name, []).append(job)
-    duplicated = sorted(n for n in expected.required_jobs if len(by_name.get(n, [])) > 1)
+    judged = checks.required | ({fast.classifier} if fast else set())
+    duplicated = sorted(n for n in judged if len(by_name.get(n, [])) > 1)
     if duplicated:
         # [LAW:no-silent-failure] two same-named jobs in one run cannot both be the
         # context; picking either would be choosing whichever is easiest to find.
@@ -148,55 +185,122 @@ def validate_ci_binding(expected: ExpectedBinding, observed: RunEvidence) -> CiB
         )
     if observed.status != "completed":
         return _decision("held", "check_pending", f"run {observed.status}", observed)
+    conclusion = {name: jobs[0].conclusion for name, jobs in by_name.items()}
+    # [LAW:dataflow-not-control-flow] the classifier proof selects WHICH conclusions each
+    # job may have; every required job is then judged by the same lookup.
+    expected_skips = (
+        fast.skippable
+        if fast is not None
+        and observed.classification == "bookkeeping"
+        and conclusion.get(fast.classifier) == "success"
+        else frozenset[str]()
+    )
     not_green = sorted(
-        f"{name}={by_name[name][0].conclusion if name in by_name else 'missing'}"
-        for name in expected.required_jobs
-        if name not in by_name or by_name[name][0].conclusion != "success"
+        f"{name}={conclusion.get(name, 'missing')}"
+        for name in checks.required
+        if conclusion.get(name) != "success"
+        and not (name in expected_skips and conclusion.get(name) == "skipped")
     )
     if not_green:
         return _decision("failed", "check_failed", " ".join(not_green), observed)
     return _decision("passed", "binding_exact", "all required jobs succeeded", observed)
 
 
+def _unbound(run: RunEvidence) -> bool:
+    return run.head_sha == _UNBOUND
+
+
 def bind_runs(expected: ExpectedBinding, runs: Sequence[RunEvidence]) -> CiBindingDecision:
     """Select the current run among all runs reported for the head and decide it.
 
-    Only runs whose identity matches compete; the newest (run id, attempt) among them is
-    current, so a rerun supersedes its earlier attempt and an older green never outvotes
-    a newer red. With no matching run the caller must dispatch verification for these
-    exact inputs: the decision is `held`/`binding_stale` with detail `no_matching_run`.
+    A run that reported a binding for other inputs provably verified something else and
+    drops out. Every other run - matching, or not yet bound and so possibly verifying
+    these inputs - competes, and the newest (run id, attempt) is current: a rerun
+    supersedes its earlier attempt, an older green never outvotes a newer red, and a
+    newer run that has not reported (still pending, or finished without a binding)
+    holds instead of letting the older green authorize a merge. With no matching run
+    the caller must dispatch verification for these exact inputs: the decision is
+    `held`/`binding_stale` with detail `no_matching_run`.
     """
-    matching = [run for run in runs if not identity_mismatches(expected, run)]
-    if not matching:
+    contenders = [r for r in runs if _unbound(r) or not identity_mismatches(expected, r)]
+    if all(_unbound(r) for r in contenders):
         return _decision("held", "binding_stale", "no_matching_run")
-    return validate_ci_binding(expected, max(matching, key=lambda r: (r.run_id, r.run_attempt)))
+    current = max(contenders, key=lambda r: (r.run_id, r.run_attempt))
+    if _unbound(current):
+        code = "check_pending" if current.status != "completed" else "binding_stale"
+        detail = f"newer run {current.run_id} ({current.status}) has not reported a binding"
+        return _decision("held", code, detail, current)
+    return validate_ci_binding(expected, current)
 
 
 CI_WORKFLOW = ".github/workflows/ci.yml"
 _UNBOUND = "0" * 40
+_JOB = re.compile(r"^  ([A-Za-z0-9_-]+):\s*$", re.MULTILINE)
+_BOOKKEEPING_OUTPUT = re.compile(r"needs\.([A-Za-z0-9_-]+)\.outputs\.bookkeeping")
 
 
-def required_contexts(workflow_text: str) -> frozenset[str]:
-    """The required contexts the workflow itself declares: every job named `... — blocking`
-    (the same rule the split-brain backstop derives required PR contexts from)."""
-    names = frozenset(re.findall(r"^    name: (.+ — blocking)\s*$", workflow_text, re.MULTILINE))
-    if not names:
+def required_checks(workflow_text: str) -> RequiredChecks:
+    """[LAW:one-source-of-truth] the required contexts the workflow itself declares.
+
+    Required: every job named `... — blocking` (the same rule the split-brain backstop
+    derives required PR contexts from). Bookkeeping-skippable: the required jobs whose
+    job-level `if:` reads `needs.<classifier>.outputs.bookkeeping`; that reference also
+    names the classifier job; no such gate means no fast path. Stdlib only, so this
+    reads the job blocks by indentation.
+    """
+    section = re.search(r"^jobs:\s*$", workflow_text, re.MULTILINE)
+    jobs = workflow_text[section.end() :] if section else ""
+    starts = list(_JOB.finditer(jobs))
+    bounds = [m.start() for m in starts] + [len(jobs)]
+    blocks = {m.group(1): jobs[m.end() : end] for m, end in zip(starts, bounds[1:], strict=True)}
+
+    def field(block: str, key: str) -> str:
+        found = re.search(rf"^    {key}: (.+?)\s*$", block, re.MULTILINE)
+        return found.group(1) if found else ""
+
+    conditions = {field(b, "name"): field(b, "if") for b in blocks.values()}
+    required = {n: cond for n, cond in conditions.items() if n.endswith(" — blocking")}
+    if not required:
         raise BindingInputError("workflow declares no `— blocking` job names")
-    return names
+    gated = {n: _BOOKKEEPING_OUTPUT.findall(cond) for n, cond in required.items()}
+    classifiers = sorted({job for refs in gated.values() for job in refs})
+    if len(classifiers) > 1 or not set(classifiers) <= blocks.keys():
+        raise BindingInputError(f"workflow bookkeeping gates name classifiers {classifiers}")
+    fast = [
+        BookkeepingFastPath(
+            field(blocks[job], "name"), frozenset(n for n, refs in gated.items() if refs)
+        )
+        for job in classifiers
+    ]
+    return RequiredChecks(frozenset(required), fast[0] if fast else None)
 
 
 def reconcile_pr_binding(
-    expected: ExpectedBinding, runs: Sequence[RunEvidence], dispatch: Callable[[], None]
+    expected: ExpectedBinding,
+    runs: Sequence[RunEvidence],
+    head_workflow_blob: str,
+    dispatch: Callable[[], None],
 ) -> CiBindingDecision:
     """The integration observer's one step: decide the current run, and when none matches
     the exact head/base, dispatch verification for them - unless an unfinished run that has
     not yet reported its binding exists, which may be that verification (reconciled before
-    launch instead of duplicated)."""
+    launch instead of duplicated).
+
+    A dispatch runs the PR branch's workflow (`head_workflow_blob`). When that differs from
+    the merge tree's workflow the run could never bind, so nothing is dispatched: the PR
+    branch must first be updated onto its base, which re-runs CI through pull_request."""
     decision = bind_runs(expected, runs)
     if decision.detail != "no_matching_run":
         return decision
-    if any(r.status != "completed" and r.head_sha == _UNBOUND for r in runs):
+    if any(r.status != "completed" and _unbound(r) for r in runs):
         return _decision("held", "check_pending", "unbound run in progress")
+    if head_workflow_blob != expected.workflow_blob:
+        return _decision(
+            "held",
+            "binding_stale",
+            f"head workflow blob {head_workflow_blob} is not the merge tree's "
+            f"{expected.workflow_blob}; update the branch onto its base",
+        )
     dispatch()
     return _decision("held", "check_pending", "dispatched exact head/base verification")
 
@@ -258,12 +362,26 @@ def parse_run_evidence(
     """Build `RunEvidence` from the REST run, its attempt's jobs and the binding notice.
 
     A run without a binding notice (its `changes` job never verified the tested tree)
-    records zero SHAs, so it can never match any expected binding.
+    records zero SHAs, so it can never match any expected binding. The run path's `@ref`
+    suffix is dropped: which definition ran is bound by `workflow_sha`/`workflow_blob`,
+    cross-checked against GitHub's own `head_sha` in `identity_mismatches`.
     """
-    recorded = json.loads(notice) if notice is not None else {}
     unknown = _UNBOUND
+    recorded = (
+        json.loads(notice) if notice is not None else {"workflow_sha": unknown, "bookkeeping": ""}
+    )
     repo = run["repository"]
     assert isinstance(repo, Mapping)
+    kinds: dict[object, Classification | None] = {
+        "true": "bookkeeping",
+        "false": "substantive",
+        "": None,
+    }
+    bookkeeping = recorded.get("bookkeeping", "absent")
+    if bookkeeping not in kinds:
+        raise BindingInputError(
+            f"notice.bookkeeping: expected true/false/empty, got {bookkeeping!r}"
+        )
     return RunEvidence(
         repository=str(repo["full_name"]),
         event=str(run["event"]),
@@ -271,11 +389,14 @@ def parse_run_evidence(
         run_attempt=_positive_int(run["run_attempt"], "run.run_attempt"),
         workflow_path=str(run["path"]).split("@", 1)[0],
         status=str(run["status"]),
+        run_head_sha=_sha(run["head_sha"], "run.head_sha"),
         head_sha=_sha(recorded.get("head", unknown), "notice.head"),
         base_sha=_sha(recorded.get("base", unknown), "notice.base"),
         tested_sha=_sha(recorded.get("tested", unknown), "notice.tested"),
         tested_parents=tuple(_sha(p, "notice.parents") for p in recorded.get("parents", [])),
+        workflow_sha=_sha(recorded.get("workflow_sha"), "notice.workflow_sha"),
         workflow_blob=_sha(recorded.get("workflow_blob", unknown), "notice.workflow_blob"),
+        classification=kinds[bookkeeping],
         jobs=tuple(
             JobResult(str(j["name"]), int(str(j["id"])), str(j["status"]), j.get("conclusion"))  # type: ignore[arg-type]
             for j in jobs

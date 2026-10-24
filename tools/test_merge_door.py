@@ -1696,26 +1696,29 @@ def test_wait_for_door_survives_a_lost_yield_row(door, monkeypatch, capsys):
     assert "ROW LOST" in err and md.LEASE_HELD_YIELD_CAUSE in err
 
 
+# WO-U10: the merge tree's ci.yml as the git shim shows it - one required job, no fast path.
+_SHIM_CI_YML = "printf 'jobs:\\n  test:\\n    name: pytest — blocking\\n'"
+
+
 def _exact_ci_gh_cases(state: Path) -> str:
     """WO-U10 shim cases for merge_door's exact-CI observer: PR branch/url, one completed
     run whose binding notice names the PR's own head/base, and its one required job."""
     meta = {"headRefName": "feat/x", "url": "https://github.com/o/r/pull/1"}
-    run = {
-        "id": 1,
-        "run_attempt": 1,
-        "event": "pull_request",
-        "status": "completed",
-        "path": ".github/workflows/ci.yml",
-        "repository": {"full_name": "o/r"},
-    }
+    run = (
+        "import json,sys; s=json.load(open(sys.argv[1])); print(json.dumps({'workflow_runs':"
+        " [{'id':1,'run_attempt':1,'event':'pull_request','status':'completed',"
+        "'path':'.github/workflows/ci.yml','head_sha':s['headRefOid'],"
+        "'repository':{'full_name':'o/r'}}]}))"
+    )
     job = {"id": 5, "name": "pytest — blocking", "status": "completed", "conclusion": "success"}
     notice = (
         "import json,sys; s=json.load(open(sys.argv[1])); h,b=s['headRefOid'],s['baseRefOid'];"
         " print(json.dumps([{'title':'ci-binding','message':json.dumps({'head':h,'base':b,"
-        "'tested':'9'*40,'parents':[b,h],'workflow_blob':'b'*40})}]))"
+        "'tested':'9'*40,'parents':[b,h],'workflow_sha':'9'*40,'workflow_blob':'b'*40,"
+        "'bookkeeping':'false'})}]))"
     )
     return f"""  *"--json headRefName,url"*) echo '{json.dumps(meta)}' ;;
-  *"api repos/o/r/actions/workflows/ci.yml/runs"*) echo '{json.dumps({"workflow_runs": [run]})}' ;;
+  *"api repos/o/r/actions/workflows/ci.yml/runs"*) python3 -c "{run}" "{state}" ;;
   *"api repos/o/r/actions/runs/1/attempts/1/jobs"*) echo '{json.dumps({"jobs": [job]})}' ;;
   *"api repos/o/r/check-runs/5/annotations"*) python3 -c "{notice}" "{state}" ;;
 """
@@ -1770,7 +1773,7 @@ case "$1 $2" in
     if [ -f "{fetched}" ]; then echo "{"b" * 40}"; else echo "unknown revision" >&2; exit 128; fi ;;
   "rev-parse "*) echo "{"b" * 40}" ;;
   "worktree list") echo "worktree /x" ;;
-  "show {tree}:.github/workflows/ci.yml") echo "    name: pytest — blocking" ;;
+  "show {tree}:.github/workflows/ci.yml") {_SHIM_CI_YML} ;;
   *) exec /usr/bin/git "$@" ;;
 esac
 """
@@ -1872,7 +1875,7 @@ case "$1 $2" in
   "rev-parse {"c" * 40}^1") echo "{"b" * 40}" ;;
   "rev-parse HEAD") echo "{"r" * 40}" ;;
   "rev-parse "*) echo "{"b" * 40}" ;;
-  "show "*":.github/workflows/ci.yml") echo "    name: pytest — blocking" ;;
+  "show "*":.github/workflows/ci.yml") {_SHIM_CI_YML} ;;
   *) exec /usr/bin/git "$@" ;;
 esac
 """

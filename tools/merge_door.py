@@ -1122,15 +1122,17 @@ def default_ground() -> Ground:
     def exact_ci(pr, head, base):
         # The run must have executed the workflow of the head-onto-base merge, so the
         # expected blob and required contexts come from that merge tree, not from main.
+        # The head's own workflow blob says whether a dispatch on the PR branch could.
         tree = git_merge_tree(base, head)
         spec = f"{tree}:{cb.CI_WORKFLOW}"
         git = ["git", "-C", str(REPO)]
-        text = subprocess.run(
-            [*git, "show", spec], capture_output=True, text=True, check=True
-        ).stdout
-        blob = subprocess.run(
-            [*git, "rev-parse", spec], capture_output=True, text=True, check=True
-        ).stdout.strip()
+
+        def git_out(*args: str) -> str:
+            return subprocess.run([*git, *args], capture_output=True, text=True, check=True).stdout
+
+        text = git_out("show", spec)
+        blob = git_out("rev-parse", spec).strip()
+        head_blob = git_out("rev-parse", f"{head}:{cb.CI_WORKFLOW}").strip()
         meta = json.loads(
             _gh("pr", "view", str(pr), "--json", "headRefName,url", timeout=30).stdout
         )
@@ -1142,7 +1144,7 @@ def default_ground() -> Ground:
             "merge_candidate",
             cb.CI_WORKFLOW,
             blob,
-            cb.required_contexts(text),
+            cb.required_checks(text),
         )
 
         def dispatch():
@@ -1164,7 +1166,7 @@ def default_ground() -> Ground:
                 raise RuntimeError(f"gh workflow run failed: {p.stderr.strip()}")
 
         runs = cb.fetch_runs(repository, head, Path(cb.CI_WORKFLOW).name)
-        return cb.reconcile_pr_binding(expected, runs, dispatch)
+        return cb.reconcile_pr_binding(expected, runs, head_blob, dispatch)
 
     return Ground(
         gh_view,

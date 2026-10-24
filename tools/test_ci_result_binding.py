@@ -26,6 +26,7 @@ from ci_result_binding import (
     BindingInputError,
     ExpectedBinding,
     PendingTimeout,
+    RequiredChecks,
     Snapshot,
     Terminal,
     bind_runs,
@@ -33,7 +34,7 @@ from ci_result_binding import (
     parse_run_evidence,
     pending_timeout_decision,
     reconcile_pr_binding,
-    required_contexts,
+    required_checks,
     validate_ci_binding,
     validate_dispatch,
 )
@@ -42,11 +43,17 @@ _REPO = Path(__file__).resolve().parent.parent
 _WORKFLOWS = _REPO / ".github" / "workflows"
 REPO = "thestoryportal/arhugula-build-eval"
 HEAD, BASE, NEW_BASE, MERGE, BLOB = ("a" * 40, "b" * 40, "c" * 40, "d" * 40, "e" * 40)
+BRANCH_BLOB = "f" * 40  # the PR branch's own ci.yml when the base changed it
 REQUIRED = frozenset({"pytest (all axis packages) — blocking", "ruff (lint + format) — blocking"})
+SHIPPED = required_checks((_WORKFLOWS / "ci.yml").read_text())
 
 
 def _run_payload(
-    run_id: int, attempt: int = 1, status: str = "completed", event: str = "pull_request"
+    run_id: int,
+    attempt: int = 1,
+    status: str = "completed",
+    event: str = "pull_request",
+    path: str = ".github/workflows/ci.yml@refs/pull/1651/merge",
 ):
     # Shape of GET /repos/{o}/{r}/actions/runs/{id} (fields this module reads).
     return {
@@ -55,25 +62,37 @@ def _run_payload(
         "event": event,
         "status": status,
         "conclusion": "success" if status == "completed" else None,
-        "path": ".github/workflows/ci.yml@refs/pull/1651/merge",
+        "path": path,
         "head_sha": HEAD,
         "repository": {"full_name": REPO},
         "display_title": "feat: something",
     }
 
 
-def _jobs(conclusion: str = "success", names=REQUIRED):
+def _jobs(conclusion: str = "success", names=REQUIRED, overrides=None):
+    concluded = {n: conclusion for n in names} | (overrides or {})
     return [
-        {"id": 9000 + i, "name": n, "status": "completed", "conclusion": conclusion}
-        for i, n in enumerate(sorted(names))
+        {"id": 9000 + i, "name": n, "status": "completed", "conclusion": c}
+        for i, (n, c) in enumerate(sorted(concluded.items()))
     ]
 
 
-def _notice(base: str = BASE, head: str = HEAD, parents=None, tested: str = MERGE) -> str:
+def _notice(
+    base: str = BASE,
+    head: str = HEAD,
+    parents=None,
+    tested: str = MERGE,
+    workflow_sha: str | None = None,
+    blob: str = BLOB,
+    bookkeeping: str = "false",
+) -> str:
     parents = [base, head] if parents is None else parents
+    # A pull_request run executes the workflow of the merge commit it tests.
+    workflow_sha = tested if workflow_sha is None else workflow_sha
     return (
         f'{{"head": "{head}", "base": "{base}", "tested": "{tested}", '
-        f'"parents": {list(parents)!r}, "workflow_blob": "{BLOB}"}}'.replace("'", '"')
+        f'"parents": {list(parents)!r}, "workflow_sha": "{workflow_sha}", '
+        f'"workflow_blob": "{blob}", "bookkeeping": "{bookkeeping}"}}'.replace("'", '"')
     )
 
 
@@ -93,9 +112,10 @@ def _evidence(
     )
 
 
-def _expected(base: str = BASE) -> ExpectedBinding:
+def _expected(base: str = BASE, checks: RequiredChecks | None = None) -> ExpectedBinding:
+    checks = RequiredChecks(REQUIRED, None) if checks is None else checks
     return ExpectedBinding(
-        REPO, HEAD, base, "merge_candidate", ".github/workflows/ci.yml", BLOB, REQUIRED
+        REPO, HEAD, base, "merge_candidate", ".github/workflows/ci.yml", BLOB, checks
     )
 
 
@@ -140,6 +160,7 @@ def test_newest_matching_attempt_is_current():
     [
         ("repository", "someone/fork"),
         ("workflow_blob", "f" * 40),
+        ("workflow_sha", "f" * 40),
         ("workflow_path", ".github/workflows/other.yml"),
         ("tested_parents", (BASE, "f" * 40)),
         ("head_sha", "f" * 40),
@@ -156,7 +177,13 @@ def test_run_without_binding_notice_never_binds():
 
 def test_landed_commit_binds_only_its_own_push_run():
     landed = ExpectedBinding(
-        REPO, HEAD, BASE, "landed_commit", ".github/workflows/ci.yml", BLOB, REQUIRED
+        REPO,
+        HEAD,
+        BASE,
+        "landed_commit",
+        ".github/workflows/ci.yml",
+        BLOB,
+        RequiredChecks(REQUIRED, None),
     )
     push = parse_run_evidence(
         _run_payload(7, event="push"), _jobs(), _notice(parents=[BASE], tested=HEAD)
@@ -205,7 +232,7 @@ def test_malformed_notice_is_rejected_loudly():
 def test_retarget_dispatches_once_and_reconciles_pending_run():
     dispatched: list[int] = []
     old = _evidence(run_id=100, base=BASE)
-    held = reconcile_pr_binding(_expected(NEW_BASE), [old], lambda: dispatched.append(1))
+    held = reconcile_pr_binding(_expected(NEW_BASE), [old], BLOB, lambda: dispatched.append(1))
     assert (held.result, held.detail, dispatched) == (
         "held",
         "dispatched exact head/base verification",
@@ -213,23 +240,141 @@ def test_retarget_dispatches_once_and_reconciles_pending_run():
     )
     # The dispatched run is queued and has not reported its binding yet: no second launch.
     queued = _evidence(run_id=101, status="queued", notice=False)
-    again = reconcile_pr_binding(_expected(NEW_BASE), [old, queued], lambda: dispatched.append(2))
+    again = reconcile_pr_binding(
+        _expected(NEW_BASE), [old, queued], BLOB, lambda: dispatched.append(2)
+    )
     assert (again.result, again.reason_codes, dispatched) == ("held", ("check_pending",), [1])
     # Once it reports the new base and succeeds, the binding passes without dispatch.
     done = _evidence(run_id=101, base=NEW_BASE)
     assert (
-        reconcile_pr_binding(_expected(NEW_BASE), [old, done], lambda: dispatched.append(3)).result
+        reconcile_pr_binding(
+            _expected(NEW_BASE), [old, done], BLOB, lambda: dispatched.append(3)
+        ).result
         == "passed"
     )
     assert dispatched == [1]
 
 
-def test_required_contexts_come_from_the_shipped_workflow():
-    names = required_contexts((_WORKFLOWS / "ci.yml").read_text())
-    assert REQUIRED <= names
-    assert "classify diff (bookkeeping fast path)" not in names
+def test_required_checks_come_from_the_shipped_workflow():
+    assert REQUIRED <= SHIPPED.required
+    assert "classify diff (bookkeeping fast path)" not in SHIPPED.required
+    # The fast path is read from the jobs' own bookkeeping gates, not restated here:
+    # the aggregate `pytest` context always runs, so it is never skippable.
+    assert SHIPPED.fast_path is not None
+    assert SHIPPED.fast_path.classifier == "classify diff (bookkeeping fast path)"
+    assert "pyright (strict) — blocking" in SHIPPED.fast_path.skippable
+    assert SHIPPED.fast_path.skippable < SHIPPED.required - REQUIRED
     with pytest.raises(BindingInputError):
-        required_contexts("jobs: {}\n")
+        required_checks("jobs: {}\n")
+    plain = required_checks("jobs:\n  t:\n    name: pytest — blocking\n")
+    assert plain == RequiredChecks(frozenset({"pytest — blocking"}), None)
+
+
+# --- F1 (pass 1): validated bookkeeping skips, proven by the classifier -----------------
+
+
+def _bookkeeping_run(bookkeeping="true", classifier="success", skipped=None):
+    assert SHIPPED.fast_path is not None
+    skipped = SHIPPED.fast_path.skippable if skipped is None else skipped
+    jobs = _jobs(
+        names=SHIPPED.required,
+        overrides={n: "skipped" for n in skipped} | {SHIPPED.fast_path.classifier: classifier},
+    )
+    return parse_run_evidence(_run_payload(100), jobs, _notice(bookkeeping=bookkeeping))
+
+
+def test_validated_bookkeeping_run_passes_with_its_expected_skips():
+    # e.g. a terminating roadmap-status refresh PR: pyright and the tools-coverage job
+    # skip by design, the classifier succeeded and reported bookkeeping.
+    expected = _expected(checks=SHIPPED)
+    assert bind_runs(expected, [_bookkeeping_run()]).result == "passed"
+    # Bookkeeping that still ran everything (conservative full run) passes too.
+    assert bind_runs(expected, [_bookkeeping_run(skipped=frozenset())]).result == "passed"
+
+
+@pytest.mark.parametrize(
+    ("bookkeeping", "classifier", "skipped"),
+    [
+        ("false", "success", None),  # substantive diff: no skip is expected
+        ("", "success", None),  # classification never reported
+        ("true", "failure", None),  # classifier failed: its output proves nothing
+        ("true", "success", frozenset({"ruff (lint + format) — blocking"})),  # not gated
+    ],
+)
+def test_skip_without_classifier_proof_or_outside_the_gates_fails(bookkeeping, classifier, skipped):
+    run = _bookkeeping_run(bookkeeping, classifier, skipped)
+    decision = bind_runs(_expected(checks=SHIPPED), [run])
+    assert (decision.result, decision.reason_codes) == ("failed", ("check_failed",))
+    assert "=skipped" in decision.detail
+
+
+def test_malformed_classification_is_rejected_loudly():
+    with pytest.raises(BindingInputError, match=r"notice\.bookkeeping"):
+        parse_run_evidence(_run_payload(1), _jobs(), _notice(bookkeeping="yes"))
+
+
+# --- F2 (pass 1): the latest run/attempt is reconciled before an older green -------------
+
+
+@pytest.mark.parametrize(
+    ("status", "code"), [("queued", "check_pending"), ("completed", "binding_stale")]
+)
+def test_newer_unbound_run_holds_an_older_green(status, code):
+    green = _evidence(run_id=100)
+    newer = _evidence(run_id=101, status=status, conclusion="failure", notice=False)
+    dispatched: list[int] = []
+    for decision in (
+        bind_runs(_expected(), [green, newer]),
+        reconcile_pr_binding(_expected(), [green, newer], BLOB, lambda: dispatched.append(1)),
+    ):
+        assert (decision.result, decision.reason_codes, decision.run_id) == ("held", (code,), 101)
+    assert dispatched == []
+
+
+def test_rerun_attempt_without_binding_yet_holds_its_earlier_green():
+    green_1 = _evidence(run_id=100, attempt=1)
+    rerun = _evidence(run_id=100, attempt=2, status="in_progress", notice=False)
+    assert bind_runs(_expected(), [green_1, rerun]).reason_codes == ("check_pending",)
+
+
+def test_superseded_or_foreign_runs_do_not_block_the_current_green():
+    stale_unbound = _evidence(run_id=99, status="queued", notice=False)
+    green = _evidence(run_id=100)
+    other_base = _evidence(run_id=101, base=NEW_BASE)  # provably verified other inputs
+    decision = bind_runs(_expected(), [stale_unbound, green, other_base])
+    assert (decision.result, decision.run_id) == ("passed", 100)
+
+
+# --- F3 (pass 1): the workflow definition that actually executed -------------------------
+
+
+def _dispatch_run(workflow_sha: str, blob: str):
+    payload = _run_payload(
+        101, event="workflow_dispatch", path=".github/workflows/ci.yml@refs/heads/feat/x"
+    )
+    return parse_run_evidence(payload, _jobs(), _notice(workflow_sha=workflow_sha, blob=blob))
+
+
+def test_dispatch_binds_the_branch_workflow_it_actually_ran():
+    # The base changed ci.yml: the branch file that ran differs from the merge tree's.
+    honest = _dispatch_run(workflow_sha=HEAD, blob=BRANCH_BLOB)
+    assert validate_ci_binding(_expected(), honest).detail == "mismatched workflow_blob"
+    # A notice claiming the merge tree's workflow commit/blob is refuted by GitHub's own
+    # record of the commit the dispatched workflow ran from (run.head_sha).
+    claimed = _dispatch_run(workflow_sha=MERGE, blob=BLOB)
+    assert validate_ci_binding(_expected(), claimed).detail == "mismatched workflow_sha"
+    # Same file on the branch and in the merge tree: the dispatch binds.
+    assert validate_ci_binding(_expected(), _dispatch_run(HEAD, BLOB)).result == "passed"
+
+
+def test_no_dispatch_when_the_branch_workflow_is_not_the_merge_trees():
+    dispatched: list[int] = []
+    old = _evidence(run_id=100, base=BASE)
+    held = reconcile_pr_binding(
+        _expected(NEW_BASE), [old], BRANCH_BLOB, lambda: dispatched.append(1)
+    )
+    assert (held.result, held.reason_codes, dispatched) == ("held", ("binding_stale",), [])
+    assert "update the branch onto its base" in held.detail
 
 
 # --- bounded observation ---------------------------------------------------------------

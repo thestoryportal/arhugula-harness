@@ -110,7 +110,7 @@ jobs:
         # Fails without publishing a binding when the tested commit is not exactly what
         # the event claims: a PR run must test the merge of head onto base, a main run the
         # landed SHA, and a dispatch must name the live same-repository PR's head/base.
-        # tools/ci_result_binding.py parses the notice back into RunEvidence.
+        # The binding notice itself is published after classification (below).
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -141,10 +141,7 @@ jobs:
           elif [ "$EVENT" != push ] && [ "$parents" != "$want" ]; then
             echo "ci-binding: tested parents '$parents' != base/head '$want'" >&2; exit 1
           fi
-          blob="$(git rev-parse "HEAD:.github/workflows/ci.yml")"
-          plist="$(printf '"%s",' $parents)"
-          echo "::notice title=ci-binding::{\"head\": \"$head\", \"base\": \"$base\", \"tested\": \"$tested\", \"parents\": [${plist%,}], \"workflow_blob\": \"$blob\"}"
-          printf 'head=%s\nbase=%s\ntested=%s\n' "$head" "$base" "$tested" | tee -a "$GITHUB_OUTPUT"
+          printf 'head=%s\nbase=%s\ntested=%s\nparents=%s\n' "$head" "$base" "$tested" "$parents" | tee -a "$GITHUB_OUTPUT"
 
       - name: Classify base...head
         id: classify
@@ -171,6 +168,27 @@ jobs:
           else
             /usr/bin/python3 tools/ci_bookkeeping_diff.py "$BASE" "$HEAD" | tee -a "$GITHUB_OUTPUT"
           fi
+
+      - name: Publish binding notice (WO-U10)
+        # Runs even when classification failed, so the run still binds its inputs; an
+        # empty `bookkeeping` then proves no classification and accepts no skip.
+        # `workflow_blob` is the definition that actually executed - the workflow file at
+        # github.workflow_sha (a dispatch runs the PR branch's file, not the merge tree's),
+        # so tools/ci_result_binding.py can compare it with the merge tree's workflow.
+        if: ${{ !cancelled() && steps.bind.outcome == 'success' }}
+        shell: bash
+        env:
+          HEAD_SHA: ${{ steps.bind.outputs.head }}
+          BASE_SHA: ${{ steps.bind.outputs.base }}
+          TESTED: ${{ steps.bind.outputs.tested }}
+          PARENTS: ${{ steps.bind.outputs.parents }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+          BOOKKEEPING: ${{ steps.classify.outputs.bookkeeping }}
+        run: |
+          git cat-file -e "$WORKFLOW_SHA^{commit}" || git fetch --no-tags --depth=1 origin "$WORKFLOW_SHA"
+          blob="$(git rev-parse "$WORKFLOW_SHA:.github/workflows/ci.yml")"
+          plist="$(printf '"%s",' $PARENTS)"
+          echo "::notice title=ci-binding::{\"head\": \"$HEAD_SHA\", \"base\": \"$BASE_SHA\", \"tested\": \"$TESTED\", \"parents\": [${plist%,}], \"workflow_sha\": \"$WORKFLOW_SHA\", \"workflow_blob\": \"$blob\", \"bookkeeping\": \"$BOOKKEEPING\"}"
 
   # WO-U09 (WS-10 §12.2) — the provider-free package suite and the codex-parity suite run
   # as two independent jobs after classification; neither waits for the other. The
