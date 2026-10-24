@@ -298,34 +298,26 @@ def pre_commit(payload: dict[str, Any]) -> int:
     command = tool_input.get("command") if isinstance(tool_input, dict) else None
     if payload.get("tool_name") != "Bash" or not isinstance(command, str):
         return 0
-    if not COMMIT_RE.search(command):
-        return 0
 
     cwd = project_dir(payload)
+    # WO-U06: every commit the command makes, in any spelling, is routed by its own
+    # repository; trial commits check their actual staged scope, never whole-project
+    # Pyright or release closeout, and an unreadable commit effect holds trial work.
     try:
-        profile = workflow_commit.worktree_profile(cwd)
-    except ValueError as exc:
+        outcome = workflow_commit.command_outcome(command, cwd, created_at=workflow_commit.now())
+        legacy_gate = bool(COMMIT_RE.search(command)) and isinstance(
+            workflow_commit.profile_at(cwd), workflow_commit.Legacy
+        )
+    except (ValueError, OSError, subprocess.CalledProcessError) as exc:
         print(f"Codex hook adapter: workflow profile unreadable: {exc}", file=sys.stderr)
         return 2
-    match profile:
-        case workflow_commit.Trial():
-            # WO-U06: a trial commit checks its actual staged scope and changed subjects,
-            # never whole-project Pyright or release closeout.
-            outcome = workflow_commit.commit_outcome(cwd, profile, created_at=workflow_commit.now())
-            if outcome.result == "passed":
-                return 0
-            print(
-                "\n".join((*outcome.detail, f"reason_codes: {', '.join(outcome.reasons)}")),
-                file=sys.stderr,
-            )
-            return 2
-        case workflow_commit.Held(reasons=reasons):
-            print(
-                f"Codex hook adapter: trial selection held: {', '.join(reasons)}", file=sys.stderr
-            )
-            return 2
-        case workflow_commit.Legacy():
-            return legacy_pre_commit(cwd)
+    if outcome.result != "passed":
+        print(
+            "\n".join((*outcome.detail, f"reason_codes: {', '.join(outcome.reasons)}")),
+            file=sys.stderr,
+        )
+        return 2
+    return legacy_pre_commit(cwd) if legacy_gate else 0
 
 
 def legacy_pre_commit(cwd: Path) -> int:
