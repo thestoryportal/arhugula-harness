@@ -16,7 +16,7 @@ After this, the hooks in this directory are active for the local repo. Per-check
 
 ### `pre-commit`
 
-**WO-U06 trial commit gate, then the X-AL-3 advisory check.** The hook first runs `tools/workflow_commit.py pre-commit --root <worktree>`. It exits 0 for legacy work, which continues unchanged; for a trial-profile unit it checks the commit's actual staged scope and blocks the commit unless that passes. A worktree can select the trial profile only when this directory is its `core.hooksPath`, because otherwise Git would not run the gate. Git's own bypasses (`--no-verify`, another `core.hooksPath`) skip it; required CI still runs.
+**WO-U06 trial commit gate, then the X-AL-3 advisory check.** The hook first runs `tools/workflow_commit.py pre-commit --root <worktree>`. It exits 0 for legacy work, which continues unchanged; for a trial-profile unit it checks the commit's actual staged scope and blocks the commit unless that passes. A worktree can select the trial profile only when this directory is its `core.hooksPath`, because otherwise Git would not run the gate. Shell or Python startup state in the caller's environment cannot skip it: the hook runs under `bash -p` and the gate under `python3 -I`. Git's own bypasses (`--no-verify`, another `core.hooksPath`) skip it; required CI still runs.
 
 **X-AL-3 advisory check.** Warns if `design-substrate/*` is staged without an accompanying `.harness/` back-flow doc. Non-blocking — the enforceable gate is the GitHub Action at `.github/workflows/x-al-3-guard.yml`.
 

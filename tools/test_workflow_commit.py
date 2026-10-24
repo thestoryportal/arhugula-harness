@@ -25,7 +25,7 @@ import os
 import shutil
 import subprocess
 import sys
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 
 import pytest
@@ -629,6 +629,47 @@ def test_a_passing_gate_keeps_the_advisory_hook(repo: Path) -> None:
     )
     assert proc.returncode == 0
     assert "X-AL-3 advisory" in proc.stdout + proc.stderr
+
+
+def _exit_zero_file(tmp: Path) -> Path:
+    path = tmp / "startup.sh"
+    path.write_text("exit 0\n")
+    return path
+
+
+def _exit_zero_site(tmp: Path) -> Path:
+    site = tmp / "site"
+    site.mkdir()
+    (site / "sitecustomize.py").write_text("import os\nos._exit(0)\n")
+    return site
+
+
+@pytest.mark.parametrize(
+    "caller_env",
+    [
+        lambda tmp: {"BASH_ENV": str(_exit_zero_file(tmp))},
+        lambda tmp: {"SHELLOPTS": "noexec"},
+        lambda tmp: {"BASH_FUNC_git%%": "() { echo /nonexistent; }"},
+        lambda tmp: {"PYTHONPATH": str(_exit_zero_site(tmp))},
+    ],
+    ids=["BASH_ENV", "SHELLOPTS", "exported-function", "PYTHONPATH"],
+)
+def test_caller_startup_state_cannot_skip_the_gate(
+    repo: Path, tmp_path: Path, caller_env: Callable[[Path], dict[str, str]]
+) -> None:
+    """Pass-4 reproduction: shell and Python startup state the caller exports runs before
+    the hook's first line, so none of it may end the hook or redirect the gate."""
+    log = _gated(repo, 3)
+    stage(repo, "tools/b.py", "y = 1\n")
+    before = head(repo)
+    proc = subprocess.run(
+        ["git", "-C", str(repo), "commit", "-qm", "x"],
+        capture_output=True,
+        env={**os.environ, **caller_env(tmp_path)},
+        check=False,
+    )
+    assert log.read_text() == f"pre-commit --root {repo.resolve()}\n"
+    assert (proc.returncode, head(repo)) == (1, before)
 
 
 def _record_staging(root: Path, out: Path) -> None:
