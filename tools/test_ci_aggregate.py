@@ -249,9 +249,7 @@ def _provenance_step() -> dict[str, Any]:
 def test_provenance_env_keeps_head_base_and_tested_commit_distinct() -> None:
     env = _provenance_step()["env"]
     assert env["COVERAGE_HEAD"] == "${{ needs.changes.outputs.head }}"
-    assert (
-        env["COVERAGE_BASE"] == "${{ needs.changes.outputs.base }}"
-    )
+    assert env["COVERAGE_BASE"] == "${{ needs.changes.outputs.base }}"
     assert env["COVERAGE_TESTED"] == "${{ needs.changes.outputs.tested }}"
     assert env["COVERAGE_COMMAND"] == _PRIMARY_PYTEST
 
