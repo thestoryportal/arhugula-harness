@@ -2,7 +2,8 @@
 # C-HE-07 allowlisted merge wrapper. Exact arity: `bash tools/hooks/safe-merge.sh <pr-number>`.
 # Performs C-HE-06 steps (i)-(ix) by delegating to tools/merge_door.py; the ONLY merge string it
 # ever issues is `gh pr merge <pr> --squash --match-head-commit <head_sha>` (inside merge_door).
-# No flags are accepted or forwarded.
+# No flags are accepted or forwarded. The door selects the arc's WO-U03 profile itself: a
+# trial landing never runs --refresh-cmd and releases on its own-main result (WO-U08).
 set -euo pipefail
 [ "$#" -eq 1 ] || { echo "usage: safe-merge.sh <pr-number>" >&2; exit 64; }
 case "$1" in ''|*[!0-9]*) echo "safe-merge: pr must be all digits" >&2; exit 64 ;; esac
