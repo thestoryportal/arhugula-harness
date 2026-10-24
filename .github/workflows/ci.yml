@@ -105,11 +105,123 @@ jobs:
             /usr/bin/python3 tools/ci_bookkeeping_diff.py "$BASE" "$HEAD" | tee -a "$GITHUB_OUTPUT"
           fi
 
-  test:
+  # WO-U09 (WS-10 §12.2) — the provider-free package suite and the codex-parity suite run
+  # as two independent jobs after classification; neither waits for the other. The
+  # required context `pytest (all axis packages) — blocking` is the `test` aggregate below,
+  # which decides from both terminal results. Coverage comes from the one package-suite
+  # run: the separate informational job that re-ran the whole suite is gone.
+  package-tests:
     runs-on: ubuntu-latest
-    name: pytest (all axis packages) — blocking
+    name: package tests (all axis packages, with coverage)
     needs: changes
-    if: always() && needs.changes.outputs.bookkeeping != 'true'
+    if: always() && (needs.changes.result != 'success' || needs.changes.outputs.bookkeeping != 'true')
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Install uv + Python 3.12
+        uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081 # v5
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Sync workspace (all members)
+        run: uv sync --all-packages
+
+      # Excludes the `e2e` marker — those tests exercise real external services
+      # (Anthropic API etc.) and are gated on credentials not available in CI
+      # per the marker definition in the root pyproject.toml. testpaths in
+      # [tool.pytest.ini_options] cover all 7 workspace packages (the 5 axes +
+      # harness-core + harness-runtime). Coverage config is the root pyproject
+      # [tool.coverage.run]. This step's exit status is the package verdict; the
+      # advisory steps after it cannot change it.
+      - name: Pytest with coverage (excludes e2e)
+        run: uv run pytest -m "not e2e" --cov --cov-report=term-missing --cov-report=xml --cov-report=json
+
+      # R-200-ci-coverage-gating — post-pytest publication is advisory (no threshold).
+      # The primary coverage-enabled pytest process above retains its blocking exit.
+      # WS-10 §12.2/§12.4: coverage-provenance.json binds the artifact to the PR head, its
+      # base and the tested (for a PR, synthetic merge) commit as distinct fields, plus
+      # workflow/run/attempt, platform, lock digest and command. The job summary is
+      # rendered from that same manifest.
+      - name: Record coverage provenance and publish total to job summary
+        id: coverage_provenance
+        if: always()
+        continue-on-error: true
+        env:
+          COVERAGE_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+          COVERAGE_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          COVERAGE_TESTED: ${{ github.sha }}
+          COVERAGE_COMMAND: uv run pytest -m "not e2e" --cov --cov-report=term-missing --cov-report=xml --cov-report=json
+        run: |
+          uv run python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import hashlib, json, os, pathlib, platform
+
+          # [LAW:effects-at-boundaries] Publish complete, persisted JSON atomically;
+          # only its validation receipt authorizes the advisory artifact upload.
+          def read_totals(path):
+              if not path.exists():
+                  return "missing", None, None
+              try:
+                  t = json.loads(path.read_text())["totals"]
+                  return "valid", (t["percent_covered_display"], t["covered_lines"], t["num_statements"]), None
+              except (ValueError, KeyError, TypeError) as exc:
+                  return "malformed", None, repr(exc)
+
+          json_state, totals, json_error = read_totals(pathlib.Path("coverage.json"))
+          xml_state = "present" if pathlib.Path("coverage.xml").exists() else "missing"
+          manifest = {
+              "head": os.environ["COVERAGE_HEAD"],
+              "base": os.environ["COVERAGE_BASE"],
+              "tested_commit": os.environ["COVERAGE_TESTED"],
+              "workflow": os.environ["GITHUB_WORKFLOW"],
+              "run_id": os.environ["GITHUB_RUN_ID"],
+              "run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
+              "platform": f"{platform.system()}-{platform.machine()}",
+              "uv_lock_sha256": hashlib.sha256(pathlib.Path("uv.lock").read_bytes()).hexdigest(),
+              "command": os.environ["COVERAGE_COMMAND"],
+              "coverage_xml": xml_state,
+              "coverage_json": json_state,
+              "coverage_json_error": json_error,
+              "coverage_available": xml_state == "present" and json_state == "valid",
+          }
+          serialized = json.dumps(manifest, indent=2) + "\n"
+          temporary = pathlib.Path(".coverage-provenance.json.tmp")
+          temporary.write_text(serialized)
+          if json.loads(temporary.read_text()) != manifest:
+              raise ValueError("persisted coverage provenance differs from its inputs")
+          temporary.replace("coverage-provenance.json")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              print("valid=true", file=output)
+          print("### Coverage (informational — v1, no threshold)\n")
+          print("```json\n" + json.dumps(manifest, indent=2) + "\n```\n")
+          if manifest["coverage_available"]:
+              percent, covered, statements = totals
+              print(f"**Total line coverage: {percent}%** ({covered}/{statements} statements; "
+                    "branch coverage enabled).\n")
+              print("Threshold enforcement deferred (`fail_under`) until a baseline trend justifies it.")
+          else:
+              print(f"_Coverage unavailable: coverage.xml {xml_state}, coverage.json {json_state}"
+                    " — see the pytest step._")
+          PY
+
+      - name: Upload coverage.xml artifact with its provenance
+        # [LAW:parse-dont-validate] Consume the validated publication receipt.
+        if: always() && steps.coverage_provenance.outputs.valid == 'true'
+        continue-on-error: true
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: coverage-xml-${{ github.event.pull_request.head.sha || github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            coverage.xml
+            coverage-provenance.json
+          if-no-files-found: warn
+
+  parity-tests:
+    runs-on: ubuntu-latest
+    name: codex compatibility regressions (parity suite)
+    needs: changes
+    if: always() && (needs.changes.result != 'success' || needs.changes.outputs.bookkeeping != 'true')
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -132,14 +244,6 @@ jobs:
       - name: Install just
         uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
 
-      # Excludes the `e2e` marker — those tests exercise real external services
-      # (Anthropic API etc.) and are gated on credentials not available in CI
-      # per the marker definition in the root pyproject.toml. testpaths in
-      # [tool.pytest.ini_options] cover all 7 workspace packages (the 5 axes +
-      # harness-core + harness-runtime).
-      - name: Pytest (excludes e2e)
-        run: uv run pytest -m "not e2e"
-
       # tools/hooks/test_lane_init.sh (run by codex-parity-check.sh below) pins a zsh-ONLY
       # regression: lane-init.sh is sourced, and ${BASH_SOURCE[0]} is bash-only. That suite
       # now FAILS when a required shell is absent rather than skipping it, because a skipped
@@ -147,8 +251,30 @@ jobs:
       - name: Install zsh (required by the lane-init portability suite)
         run: sudo apt-get update && sudo apt-get install -y zsh
 
-      - name: Codex compatibility regressions — blocking
+      - name: Codex compatibility regressions
         run: bash tools/codex-parity-check.sh
+
+  test:
+    # The required context. `always()` makes it report on every run, including when a
+    # constituent failed, was canceled or was skipped; `needs:` makes it wait until both
+    # are terminal, so pending is never read as success. tools/ci_aggregate.py holds the
+    # WS-10 §12.2 truth table: only an enumerated row passes, everything else fails.
+    # Stdlib-only under the runner's python3, like the `changes` job — no uv setup.
+    runs-on: ubuntu-latest
+    name: pytest (all axis packages) — blocking
+    needs: [changes, package-tests, parity-tests]
+    if: always()
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Aggregate classification, package and parity results
+        env:
+          CLASSIFIER_RESULT: ${{ needs.changes.result }}
+          BOOKKEEPING: ${{ needs.changes.outputs.bookkeeping }}
+          PACKAGE_RESULT: ${{ needs.package-tests.result }}
+          PARITY_RESULT: ${{ needs.parity-tests.result }}
+        run: /usr/bin/python3 tools/ci_aggregate.py
 
   lint:
     runs-on: ubuntu-latest
@@ -180,7 +306,7 @@ jobs:
     runs-on: ubuntu-latest
     name: pyright (strict) — blocking
     needs: changes
-    if: always() && needs.changes.outputs.bookkeeping != 'true'
+    if: always() && (needs.changes.result != 'success' || needs.changes.outputs.bookkeeping != 'true')
     # Blocking as of R-200-ci-lint-typecheck-blocking (pyright half) — the tree
     # is pyright-clean (0 errors) tree-wide. New findings fail the PR. See header
     # note for the drive-clean approach (test-dir executionEnvironments + src
@@ -231,7 +357,7 @@ jobs:
     name: axis isolation — harness-${{ matrix.axis }}
     runs-on: ubuntu-latest
     needs: changes
-    if: always() && needs.changes.outputs.bookkeeping != 'true'
+    if: always() && (needs.changes.result != 'success' || needs.changes.outputs.bookkeeping != 'true')
     strategy:
       fail-fast: false
       matrix:
@@ -261,63 +387,6 @@ jobs:
 
       - name: Pytest ${{ matrix.test_root }} in isolation (excludes e2e)
         run: uv run --no-sync pytest ${{ matrix.test_root }} -m "not e2e"
-
-  coverage:
-    # R-200-ci-coverage-gating — INFORMATIONAL coverage at PR. v1 posture: NO
-    # threshold ("gather data first" per the roadmap entry); advisory
-    # (continue-on-error) so a coverage hiccup never blocks merge. Re-runs the
-    # non-e2e suite under coverage (config at root pyproject [tool.coverage.run]:
-    # source = the 7 import packages, tests omitted), publishes a one-line total
-    # to the job step-summary (visible on the PR's Checks tab), and uploads
-    # coverage.xml as an artifact for inspection. A `fail_under` threshold +
-    # cross-PR trend (codecov/badge) land only once a baseline justifies it —
-    # the same "advisory until justified, then flip blocking" path the lint +
-    # typecheck jobs already walked (both now blocking).
-    name: coverage (informational) — advisory at v1
-    runs-on: ubuntu-latest
-    continue-on-error: true
-    needs: changes
-    if: always() && needs.changes.outputs.bookkeeping != 'true'
-    steps:
-      - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-
-      - name: Install uv + Python 3.12
-        uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081 # v5
-        with:
-          python-version: "3.12"
-          enable-cache: true
-
-      - name: Sync workspace (all members)
-        run: uv sync --all-packages
-
-      - name: Pytest with coverage (excludes e2e)
-        run: uv run pytest -m "not e2e" --cov --cov-report=term-missing --cov-report=xml --cov-report=json
-
-      - name: Publish coverage total to job summary
-        if: always()
-        run: |
-          uv run python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
-          import json, pathlib
-          p = pathlib.Path("coverage.json")
-          if not p.exists():
-              print("### Coverage\n\n_coverage.json not produced — see the pytest step._")
-          else:
-              t = json.loads(p.read_text())["totals"]
-              print("### Coverage (informational — v1, no threshold)\n")
-              print(f"**Total line coverage: {t['percent_covered_display']}%** "
-                    f"({t['covered_lines']}/{t['num_statements']} statements; "
-                    f"branch coverage enabled).\n")
-              print("Threshold enforcement deferred (`fail_under`) until a baseline trend justifies it.")
-          PY
-
-      - name: Upload coverage.xml artifact
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: coverage-xml
-          path: coverage.xml
-          if-no-files-found: warn
 
   substitution-ledger:
     # R-600-substitution-ledger-schema — the tally-validation gate. Derives the
@@ -510,7 +579,7 @@ jobs:
     runs-on: ubuntu-latest
     name: tools/ test coverage guard + codex-loop tests — blocking
     needs: changes
-    if: always() && needs.changes.outputs.bookkeeping != 'true'
+    if: always() && (needs.changes.result != 'success' || needs.changes.outputs.bookkeeping != 'true')
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -529,6 +598,11 @@ jobs:
 
       - name: Coverage-guard tests
         run: uv run python -m pytest tools/test_tools_test_coverage_guard.py -q
+
+      # [LAW:verifiable-goals] This required job independently rejects a reducer
+      # regression even when that reducer would incorrectly accept failed parity.
+      - name: CI aggregate regression tests (independent required witness)
+        run: uv run python -m pytest tools/test_ci_aggregate.py -q
 
       - name: Codex loop tests (kept out of the parity gate on latency)
         run: uv run python -m pytest tools/test_codex_loop.py -q
