@@ -905,17 +905,24 @@ def test_parity_regressions_are_blocking_locally_and_in_ci() -> None:
     workflow = yaml.safe_load(
         (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     )
-    test_steps = workflow["jobs"]["test"]["steps"]
+    jobs = workflow["jobs"]
+    # WO-U09: parity runs in its own job; it blocks through the required aggregate,
+    # which consumes that job's result (tools/test_ci_aggregate.py owns the verdict).
+    [parity_id] = [
+        job_id
+        for job_id, job in jobs.items()
+        if any("bash tools/codex-parity-check.sh" in str(s.get("run") or "") for s in job["steps"])
+    ]
+    required = jobs["test"]
 
     assert "codex-parity-check" in justfile
     assert "bash tools/codex-parity-check.sh" in justfile
-    assert any(
-        "bash tools/codex-parity-check.sh" in str(step.get("run") or "") for step in test_steps
-    )
+    assert required["name"] == "pytest (all axis packages) — blocking"
+    assert parity_id in required["needs"]
     assert any(
         str(step.get("uses") or "").startswith("actions/checkout@")
         and str((step.get("with") or {}).get("fetch-depth")) == "0"
-        for step in test_steps
+        for step in jobs[parity_id]["steps"]
     )
 
 
