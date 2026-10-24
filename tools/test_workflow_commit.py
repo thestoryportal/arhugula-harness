@@ -277,7 +277,8 @@ def test_commit_does_not_require_release_closeout(
 def test_trial_commit_blocks_on_a_held_or_failed_outcome(
     repo: Path, monkeypatch: pytest.MonkeyPatch, profile: object
 ) -> None:
-    adapter = _adapter()
+    adapter, calls = _adapter(), []
+    monkeypatch.setattr(adapter, "run_bounded", _recording(adapter, calls))
     chosen = TRIAL if profile == "failed" else profile
     monkeypatch.setattr(adapter.workflow_commit, "worktree_profile", lambda _root: chosen)
     ruff, gate = FakeRuff(), adapter.workflow_commit.commit_outcome
@@ -287,6 +288,7 @@ def test_trial_commit_blocks_on_a_held_or_failed_outcome(
     monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
     stage(repo, "tools/b.py", "y = 1  # LINT_BAD\n")
     assert adapter.pre_commit(_commit_payload(repo)) == 2
+    assert calls == []  # never falls through to the legacy gate
 
 
 def test_stop_cli_reports_legacy_for_unbound_work(repo: Path) -> None:
