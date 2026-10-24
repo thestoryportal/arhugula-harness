@@ -302,7 +302,8 @@ def pre_commit(payload: dict[str, Any]) -> int:
     cwd = project_dir(payload)
     # WO-U06: every commit the command makes, in any spelling, is routed by its own
     # repository; trial commits check their actual staged scope, never whole-project
-    # Pyright or release closeout, and an unreadable commit effect holds trial work.
+    # Pyright or release closeout, and an unreadable commit effect holds unless no
+    # worktree can select trial.
     try:
         outcome = workflow_commit.command_outcome(command, cwd, created_at=workflow_commit.now())
         legacy_gate = bool(COMMIT_RE.search(command)) and isinstance(

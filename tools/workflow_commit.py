@@ -2,28 +2,33 @@
 """WO-U06 / WP-04 — proportionate trial commits and changed-subject reuse (spec WS-07,
 WS-08 §10.1-10.2; verification WT-10, WT-11 local part).
 
-`read_commits` finds every commit a Bash command can make — through `git -C`, `cd`,
-subshells, wrappers and aliases — and reports a command whose commit effect it cannot
-identify as `Unreadable`, which holds trial work. Each commit is routed by its repository
-top level: legacy work keeps the existing hooks unchanged, a held selection holds, and a
-trial commit must leave staging explicit (`commit_selection`), because only then is the
-inspected index exactly what Git records.
+`read_commits` reads what a Bash command does to Git: every commit it makes, through
+quoting, `git -C`, `cd`, subshells, command substitutions, wrappers, shells, `eval` and
+aliases, and whether anything that can change the index or worktree runs before or
+alongside one. The gate inspects the index before the command runs, so such a commit is
+`Unreadable`, as is any command whose commit effect the reader cannot follow; that passes
+only while no worktree can select a trial profile. A script or program run from a file
+is the reader's limit: it counts as an effect, but commits inside it are not followed.
 
-A trial commit is checked over that index: `parse_staged` turns Git's listings into a
-`StagedScope`, and a staged path whose worktree bytes differ from the index holds
-(`binding_stale`). `commit_obligations` names the proportionate local set (WS-07):
-Ruff lint and format for each changed Python subject, the sibling behavior test of each
-changed Python or shell subject, the named risk expansion for hook and guard paths, the
-CI record producers for any record path, and a parser for JSON records. A subject with
-no behavior test is a `Gap` and holds. There is no whole-project Pyright, suite or
-closeout. Stop runs the Ruff subset over the working tree.
+Each commit is routed by its repository top level: legacy work keeps the existing hooks
+unchanged, a held selection holds, and a trial commit must leave staging explicit
+(`commit_selection`), because only then is the inspected index exactly what Git records.
+`parse_staged` turns Git's listings into a `StagedScope`, and a staged path whose
+worktree bytes differ from the index holds (`binding_stale`). `commit_obligations` names
+the proportionate local set (WS-07): Ruff lint and format for each changed Python
+subject, the behavior tests of each changed Python or shell subject (`tests_for`), the
+named risk expansion for hook and guard paths, the CI record producers for any record
+path, and a parser for JSON records. A subject with no behavior test is a `Gap` and
+holds. There is no whole-project Pyright, suite or closeout. Stop runs the Ruff subset
+over the working tree.
 
-Every check is keyed by its WP-03 input manifest and runs from the repository root. A
-stored passed receipt is reused only when `reuse_result` accepts it for the current
-manifest, so an unchanged commit or turn runs nothing, while any material change runs
-the check again. A check that reads the working tree holds when an unstaged or untracked
-path falls in its inputs, so a receipt never describes bytes the commit does not record.
-Failed, unavailable or unreadable results are never reused as a pass.
+Commit checks run in a private checkout of exactly the index (`index_snapshot`), so
+unstaged or untracked work neither reaches nor blocks them, and the index is observed
+again once they finish: a change while they ran holds. Every check is keyed by its WP-03
+input manifest, which includes the observed checker identity (`Toolchain`). A stored
+passed receipt is reused only when `reuse_result` accepts it for the current manifest,
+so an unchanged commit or turn runs nothing, while any material change runs the check
+again. Failed, unavailable or unreadable results are never reused as a pass.
 
 `worktree_profile` routes a worktree: only a unit bound through its Codex loop arc can
 select `trial` (WP-02 `select_profile`). Until the coherent activation (WP-17) every unit
@@ -40,8 +45,10 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Generator, Iterable, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
@@ -65,6 +72,7 @@ from tools.workflow_evidence import (
 )
 from tools.workflow_policy import (
     CANONICAL_ROOT,
+    ActivationAbsent,
     SelectionFacts,
     WorkflowPolicy,
     read_activation,
@@ -200,70 +208,228 @@ class CommitCommand:
 
 @dataclass(frozen=True)
 class Unreadable:
-    """The command may commit, but where or how cannot be determined from its text."""
+    """The command may commit, but where, how or over what cannot be determined from its
+    text."""
 
     reason: str
 
 
+@dataclass(frozen=True)
+class Reading:
+    """What a command does that the commit gate needs: the commits it makes, in order, and
+    the first thing it runs that can change the index, worktree or HEAD, None while it
+    only reads. A commit is such an effect for whatever runs after it."""
+
+    commits: tuple[CommitCommand, ...] = ()
+    effect: str | None = None
+
+
+class _UnreadableError(Exception):
+    """Raised inside the reader; `read_commits` returns it as `Unreadable`."""
+
+
+@dataclass(frozen=True)
+class Wrapper:
+    """A program that runs the command after its options and `operands` leading operands:
+    options that take a value, options that take none, options whose value is the
+    command's directory, and options after which it runs no command at all."""
+
+    valued: frozenset[str] = frozenset()
+    flags: frozenset[str] = frozenset()
+    operands: int = 0
+    chdir: frozenset[str] = frozenset()
+    stops: frozenset[str] = frozenset()
+
+
+def _names(*names: str) -> frozenset[str]:
+    return frozenset(names)
+
+
 AliasLookup = Callable[[Path, str], str | None]
-_HEREDOC = re.compile(r"<<(-?)[ \t]*(['\"]?)([A-Za-z0-9_.-]+)\2")
-_ASSIGNMENT = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)=")
-_GIT_INSIDE = re.compile(r"(?:\$\(|`|&&|;|\|)\s*(?:\S*/)?git(?:\s|$)")
-_GIT_WORD = re.compile(r"(?:^|[\s/])git(?:\s|$)")
-# Programs that run their arguments unchanged in this shell's directory.
-_WRAPPERS = frozenset({"rtk", "command", "exec", "nohup", "time"})
-# Programs that run a command assembled from their arguments, where this reader cannot
-# follow the directory or the expansion.
-_RUNNERS = frozenset(
-    {"xargs", "timeout", "sh", "bash", "zsh", "dash", "eval", "find", "nice", "sudo"}
-    | {"watch", "parallel", "script", "flock", "stdbuf", "ionice", "setsid", "env"}
+# [LAW:one-type-per-behavior] each wrapper is data for the one option reader, `_unwrap`.
+WRAPPERS: Mapping[str, Wrapper] = {
+    "rtk": Wrapper(),
+    "nohup": Wrapper(),
+    "command": Wrapper(flags=_names("-p"), stops=_names("-v", "-V")),
+    "exec": Wrapper(valued=_names("-a"), flags=_names("-c", "-l")),
+    "time": Wrapper(
+        valued=_names("-o", "-f", "--output", "--format"),
+        flags=_names("-p", "-v", "-a", "--verbose", "--append", "--portability"),
+    ),
+    "timeout": Wrapper(
+        valued=_names("-s", "-k", "--signal", "--kill-after"),
+        flags=_names("-v", "--verbose", "--preserve-status", "--foreground"),
+        operands=1,
+    ),
+    "nice": Wrapper(valued=_names("-n", "--adjustment")),
+    "stdbuf": Wrapper(valued=_names("-i", "-o", "-e", "--input", "--output", "--error")),
+    "ionice": Wrapper(
+        valued=_names("-c", "-n", "--class", "--classdata"), flags=_names("-t", "--ignore")
+    ),
+    "setsid": Wrapper(flags=_names("-c", "-f", "-w", "--ctty", "--fork", "--wait")),
+    "env": Wrapper(
+        valued=_names("-u", "--unset"),
+        flags=_names("-i", "-0", "-v", "--ignore-environment", "--null", "--debug"),
+        chdir=_names("-C", "--chdir"),
+    ),
+}
+_SHELLS = frozenset({"sh", "bash", "zsh", "dash", "ksh"})
+_SHELL_VALUED = frozenset({"-o", "+o", "-O", "+O", "--rcfile", "--init-file"})
+_INTERPRETER = re.compile(r"python[0-9.]*|node|perl|ruby")
+_INLINE_CODE = re.compile(r"-[A-Za-z]*[ceE]|--eval|--print|-p")
+# Programs that run a command assembled from their arguments in a way this reader does
+# not follow.
+_RUNNERS = frozenset({"xargs", "find", "parallel", "watch", "sudo", "script", "flock"})
+# Compound commands whose bodies run repeatedly or by pattern.
+_COMPOUND = frozenset({"for", "case", "select", "function", "coproc"})
+_RESERVED = frozenset({"if", "then", "else", "elif", "do", "while", "until", "!"})
+_ASSIGNS = frozenset({"export", "declare", "typeset", "local", "readonly"})
+# Commands that change neither the index nor the worktree unless their output is
+# redirected to a file.
+_READ_ONLY = frozenset(
+    {"cd", "pushd", "popd", "true", "false", ":", "echo", "printf", "cat", "pwd", "ls"}
+    | {"head", "tail", "grep", "wc", "date", "basename", "dirname", "which", "type"}
+    | {"test", "[", "[[", "sleep", "exit", "fi", "done", "}"}
 )
+_READ_ONLY_GIT = frozenset({"status", "diff", "log", "show", "rev-parse", "ls-files"})
 _GIT_FLAGS = frozenset(
     {"--no-pager", "-P", "-p", "--paginate", "--no-optional-locks", "--literal-pathspecs"}
     | {"--no-replace-objects", "--noglob-pathspecs"}
 )
-_ALIAS_DEPTH = 8
+_HEREDOC = re.compile(r"<<(-?)[ \t]*(['\"]?)([A-Za-z0-9_.-]+)\2")
+_ASSIGNMENT = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)=")
+_GIT_WORD = re.compile(r"\bgit\b")
+_SUBSTITUTION = re.compile("\\$\0(\\d+)\0")
+# A program word holding one of these is the result of an expansion this reader does not
+# perform.
+_EXPANDS = frozenset("$`*?[{")
+_PUNCTUATION = frozenset(";&|()<>\n")
+_DEPTH = 8
 
 
-def strip_heredocs(text: str) -> str | None:
-    """`text` without here-document bodies, which are data rather than commands; None
-    when a body never reaches its terminator."""
+def _strip_heredocs(text: str) -> str:
+    """`text` without here-document operators and bodies, which are data rather than
+    commands. A body that never ends, or one whose unquoted delimiter lets the shell run a
+    substitution inside it, is unreadable."""
     lines: list[str] = []
-    pending: list[tuple[str, bool]] = []
+    pending: list[tuple[str, bool, bool]] = []
     quote = ""
     for line in text.split("\n"):
         if pending:
-            delimiter, tabs = pending[0]
+            delimiter, tabs, literal = pending[0]
             if (line.lstrip("\t") if tabs else line) == delimiter:
                 pending.pop(0)
+            elif not literal and ("$(" in line or "`" in line):
+                raise _UnreadableError("a here-document with an unquoted delimiter substitutes")
             continue
-        lines.append(line)
-        quote = _scan_heredocs(line, quote, pending)
-    return None if pending else "\n".join(lines)
+        kept, quote = _scan_heredocs(line, quote, pending)
+        lines.append(kept)
+    if pending:
+        raise _UnreadableError("a here-document never ends")
+    return "\n".join(lines)
 
 
-def _scan_heredocs(line: str, quote: str, pending: list[tuple[str, bool]]) -> str:
-    """Append each `<<` operator outside single quotes to `pending`; return the quote
-    still open at the end of the line. Double quotes do not hide one, because a
+def _scan_heredocs(line: str, quote: str, pending: list[tuple[str, bool, bool]]) -> tuple[str, str]:
+    """`line` without its `<<` operators outside single quotes, each appended to `pending`,
+    and the quote still open at its end. Double quotes do not hide one, because a
     here-document inside `"$(...)"` is still read by the shell."""
+    kept: list[str] = []
     index = 0
     while index < len(line):
         char = line[index]
+        match = None if quote == "'" else _HEREDOC.match(line, index)
+        if line.startswith("<<<", index):
+            kept.append("<<<")
+            index += 3
+            continue
+        if match:
+            pending.append((match.group(3), match.group(1) == "-", bool(match.group(2))))
+            index = match.end()
+            continue
         if quote == "'":
             quote = "" if char == "'" else quote
         elif char == "\\":
-            index += 1
+            kept.append(line[index : index + 2])
+            index += 2
+            continue
         elif quote == '"' and char == '"':
             quote = ""
         elif not quote and char in "'\"":
             quote = char
-        elif line.startswith("<<", index) and not line.startswith("<<<", index):
-            match = _HEREDOC.match(line, index)
-            if match:
-                pending.append((match.group(3), match.group(1) == "-"))
-                index = match.end() - 1
+        kept.append(char)
         index += 1
-    return quote
+    return "".join(kept), quote
+
+
+def lift_substitutions(text: str) -> tuple[str, tuple[str, ...]]:
+    """`text` with each outermost command substitution outside single quotes, `$(...)` or
+    backquoted, replaced by a `$<NUL>n<NUL>` marker, and the bodies in order. The marker
+    stays inside its word, so a program word made from a substitution's output is still
+    visibly an expansion, and the body is read where that word's command runs."""
+    if "\0" in text:
+        raise _UnreadableError("a NUL byte in the command")
+    out: list[str] = []
+    bodies: list[str] = []
+    quote, index = "", 0
+    while index < len(text):
+        char = text[index]
+        if quote != "'" and (text.startswith("$(", index) or char == "`"):
+            start = index + 2 if char == "$" else index + 1
+            index = _paren_end(text, start) if char == "$" else _backquote_end(text, start)
+            out.append(f"$\0{len(bodies)}\0")
+            bodies.append(text[start : index - 1])
+            continue
+        if quote == "'":
+            quote = "" if char == "'" else quote
+        elif char == "\\":
+            out.append(text[index : index + 2])
+            index += 2
+            continue
+        elif char == '"':
+            quote = "" if quote else '"'
+        elif char == "'" and not quote:
+            quote = "'"
+        out.append(char)
+        index += 1
+    return "".join(out), tuple(bodies)
+
+
+def _backquote_end(text: str, start: int) -> int:
+    """Just past the backquote that closes the body starting at `start`."""
+    index = start
+    while index < len(text):
+        if text.startswith("\\`", index):
+            raise _UnreadableError("nested backquotes")
+        if text[index] == "`":
+            return index + 1
+        index += 2 if text[index] == "\\" else 1
+    raise _UnreadableError("a command substitution never ends")
+
+
+def _paren_end(text: str, start: int) -> int:
+    """Just past the `)` that closes the `$(` body starting at `start`, skipping quoted
+    text and nested substitutions."""
+    quote, depth, index = "", 0, start
+    while index < len(text):
+        char = text[index]
+        if quote == "'":
+            quote = "" if char == "'" else quote
+        elif char == "\\":
+            index += 1
+        elif text.startswith("$(", index):
+            index = _paren_end(text, index + 2) - 1
+        elif char == "`":
+            index = _backquote_end(text, index + 1) - 1
+        elif char == '"':
+            quote = "" if quote else '"'
+        elif not quote and char == "'":
+            quote = "'"
+        elif not quote and char == ")" and depth == 0:
+            return index + 1
+        elif not quote and char in "()":
+            depth += 1 if char == "(" else -1
+        index += 1
+    raise _UnreadableError("a command substitution never ends")
 
 
 def _tokens(text: str) -> list[str]:
@@ -284,9 +450,68 @@ def _moved(cwd: Path | None, target: str) -> Path | None:
     return Path(target) if target.startswith("/") else None if cwd is None else cwd / target
 
 
-def _git_command(
-    words: list[str], cwd: Path | None, aliases: AliasLookup, depth: int = 0
-) -> tuple[CommitCommand, ...] | Unreadable:
+def _nested(text: str) -> str:
+    """Command text a shell, `eval` or alias runs, which must be literal to be read."""
+    if _SUBSTITUTION.search(text):
+        raise _UnreadableError("it runs the output of a command substitution")
+    return text
+
+
+@dataclass(frozen=True)
+class _Context:
+    aliases: AliasLookup
+    mentions_git: bool
+
+
+def _then(before: Reading, after: Reading) -> Reading:
+    """`after` once `before` has finished. A commit after an effect may record what the
+    effect changed, which the gate never inspected."""
+    if after.commits and before.effect is not None:
+        raise _UnreadableError(
+            f"{before.effect} runs before a commit and can change what it records"
+        )
+    return Reading((*before.commits, *after.commits), before.effect or after.effect)
+
+
+def _alongside(members: Sequence[Reading]) -> Reading:
+    """A pipeline's members, which all run at once."""
+    effects = [member.effect for member in members if member.effect is not None]
+    commits = tuple(commit for member in members for commit in member.commits)
+    if commits and len(effects) > 1:
+        raise _UnreadableError(f"{', '.join(effects)} run together, alongside a commit")
+    return Reading(commits, next(iter(effects), None))
+
+
+def _option(arg: str) -> tuple[str, str | None]:
+    """An option's name and its attached value: `--name=value` or `-xVALUE`."""
+    if arg.startswith("--"):
+        name, equals, value = arg.partition("=")
+        return name, value if equals else None
+    return arg[:2], arg[2:] or None
+
+
+def _unwrap(program: str, args: list[str], cwd: Path | None) -> tuple[list[str], Path | None]:
+    """The command a wrapper runs and the directory it runs in; an option this reader does
+    not know is unreadable, because it may change either."""
+    wrapper, index, here = WRAPPERS[program], 0, cwd
+    while index < len(args) and args[index].startswith("-") and args[index] != "-":
+        arg = args[index]
+        index += 1
+        if arg == "--":
+            break
+        name, attached = _option(arg)
+        if name in wrapper.stops:
+            return [], here
+        if name in wrapper.valued | wrapper.chdir:
+            value = attached if attached is not None else "".join(args[index : index + 1]) or "$"
+            index += 0 if attached is not None else 1
+            here = _moved(here, value) if name in wrapper.chdir else here
+        elif name not in wrapper.flags or attached is not None:
+            raise _UnreadableError(f"{program} option {arg!r} is not one this reader knows")
+    return args[index + wrapper.operands :], here
+
+
+def _git_command(words: list[str], cwd: Path | None, context: _Context, depth: int) -> Reading:
     """`words` after the `git` program: its global options, then the subcommand."""
     root, rest = cwd, iter(words)
     for word in rest:
@@ -294,118 +519,216 @@ def _git_command(
             root = _moved(root, next(rest, "$"))
         elif word == "-c":
             if next(rest, "").lower().startswith("alias."):
-                return Unreadable("an alias defined on the command line")
+                raise _UnreadableError("an alias defined on the command line")
         elif word in _GIT_FLAGS:
             continue
         elif word.startswith("-"):
-            return Unreadable(f"git option {word!r} can change what is committed")
+            raise _UnreadableError(f"git option {word!r} can change what is committed")
+        elif _EXPANDS & set(word):
+            raise _UnreadableError(f"the git subcommand {word!r} is an expansion")
+        elif word in _READ_ONLY_GIT:
+            writes = any(arg.startswith("--output") for arg in rest)
+            return Reading((), f"git {word} --output" if writes else None)
         elif root is None:
-            return Unreadable("git runs in a directory that cannot be determined")
+            raise _UnreadableError("git runs in a directory that cannot be determined")
         elif word == "commit":
-            return (CommitCommand(root, tuple(rest)),)
+            return Reading((CommitCommand(root, tuple(rest)),), "git commit")
         else:
-            expansion = aliases(root, word)
-            if expansion is None:
-                return ()
-            if expansion.startswith("!"):
-                runs_git = _GIT_WORD.search(expansion[1:]) or "commit" in expansion
-                return Unreadable(f"shell alias {word!r} runs git") if runs_git else ()
-            if depth >= _ALIAS_DEPTH:
-                return Unreadable(f"alias {word!r} nests too deeply")
-            try:
-                expanded = shlex.split(expansion)
-            except ValueError:
-                return Unreadable(f"alias {word!r} is not readable")
-            return _git_command([*expanded, *rest], root, aliases, depth + 1)
-    return ()
+            return _git_alias(word, list(rest), root, context, depth)
+    return Reading()
 
 
-def _simple_command(
-    words: list[str], cwd: Path | None, aliases: AliasLookup
-) -> tuple[Path | None, tuple[CommitCommand, ...] | Unreadable]:
-    """One simple command: the directory after it, and the commits it makes."""
-    if any(_GIT_INSIDE.search(word) for word in words):
-        return cwd, Unreadable("git runs inside a substitution or a quoted command")
-    index = 0
-    while index < len(words):
-        assignment = _ASSIGNMENT.match(words[index])
-        if assignment and assignment.group(1).startswith("GIT_"):
-            return cwd, Unreadable(f"{assignment.group(1)} changes how git commits")
-        program, following = _program(words[index]), "".join(words[index + 1 : index + 2])
-        # `env` with only assignments is a wrapper; with options it is a runner.
-        if (
-            assignment
-            or program in _WRAPPERS
-            or (program == "env" and not following.startswith("-"))
-        ):
+def _git_alias(word: str, rest: list[str], root: Path, context: _Context, depth: int) -> Reading:
+    """A git subcommand other than commit: an effect, or the alias it expands to."""
+    expansion = context.aliases(root, word)
+    if expansion is None:
+        return Reading((), f"git {word}")
+    if expansion.startswith("!"):
+        if _GIT_WORD.search(expansion[1:]) or "commit" in expansion:
+            raise _UnreadableError(f"shell alias {word!r} runs git")
+        return Reading((), f"git {word}")
+    if depth >= _DEPTH:
+        raise _UnreadableError(f"alias {word!r} nests too deeply")
+    try:
+        expanded = shlex.split(_nested(expansion))
+    except ValueError as exc:
+        raise _UnreadableError(f"alias {word!r} is not readable") from exc
+    return _git_command([*expanded, *rest], root, context, depth + 1)
+
+
+def _shell(
+    program: str, args: list[str], cwd: Path | None, context: _Context, depth: int
+) -> Reading:
+    """A shell: its `-c` script is read in `cwd`; a script file is the reader's limit;
+    commands from its input are unreadable when the command names git."""
+    index, inline = 0, False
+    while index < len(args) and args[index].startswith(("-", "+")) and args[index] not in "-+":
+        arg = args[index]
+        index += 1
+        if arg == "--":
+            break
+        if arg in _SHELL_VALUED:
             index += 1
-            continue
-        break
-    program, arguments = (_program(words[index]), words[index + 1 :]) if words[index:] else ("", [])
-    if program in {"cd", "pushd"}:
-        return (_moved(cwd, arguments[0]) if len(arguments) == 1 else None), ()
-    if program == "popd":
-        return None, ()
+        elif not arg.startswith("--"):
+            inline = inline or "c" in arg[1:]
+    operands = args[index:]
+    if inline and operands:
+        return _read(_nested(operands[0]), cwd, context, depth + 1)
+    if (inline or not operands or operands[0] == "-") and context.mentions_git:
+        raise _UnreadableError(f"{program} reads commands this reader cannot see")
+    return Reading((), " ".join([program, *operands[:1]]))
+
+
+def _interpreter(program: str, args: list[str], context: _Context) -> Reading:
+    """An interpreter runs code from an argument, its input or a file. Inline code naming
+    git, or code from its input when the command names git, is unreadable; a program
+    file is the reader's limit."""
+    inline = any(_INLINE_CODE.fullmatch(arg) for arg in args)
+    stdin = "-" in args or all(arg.startswith("-") for arg in args)
+    if (inline and any(_GIT_WORD.search(arg) for arg in args)) or (
+        stdin and not inline and context.mentions_git
+    ):
+        raise _UnreadableError(f"{program} runs code that names git")
+    return Reading((), program)
+
+
+def _program_reading(
+    program: str, arguments: list[str], cwd: Path | None, context: _Context, depth: int
+) -> Reading:
+    """What one program does, run in `cwd` with `arguments`."""
     if program == "git":
-        return cwd, _git_command(arguments, cwd, aliases)
+        return _git_command(arguments, cwd, context, depth)
+    if program in _SHELLS:
+        return _shell(program, arguments, cwd, context, depth)
+    if program == "eval":
+        return _read(_nested(" ".join(arguments)), cwd, context, depth + 1)
+    if program in _ASSIGNS:
+        if any(word.startswith("GIT_") for word in arguments):
+            raise _UnreadableError(f"{program} sets a GIT_ variable that changes how git commits")
+        return Reading()
+    if program in _READ_ONLY:
+        return Reading()
+    if program in _COMPOUND and context.mentions_git:
+        raise _UnreadableError(f"a {program} compound command runs git this reader cannot follow")
+    if _INTERPRETER.fullmatch(program):
+        return _interpreter(program, arguments, context)
     if program in _RUNNERS and any(_GIT_WORD.search(word) for word in arguments):
-        return cwd, Unreadable(f"{program} runs a git command this reader cannot follow")
-    return cwd, ()
+        raise _UnreadableError(f"{program} runs a git command this reader cannot follow")
+    return Reading((), program)
+
+
+def _command(
+    words: list[str], cwd: Path | None, context: _Context, depth: int
+) -> tuple[Path | None, Reading]:
+    """One simple command whose substitutions were already read: the shell's directory
+    after it, and what it does."""
+    run_dir = cwd
+    while words:
+        assignment = _ASSIGNMENT.match(words[0])
+        if assignment and assignment.group(1).startswith("GIT_"):
+            raise _UnreadableError(f"{assignment.group(1)} changes how git commits")
+        if assignment or words[0] in _RESERVED:
+            words = words[1:]
+        elif _program(words[0]) in WRAPPERS and not _EXPANDS & set(words[0]):
+            words, run_dir = _unwrap(_program(words[0]), words[1:], run_dir)
+        else:
+            break
+    if not words:
+        return cwd, Reading()
+    word, arguments = words[0], words[1:]
+    program = _program(word)
+    if word not in _READ_ONLY and _EXPANDS & set(word):
+        raise _UnreadableError(f"the program {word!r} is an expansion this reader cannot resolve")
+    if program in {"cd", "pushd"}:
+        return (_moved(cwd, arguments[0]) if len(arguments) == 1 else None), Reading()
+    if program == "popd":
+        return None, Reading()
+    return cwd, _program_reading(program, arguments, run_dir, context, depth)
+
+
+def _read(text: str, cwd: Path | None, context: _Context, depth: int) -> Reading:
+    """[LAW:single-enforcer] the one reading of command text: its pipelines in order, each
+    simple command read in the directory the shell is in when it runs, after the
+    substitutions in its words."""
+    if depth > _DEPTH:
+        raise _UnreadableError("commands nest too deeply")
+    lifted, bodies = lift_substitutions(_strip_heredocs(text))
+    try:
+        tokens = _tokens(lifted)
+    except ValueError as exc:
+        raise _UnreadableError(f"unbalanced quoting: {exc}") from exc
+    sequence, pipeline = Reading(), list[Reading]()
+    stack: list[Path | None] = []
+    here: Path | None = cwd
+    words: list[str] = []
+    targets: list[str] = []
+    output: list[str] = []
+    background = False
+    stream = iter(tokens)
+
+    def simple() -> None:
+        nonlocal here
+        reading = Reading()
+        for word in (*words, *targets):
+            for match in _SUBSTITUTION.finditer(word):
+                body = _read(bodies[int(match.group(1))], here, context, depth + 1)
+                reading = _then(reading, body)
+        here, command = _command(list(words), here, context, depth)
+        effect = command.effect or next((f"output to {target}" for target in output), None)
+        pipeline.append(_then(reading, Reading(command.commits, effect)))
+        words.clear()
+        targets.clear()
+        output.clear()
+
+    def settle() -> None:
+        nonlocal sequence
+        sequence = _then(sequence, _alongside(pipeline))
+        pipeline.clear()
+
+    for token in stream:
+        if not set(token) <= _PUNCTUATION:
+            words.append(token)
+        elif "<" in token or ">" in token:
+            if "(" in token:
+                raise _UnreadableError("process substitution")
+            if words and words[-1].isdigit():
+                words.pop()  # the redirected descriptor, as in `2>`
+            target = next(stream, "")  # a file, not a command word
+            targets.append(target)
+            if ">" in token and target not in ("/dev/null", "-") and not target.isdigit():
+                output.append(target)
+        else:
+            simple()
+            for char in token:
+                if char == "(":
+                    stack.append(here)
+                elif char == ")":
+                    if not stack:
+                        raise _UnreadableError("unbalanced parentheses")
+                    here = stack.pop()
+            alone = "&" in token.replace("&&", "").replace("|&", "|")
+            background = background or alone
+            if alone or any(separator in token for separator in (";", "\n", "&&", "||")):
+                settle()
+    simple()
+    settle()
+    if background and sequence.commits:
+        raise _UnreadableError("a background job runs alongside the commit")
+    return sequence
 
 
 def read_commits(
     command: str, cwd: Path, aliases: AliasLookup
 ) -> tuple[CommitCommand, ...] | Unreadable:
     """[LAW:parse-dont-validate] every commit the Bash `command` makes, each with the
-    directory it runs in, or why that cannot be known. Text that never names git
-    makes no commit."""
-    if "git" not in command:
-        return ()
-    text = strip_heredocs(command)
-    if text is None:
-        return Unreadable("a here-document never ends")
+    directory it runs in, or why that cannot be known. A commit after or alongside
+    anything that can change what it records is unreadable: the gate inspects the index
+    before the command runs."""
+    context = _Context(aliases, bool(_GIT_WORD.search(command)))
     try:
-        tokens = _tokens(text)
-    except ValueError as exc:
-        return Unreadable(f"unbalanced quoting: {exc}")
-    found: list[CommitCommand] = []
-    stack: list[Path | None] = []
-    here: Path | None = cwd
-    words: list[str] = []
-    stream: Iterator[str] = iter(tokens)
-
-    def finish() -> Unreadable | None:
-        nonlocal here
-        here, commits = _simple_command(words, here, aliases) if words else (here, ())
-        words.clear()
-        if isinstance(commits, Unreadable):
-            return commits
-        found.extend(commits)
-        return None
-
-    for token in stream:
-        if not set(token) <= set(";&|()<>\n"):
-            words.append(token)
-            continue
-        if "<" in token or ">" in token:
-            if "(" in token:
-                return Unreadable("process substitution")
-            if words and words[-1].isdigit():
-                words.pop()  # the redirected descriptor, as in `2>`
-            next(stream, None)  # the redirect target is not a command word
-            continue
-        if failure := finish():
-            return failure
-        for char in token:
-            if char == "(":
-                stack.append(here)
-            elif char == ")":
-                if not stack:
-                    return Unreadable("unbalanced parentheses")
-                here = stack.pop()
-    if failure := finish():
-        return failure
-    return tuple(found)
+        return _read(command, cwd, context, 0).commits
+    except _UnreadableError as exc:
+        return Unreadable(str(exc))
 
 
 _SELECT_SHORT = frozenset("aiop")
@@ -463,40 +786,37 @@ def observe_alias(root: Path, name: str) -> str | None:
 
 @dataclass(frozen=True)
 class StagedScope:
-    """What a commit records and what surrounds it: staged non-deleted paths, staged
-    deletions, those staged paths whose worktree bytes differ from the index (WS-08:
-    verified only by checking staged bytes), every unstaged or untracked path, and every
-    path the index tracks."""
+    """What a commit records: staged non-deleted paths, staged deletions, those staged
+    paths whose worktree bytes differ from the index (WS-08: verified only by checking
+    staged bytes), every path the index tracks, and the index's identity, a digest of
+    every entry's mode, object and stage."""
 
     paths: tuple[str, ...]
     deleted: tuple[str, ...]
     divergent: tuple[str, ...]
-    dirty: tuple[str, ...]
     tracked: tuple[str, ...]
+    index: str
 
 
 def _z_fields(raw: bytes) -> list[str]:
     return [field.decode("utf-8") for field in raw.split(b"\0") if field]
 
 
-def parse_staged(
-    name_status: bytes, unstaged: bytes, untracked: bytes, tracked: bytes
-) -> StagedScope:
+def parse_staged(name_status: bytes, unstaged: bytes, stage: bytes) -> StagedScope:
     """The single checkpoint for Git's `-z` listings (`git diff --cached --name-status
-    --no-renames -z`, `git diff --name-only -z`, `git ls-files --others
-    --exclude-standard -z` and `git ls-files -z`)."""
+    --no-renames -z`, `git diff --name-only -z` and `git ls-files --stage -z`)."""
     fields = _z_fields(name_status)
     if len(fields) % 2:
         raise ValueError("staged listing: status without a path")
     entries = list(zip(fields[::2], fields[1::2], strict=True))
     paths = tuple(path for status, path in entries if status != "D")
-    worktree_changed = _z_fields(unstaged)
+    worktree_changed = set(_z_fields(unstaged))
     return StagedScope(
         paths,
         tuple(path for status, path in entries if status == "D"),
-        tuple(path for path in paths if path in set(worktree_changed)),
-        tuple(sorted({*worktree_changed, *_z_fields(untracked)})),
-        tuple(_z_fields(tracked)),
+        tuple(path for path in paths if path in worktree_changed),
+        tuple(dict.fromkeys(row.split("\t", 1)[1] for row in _z_fields(stage))),
+        hashlib.sha256(stage).hexdigest(),
     )
 
 
@@ -510,8 +830,7 @@ def observe_staged(root: Path) -> StagedScope:
     return parse_staged(
         _git(root, "diff", "--cached", "--name-status", "--no-renames", "-z"),
         _git(root, "diff", "--name-only", "-z"),
-        _git(root, "ls-files", "--others", "--exclude-standard", "-z"),
-        _git(root, "ls-files", "-z"),
+        _git(root, "ls-files", "--stage", "-z"),
     )
 
 
@@ -523,14 +842,23 @@ def changed_worktree_paths(root: Path) -> tuple[str, ...]:
     return tuple(sorted(set(tracked) | set(untracked)))
 
 
+@contextmanager
+def index_snapshot(root: Path) -> Generator[Path]:
+    """[LAW:effects-at-boundaries] a private checkout of exactly the index, so a check that
+    reads files sees the bytes the commit records and no unstaged or untracked work."""
+    with tempfile.TemporaryDirectory(prefix="workflow-commit-") as directory:
+        _git(root, "checkout-index", "--all", f"--prefix={directory}/")
+        yield Path(directory)
+
+
 # --- obligations -------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
 class Check:
-    """One checker execution from the repository root. `subject`, when set, is fed on
-    stdin as the scope's exact bytes; every other input is read from the working tree.
-    Exit 0 passes, 1 reports findings, anything else means it could not decide."""
+    """One checker execution. `subject`, when set, is fed on stdin as the scope's exact
+    bytes; every other input is read from the directory it runs in. Exit 0 passes, 1
+    reports findings, anything else means it could not decide."""
 
     name: str
     version: str
@@ -550,8 +878,27 @@ class Gap:
 
 Obligation = Check | Gap
 
-_UV = ("uv", "run", "--quiet")
-_PYTEST = (*_UV, "pytest", "-q", "-p", "no:cacheprovider")
+
+@dataclass(frozen=True)
+class Toolchain:
+    """The checker environment, observed once per gate: the project `uv run` uses, the
+    Ruff command, and the identity of Ruff, Bash and the `uv run` interpreter. An
+    identity is None when it could not be observed, which makes each check needing it a
+    `Gap`."""
+
+    project: Path
+    ruff_argv: tuple[str, ...]
+    ruff: str | None
+    bash: str | None
+    python: str | None
+
+
+def uv_prefix(project: Path) -> tuple[str, ...]:
+    """`uv run` in `project`'s environment, unsynced: commit checks run from an index
+    snapshot, which `uv` must neither adopt as a project nor sync from."""
+    return ("uv", "run", "--quiet", "--project", str(project), "--no-sync")
+
+
 # [LAW:one-source-of-truth] a fenced copy of the record producers CI runs
 # (.github/workflows/ci.yml); a test asserts each still appears there.
 RECORD_PRODUCERS: tuple[tuple[str, ...], ...] = (
@@ -577,15 +924,20 @@ RISK_EXPANSIONS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
     ),
 )
 _SOURCE_SUFFIXES = (".py", ".sh")
+_TEST_FILES = (":(glob)**/test_*.py", ":(glob)**/test_*.sh")
 
 
 def _top(path: str) -> str:
     return path.split("/", 1)[0] if "/" in path else ""
 
 
+def source_subjects(paths: Sequence[str]) -> tuple[str, ...]:
+    return tuple(path for path in paths if path.endswith(_SOURCE_SUFFIXES))
+
+
 def behavior_tests(path: str, tracked: Sequence[str]) -> tuple[str, ...]:
-    """The narrowest behavior tests for a source subject: itself when it is a test,
-    otherwise every tracked sibling `test_<name>` under the same top-level directory."""
+    """A source subject's sibling tests: itself when it is a test, otherwise every tracked
+    `test_<name>` under the same top-level directory."""
     name = PurePosixPath(path).name
     if name.startswith("test_"):
         return (path,)
@@ -593,29 +945,107 @@ def behavior_tests(path: str, tracked: Sequence[str]) -> tuple[str, ...]:
     return tuple(t for t in tracked if PurePosixPath(t).name == wanted and _top(t) == _top(path))
 
 
-def _test_check(test: str, code_roots: tuple[str, ...]) -> Check:
-    python = test.endswith(".py")
-    return Check(
-        "pytest" if python else "bash-test",
-        "uv.lock" if python else "bash",
-        (*_PYTEST, test) if python else ("bash", test),
-        None,
-        code_roots,
-        tuple(sorted({*LOCKED_INPUTS, test})),
-        100.0 if python else 60.0,
+def subject_terms(path: str) -> tuple[str, ...]:
+    """What a test names to exercise a subject: its file name and, for Python, its dotted
+    module (`*/src/pkg/x.py` is `pkg.x`)."""
+    pure = PurePosixPath(path)
+    parts = pure.with_suffix("").parts
+    parts = parts[parts.index("src") + 1 :] if "src" in parts else parts
+    module = ".".join(parts[:-1] if parts[-1:] == ("__init__",) else parts)
+    return (pure.name, module) if pure.suffix == ".py" and module else (pure.name,)
+
+
+def risk_tests(path: str) -> tuple[str, ...]:
+    return tuple(
+        test
+        for _, prefixes, added in RISK_EXPANSIONS
+        if path.startswith(prefixes)
+        for test in added
     )
 
 
-def ruff_obligations(paths: Sequence[str], ruff_version: str | None) -> tuple[Obligation, ...]:
+def tests_for(
+    path: str, tracked: Sequence[str], naming: Mapping[str, Sequence[str]]
+) -> tuple[str, ...]:
+    """[LAW:single-enforcer] a source subject's behavior tests: its siblings, every staged
+    test naming its file or module (`naming`, from `observe_naming`), and its named risk
+    expansion. Only an empty union is a gap."""
+    return tuple(
+        dict.fromkeys(
+            [
+                *behavior_tests(path, tracked),
+                *(test for term in subject_terms(path) for test in naming[term]),
+                *risk_tests(path),
+            ]
+        )
+    )
+
+
+def observe_naming(root: Path, terms: Iterable[str]) -> dict[str, tuple[str, ...]]:
+    """[LAW:effects-at-boundaries] for each term, the staged test files that contain it."""
+    return {term: _staged_tests_naming(root, term) for term in dict.fromkeys(terms)}
+
+
+def _staged_tests_naming(root: Path, term: str) -> tuple[str, ...]:
+    proc = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(root),
+            "grep",
+            "--cached",
+            "-l",
+            "-z",
+            "-F",
+            "-e",
+            term,
+            "--",
+            *_TEST_FILES,
+        ],
+        capture_output=True,
+        check=False,
+    )
+    if proc.returncode not in (0, 1):
+        raise OSError(f"git grep {term!r} in {root}: {proc.stderr.decode('utf-8', 'replace')}")
+    return tuple(_z_fields(proc.stdout))
+
+
+def _uv_check(
+    name: str,
+    toolchain: Toolchain,
+    argv: tuple[str, ...],
+    subject: str | None,
+    domains: tuple[str, ...],
+    explicit: tuple[str, ...],
+    timeout: float,
+) -> Obligation:
+    """A check `uv run` executes, identified by the interpreter it resolves."""
+    if toolchain.python is None:
+        return Gap(f"{name}: the uv interpreter identity is unavailable")
+    argv = (*uv_prefix(toolchain.project), *argv)
+    return Check(name, toolchain.python, argv, subject, domains, explicit, timeout)
+
+
+def _test_check(test: str, code_roots: tuple[str, ...], toolchain: Toolchain) -> Obligation:
+    explicit = tuple(sorted({*LOCKED_INPUTS, test}))
+    if test.endswith(".py"):
+        argv = ("pytest", "-q", "-p", "no:cacheprovider", test)
+        return _uv_check("pytest", toolchain, argv, None, code_roots, explicit, 100.0)
+    if toolchain.bash is None:
+        return Gap(f"{test}: the bash version is unavailable")
+    return Check("bash-test", toolchain.bash, ("bash", test), None, code_roots, explicit, 60.0)
+
+
+def ruff_obligations(paths: Sequence[str], toolchain: Toolchain) -> tuple[Obligation, ...]:
     """Ruff lint and format over each changed Python subject's exact bytes."""
     subjects = [path for path in paths if path.endswith(".py")]
-    if subjects and ruff_version is None:
+    if subjects and toolchain.ruff is None:
         return (Gap("ruff is unavailable"),)
     return tuple(
         Check(
             name,
-            str(ruff_version),
-            (*ruff_command(), *args, "--config", RUFF_CONFIG, "--stdin-filename", path, "-"),
+            str(toolchain.ruff),
+            (*toolchain.ruff_argv, *args, "--config", RUFF_CONFIG, "--stdin-filename", path, "-"),
             path,
             (),
             (path, RUFF_CONFIG),
@@ -629,53 +1059,42 @@ def ruff_obligations(paths: Sequence[str], ruff_version: str | None) -> tuple[Ob
     )
 
 
-def _record_check(producer: tuple[str, ...]) -> Check:
+def _record_check(producer: tuple[str, ...], toolchain: Toolchain) -> Obligation:
     name = f"record-{PurePosixPath(producer[0]).stem}"
-    return Check(name, "uv.lock", (*_UV, "python", *producer), None, (".",), LOCKED_INPUTS, 60.0)
+    return _uv_check(name, toolchain, ("python", *producer), None, (".",), LOCKED_INPUTS, 60.0)
 
 
-def _json_check(path: str) -> Check:
+def _json_check(path: str, toolchain: Toolchain) -> Obligation:
     lines = ("--json-lines",) if path.endswith(".jsonl") else ()
-    argv = (*_UV, "python", "-m", "json.tool", *lines)
-    return Check("json", "uv.lock", argv, path, (), LOCKED_INPUTS, 30.0)
+    argv = ("python", "-m", "json.tool", *lines)
+    return _uv_check("json", toolchain, argv, path, (), LOCKED_INPUTS, 30.0)
 
 
 def commit_obligations(
-    paths: Sequence[str],
-    deleted: Sequence[str],
-    tracked: Sequence[str],
+    staged: StagedScope,
     policy: WorkflowPolicy,
-    ruff_version: str | None,
+    toolchain: Toolchain,
+    naming: Mapping[str, Sequence[str]],
 ) -> tuple[Obligation, ...]:
     """[LAW:single-enforcer] the one place WS-07's proportionate local set is decided for
-    a staged scope; required CI stays a later gate. A deletion can orphan any record
-    reference, so it runs the record producers."""
+    a staged scope; required CI stays a later gate. A record under a risk prefix adds its
+    expansion, and a deletion can orphan any record reference, so it runs the record
+    producers."""
     code_roots = parse_classification(policy.rules["artifact_roots"]).code_roots
     tests = {
-        path: behavior_tests(path, tracked) for path in paths if path.endswith(_SOURCE_SUFFIXES)
+        path: tests_for(path, staged.tracked, naming) for path in source_subjects(staged.paths)
     }
-    risk_tests = [
-        test
-        for _, prefixes, added in RISK_EXPANSIONS
-        if any(path.startswith(prefixes) for path in paths)
-        for test in added
+    records = [path for path in staged.paths if not path.endswith(_SOURCE_SUFFIXES)]
+    selected = [
+        *(test for found in tests.values() for test in found),
+        *(test for path in records for test in risk_tests(path)),
     ]
-    records = [path for path in paths if not path.endswith(_SOURCE_SUFFIXES)]
     return (
-        *ruff_obligations(paths, ruff_version),
-        *(
-            Gap(f"{path}: no behavior test under its top directory")
-            for path, found in tests.items()
-            if not found
-        ),
-        *(
-            _test_check(test, code_roots)
-            for test in dict.fromkeys(
-                [*(t for found in tests.values() for t in found), *risk_tests]
-            )
-        ),
-        *(_record_check(producer) for producer in RECORD_PRODUCERS if records or deleted),
-        *(_json_check(path) for path in records if path.endswith((".json", ".jsonl"))),
+        *ruff_obligations(staged.paths, toolchain),
+        *(Gap(f"{path}: no behavior test names it") for path, found in tests.items() if not found),
+        *(_test_check(test, code_roots, toolchain) for test in dict.fromkeys(selected)),
+        *(_record_check(p, toolchain) for p in RECORD_PRODUCERS if records or staged.deleted),
+        *(_json_check(path, toolchain) for path in records if path.endswith((".json", ".jsonl"))),
     )
 
 
@@ -722,13 +1141,30 @@ def run_bounded(
         return subprocess.CompletedProcess(list(argv), 127, b"", str(exc).encode())
 
 
-def ruff_command() -> tuple[str, ...]:
-    return ("ruff",) if shutil.which("ruff") else (*_UV, "ruff")
+def ruff_command(project: Path) -> tuple[str, ...]:
+    return ("ruff",) if shutil.which("ruff") else (*uv_prefix(project), "ruff")
 
 
-def ruff_version(root: Path, run: Runner) -> str | None:
-    proc = run([*ruff_command(), "--version"], b"", root, 30.0)
-    return proc.stdout.decode().strip() if proc.returncode == 0 and proc.stdout else None
+def _first_line(proc: subprocess.CompletedProcess[bytes]) -> str | None:
+    lines = proc.stdout.decode("utf-8", "replace").strip().splitlines()
+    return lines[0] if proc.returncode == 0 and lines else None
+
+
+def observe_toolchain(root: Path, run: Runner) -> Toolchain:
+    """[LAW:effects-at-boundaries] each checker's identity, probed from `root`."""
+    ruff_argv = ruff_command(root)
+
+    def probe(*argv: str) -> str | None:
+        return _first_line(run(argv, b"", root, 30.0))
+
+    uv, python = probe("uv", "--version"), probe(*uv_prefix(root), "python", "--version")
+    return Toolchain(
+        root,
+        ruff_argv,
+        probe(*ruff_argv, "--version"),
+        probe("bash", "--version"),
+        None if uv is None or python is None else f"{uv}; {python}",
+    )
 
 
 def _subject_bytes(root: Path, scope: Scope, path: str) -> bytes:
@@ -767,23 +1203,19 @@ def publish_receipt(path: Path, record: dict[str, object]) -> None:
         raise OSError(f"{path}: readback differs from the published bytes")
 
 
-def _within(path: str, root: str) -> bool:
-    return root == "." or path == root or path.startswith(root.rstrip("/") + "/")
-
-
 def run_check(
     root: Path,
     trial: Trial,
     scope: Scope,
     check: Check,
-    dirty: Sequence[str],
+    cwd: Path,
     *,
     created_at: str,
     run: Runner,
     timeout: float,
 ) -> Outcome:
-    """One check: reuse an accepted identical result, otherwise run it on exactly the
-    manifest's inputs and publish a passed receipt for later reuse."""
+    """One check: reuse an accepted identical result, otherwise run it in `cwd`, which
+    holds exactly the scope's files, and publish a passed receipt for later reuse."""
     label = check.subject or " ".join(check.argv)
     request = CheckRequest(
         unit=trial.unit,
@@ -797,16 +1229,6 @@ def run_check(
         material_base=None,
         closure="declared",
     )
-    # [LAW:single-enforcer] a check reads every input except its stdin subject from the
-    # working tree; an unstaged or untracked path among them is not what is recorded.
-    reads = (*check.domains, *(path for path in check.explicit if path != check.subject))
-    stale = [path for path in dirty if any(_within(path, read) for read in reads)]
-    if stale:
-        return Outcome(
-            "held",
-            ("binding_stale",),
-            (f"{label}: reads unstaged or untracked {', '.join(stale)}; stage or remove them",),
-        )
     try:
         manifest = build_manifest(root, request)
     except (EvidenceError, subprocess.CalledProcessError) as exc:
@@ -825,7 +1247,7 @@ def run_check(
     # edit between observation and execution invalidates the binding.
     if entry is not None and hashlib.sha256(content).hexdigest() != entry.sha256:
         return Outcome("held", ("binding_stale",), (f"{label}: changed while being checked",))
-    proc = run(check.argv, content, root, timeout)
+    proc = run(check.argv, content, cwd, timeout)
     output = (proc.stdout + proc.stderr).decode("utf-8", "replace").strip()[-2000:]
     if proc.returncode == 1:
         return Outcome("failed", ("check_failed",), (f"{label}: {check.name}: {output}",))
@@ -836,7 +1258,7 @@ def run_check(
     record = check_receipt(
         manifest,
         record_id=stored.stem,
-        producer={"tool": "workflow_commit", "version": "2"},
+        producer={"tool": "workflow_commit", "version": "3"},
         created_at=created_at,
         result="passed",
         artifacts=[],
@@ -853,13 +1275,13 @@ def run_obligations(
     trial: Trial,
     scope: Scope,
     obligations: Sequence[Obligation],
-    dirty: Sequence[str],
+    cwd: Path,
     *,
     created_at: str,
     run: Runner,
     clock: Clock,
 ) -> Outcome:
-    """Every obligation in order within one time budget; a Gap holds."""
+    """Every obligation in order within one time budget, each run in `cwd`; a Gap holds."""
     deadline = clock() + COMMIT_BUDGET_SECONDS
     outcomes: list[Outcome] = []
     for obligation in obligations:
@@ -874,13 +1296,26 @@ def run_obligations(
                         trial,
                         scope,
                         check,
-                        dirty,
+                        cwd,
                         created_at=created_at,
                         run=run,
                         timeout=remaining,
                     )
                 )
     return combine(outcomes)
+
+
+def rebound(before: StagedScope, after: StagedScope) -> Outcome:
+    """[LAW:single-enforcer] the checks describe the index observed before them; a change
+    to it, or to which staged paths the worktree differs from, while they ran voids that
+    binding."""
+    if (after.index, after.divergent) == (before.index, before.divergent):
+        return PASSED
+    return Outcome(
+        "held",
+        ("binding_stale",),
+        ("the index or a staged path changed while the commit checks ran; commit again",),
+    )
 
 
 def commit_outcome(
@@ -891,7 +1326,8 @@ def commit_outcome(
     run: Runner = run_bounded,
     clock: Clock = time.monotonic,
 ) -> Outcome:
-    """The trial commit gate: the actual staged scope, then its proportionate checks."""
+    """The trial commit gate: the actual staged scope, its proportionate checks over a
+    snapshot of exactly that index, then the index observed again."""
     staged = observe_staged(root)
     if staged.divergent:
         return Outcome(
@@ -902,19 +1338,15 @@ def commit_outcome(
                 for path in staged.divergent
             ),
         )
-    obligations = commit_obligations(
-        staged.paths, staged.deleted, staged.tracked, trial.policy, ruff_version(root, run)
-    )
-    return run_obligations(
-        root,
-        trial,
-        Index(),
-        obligations,
-        staged.dirty,
-        created_at=created_at,
-        run=run,
-        clock=clock,
-    )
+    terms = (term for path in source_subjects(staged.paths) for term in subject_terms(path))
+    toolchain = observe_toolchain(root, run)
+    obligations = commit_obligations(staged, trial.policy, toolchain, observe_naming(root, terms))
+    with index_snapshot(root) as snapshot:
+        checked = run_obligations(
+            root, trial, Index(), obligations, snapshot,
+            created_at=created_at, run=run, clock=clock,
+        )  # fmt: skip
+    return combine([checked, rebound(staged, observe_staged(root))])
 
 
 def stop_outcome(
@@ -926,9 +1358,9 @@ def stop_outcome(
     clock: Clock = time.monotonic,
 ) -> Outcome:
     """Stop stays lint-only: Ruff over the changed working-tree subjects."""
-    obligations = ruff_obligations(changed_worktree_paths(root), ruff_version(root, run))
+    obligations = ruff_obligations(changed_worktree_paths(root), observe_toolchain(root, run))
     return run_obligations(
-        root, trial, WorkingTree(), obligations, (), created_at=created_at, run=run, clock=clock
+        root, trial, WorkingTree(), obligations, root, created_at=created_at, run=run, clock=clock
     )
 
 
@@ -951,6 +1383,14 @@ def route_commit(commit: CommitCommand, *, created_at: str, run: Runner, clock: 
             return PASSED
 
 
+def trial_dormant() -> bool:
+    """[LAW:effects-at-boundaries] True only while no worktree can select a non-legacy
+    profile: the policy reads and no activation receipt exists, so WP-02 selects `legacy`
+    for every unit."""
+    policy, activation = observe_policy(), read_activation()
+    return isinstance(policy, WorkflowPolicy) and isinstance(activation, ActivationAbsent)
+
+
 def command_outcome(
     command: str,
     cwd: Path,
@@ -961,14 +1401,14 @@ def command_outcome(
     clock: Clock = time.monotonic,
 ) -> Outcome:
     """The pre-commit gate for one Bash command: each commit it makes is routed by its
-    own repository; a command whose commit effect cannot be read holds trial work."""
-    commits = read_commits(command, cwd, aliases)
-    match commits:
+    own repository. A command whose commit effect cannot be read could record into any
+    worktree, so it holds unless none can select trial."""
+    match read_commits(command, cwd, aliases):
         case Unreadable(reason=reason):
-            if isinstance(profile_at(cwd), Legacy):
+            if trial_dormant():
                 return PASSED
             return Outcome("held", ("invalid_input",), (f"commit effect unreadable: {reason}",))
-        case _:
+        case commits:
             return combine(
                 [route_commit(c, created_at=created_at, run=run, clock=clock) for c in commits]
             )
