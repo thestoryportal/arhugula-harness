@@ -14,12 +14,24 @@ the current manifest has no refusals and every identity component matches; other
 each differing component is named. Reuse is identity/equivalence evidence with explicit
 limits, never a cached pass for different inputs or a semantic approval.
 
+WO-U19 / WP-14 (spec WS-12, WS-13) adds installed reuse on the same identities.
+`install_reuse` judges whether a current `InstalledCandidate` may reuse an accepted
+build/install (`valid`, `impact_review_required`, `invalid` or `unknown`); a later head
+reuses it only through an equivalence over the installed inputs. `bind_acceptance` admits
+only a passed installed run of the final candidate, or of an accepted candidate carried to
+it by a valid reuse. `accepted_build_install` reads the native accepted build evidence
+without rewriting it; `observe_install` re-reads an existing install by hashing files.
+A `ScenarioContract` must be complete before `admit_scenario` lets it start, and
+`judge_scenario` passes only the specific expected outcome.
+
 Nothing here runs a checker, publishes a receipt or changes a gate; it is inactive until
 the coherent adoption (WP-17) wires it into the guard.
 """
 
 from __future__ import annotations
 
+import base64
+import csv
 import hashlib
 import json
 import os
@@ -27,11 +39,11 @@ import posixpath
 import re
 import stat
 import subprocess
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
-from typing import Literal, cast
+from typing import Literal, NamedTuple, cast
 
 from tools.workflow_policy import WorkflowPolicy, canonical_digest
 
@@ -642,14 +654,26 @@ def parse_manifest(value: object) -> InputManifest:
     )
 
 
-def _reference(value: object, field: str) -> None:
+@dataclass(frozen=True)
+class Reference:
+    """An immutable artifact reference (WS-08 §10.1)."""
+
+    uri: str
+    sha256: str
+    bytes: int
+
+
+def _reference(value: object, field: str) -> Reference:
     doc = _object(value, field)
     _exact_keys(doc, ("uri", "sha256", "bytes"), field)
-    _text(doc["uri"], field + ".uri")
-    _matching(doc["sha256"], _SHA256, field + ".sha256")
     size = doc["bytes"]
     if type(size) is not int or size < 0:
         raise EvidenceError(field + ".bytes", "must be a nonnegative integer")
+    return Reference(
+        _text(doc["uri"], field + ".uri"),
+        _matching(doc["sha256"], _SHA256, field + ".sha256"),
+        size,
+    )
 
 
 @dataclass(frozen=True)
@@ -865,31 +889,44 @@ class ReuseDecision:
     equivalence: str | None
 
 
+def _incomplete(prior: InputManifest, current: InputManifest) -> list[str]:
+    """What neither manifest could identify: refusals make any comparison unknown."""
+    return [refusal.code for refusal in current.refusals] + (
+        ["prior_incomplete"] if prior.refusals else []
+    )
+
+
+def _changed(prior: InputManifest, current: InputManifest) -> list[str]:
+    then, now = prior.identity(), current.identity()
+    # [LAW:dataflow-not-control-flow] every identity component is compared the same way.
+    return [f"{name}_changed" for name in now if then[name] != now[name]]
+
+
 def _differences(prior: CheckReceipt, current: InputManifest) -> list[str]:
-    then, now = prior.manifest.identity(), current.identity()
     return (
-        [refusal.code for refusal in current.refusals]
-        + (["prior_incomplete"] if prior.manifest.refusals else [])
+        _incomplete(prior.manifest, current)
         + (["prior_not_passed"] if prior.result != "passed" else [])
-        # [LAW:dataflow-not-control-flow] every identity component is compared the same way.
-        + [f"{name}_changed" for name in now if then[name] != now[name]]
+        + _changed(prior.manifest, current)
     )
 
 
 def _equivalence_gap(
-    prior: CheckReceipt, current: InputManifest, equivalence: EquivalenceReceipt | None
+    prior_record: str,
+    prior: InputManifest,
+    current: InputManifest,
+    equivalence: EquivalenceReceipt | None,
 ) -> list[str]:
     """WS-08 §10.1: reuse across heads needs a published equivalence binding exactly this
     prior record and this current manifest's full identity; any inconsistency refuses."""
     if equivalence is None:
-        return [] if prior.manifest.head == current.head else ["equivalence_required"]
+        return [] if prior.head == current.head else ["equivalence_required"]
     bound = (
         equivalence.prior_record,
         equivalence.prior_head,
         equivalence.identity,
         equivalence.key,
     )
-    expected = (prior.record_id, prior.manifest.head, _manifest_identity(current), current.key)
+    expected = (prior_record, prior.head, _manifest_identity(current), current.key)
     return [] if bound == expected else ["equivalence_mismatch"]
 
 
@@ -902,7 +939,10 @@ def reuse_result(
     if isinstance(prior, ReceiptDefect):
         return ReuseDecision(False, ("prior_unreadable",), None, current.key, None)
     reasons = tuple(
-        dict.fromkeys(_differences(prior, current) + _equivalence_gap(prior, current, equivalence))
+        dict.fromkeys(
+            _differences(prior, current)
+            + _equivalence_gap(prior.record_id, prior.manifest, current, equivalence)
+        )
     )
     return ReuseDecision(
         not reasons,
@@ -911,3 +951,740 @@ def reuse_result(
         current.key,
         None if equivalence is None else equivalence.record_id,
     )
+
+
+# --- installed candidates (WS-12) --------------------------------------------------------
+
+InstallDisposition = Literal["valid", "impact_review_required", "invalid", "unknown"]
+# Worst first: a proven artifact difference outranks uncertainty, which outranks an input
+# change that a documented impact review may still clear. Only `valid` permits reuse.
+_DISPOSITIONS: tuple[InstallDisposition, ...] = (
+    "invalid",
+    "unknown",
+    "impact_review_required",
+    "valid",
+)
+
+Facts = Mapping[str, str | None]
+Graded = list[tuple[InstallDisposition, str]]
+
+
+class _Shape(NamedTuple):
+    """How one fact reads when it verifies the install, and when it observes a defect.
+    A family fact (`member` set) is every key `<name><member>`: at least one, each named."""
+
+    verified: re.Pattern[str]
+    failed: re.Pattern[str] = re.compile(r"(?!)")  # most facts have no defect form
+    member: re.Pattern[str] | None = None
+
+
+# A distribution file's basename or an installed package's name - never empty or a path.
+_MEMBER = re.compile(r"[A-Za-z0-9][\w.+-]*")
+
+# [LAW:one-source-of-truth] WS-12's mandatory observations of every installed candidate.
+# Only the verified shape completes a fact; an observed defect (failed origin check, RECORD
+# difference, editable install) is invalid, and blank or free text is not an observation.
+_ABSOLUTE = _Shape(re.compile(r"/\S.*"))
+_TOKEN = _Shape(re.compile(r"\S+"))
+_REQUIRED_FACTS: Mapping[str, Mapping[str, _Shape]] = MappingProxyType(
+    {
+        "artifact": {
+            "distribution:": _Shape(_SHA256, member=_MEMBER),
+            "installed:": _Shape(
+                re.compile(r"version=\S+; editable=false; record=[1-9]\d* verified"),
+                re.compile(
+                    r"version=\S+; editable=(true; record=\d+ verified(, [1-9]\d* differ)?"
+                    r"|false; record=\d+ verified, [1-9]\d* differ)"
+                ),
+                _MEMBER,
+            ),
+            "site_packages": _Shape(re.compile(r"/\S.*/site-packages")),
+            "origins": _Shape(
+                re.compile(r"[1-9]\d* harness modules in site-packages"),
+                re.compile(r"origin check failed: \d+ failures"),
+            ),
+        },
+        "environment": {
+            "python": _ABSOLUTE,
+            "os": _TOKEN,
+            "kernel": _TOKEN,
+            "architecture": _TOKEN,
+            # A pin is the digest of the accepted resource-pin record, never a description.
+            "resources": _Shape(re.compile(r"sha256:[0-9a-f]{64}")),
+        },
+    }
+)
+_GAP_GRADES: Mapping[str, InstallDisposition] = MappingProxyType(
+    {"failed": "invalid", "unknown": "unknown"}
+)
+
+
+def _state(value: str | None, shape: _Shape) -> str:
+    if value is not None and shape.verified.fullmatch(value):
+        return "verified"
+    return "failed" if value is not None and shape.failed.fullmatch(value) else "unknown"
+
+
+def _states(facts: Facts, name: str, shape: _Shape) -> set[str]:
+    if shape.member is None:
+        return {_state(facts.get(name), shape)}
+    # [LAW:parse-dont-validate] an unnamed member identifies nothing, whatever its value.
+    members = [key.removeprefix(name) for key in facts if key.startswith(name)]
+    return {
+        _state(facts[name + member], shape) if shape.member.fullmatch(member) else "unknown"
+        for member in members
+    } or {"unknown"}
+
+
+def _fact_gaps(candidate: InstalledCandidate) -> Graded:
+    facts = {"artifact": candidate.artifact, "environment": candidate.environment}
+    return [
+        (grade, f"{group}.{name.rstrip(':')}_{state}")
+        for group, shapes in _REQUIRED_FACTS.items()
+        for name, shape in shapes.items()
+        for state, grade in _GAP_GRADES.items()
+        if state in _states(facts[group], name, shape)
+    ]
+
+
+def candidate_gaps(candidate: InstalledCandidate) -> tuple[str, ...]:
+    """[LAW:single-enforcer] every mandatory observation `candidate` lacks; empty means it
+    is completely identified and may be reused, admitted or accepted."""
+    return tuple(f"source.{refusal.code}" for refusal in candidate.source.refusals) + tuple(
+        code for _, code in _fact_gaps(candidate)
+    )
+
+
+@dataclass(frozen=True)
+class InstalledCandidate:
+    """One installed environment (WS-12): the installed code/contract/config/lock inputs it
+    was built from, its artifact facts (distribution hashes, per-package version, editable
+    status and RECORD verification, install path, import origins) and toolchain pins.
+    A `None` fact was not observed: it is never equal to anything, including `None`."""
+
+    source: InputManifest
+    artifact: Facts
+    environment: Facts
+
+    def to_json(self) -> dict[str, object]:
+        return {
+            "head": self.source.head,
+            "source": self.source.key,
+            "artifact": dict(sorted(self.artifact.items())),
+            "environment": dict(sorted(self.environment.items())),
+        }
+
+    @property
+    def key(self) -> str:
+        # The head is part of the candidate: a later revision with unchanged installed bytes
+        # is still a different candidate, and only an equivalence carries results across.
+        return canonical_digest(self.to_json())
+
+
+@dataclass(frozen=True)
+class AcceptedInstall:
+    """A build/install some record accepted, and the candidate it describes."""
+
+    record_id: str
+    candidate: InstalledCandidate
+
+
+@dataclass(frozen=True)
+class InstallReuse:
+    """Whether `current` may reuse an accepted install; reasons name every component."""
+
+    disposition: InstallDisposition
+    reasons: tuple[str, ...]
+    accepted_record: str
+    accepted_key: str
+    current_key: str
+    equivalence: str | None
+
+
+def _graded(grade: InstallDisposition, codes: Iterable[str]) -> Graded:
+    return [(grade, code) for code in codes]
+
+
+def _fact_reasons(group: str, then: Facts, now: Facts, changed: InstallDisposition) -> Graded:
+    graded: Graded = []
+    for name in _utf8_order(tuple(set(then) | set(now))):
+        before, after = then.get(name), now.get(name)
+        if before is None or after is None:
+            graded.append(("unknown", f"{group}.{name}_unknown"))
+        elif before != after:
+            graded.append((changed, f"{group}.{name}_changed"))
+    return graded
+
+
+def install_reuse(
+    accepted: AcceptedInstall,
+    current: InstalledCandidate,
+    equivalence: EquivalenceReceipt | None = None,
+) -> InstallReuse:
+    """Pure WS-12 disposition: changed installed inputs or toolchain pins need an impact
+    review, a changed artifact is a different install, anything unobserved is unknown, and
+    a later head reuses only through an equivalence bound to this accepted record."""
+    then = accepted.candidate
+    graded: Graded = (
+        _graded("unknown", (f"source.{code}" for code in _incomplete(then.source, current.source)))
+        + _graded(
+            "impact_review_required",
+            (
+                f"source.{code}"
+                for code in _changed(then.source, current.source)
+                + _equivalence_gap(accepted.record_id, then.source, current.source, equivalence)
+            ),
+        )
+        + _fact_reasons("artifact", then.artifact, current.artifact, "invalid")
+        + _fact_reasons(
+            "environment", then.environment, current.environment, "impact_review_required"
+        )
+        + _fact_gaps(then)
+        + _fact_gaps(current)
+    )
+    worst = min((_DISPOSITIONS.index(grade) for grade, _ in graded), default=len(_DISPOSITIONS) - 1)
+    return InstallReuse(
+        disposition=_DISPOSITIONS[worst],
+        reasons=tuple(dict.fromkeys(code for _, code in graded)),
+        accepted_record=accepted.record_id,
+        accepted_key=then.key,
+        current_key=current.key,
+        equivalence=None if equivalence is None else equivalence.record_id,
+    )
+
+
+def install_equivalence_record(
+    accepted: AcceptedInstall,
+    current: InstalledCandidate,
+    *,
+    record_id: str,
+    producer: Mapping[str, str],
+    created_at: str,
+) -> dict[str, object]:
+    """Pure: the WS-08 equivalence record proving `current` has the accepted installed
+    inputs; refuses any difference. Only installed inputs are compared, so it proves a
+    gate-only revision, never a rebuilt or changed artifact."""
+    prior = CheckReceipt(accepted.record_id, "passed", accepted.candidate.source)
+    return equivalence_record(
+        prior, current.source, record_id=record_id, producer=producer, created_at=created_at
+    )
+
+
+# --- installed acceptance ----------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class InstalledRun:
+    """A scenario result produced by executing one installed candidate, named by key."""
+
+    record_id: str
+    scenario: str
+    candidate_key: str
+    result: RecordResult
+
+
+Proof = CheckReceipt | AcceptedInstall | InstalledRun
+
+
+@dataclass(frozen=True)
+class AcceptanceBinding:
+    """Whether a proof stands as installed acceptance of `final_key` at `final_head`; a
+    carried result names its run's own candidate and the equivalence that carried it."""
+
+    accepted: bool
+    reasons: tuple[str, ...]
+    final_key: str
+    final_head: str
+    run: str | None
+    run_candidate: str | None
+    equivalence: str | None
+
+
+def _carry_gap(
+    run: InstalledRun, final: InstalledCandidate, carried: InstallReuse | None
+) -> list[str]:
+    if run.candidate_key == final.key:
+        return []
+    if carried is None or (carried.accepted_key, carried.current_key) != (
+        run.candidate_key,
+        final.key,
+    ):
+        return ["candidate_mismatch"]
+    return [] if carried.disposition == "valid" else [f"reuse_{carried.disposition}"]
+
+
+def bind_acceptance(
+    proof: Proof, final: InstalledCandidate, carried: InstallReuse | None = None
+) -> AcceptanceBinding:
+    """WS-12: only a passed installed run of a completely observed final candidate - or of
+    an accepted candidate carried to it by a valid reuse - is installed acceptance. Source
+    checks and build/install proof never are."""
+    match proof:
+        case CheckReceipt():
+            reasons, run = ["source_proof_is_not_installed_acceptance"], None
+        case AcceptedInstall():
+            reasons, run = ["build_proof_is_not_installed_acceptance"], None
+        case InstalledRun():
+            not_passed = [] if proof.result == "passed" else ["run_not_passed"]
+            reasons, run = not_passed + _carry_gap(proof, final, carried), proof
+    reasons += [f"final.{gap}" for gap in candidate_gaps(final)]
+    carried_by = (
+        carried.equivalence
+        if run is not None and carried is not None and run.candidate_key == carried.accepted_key
+        else None
+    )
+    return AcceptanceBinding(
+        accepted=not reasons,
+        reasons=tuple(reasons),
+        final_key=final.key,
+        final_head=final.source.head,
+        run=None if run is None else run.record_id,
+        run_candidate=None if run is None else run.candidate_key,
+        equivalence=carried_by,
+    )
+
+
+# --- native install evidence: the only effects in this section ---------------------------
+
+
+# The native acceptance's own status for accepted build/install evidence; nothing else is.
+_ACCEPTED_BUILD = "BUILD_INSTALL_EVIDENCE_ACCEPTED_ONLY"
+
+
+def _package(name: str) -> str:
+    """Distribution name in its installed (dist-info) spelling."""
+    return name.replace("-", "_")
+
+
+def _installed_fact(version: str, editable: bool, verified: int, differing: int) -> str:
+    record = f"{verified} verified" + (f", {differing} differ" if differing else "")
+    return f"version={version}; editable={str(editable).lower()}; record={record}"
+
+
+def accepted_build_install(
+    acceptance: bytes, execution_result: bytes, source: InputManifest
+) -> AcceptedInstall:
+    """Adapter for the native accepted build (`build-evidence-acceptance.json` and the
+    `execution-result.json` it pins): read in their own schema, never rewritten. Raises
+    `EvidenceError` when the pair is inconsistent or names another source head."""
+    accepted = _decode(acceptance)
+    if _text(accepted.get("status"), "acceptance.status") != _ACCEPTED_BUILD:
+        raise EvidenceError("acceptance.status", "is not an accepted build/install")
+    pinned = _object(accepted.get("result"), "acceptance.result")
+    _exact_keys(pinned, ("path", "sha256", "bytes"), "acceptance.result")
+    if (pinned["sha256"], pinned["bytes"]) != (_sha256(execution_result), len(execution_result)):
+        raise EvidenceError("acceptance.result", "does not pin these execution-result bytes")
+    result = _decode(execution_result)
+    verified = _object(
+        result.get("inputs_verified_before"), "execution_result.inputs_verified_before"
+    )
+    main = _GIT_OID.match(_text(verified.get("main"), "inputs_verified_before.main"))
+    if main is None or main.group() != source.head:
+        raise EvidenceError(
+            "inputs_verified_before.main", f"does not name source head {source.head}"
+        )
+    installed = _object(result.get("installed"), "execution_result.installed")
+    pins = _object(
+        _object(result.get("artifacts"), "artifacts").get("dist_sha256_file"), "dist_sha256_file"
+    )
+    distributions: dict[str, str | None] = {}
+    for line in _strings(pins.get("content"), "dist_sha256_file.content"):
+        digest, name = line.split("  ", 1)
+        distributions[f"distribution:{name}"] = _matching(
+            digest, _SHA256, f"dist_sha256_file[{name}]"
+        )
+    packages = {
+        f"installed:{_package(name)}": _installed_fact(
+            _text(dist.get("version"), f"dists.{name}.version"),
+            _object(dist, f"dists.{name}").get("direct_url") is not None,
+            _int(dist.get("record_files_verified"), f"dists.{name}.record_files_verified"),
+            0,
+        )
+        for name, dist in (
+            (name, _object(value, f"dists.{name}"))
+            for name, value in _object(installed.get("dists"), "installed.dists").items()
+        )
+    }
+    origin_failures = _array(installed.get("v1_failures"), "installed.v1_failures")
+    loaded = _int(installed.get("harness_modules_loaded"), "installed.harness_modules_loaded")
+    origins = (
+        f"{loaded} harness modules in site-packages"
+        if installed.get("all_modules_in_site") is True and not origin_failures
+        else f"origin check failed: {len(origin_failures)} failures"
+    )
+    candidate = InstalledCandidate(
+        source=source,
+        artifact=MappingProxyType(
+            distributions
+            | packages
+            | {
+                "site_packages": _text(installed.get("site_packages"), "installed.site_packages"),
+                "origins": origins,
+            }
+        ),
+        environment=MappingProxyType(
+            {"python": _text(installed.get("python_realpath"), "installed.python_realpath")}
+        ),
+    )
+    return AcceptedInstall(record_id=f"sha256:{_sha256(acceptance)}", candidate=candidate)
+
+
+def _record_check(site: Path, record: Path) -> tuple[int, int]:
+    """(verified, differing) RECORD entries; a missing or changed file differs."""
+    verified = differing = 0
+    for path, digest, _ in csv.reader(record.read_text(encoding="utf-8").splitlines()):
+        if not digest:
+            continue  # RECORD lists itself and bytecode without hashes.
+        target = site / path
+        actual = (
+            "sha256="
+            + base64.urlsafe_b64encode(hashlib.sha256(target.read_bytes()).digest())
+            .rstrip(b"=")
+            .decode()
+            if target.is_file()
+            else None
+        )
+        verified, differing = (
+            (verified + 1, differing) if actual == digest else (verified, differing + 1)
+        )
+    return verified, differing
+
+
+def _metadata_version(info: Path) -> str | None:
+    lines = (info / "METADATA").read_text(encoding="utf-8").splitlines()
+    return next((line.split(": ", 1)[1] for line in lines if line.startswith("Version: ")), None)
+
+
+def _installed(site: Path, package: str) -> str | None:
+    """One package's installed fact, or `None` when it is absent, ambiguous or unversioned."""
+    infos = sorted(site.glob(f"{package}-*.dist-info"))
+    version = _metadata_version(infos[0]) if len(infos) == 1 else None
+    if version is None:
+        return None
+    verified, differing = _record_check(site, infos[0] / "RECORD")
+    return _installed_fact(version, (infos[0] / "direct_url.json").exists(), verified, differing)
+
+
+def observe_install(
+    exec_root: Path, packages: tuple[str, ...], *, origins: str | None, resources: str | None
+) -> tuple[Facts, Facts]:
+    """[LAW:effects-at-boundaries] read an existing install's artifact, toolchain and host
+    facts by hashing files and asking the kernel; it never runs the installed interpreter.
+    `origins` and `resources` come from an installed origin check's receipt and the accepted
+    resource pins, or `None` while not observed."""
+    site = next(iter(sorted((exec_root / "venv" / "lib").glob("python3.*/site-packages"))), None)
+    distributions: dict[str, str | None] = {
+        f"distribution:{path.name}": _sha256(path.read_bytes())
+        for path in sorted((exec_root / "dist").iterdir())
+        if path.is_file()
+    }
+    installed: dict[str, str | None] = {
+        f"installed:{package}": None if site is None else _installed(site, package)
+        for package in packages
+    }
+    python = exec_root / "venv" / "bin" / "python"
+    artifact = (
+        distributions
+        | installed
+        | {
+            "site_packages": None if site is None else str(site),
+            "origins": origins,
+        }
+    )
+    host = os.uname()
+    environment = {
+        "python": os.path.realpath(python) if python.exists() else None,
+        "os": host.sysname,
+        "kernel": host.release,
+        "architecture": host.machine,
+        "resources": resources,
+    }
+    return MappingProxyType(artifact), MappingProxyType(environment)
+
+
+# --- scenario contracts (WS-13) ----------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Behaves:
+    """The scenario is expected to meet its accepted criteria."""
+
+
+@dataclass(frozen=True)
+class Refuses:
+    """The scenario is expected to be refused with exactly this code."""
+
+    code: str
+
+
+@dataclass(frozen=True)
+class Fails:
+    """The product is expected to fail in one specified way, named by this code; a bare
+    nonzero exit or an infrastructure failure never proves it."""
+
+    code: str
+
+
+Expected = Behaves | Refuses | Fails
+
+
+@dataclass(frozen=True)
+class Threshold:
+    value: str
+    source: Reference
+
+
+@dataclass(frozen=True)
+class Resource:
+    """Who owns one process, container, service or durable state, and how it is reclaimed."""
+
+    owner: str
+    reclaim: str
+
+
+@dataclass(frozen=True)
+class ScenarioContract:
+    """Everything WS-13 §15.2 requires before a scenario may start: its identity, version
+    and acceptance IDs; the exact candidate and run; literal argv, cwd and environment
+    allowlist; the prerequisites it requires; its accepted workload, outcome, thresholds and
+    timeout with their sources; the owner and reclamation of every resource it touches; its
+    author and separate witness; where evidence goes; and what the start, pre- and
+    post-cleanup observations record."""
+
+    scenario: str
+    version: str
+    acceptance: tuple[str, ...]
+    candidate: str
+    run: str
+    argv: tuple[str, ...]
+    cwd: str
+    environment: Mapping[str, str]
+    requires: tuple[str, ...]
+    workload: Reference
+    expected: Expected
+    thresholds: Mapping[str, Threshold]
+    timeout: Threshold
+    resources: Mapping[str, Resource]
+    author: str
+    witness: str
+    evidence: str
+    start: str
+    precleanup: str
+    postcleanup: str
+
+
+_CONTRACT_FIELDS = (
+    "schema_version",
+    "scenario",
+    "version",
+    "acceptance",
+    "candidate",
+    "run",
+    "argv",
+    "cwd",
+    "environment",
+    "requires",
+    "workload",
+    "expected",
+    "thresholds",
+    "timeout",
+    "resources",
+    "attribution",
+    "evidence",
+    "observations",
+)
+
+
+def _expected(value: object) -> Expected:
+    doc = _object(value, "expected")
+    match doc.get("outcome"):
+        case "behaves":
+            _exact_keys(doc, ("outcome",), "expected")
+            return Behaves()
+        case "refuses":
+            _exact_keys(doc, ("outcome", "code"), "expected")
+            return Refuses(_text(doc["code"], "expected.code"))
+        case "fails":
+            _exact_keys(doc, ("outcome", "code"), "expected")
+            return Fails(_text(doc["code"], "expected.code"))
+        case other:
+            raise EvidenceError(
+                "expected.outcome", f"must be behaves, refuses or fails, not {other!r}"
+            )
+
+
+def _threshold(value: object, field: str) -> Threshold:
+    doc = _object(value, field)
+    _exact_keys(doc, ("value", "source"), field)
+    return Threshold(
+        _text(doc["value"], f"{field}.value"), _reference(doc["source"], f"{field}.source")
+    )
+
+
+def _resource(value: object, field: str) -> Resource:
+    doc = _object(value, field)
+    _exact_keys(doc, ("owner", "reclaim"), field)
+    return Resource(
+        _text(doc["owner"], f"{field}.owner"), _text(doc["reclaim"], f"{field}.reclaim")
+    )
+
+
+def _nonempty[T](items: T, field: str) -> T:
+    if not items:
+        raise EvidenceError(field, "must not be empty")
+    return items
+
+
+def _absolute(value: object, field: str) -> str:
+    path = _text(value, field)
+    if not Path(path).is_absolute():
+        raise EvidenceError(field, "must be an absolute path")
+    return path
+
+
+def parse_scenario_contract(raw: bytes) -> ScenarioContract:
+    """The single checkpoint a scenario passes before it may start: any missing or empty
+    §15.2 obligation raises `EvidenceError` naming it."""
+    doc = _decode(raw)
+    _exact_keys(doc, _CONTRACT_FIELDS, "contract")
+    if doc["schema_version"] != SCHEMA_VERSION or type(doc["schema_version"]) is not int:
+        raise EvidenceError("schema_version", f"must be {SCHEMA_VERSION}")
+    expected = _expected(doc["expected"])
+    thresholds = {
+        name: _threshold(value, f"thresholds.{name}")
+        for name, value in _object(doc["thresholds"], "thresholds").items()
+    }
+    # A refusal or failure is judged by its code; meeting criteria needs a threshold.
+    if isinstance(expected, Behaves):
+        _nonempty(thresholds, "thresholds")
+    attribution = _object(doc["attribution"], "attribution")
+    _exact_keys(attribution, ("author", "witness"), "attribution")
+    author = _text(attribution["author"], "attribution.author")
+    witness = _text(attribution["witness"], "attribution.witness")
+    if witness == author:
+        raise EvidenceError("attribution.witness", "must be independent of the author")
+    observations = _object(doc["observations"], "observations")
+    _exact_keys(observations, ("start", "precleanup", "postcleanup"), "observations")
+    resources = _nonempty(_object(doc["resources"], "resources"), "resources")
+    return ScenarioContract(
+        scenario=_text(doc["scenario"], "scenario"),
+        version=_text(doc["version"], "version"),
+        acceptance=_nonempty(_strings(doc["acceptance"], "acceptance"), "acceptance"),
+        candidate=_matching(doc["candidate"], _SHA256, "candidate"),
+        run=_text(doc["run"], "run"),
+        argv=_nonempty(_strings(doc["argv"], "argv"), "argv"),
+        cwd=_absolute(doc["cwd"], "cwd"),
+        environment=MappingProxyType(
+            {
+                k: _text(v, f"environment.{k}")
+                for k, v in _object(doc["environment"], "environment").items()
+            }
+        ),
+        requires=_nonempty(_strings(doc["requires"], "requires"), "requires"),
+        workload=_reference(doc["workload"], "workload"),
+        expected=expected,
+        thresholds=MappingProxyType(thresholds),
+        timeout=_threshold(doc["timeout"], "timeout"),
+        resources=MappingProxyType(
+            {k: _resource(v, f"resources.{k}") for k, v in resources.items()}
+        ),
+        author=author,
+        witness=witness,
+        evidence=_text(doc["evidence"], "evidence"),
+        start=_text(observations["start"], "observations.start"),
+        precleanup=_text(observations["precleanup"], "observations.precleanup"),
+        postcleanup=_text(observations["postcleanup"], "observations.postcleanup"),
+    )
+
+
+# WS-13 §15.1 prerequisite register states; only `ready` lets a dependent scenario start.
+PrerequisiteState = Literal["ready", "missing", "denied", "unknown"]
+
+
+@dataclass(frozen=True)
+class AcceptedScenario:
+    """The original accepted obligations a scenario contract must copy unchanged."""
+
+    workload: Reference
+    thresholds: Mapping[str, Threshold]
+    timeout: Threshold
+
+
+def admit_scenario(
+    contract: ScenarioContract,
+    candidate: InstalledCandidate,
+    accepted: AcceptedScenario,
+    prerequisites: Mapping[str, PrerequisiteState],
+) -> tuple[str, ...]:
+    """Why `contract` may not start against `candidate`; empty means admitted. Every
+    required prerequisite must be registered `ready`, and the accepted workload, timeout and
+    thresholds are the original obligations: none may be dropped, added or changed, so a
+    shortened soak or relaxed bound refuses."""
+    return (
+        (() if contract.candidate == candidate.key else ("candidate_mismatch",))
+        + tuple(f"candidate.{gap}" for gap in candidate_gaps(candidate))
+        + tuple(
+            f"prerequisite.{name}_{prerequisites.get(name, 'unknown')}"
+            for name in contract.requires
+            if prerequisites.get(name) != "ready"
+        )
+        + (() if contract.workload == accepted.workload else ("workload_differs",))
+        + (() if contract.timeout == accepted.timeout else ("timeout_differs",))
+        + tuple(
+            f"threshold.{name}_differs"
+            for name in _utf8_order(tuple(set(accepted.thresholds) | set(contract.thresholds)))
+            if contract.thresholds.get(name) != accepted.thresholds.get(name)
+        )
+    )
+
+
+@dataclass(frozen=True)
+class Behaved:
+    """The run met its criteria, as judged by the scenario's own witness."""
+
+
+@dataclass(frozen=True)
+class Refused:
+    code: str
+
+
+@dataclass(frozen=True)
+class Failed:
+    """The product failed, and its structured result names how."""
+
+    code: str
+
+
+@dataclass(frozen=True)
+class InfrastructureFailed:
+    """The run could not exercise the product; it says nothing about product behavior."""
+
+    detail: str
+
+
+Outcome = Behaved | Refused | Failed | InfrastructureFailed
+
+
+@dataclass(frozen=True)
+class ScenarioObservation:
+    outcome: Outcome
+    precleanup: Reference
+    postcleanup: Reference | None
+
+
+def judge_scenario(expected: Expected, observation: ScenarioObservation) -> RecordResult:
+    """Pass only the specific expected outcome: an expected refusal or product failure
+    passes only with its own code. Infrastructure failure is an error, never product
+    behavior; a missing post-cleanup observation holds a pass but cannot hide a failure."""
+    match observation.outcome, expected:
+        case InfrastructureFailed(), _:
+            return "error"
+        case Behaved(), Behaves():
+            pass
+        case Refused(code=got), Refuses(code=want) if got == want:
+            pass
+        case Failed(code=got), Fails(code=want) if got == want:
+            pass
+        case _:
+            return "failed"
+    return "held" if observation.postcleanup is None else "passed"

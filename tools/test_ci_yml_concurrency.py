@@ -17,15 +17,15 @@ _CI_YML = Path(__file__).resolve().parent.parent / ".github" / "workflows" / "ci
 def test_main_push_concurrency_keyed_by_sha() -> None:
     ci = yaml.safe_load(_CI_YML.read_text())
     group = ci["concurrency"]["group"]
-    assert "github.ref == 'refs/heads/main' && github.sha || github.ref" in group
-    assert ci["concurrency"]["cancel-in-progress"] is True
+    # push only fires for main; WO-U10 groups PR runs by PR number (see
+    # test_ci_result_binding.py routing lens for the evaluated behavior).
+    assert "github.event_name == 'push' && github.sha ||" in group
+    assert ci["concurrency"]["cancel-in-progress"] == "${{ github.event_name != 'push' }}"
 
 
 def test_group_prefix_unchanged() -> None:
-    # PR-event semantics unchanged: the group still namespaces by workflow, and
-    # non-main refs still fall through to `github.ref` (the `|| github.ref` arm
-    # asserted above), so a fast push series on a PR branch keeps cancelling
-    # its superseded runs.
+    # The group still namespaces by workflow; a PR's superseded runs share its
+    # PR-number group and keep cancelling (WO-U10).
     ci = yaml.safe_load(_CI_YML.read_text())
     group = ci["concurrency"]["group"]
     assert group.startswith("ci-${{ github.workflow }}-")

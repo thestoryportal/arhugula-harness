@@ -2,12 +2,12 @@
 """C-HE-08 §2–§5: server-side X9 fence for `main` as recipes — show / apply / rollback /
 verify / tiebreaker.
 
-The required-status-context list is RE-DERIVED from .github/workflows/ci.yml at run time
-(job `name:` values ending "— blocking", workflow "CI"), so the payload never drifts from
-the workflow. `apply` is operator-gated (one AskUserQuestion with the printed diff) and
-refuses to run in loop mode (the permission guard denies `gh api -X` there anyway); a
-confirmed apply is PROVISIONAL — the §4 tiebreaker runs immediately and a FAIL rolls the
-protection back to the pre-change state.
+The required-status-context list is RE-DERIVED at run time from the PR-gate workflows
+(job `name:` values ending "— blocking" in ci.yml and pr-metadata.yml), so the payload
+never drifts from the workflows. `apply` is operator-gated (one AskUserQuestion with the
+printed diff) and refuses to run in loop mode (the permission guard denies `gh api -X`
+there anyway); a confirmed apply is PROVISIONAL — the §4 tiebreaker runs immediately and a
+FAIL rolls the protection back to the pre-change state.
 """
 
 from __future__ import annotations
@@ -24,7 +24,12 @@ from pathlib import Path
 import yaml
 
 REPO = Path(__file__).resolve().parent.parent
-CI_YML = REPO / ".github" / "workflows" / "ci.yml"
+WORKFLOWS = REPO / ".github" / "workflows"
+#: The workflows whose `— blocking` jobs are required PR contexts: code verification and
+#: the WO-U10 title-dependent metadata gate (which runs under its own check name).
+REQUIRED_WORKFLOWS = (WORKFLOWS / "ci.yml", WORKFLOWS / "pr-metadata.yml")
+#: GitHub's default `pull_request` activity types — the events that put a new head on a PR.
+_PR_HEAD_EVENTS = frozenset({"opened", "synchronize", "reopened"})
 EVIDENCE_LOG = REPO / ".harness" / "plan" / "evidence-log-he-loop-lanes.md"
 REQUIRED: dict[str, object] = {
     "required_pull_request_reviews": None,
@@ -35,14 +40,63 @@ REQUIRED: dict[str, object] = {
 }
 
 
-def blocking_contexts(ci_yml: Path = CI_YML) -> list[str]:
-    ci = yaml.safe_load(ci_yml.read_text())
-    assert ci.get("name") == "CI", "workflow name must be CI (status contexts are keyed by it)"
-    return sorted(
-        j["name"]
-        for j in ci["jobs"].values()
-        if isinstance(j.get("name"), str) and j["name"].endswith("— blocking")
-    )
+class RequiredWorkflowError(ValueError):
+    """A required workflow cannot report its contexts on every PR head."""
+
+
+def _pr_actions(workflow: dict) -> frozenset[str]:
+    on = workflow.get("on", workflow.get(True))  # PyYAML reads the bare `on` key as True
+    events = on if isinstance(on, dict) else dict.fromkeys([on] if isinstance(on, str) else on)
+    if "pull_request" not in events:
+        return frozenset()
+    types = (events["pull_request"] or {}).get("types")
+    return _PR_HEAD_EVENTS if types is None else frozenset(types)
+
+
+def blocking_contexts(workflows: tuple[Path, ...] = REQUIRED_WORKFLOWS) -> list[str]:
+    names: list[str] = []
+    for path in workflows:
+        wf = yaml.safe_load(path.read_text())
+        # [LAW:parse-dont-validate] strict protection waits on every required context for
+        # each new head; a gate that does not run on every head event would block all merges.
+        missing = _PR_HEAD_EVENTS - _pr_actions(wf)
+        if missing:
+            raise RequiredWorkflowError(
+                f"{path.name} declares required contexts but does not run on pull_request "
+                f"{sorted(missing)}"
+            )
+        names += [
+            j["name"]
+            for j in wf["jobs"].values()
+            if isinstance(j.get("name"), str) and j["name"].endswith("— blocking")
+        ]
+    return sorted(names)
+
+
+def _unlanded_workflows(
+    repo: Path = REPO, workflows: tuple[Path, ...] = REQUIRED_WORKFLOWS
+) -> list[str]:
+    """Required workflows whose checkout copy is not what origin/main runs. The tiebreaker's
+    scratch PR runs main's own workflows, so the fence may only require contexts derived
+    from workflows main already carries: land them first, then apply (WT-14 bootstrap)."""
+
+    def git(*args: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(["git", *args], capture_output=True, text=True, timeout=60, cwd=repo)
+
+    fetched = git("fetch", "-q", "origin", "main")
+    if fetched.returncode != 0:
+        raise SystemExit(f"cannot read origin/main workflows: {fetched.stderr.strip()}")
+    unlanded: list[str] = []
+    for path in workflows:
+        rel = path.relative_to(repo).as_posix()
+        here = git("hash-object", "--", rel)
+        if here.returncode != 0:
+            raise SystemExit(f"cannot hash {rel}: {here.stderr.strip()}")
+        # A workflow absent on main (non-zero exit) is as unlanded as a different blob.
+        on_main = git("rev-parse", "--verify", "-q", f"origin/main:{rel}")
+        if on_main.returncode != 0 or on_main.stdout.strip() != here.stdout.strip():
+            unlanded.append(rel)
+    return unlanded
 
 
 def desired_payload(contexts: list[str]) -> dict[str, object]:
@@ -458,6 +512,14 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--confirm", action="store_true")
     p.add_argument("--approved-digest", default=None)
     a = p.parse_args(argv)
+    if a.cmd in ("apply", "tiebreaker"):
+        unlanded = _unlanded_workflows()
+        if unlanded:
+            raise SystemExit(
+                f"{a.cmd} refused: origin/main does not run this checkout's {unlanded}; the "
+                "fence would require contexts the tiebreaker's scratch PR cannot report — "
+                "land these workflows first, then apply"
+            )
     desired = desired_payload(blocking_contexts())
     if a.cmd == "verify":
         if _gh("auth", "status").returncode != 0:
@@ -742,7 +804,10 @@ def tiebreaker() -> int:
         sh("git", "checkout", "-q", "-b", br)
         created_local.append(br)
         sh("git", "commit", "-q", "--allow-empty", "-m", f"chore: main-protection tiebreaker {ts}")
-        sh("git", "push", "-q", "-u", "origin", br)
+        # [LAW:one-source-of-truth] the pushed branch name is the PR head; no upstream is
+        # recorded, because a checkout whose fetch refspec omits scratch branches cannot
+        # resolve one — gh then refuses the PR and the remover refuses the worktree.
+        sh("git", "push", "-q", "origin", br)
         created.append(br)
         url = sh(
             "gh",
@@ -754,6 +819,8 @@ def tiebreaker() -> int:
             "scratch PR; C-HE-08 §4",
             "--base",
             "main",
+            "--head",
+            br,
         )
         pr = url.rsplit("/", 1)[-1]
         print(f"tiebreaker: waiting for checks on #{pr} (strict:true requires up-to-date + green)")
@@ -771,7 +838,7 @@ def tiebreaker() -> int:
         sh("git", "checkout", "-q", "-b", br2, base)
         created_local.append(br2)
         sh("git", "commit", "-q", "--allow-empty", "-m", "ops: stale refresh-shaped commit")
-        sh("git", "push", "-q", "-u", "origin", br2)
+        sh("git", "push", "-q", "origin", br2)
         created.append(br2)
         url2 = sh(
             "gh",
@@ -783,6 +850,8 @@ def tiebreaker() -> int:
             "C-HE-08 §4 stale-branch check",
             "--base",
             "main",
+            "--head",
+            br2,
         )
         pr2 = url2.rsplit("/", 1)[-1]
         # BLOCKED is ambiguous straight after creation — pending or failing required checks
@@ -887,9 +956,8 @@ def tiebreaker() -> int:
         # open, remote branches, local refs, or the temporary worktree behind (codex r1 P3):
         # deleting a remote branch auto-closes its open PR, and an already-deleted/merged
         # branch makes this a no-op. ORDER MATTERS (codex r5 P2): the worktree is removed
-        # FIRST (it holds a checkout of a scratch branch and its -u upstream config; remote
-        # refs deleted first would make the remover classify that upstream as unresolvable
-        # local state and refuse), then local refs, then remote refs. Failures are REPORTED,
+        # FIRST (it holds the checkout of a scratch branch, which `git branch -D` refuses to
+        # delete), then local refs, then remote refs. Failures are REPORTED,
         # not swallowed — silent GC failure would contradict the cleanup contract while
         # looking identical to success (codex r4 P3).
         def _gc_run(cmd: list[str], timeout: float) -> subprocess.CompletedProcess[str]:
@@ -912,9 +980,8 @@ def tiebreaker() -> int:
                 f"WARNING: cleanup incomplete — temporary worktree {wt} was not removed "
                 f"({wtrm.stderr.strip()[:120]})"
             )
-            # Deleting local/remote refs under a RETAINED worktree would strand it with
-            # unresolvable upstreams — exactly the state the ordering exists to prevent.
-            # Leave the refs; they are accounted as leftovers with the worktree (r9 P2).
+            # A RETAINED worktree keeps its scratch branch checked out; its refs and PR stay
+            # with it for inspection and are accounted as leftovers (r9 P2).
             for leftover in [*created_local, *created]:
                 cleanup_failures.append(f"ref {leftover} left for the retained worktree")
             created_local.clear()

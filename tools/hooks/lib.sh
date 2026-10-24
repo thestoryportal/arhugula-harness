@@ -726,79 +726,36 @@ _hook_worktree_quarantine_path() {
 # 1 when none do, and 2 when the observation cannot be completed. Namespace closure
 # means every writer that can still reach the moved tree must retain such a kernel
 # reference. Linux exposes those references through procfs; macOS uses its system lsof.
+# Some hosts hide same-user processes from procfs (a systemd user manager holding a
+# capability, a non-dumpable sd-pam); that is unknown, never absence.
+# [LAW:no-mode-explosion] HARNESS_WORKTREE_REFERENCE_LAUNCHER, owned by the host operator,
+# names one absolute executable that runs ONLY the read-only observer argv with read
+# privilege. It never runs the remover; delete it when the host exposes those processes.
+_HOOK_WORKTREE_REFERENCE_OBSERVER="$(cd -P -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/worktree_references.py"
 _hook_worktree_open_references() {
-  local wt="$1" abs output rc lsof_bin=""
+  local wt="$1" abs output rc lsof_bin="" launcher="${HARNESS_WORKTREE_REFERENCE_LAUNCHER:-}"
+  local -a observer
+  local pid_line=$'^[0-9]+\n$'
   abs=$(_hook_canonical_worktree "$wt")
   if [ -d /proc/self/fd ]; then
-    /usr/bin/python3 - "$abs" <<'PY'
-import os
-import sys
-from pathlib import Path
-
-target = os.path.realpath(sys.argv[1])
-uid = os.geteuid()
-unknown = False
-
-
-def inside_target(candidate: str) -> bool:
-    if candidate.endswith(" (deleted)"):
-        candidate = candidate[: -len(" (deleted)")]
-    if not os.path.isabs(candidate):
-        return False
-    candidate = os.path.normpath(candidate)
-    try:
-        return os.path.commonpath((target, candidate)) == target
-    except ValueError:
-        return False
-
-for process in Path("/proc").iterdir():
-    if not process.name.isdigit():
-        continue
-    try:
-        if process.stat().st_uid != uid:
-            continue
-    except FileNotFoundError:
-        continue
-    except OSError:
-        unknown = True
-        continue
-    links = [process / "cwd", process / "root"]
-    try:
-        links.extend((process / "fd").iterdir())
-    except FileNotFoundError:
-        continue
-    except OSError:
-        unknown = True
-    for link in links:
-        try:
-            candidate = os.readlink(link)
-        except FileNotFoundError:
-            continue
-        except OSError:
-            unknown = True
-            continue
-        if inside_target(candidate):
-            print(process.name)
-            raise SystemExit(0)
-    try:
-        maps = (process / "maps").read_text(encoding="utf-8", errors="replace").splitlines()
-    except FileNotFoundError:
-        continue
-    except OSError:
-        unknown = True
-        continue
-    for mapping in maps:
-        fields = mapping.split(maxsplit=5)
-        if len(fields) == 6 and inside_target(fields[5]):
-            print(process.name)
-            raise SystemExit(0)
-
-raise SystemExit(20 if unknown else 10)
-PY
+    observer=(/usr/bin/python3 -I "$_HOOK_WORKTREE_REFERENCE_OBSERVER" --uid "$(id -u)" "$abs")
+    if [ -n "$launcher" ]; then
+      # [LAW:no-silent-failure] a relative, missing or failing launcher is unknown (rc 2).
+      case "$launcher" in /*) ;; *) return 2 ;; esac
+      [ -x "$launcher" ] || return 2
+      observer=("$launcher" "${observer[@]}")
+    fi
+    # The trailing sentinel keeps the raw stdout: command substitution would strip
+    # trailing newlines and turn a blank-line answer into an empty one.
+    output=$(hook_bounded "${HARNESS_WORKTREE_REFERENCE_SCAN_TIMEOUT_SECONDS:-5}" \
+      "${observer[@]}" </dev/null; rc=$?; printf .; exit "$rc")
     rc=$?
-    case "$rc" in
-      0) return 0 ;;
-      10) return 1 ;;
+    output=${output%.}
+    # [LAW:parse-dont-validate] only the observer's exact raw contract counts as an answer.
+    case "$rc:$output" in
+      0:*) [[ "$output" =~ $pid_line ]] || return 2
+        printf '%s' "$output"; return 0 ;;
+      10:) return 1 ;;
       *) return 2 ;;
     esac
   fi

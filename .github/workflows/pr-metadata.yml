@@ -1,0 +1,48 @@
+name: PR metadata
+
+# WO-U10 (WS-10 §12.3): PR metadata edits are evaluated here, never by the code workflow.
+# A body-only edit therefore cannot restart or cancel code verification, and a retitle
+# re-runs only the title-dependent refresh-shape gate. This workflow has its own
+# concurrency group and its own check name: it can never publish under, or stand in for,
+# a required code-check context. A title or body edit never satisfies a missing code run.
+# The title gate is itself a required context (tools/main_protection.py), so it also runs
+# on every new head; otherwise a never-edited PR would wait on it forever.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+
+concurrency:
+  group: pr-metadata-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  title-shape:
+    name: PR title shape (metadata gate) — blocking
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          # base..head history for the refresh-shape gate (same need as ci.yml arc-ledger).
+          fetch-depth: 0
+
+      - name: Install uv + Python 3.12
+        uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081 # v5
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Sync workspace (all members; provides pyyaml via harness-runtime)
+        run: uv sync --all-packages
+
+      - name: Title-dependent refresh-shape gate (§12.2.1)
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: >
+          uv run python tools/roadmap_status_refresh.py --check
+          --shape-ref "${{ github.event.pull_request.head.sha }}"
+          --shape-base "${{ github.event.pull_request.base.sha }}"
+          --shape-title-env PR_TITLE

@@ -25,6 +25,124 @@ def test_blocking_contexts_derived_from_ci_yml():
     assert len(ctx) >= 12
 
 
+_WORKFLOWS = Path(mp.__file__).resolve().parent.parent / ".github" / "workflows"
+_LIVE_CODE_CONTEXTS = 14  # the WO-U01 inventory: every ci.yml `— blocking` job
+
+
+def _blocking_names(workflow: str) -> set[str]:
+    jobs = mp.yaml.safe_load((_WORKFLOWS / workflow).read_text())["jobs"].values()
+    return {j["name"] for j in jobs if str(j.get("name", "")).endswith("— blocking")}
+
+
+def test_required_contexts_include_the_pr_metadata_title_gate():
+    """WO-U10/WT-14: the title-dependent gate lives in pr-metadata.yml under its own check
+    name, so the fence must require it alongside the code contexts — not reject it as extra."""
+    ctx = mp.blocking_contexts()
+    meta = _blocking_names("pr-metadata.yml")
+    assert meta, "pr-metadata.yml must declare its title gate as a `— blocking` job"
+    assert meta <= set(ctx)
+    assert set(ctx) == _blocking_names("ci.yml") | meta
+    assert len(ctx) == _LIVE_CODE_CONTEXTS + len(meta)
+
+
+def test_verify_requires_the_metadata_context_on_the_live_fence():
+    """The live probe shape: 14 code contexts verified clean while the required metadata
+    context was absent, and adding it was rejected as extra. Both verdicts must invert."""
+    desired = mp.desired_payload(mp.blocking_contexts())
+    code_only = sorted(_blocking_names("ci.yml"))
+    meta = sorted(_blocking_names("pr-metadata.yml"))
+    incomplete = _live_get(mp.desired_payload(code_only))
+    complete = _live_get(mp.desired_payload(code_only + meta))
+    assert mp.verify(complete, desired) == []
+    assert mp.verify(incomplete, desired) == [f"contexts differ: missing={meta} extra=[]"]
+
+
+def _git(cwd, *args):
+    subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True)
+
+
+def _repo_with_main(tmp_path, landed: dict[str, str]):
+    """A clone whose origin/main carries `landed` workflow files."""
+    origin, clone = tmp_path / "origin.git", tmp_path / "clone"
+    _git(tmp_path, "init", "-q", "--bare", "-b", "main", str(origin))
+    _git(tmp_path, "clone", "-q", str(origin), str(clone))
+    wf = clone / ".github" / "workflows"
+    wf.mkdir(parents=True)
+    for name, text in landed.items():
+        (wf / name).write_text(text)
+    _git(clone, "add", "-A")
+    _git(clone, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "main")
+    _git(clone, "push", "-q", "origin", "HEAD:main")
+    return clone, (wf / "ci.yml", wf / "pr-metadata.yml")
+
+
+def test_unlanded_workflows_names_checkout_workflows_main_does_not_run(tmp_path):
+    """The tiebreaker's scratch PR runs main's own workflows, so a context the checkout
+    derives from a workflow main lacks (or runs differently) can never report there."""
+    clone, workflows = _repo_with_main(tmp_path, {"ci.yml": "name: CI\n"})
+    (clone / ".github" / "workflows" / "pr-metadata.yml").write_text("name: PR metadata\n")
+    assert mp._unlanded_workflows(clone, workflows) == [".github/workflows/pr-metadata.yml"]
+    (clone / ".github" / "workflows" / "ci.yml").write_text("name: CI\n# changed\n")
+    assert mp._unlanded_workflows(clone, workflows) == [
+        ".github/workflows/ci.yml",
+        ".github/workflows/pr-metadata.yml",
+    ]
+
+
+def test_unlanded_workflows_is_empty_once_main_runs_the_checkout_workflows(tmp_path):
+    texts = {"ci.yml": "name: CI\n", "pr-metadata.yml": "name: PR metadata\n"}
+    clone, workflows = _repo_with_main(tmp_path, texts)
+    assert mp._unlanded_workflows(clone, workflows) == []
+
+
+@pytest.mark.parametrize("argv", [["apply"], ["apply", "--confirm"], ["tiebreaker"]])
+def test_fence_changes_refuse_until_main_runs_the_required_workflows(monkeypatch, argv):
+    """WT-14 bootstrap: applying (or exercising) a fence that requires a context main cannot
+    report would fail the tiebreaker after a provisional PUT; refuse before any gh call."""
+
+    def no_live_call(*a, **k):
+        raise AssertionError("no protection read or mutation before the landing check")
+
+    monkeypatch.setattr(mp, "_unlanded_workflows", lambda: [".github/workflows/pr-metadata.yml"])
+    monkeypatch.setattr(mp, "current_protection", no_live_call)
+    monkeypatch.setattr(mp, "_gh", no_live_call)
+    monkeypatch.setattr(mp, "_loop_mode", lambda: False)
+    with pytest.raises(SystemExit, match=r"pr-metadata\.yml"):
+        mp.main(argv)
+
+
+@pytest.mark.parametrize(
+    "trigger",
+    [
+        "on:\n  pull_request:\n    types: [edited]\n",
+        "on:\n  push:\n    branches: [main]\n",
+        "on:\n  pull_request:\n    types: [opened, reopened, edited]\n",
+    ],
+)
+def test_required_workflow_must_report_on_every_pr_head(tmp_path, trigger):
+    """A required context that does not run on opened/synchronize/reopened never reports
+    on a fresh head, so strict protection would block every merge: refuse to derive it."""
+    wf = tmp_path / "gate.yml"
+    wf.write_text(trigger + "jobs:\n  g:\n    name: g — blocking\n    runs-on: x\n")
+    with pytest.raises(mp.RequiredWorkflowError, match=r"gate\.yml"):
+        mp.blocking_contexts((wf,))
+
+
+@pytest.mark.parametrize(
+    "trigger",
+    [
+        "on: pull_request\n",
+        "on: [push, pull_request]\n",
+        "on:\n  pull_request:\n",
+        "on:\n  pull_request:\n    types: [opened, synchronize, reopened, edited]\n",
+    ],
+)
+def test_required_workflow_reporting_on_every_pr_head_is_accepted(tmp_path, trigger):
+    wf = tmp_path / "gate.yml"
+    wf.write_text(trigger + "jobs:\n  g:\n    name: g — blocking\n    runs-on: x\n")
+    assert mp.blocking_contexts((wf,)) == ["g — blocking"]
+
+
 def test_desired_payload_shape():
     p = mp.desired_payload(["a — blocking"])
     assert p["required_pull_request_reviews"] is None
@@ -258,6 +376,7 @@ def _wire_apply(monkeypatch, tmp_path, *, cur, tiebreaker, states=None):
 
     monkeypatch.setattr(mp.subprocess, "run", fake_run)
     monkeypatch.setattr(mp, "_gh", fake_gh)
+    monkeypatch.setattr(mp, "_unlanded_workflows", lambda: [])
     monkeypatch.setattr(mp, "_repo", lambda: "o/r")
     monkeypatch.setattr(mp, "_loop_mode", lambda: False)
     monkeypatch.setattr(mp, "current_protection", fake_protection)
@@ -405,6 +524,84 @@ def test_real_tiebreaker_refuses_when_fence_not_live(monkeypatch, capsys):
     assert mp.tiebreaker() == 1
     out = capsys.readouterr().out
     assert "fence is not live" in out and "unprotected (404)" in out
+
+
+# gh's `pr create` contract without --head: it finds the pushed head through the current
+# branch's remote-tracking upstream and aborts when that does not resolve.
+_FAKE_GH = """#!/usr/bin/env python3
+import subprocess, sys
+args = sys.argv[1:]
+if args[:2] != ["pr", "create"]:
+    sys.exit(f"fake gh: unexpected {args}")
+if "--head" in args:
+    head = args[args.index("--head") + 1]
+    subprocess.run(["git", "ls-remote", "--exit-code", "--heads", "origin", head], check=True)
+elif subprocess.run(["git", "rev-parse", "--verify", "-q", "@{upstream}"]).returncode:
+    sys.exit("aborted: you must first push the current branch to a remote, or use the --head flag")
+open(sys.argv[0] + ".created", "a").write("pr\\n")
+print("https://github.com/o/r/pull/7")
+"""
+
+# The real remover's local-state classifier, minus its /proc open-reference probe: that
+# probe reports "unknown" on hosts with unreadable same-uid processes (systemd --user),
+# which would make this test measure the host instead of the tiebreaker's scratch state.
+_LOCAL_STATE_REMOVER = """#!/usr/bin/env bash
+. "{lib}"
+if hook_worktree_local_state "$1" >&2; then
+  echo "safe-worktree-remove: target has local state" >&2
+  exit 4
+fi
+git worktree remove "$1"
+"""
+
+
+@pytest.mark.parametrize(
+    "fetch_refspec",
+    ["+refs/heads/*:refs/remotes/origin/*", "+refs/heads/main:refs/remotes/origin/main"],
+)
+def test_real_tiebreaker_opens_its_scratch_pr_and_cleans_up_under_any_fetch_refspec(
+    monkeypatch, tmp_path, capsys, fetch_refspec
+):
+    """The live witness (WO-U10 cmt-9433a06c) ran in a checkout that fetches only named
+    branches: the pushed scratch branch got no remote-tracking ref, so `gh pr create` could
+    not find it, and the unresolvable -u upstream made the worktree remover refuse. The
+    scratch PR must open and every scratch ref/worktree be reaped regardless of the refspec."""
+    clone, _ = _repo_with_main(tmp_path, {"ci.yml": "on: pull_request\n"})
+    _git(clone, "config", "remote.origin.fetch", fetch_refspec)
+    _git(clone, "config", "user.name", "t")
+    _git(clone, "config", "user.email", "t@t")
+    hooks = clone / "tools" / "hooks"
+    hooks.mkdir(parents=True)
+    lib = Path(mp.__file__).resolve().parent / "hooks" / "lib.sh"
+    (hooks / "safe-worktree-remove.sh").write_text(_LOCAL_STATE_REMOVER.format(lib=lib))
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    gh = bin_dir / "gh"
+    gh.write_text(_FAKE_GH)
+    gh.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}:{mp.os.environ['PATH']}")
+    monkeypatch.setattr(mp, "REPO", clone)
+    monkeypatch.setattr(mp.tempfile, "tempdir", str(tmp_path))  # a failed run leaks nothing
+    monkeypatch.setattr(mp, "blocking_contexts", lambda: ["ctx"])
+    monkeypatch.setattr(mp, "current_protection", lambda: {})
+    monkeypatch.setattr(mp, "verify", lambda live, desired: [])
+    # Stop at the first check watch: reaching it proves the scratch PR was created.
+    monkeypatch.setattr(mp, "_watch_checks", lambda pr, wt, contexts: False)
+
+    assert mp.tiebreaker() == 1
+    out = capsys.readouterr().out
+    assert "scratch PR checks did not go green" in out, out
+    assert "cleanup incomplete" not in out, out
+    assert (bin_dir / "gh.created").read_text() == "pr\n"
+
+    def git_out(*args: str) -> str:
+        return subprocess.run(
+            ["git", *args], cwd=clone, capture_output=True, text=True, check=True
+        ).stdout
+
+    assert git_out("ls-remote", "--heads", "origin", "mp-tiebreaker-*") == ""
+    assert git_out("branch", "--list", "mp-tiebreaker-*") == ""
+    assert "mp-tiebreaker-" not in git_out("worktree", "list", "--porcelain")
 
 
 def test_verify_restore_check_accepts_prior_policy_with_reviews():
