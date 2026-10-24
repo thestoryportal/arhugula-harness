@@ -510,6 +510,85 @@ PY
   eq "writable mmap is a retained worktree reference" "$MMAP_RC" "0"
 fi
 
+# Linux: the read-only observer classifies a procfs tree exactly - found, none, or
+# unknown - for the user it is told to observe. A fake procfs root makes every arm
+# hermetic, including the same-user process this host hides (unreadable entries).
+if [ -d /proc/self/fd ]; then
+  OBS="$SCRIPT_DIR/worktree_references.py"
+  OBS_UID=$(id -u)
+  OBS_TARGET="$REPO/observer-target"
+  mkdir -p "$OBS_TARGET/sub"
+  fake_process() {  # fake_process ROOT PID CWD
+    mkdir -p "$1/$2/fd"
+    ln -s "$3" "$1/$2/cwd"
+    ln -s / "$1/$2/root"
+    : > "$1/$2/maps"
+  }
+  OBS_FOUND="$REPO/proc-found"; fake_process "$OBS_FOUND" 100 "$OBS_TARGET/sub"
+  OBS_NONE="$REPO/proc-none"; fake_process "$OBS_NONE" 101 /
+  ln -s "$REPO/elsewhere" "$OBS_NONE/101/fd/3"
+  OBS_HIDDEN="$REPO/proc-hidden"; fake_process "$OBS_HIDDEN" 102 /; chmod 000 "$OBS_HIDDEN/102/fd"
+  OBS_OUT=$(/usr/bin/python3 -I "$OBS" --uid "$OBS_UID" --proc-root "$OBS_FOUND" "$OBS_TARGET"); OBS_RC=$?
+  eq "observer reports a retained cwd and its PID" "$OBS_RC:$OBS_OUT" "0:100"
+  /usr/bin/python3 -I "$OBS" --uid "$OBS_UID" --proc-root "$OBS_NONE" "$OBS_TARGET" >/dev/null
+  eq "observer proves absence only after a complete observation" "$?" "10"
+  /usr/bin/python3 -I "$OBS" --uid "$OBS_UID" --proc-root "$OBS_HIDDEN" "$OBS_TARGET" >/dev/null
+  eq "an unreadable same-user process is unknown, not absence" "$?" "20"
+  /usr/bin/python3 -I "$OBS" --uid "$((OBS_UID + 1))" --proc-root "$OBS_FOUND" "$OBS_TARGET" >/dev/null
+  eq "observer filters on the named uid, not its own identity" "$?" "10"
+  chmod 700 "$OBS_HIDDEN/102/fd"
+
+  # The launcher seam runs only the observer argv. Each fixture launcher appends a
+  # fake procfs root so a privileged answer can be simulated without privilege.
+  OBS_ARGV="$REPO/launcher-argv"
+  launcher() {  # launcher NAME BODY
+    printf '#!/usr/bin/env bash\n%s\n' "$2" > "$REPO/$1"; chmod +x "$REPO/$1"; printf '%s' "$REPO/$1"
+  }
+  L_FOUND=$(launcher l-found "printf '%s\n' \"\$@\" > '$OBS_ARGV'; exec \"\$@\" --proc-root '$OBS_FOUND'")
+  L_NONE=$(launcher l-none "exec \"\$@\" --proc-root '$OBS_NONE'")
+  L_DENIED=$(launcher l-denied "echo 'sudo: a password is required' >&2; exit 1")
+  L_MALFORMED=$(launcher l-malformed "echo 100; exit 10")
+  L_GARBAGE=$(launcher l-garbage "echo 'not-a-pid'; exit 0")
+  L_HANG=$(launcher l-hang "sleep 30")
+  L_STDIN=$(launcher l-stdin "read -r line && exit 10; exit 20")
+  launch_rc() { HARNESS_WORKTREE_REFERENCE_LAUNCHER="$1" HARNESS_WORKTREE_REFERENCE_SCAN_TIMEOUT_SECONDS=1 \
+    _hook_worktree_open_references_production "$OBS_TARGET" >/dev/null; printf '%s' "$?"; }
+  eq "launched observer reports a retained reference" "$(launch_rc "$L_FOUND")" "0"
+  grep -qx -- "--uid" "$OBS_ARGV" && grep -qx -- "$OBS_UID" "$OBS_ARGV" && grep -qx -- "$OBS" "$OBS_ARGV" \
+    && ok "launcher receives only the observer argv with the remover's uid" \
+    || bad "launcher argv: [$(tr '\n' ' ' < "$OBS_ARGV")]"
+  eq "launched complete observation proves absence" "$(launch_rc "$L_NONE")" "1"
+  eq "launcher denial is unknown" "$(launch_rc "$L_DENIED")" "2"
+  eq "absence with output is malformed and unknown" "$(launch_rc "$L_MALFORMED")" "2"
+  eq "a non-PID reference answer is unknown" "$(launch_rc "$L_GARBAGE")" "2"
+  eq "launcher cannot read the caller's stdin" "$(printf 'y\n' | launch_rc "$L_STDIN")" "2"
+  eq "a relative launcher is unknown" "$(launch_rc l-none)" "2"
+  eq "a missing launcher is unknown" "$(launch_rc "$REPO/no-such-launcher")" "2"
+  HANG_START=$(date +%s)
+  eq "a hanging launcher is bounded and unknown" "$(launch_rc "$L_HANG")" "2"
+  [ $(( $(date +%s) - HANG_START )) -lt 10 ] && ok "hanging launcher released within the bound" \
+    || bad "hanging launcher outlived the bound"
+
+  # End to end through the locked remover: privilege supplies observation only. A
+  # complete launched observation lets the full remover delete a clean worktree; a
+  # denied launcher keeps rc 9 and restores the tree.
+  for OBS_CASE in "$L_NONE:0" "$L_DENIED:9"; do
+    OBS_WT="$REPO-observer-remove-${OBS_CASE##*:}"
+    git -C "$REPO" worktree add -q -b "observer-remove-${OBS_CASE##*:}" "$OBS_WT"
+    (
+      _hook_worktree_open_references() { _hook_worktree_open_references_production "$@"; }
+      HARNESS_WORKTREE_REFERENCE_LAUNCHER="${OBS_CASE%%:*}" hook_safe_worktree_remove "$REPO" "$OBS_WT"
+      printf '%s' "$?" > "$REPO/observer-remove-result"
+    )
+    OBS_LAUNCHER=${OBS_CASE%%:*}
+    eq "remover with launcher ${OBS_LAUNCHER##*/}" "$(cat "$REPO/observer-remove-result")" "${OBS_CASE##*:}"
+  done
+  [ ! -e "$REPO-observer-remove-0" ] && ok "complete launched observation removed the clean worktree" \
+    || bad "clean worktree survived a complete observation"
+  [ -d "$REPO-observer-remove-9" ] && ok "denied observation restored the worktree" \
+    || bad "denied observation lost the worktree"
+fi
+
 # HUP, INT, and TERM after the move must each restore the path and preserve the
 # signal-specific shell status promised by the public remover.
 for SIGNAL_CASE in HUP:129 INT:130 TERM:143; do
