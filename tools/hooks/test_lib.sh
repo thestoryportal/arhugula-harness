@@ -550,6 +550,8 @@ if [ -d /proc/self/fd ]; then
   L_MALFORMED=$(launcher l-malformed "echo 100; exit 10")
   L_GARBAGE=$(launcher l-garbage "echo 'not-a-pid'; exit 0")
   L_TRAILING=$(launcher l-trailing "printf '100\\nnot-a-pid\\n'; exit 0")
+  L_BLANK=$(launcher l-blank "printf '\\n'; exit 10")
+  L_PID_BLANK=$(launcher l-pid-blank "printf '100\\n\\n'; exit 0")
   L_HANG=$(launcher l-hang "sleep 30")
   L_STDIN=$(launcher l-stdin "read -r line && exit 10; exit 20")
   launch_rc() { HARNESS_WORKTREE_REFERENCE_LAUNCHER="$1" HARNESS_WORKTREE_REFERENCE_SCAN_TIMEOUT_SECONDS=1 \
@@ -563,6 +565,8 @@ if [ -d /proc/self/fd ]; then
   eq "absence with output is malformed and unknown" "$(launch_rc "$L_MALFORMED")" "2"
   eq "a non-PID reference answer is unknown" "$(launch_rc "$L_GARBAGE")" "2"
   eq "a PID followed by junk is unknown" "$(launch_rc "$L_TRAILING")" "2"
+  eq "absence with a blank line is malformed and unknown" "$(launch_rc "$L_BLANK")" "2"
+  eq "a PID followed by a blank line is unknown" "$(launch_rc "$L_PID_BLANK")" "2"
   eq "launcher cannot read the caller's stdin" "$(printf 'y\n' | launch_rc "$L_STDIN")" "2"
   eq "a relative launcher is unknown" "$(launch_rc l-none)" "2"
   eq "a missing launcher is unknown" "$(launch_rc "$REPO/no-such-launcher")" "2"

@@ -735,6 +735,7 @@ _HOOK_WORKTREE_REFERENCE_OBSERVER="$(cd -P -- "$(dirname -- "${BASH_SOURCE[0]}")
 _hook_worktree_open_references() {
   local wt="$1" abs output rc lsof_bin="" launcher="${HARNESS_WORKTREE_REFERENCE_LAUNCHER:-}"
   local -a observer
+  local pid_line=$'^[0-9]+\n$'
   abs=$(_hook_canonical_worktree "$wt")
   if [ -d /proc/self/fd ]; then
     observer=(/usr/bin/python3 -I "$_HOOK_WORKTREE_REFERENCE_OBSERVER" --uid "$(id -u)" "$abs")
@@ -744,13 +745,16 @@ _hook_worktree_open_references() {
       [ -x "$launcher" ] || return 2
       observer=("$launcher" "${observer[@]}")
     fi
+    # The trailing sentinel keeps the raw stdout: command substitution would strip
+    # trailing newlines and turn a blank-line answer into an empty one.
     output=$(hook_bounded "${HARNESS_WORKTREE_REFERENCE_SCAN_TIMEOUT_SECONDS:-5}" \
-      "${observer[@]}" </dev/null)
+      "${observer[@]}" </dev/null; rc=$?; printf .; exit "$rc")
     rc=$?
-    # [LAW:parse-dont-validate] only the observer's exact contract counts as an answer.
+    output=${output%.}
+    # [LAW:parse-dont-validate] only the observer's exact raw contract counts as an answer.
     case "$rc:$output" in
-      0:*) [[ "$output" =~ ^[0-9]+$ ]] || return 2
-        printf '%s\n' "$output"; return 0 ;;
+      0:*) [[ "$output" =~ $pid_line ]] || return 2
+        printf '%s' "$output"; return 0 ;;
       10:) return 1 ;;
       *) return 2 ;;
     esac
