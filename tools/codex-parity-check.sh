@@ -39,6 +39,7 @@ tools/test_concurrency_surface.py \
   tools/test_arc_disjoint_check.py \
   tools/test_ci_yml_concurrency.py \
   tools/test_ci_bookkeeping_filter.py \
+  tools/test_ci_aggregate.py \
   tools/test_workflow_policy.py \
   tools/test_finding_record.py \
   tools/test_refresh_classes.py \
