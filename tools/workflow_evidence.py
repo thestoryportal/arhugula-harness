@@ -6,7 +6,8 @@
 everything Git can discover under its discovery domains (tracked plus genuine untracked
 files), every explicit input (checker, config, lock and task subjects, read even when
 ignored), each with byte-exact path, kind, effective Git mode and content digest. Files
-under a policy-validated artifact root leave discovery; explicit inputs never do.
+under a policy-validated artifact root leave discovery before any of their bytes are read;
+explicit inputs never do.
 Anything the manifest cannot identify faithfully becomes a typed `Refusal`.
 
 `reuse_result` is a pure decision: a prior passed `CheckReceipt` is reusable only when
@@ -313,6 +314,13 @@ def parse_classification(rule: Mapping[str, object]) -> Classification:
     )
 
 
+def _classified(raw: bytes, artifact_roots: tuple[str, ...]) -> bool:
+    """Whether a listed raw path lies in a validated artifact root (WS-15 §17.1)."""
+    return any(
+        raw == root.encode() or raw.startswith(root.encode() + b"/") for root in artifact_roots
+    )
+
+
 def _classification(policy: WorkflowPolicy) -> tuple[Classification, tuple[Refusal, ...]]:
     """The roots discovery may prune, plus refusals; an unusable rule prunes nothing."""
     try:
@@ -416,10 +424,15 @@ def _read_worktree(root: Path, path: str) -> FileEntry | Refusal:
         return _entry(path, mode, handle.read())
 
 
-def _observe_worktree(root: Path, request: CheckRequest) -> list[FileEntry | Refusal]:
+def _observe_worktree(
+    root: Path, request: CheckRequest, artifact_roots: tuple[str, ...]
+) -> list[FileEntry | Refusal]:
     listed = ("ls-files", "-z", "--cached", "--others", "--exclude-standard")
-    names = [_decoded(raw) for raw in _listing(root, listed, request.domains)]
-    # Explicit inputs are read by name, so an ignored historical driver stays visible.
+    # [LAW:single-enforcer] pruned at the listing, so no retained raw log is ever opened.
+    discovered = _listing(root, listed, request.domains)
+    names = [_decoded(raw) for raw in discovered if not _classified(raw, artifact_roots)]
+    # [LAW:one-source-of-truth] an explicit task input outranks any artifact declaration:
+    # it is read by name, so an ignored historical driver stays visible.
     paths = sorted({name for name in names if isinstance(name, str)} | set(request.explicit))
     refusals: list[FileEntry | Refusal] = [name for name in names if isinstance(name, Refusal)]
     return refusals + [_read_worktree(root, path) for path in paths]
@@ -461,9 +474,12 @@ def _object_rows(
 
 
 def _observe_objects(
-    root: Path, scope: Index | GitTree, request: CheckRequest
+    root: Path, scope: Index | GitTree, request: CheckRequest, artifact_roots: tuple[str, ...]
 ) -> list[FileEntry | Refusal]:
-    rows = _object_rows(root, scope, request.domains) | _object_rows(root, scope, request.explicit)
+    discovered = _object_rows(root, scope, request.domains)
+    rows = {
+        raw: row for raw, row in discovered.items() if not _classified(raw, artifact_roots)
+    } | _object_rows(root, scope, request.explicit)
     names = {raw: _decoded(raw) for raw in rows}
     # Only blob modes have content to hash; any other mode becomes a refusal in `_entry`.
     readable = [
@@ -483,17 +499,21 @@ def build_manifest(root: Path, request: CheckRequest) -> InputManifest:
     toplevel = _git(root, "rev-parse", "--show-toplevel").decode().strip()
     if Path(toplevel).resolve() != root.resolve():
         raise EvidenceError("root", f"{root} is not the repository top level {toplevel}")
+    classification, refusals = _classification(request.policy)
+    pruned = classification.artifact_roots
     match request.scope:
         case WorkingTree():
-            head, observed = _revision(root, "HEAD"), _observe_worktree(root, request)
+            head, observed = _revision(root, "HEAD"), _observe_worktree(root, request, pruned)
         case Index() as index:
-            head, observed = _revision(root, "HEAD"), _observe_objects(root, index, request)
+            head, observed = _revision(root, "HEAD"), _observe_objects(root, index, request, pruned)
         case GitTree(rev=rev) as tree:
-            head, observed = _revision(root, rev), _observe_objects(root, tree, request)
+            head, observed = _revision(root, rev), _observe_objects(root, tree, request, pruned)
     material_base = (
         None if request.material_base is None else _revision(root, request.material_base)
     )
-    return assemble_manifest(request, head=head, material_base=material_base, observed=observed)
+    return assemble_manifest(
+        request, head=head, material_base=material_base, observed=[*refusals, *observed]
+    )
 
 
 def assemble_manifest(
@@ -503,16 +523,8 @@ def assemble_manifest(
     material_base: str | None,
     observed: list[FileEntry | Refusal],
 ) -> InputManifest:
-    """Pure: observed entries to a canonical manifest, pruning only validated artifacts."""
-    classification, refusals = _classification(request.policy)
-    entries = [item for item in observed if isinstance(item, FileEntry)]
-    # [LAW:one-source-of-truth] an explicit task input outranks any artifact declaration.
-    kept = {
-        entry.path: entry
-        for entry in entries
-        if entry.path in request.explicit
-        or not any(_under(entry.path, root) for root in classification.artifact_roots)
-    }
+    """Pure: observed entries, already source-scoped by discovery, to a canonical manifest."""
+    entries = {item.path: item for item in observed if isinstance(item, FileEntry)}
     closure = (
         (Refusal("dependency_closure_unknown", request.checker.name),)
         if request.closure == "unknown"
@@ -531,8 +543,8 @@ def assemble_manifest(
         domains=_utf8_order(tuple(set(request.domains))),
         explicit=_utf8_order(tuple(set(request.explicit))),
         environment=MappingProxyType(dict(sorted(request.environment.items()))),
-        files=tuple(kept[path] for path in _utf8_order(tuple(kept))),
-        refusals=refusals + tuple(item for item in observed if isinstance(item, Refusal)) + closure,
+        files=tuple(entries[path] for path in _utf8_order(tuple(entries))),
+        refusals=tuple(item for item in observed if isinstance(item, Refusal)) + closure,
     )
 
 
