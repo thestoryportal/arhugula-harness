@@ -1691,7 +1691,24 @@ def _json_report(state: GuardState, findings: list[Finding]) -> str:
     )
 
 
+def _workflow(argv: list[str]) -> int:
+    """WO-U05 `workflow status|check` (spec WS-06); its own JSON and 0/2/3/4/5 exits."""
+    # Run as a script, only tools/ is on sys.path; the WO modules import as the `tools`
+    # namespace package from the repository root, as the test suite does.
+    root = str(Path(__file__).resolve().parent.parent)
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    from tools import workflow_boundaries
+
+    return workflow_boundaries.main(argv)
+
+
 def main(argv: list[str] | None = None) -> int:
+    args = sys.argv[1:] if argv is None else argv
+    # [LAW:locality-or-seam] `workflow` dispatches before the positional-mode parser, so
+    # the existing modes keep their choices, flags and exits unchanged.
+    if args[:1] == ["workflow"]:
+        return _workflow(args[1:])
     parser = argparse.ArgumentParser(description="Codex deterministic context guard.")
     parser.add_argument(
         "mode",
