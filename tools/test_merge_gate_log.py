@@ -454,23 +454,59 @@ _TRIAL_ARC = "b-000-test"
 _TRIAL_TS = "2026-01-01T00:00:00Z"
 
 
-def _observe(jl: Path, head: str, digest: str, producer: str, *, arc: str = _TRIAL_ARC,
-             cycle_pass: str | None = None, severity: str | None = None) -> dict:
+def _observe(
+    jl: Path,
+    head: str,
+    digest: str,
+    producer: str,
+    *,
+    arc: str = _TRIAL_ARC,
+    cycle_pass: str | None = None,
+    severity: str | None = None,
+) -> dict:
     """One schema-valid observation as its writer records it: a `finding` at `severity`, else a
     clean `no_finding`."""
-    kind, sev, ft = (("finding", severity, "terminal-block") if severity
-                     else ("no_finding", "info", "clean-approve"))
+    kind, sev, ft = (
+        ("finding", severity, "terminal-block")
+        if severity
+        else ("no_finding", "info", "clean-approve")
+    )
     return fr.append_observation(
-        dict(location=producer, observed_evidence="observed", expected_contract="contract",
-             severity=sev, finding_type=ft, lineage_claim="fresh", producer=producer),
-        fr.Envelope(record_kind=kind, ts=_TRIAL_TS, arc_id=arc, lane_id="h-w-1", head_sha=head,
-                    base_sha=B, diff_digest=digest, round_n=1, cycle_pass=cycle_pass),
-        jl)
+        dict(
+            location=producer,
+            observed_evidence="observed",
+            expected_contract="contract",
+            severity=sev,
+            finding_type=ft,
+            lineage_claim="fresh",
+            producer=producer,
+        ),
+        fr.Envelope(
+            record_kind=kind,
+            ts=_TRIAL_TS,
+            arc_id=arc,
+            lane_id="h-w-1",
+            head_sha=head,
+            base_sha=B,
+            diff_digest=digest,
+            round_n=1,
+            cycle_pass=cycle_pass,
+        ),
+        jl,
+    )
 
 
 def _adjudicate(jl: Path, finding: dict, disposition: str, ts: str) -> None:
-    fr.append_row({**finding, "record_kind": "finding_adjudication", "ts": ts,
-                   "disposition": disposition, "disposition_actor": "claude_absorber"}, jl)
+    fr.append_row(
+        {
+            **finding,
+            "record_kind": "finding_adjudication",
+            "ts": ts,
+            "disposition": disposition,
+            "disposition_actor": "claude_absorber",
+        },
+        jl,
+    )
 
 
 def _landing_repo(tmp_path: Path):
@@ -479,7 +515,8 @@ def _landing_repo(tmp_path: Path):
     repo = tmp_path / "r"
     repo.mkdir()
     g = lambda *a: subprocess.run(  # noqa: E731
-        ["git", *a], cwd=repo, capture_output=True, text=True, check=True).stdout.strip()
+        ["git", *a], cwd=repo, capture_output=True, text=True, check=True
+    ).stdout.strip()
     g("init", "-q", "-b", "main")
     g("config", "user.email", "t@t")
     g("config", "user.name", "t")
@@ -487,8 +524,9 @@ def _landing_repo(tmp_path: Path):
     jl, md = repo / ".harness" / "merge-gate-log.jsonl", repo / ".harness" / "merge-gate-log.md"
     _observe(jl, H, D, LENS, arc="pr-1")
     # a release recorded before the review is history, not part of the landing delta
-    _adjudicate(jl, _observe(jl, H, D, LENS, arc="pr-1", severity="P3"), "rejected",
-                "2026-01-02T00:00:00Z")
+    _adjudicate(
+        jl, _observe(jl, H, D, LENS, arc="pr-1", severity="P3"), "rejected", "2026-01-02T00:00:00Z"
+    )
     md.write_text(mgl._md_line(_TRIAL_TS, 1, H, LENS, "APPROVE", 0, 1))
     g("add", "-A")
     g("commit", "-qm", "base")
@@ -528,19 +566,47 @@ def test_landing_proof_binds_the_reviewed_and_final_bindings(tmp_path: Path):
 def _trial_cycle(jl: Path, head: str, digest: str, *, finding: str | None = None) -> list[dict]:
     """Independent passes 1, 2 and 3 on exactly (head, digest), committed to the gate log; pass
     1's loop reviewer raises a `finding`-severity observation when one is given."""
-    passes = {"1": ["codex_review_wrapper", *rlg.LENSES],
-              "2": ["codex_review_wrapper", rlg._WITNESS_LENS], "3": [rlg.LENSES[0]]}
-    return [_observe(jl, head, digest, producer, cycle_pass=p,
-                     severity=finding if (p, producer) == ("1", "codex_review_wrapper") else None)
-            for p, producers in passes.items() for producer in producers]
+    passes = {
+        "1": ["codex_review_wrapper", *rlg.LENSES],
+        "2": ["codex_review_wrapper", rlg._WITNESS_LENS],
+        "3": [rlg.LENSES[0]],
+    }
+    return [
+        _observe(
+            jl,
+            head,
+            digest,
+            producer,
+            cycle_pass=p,
+            severity=finding if (p, producer) == ("1", "codex_review_wrapper") else None,
+        )
+        for p, producers in passes.items()
+        for producer in producers
+    ]
 
 
 def _trial_decision(repo: Path, final_head: str = "HEAD") -> rlg.TrialReviewDecision:
-    policy = rlg.parse_trial_policy({"version": "wo-u07-trial-v1", "units": {"u07": {
-        "arcs": [_TRIAL_ARC], "legacy": {"rounds": [], "p1_streak": 0, "stopped": False}}}})
+    policy = rlg.parse_trial_policy(
+        {
+            "version": "wo-u07-trial-v1",
+            "units": {
+                "u07": {
+                    "arcs": [_TRIAL_ARC],
+                    "legacy": {"rounds": [], "p1_streak": 0, "stopped": False},
+                }
+            },
+        }
+    )
     return mgl.trial_review_decision(
-        policy=policy, unit="u07", arc=_TRIAL_ARC, authors=frozenset({"claude"}), doc_only=False,
-        final_head=final_head, base="main", repo=repo)
+        policy=policy,
+        unit="u07",
+        arc=_TRIAL_ARC,
+        authors=frozenset({"claude"}),
+        doc_only=False,
+        final_head=final_head,
+        base="main",
+        repo=repo,
+    )
 
 
 def test_trial_approval_transfers_only_across_a_git_proven_gate_row_delta(tmp_path: Path):
@@ -575,13 +641,19 @@ def test_trial_transfer_refuses_appended_rows_that_release_a_finding(tmp_path: P
     g("commit", "-qam", "verdicts")
     blocked = _trial_decision(repo)
     assert blocked.state == "changes_required" and blocked.blocking_findings == (p2["finding_id"],)
-    released = json.dumps({"record_kind": "finding_adjudication", "finding_id": p2["finding_id"],
-                           "disposition": "rejected"})
+    released = json.dumps(
+        {
+            "record_kind": "finding_adjudication",
+            "finding_id": p2["finding_id"],
+            "disposition": "rejected",
+        }
+    )
     appends = {
         "malformed": lambda: jl.write_text(jl.read_text() + released + "\n"),  # the pass 3 repro
         "rejected": lambda: _adjudicate(jl, p2, "rejected", "2026-01-03T00:00:00Z"),
         "downgraded": lambda: jl.write_text(  # a well-formed retry rewriting the report's core
-            jl.read_text() + json.dumps({**p2, "severity": "P3"}, sort_keys=True) + "\n"),
+            jl.read_text() + json.dumps({**p2, "severity": "P3"}, sort_keys=True) + "\n"
+        ),
         "narrative": lambda: md.write_text(md.read_text() + "| #9 | waived |\n"),
     }
     for name, append in appends.items():

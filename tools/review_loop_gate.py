@@ -774,14 +774,20 @@ def parse_trial_policy(doc: object) -> TrialPolicy:
     an absent account would otherwise read as zero spent rounds."""
     # [LAW:parse-dont-validate] the policy crosses here; the reducer trusts TrialPolicy
     units = doc.get("units") if isinstance(doc, dict) else None
-    if not (isinstance(doc, dict) and isinstance(doc.get("version"), str) and doc["version"]
-            and isinstance(units, dict) and units):
+    if not (
+        isinstance(doc, dict)
+        and isinstance(doc.get("version"), str)
+        and doc["version"]
+        and isinstance(units, dict)
+        and units
+    ):
         raise TrialInputError("invalid_input", "policy needs a version and units")
     arcs: dict[str, tuple[str, ...]] = {}
     for unit, raw in units.items():
         members = raw.get("arcs") if isinstance(raw, dict) else None
-        if not (isinstance(members, list) and members
-                and all(isinstance(a, str) and a for a in members)):
+        if not (
+            isinstance(members, list) and members and all(isinstance(a, str) and a for a in members)
+        ):
             raise TrialInputError("invalid_input", f"unit {unit}: arcs")
         arcs[unit] = tuple(members)
     seen = [a for members in arcs.values() for a in members]
@@ -813,8 +819,15 @@ def trial_review_decision(
         if run.cycle_pass != "1":
             streak = streak + 1 if _accepted(run, ("P1",), disposed) else 0
     completed = legacy.rounds + tuple(_round_id(a, r) for a, r in spent)
-    undisposed = sorted({f["finding_id"] for a in policy.units[unit] for r in pass_runs(rows, a)
-                         for f in r.findings if disposed.get(f["finding_id"]) is None})
+    undisposed = sorted(
+        {
+            f["finding_id"]
+            for a in policy.units[unit]
+            for r in pass_runs(rows, a)
+            for f in r.findings
+            if disposed.get(f["finding_id"]) is None
+        }
+    )
     # [LAW:single-enforcer] independence is decided here once. The cycle's shape comes
     # from every run; a judgment from an authoring route delivers nothing toward approval,
     # so each completed run must also complete on the eligible rows alone.
@@ -825,12 +838,21 @@ def trial_review_decision(
     runs = pass_runs(rows, arc)
     judged = {(r.cycle_pass, r.head_sha, r.diff_digest): r for r in pass_runs(eligible, arc)}
     unjudged = {(r.cycle_pass, r.head_sha, r.diff_digest) for r in runs if r.complete} - {
-        k for k, r in judged.items() if r.complete}
+        k for k, r in judged.items() if r.complete
+    }
     joining = (expected, binding.head_sha, binding.diff_digest)
     pending = unjudged | ({joining} if done is None else set())
-    missing = tuple(sorted(set().union(*(
-        _PASS_REVIEWERS[k[0]] - (judged[k].delivered if k in judged else frozenset())
-        for k in pending if not (k in judged and judged[k].complete)))))
+    missing = tuple(
+        sorted(
+            set().union(
+                *(
+                    _PASS_REVIEWERS[k[0]] - (judged[k].delivered if k in judged else frozenset())
+                    for k in pending
+                    if not (k in judged and judged[k].complete)
+                )
+            )
+        )
+    )
     head = done.head_sha if done is not None else binding.head_sha
 
     def unverified(member: str, run: PassRun) -> bool:
@@ -843,15 +865,22 @@ def trial_review_decision(
         closing = completing_run(rows, member)
         return closing is None or run.head_sha == closing.head_sha
 
-    blocking = sorted({f["finding_id"] for a in policy.units[unit] for r in pass_runs(rows, a)
-                       if r.complete and unverified(a, r)
-                       for f in r.findings
-                       if f["severity"] in ("P1", "P2")
-                       and disposed.get(f["finding_id"]) == "accepted"})
+    blocking = sorted(
+        {
+            f["finding_id"]
+            for a in policy.units[unit]
+            for r in pass_runs(rows, a)
+            if r.complete and unverified(a, r)
+            for f in r.findings
+            if f["severity"] in ("P1", "P2") and disposed.get(f["finding_id"]) == "accepted"
+        }
+    )
     # [LAW:one-source-of-truth] an approval names (head, digest): the same head with another
     # reviewed diff transfers nothing
     transfers = done is not None and (done.head_sha, done.diff_digest) == (
-        binding.head_sha, binding.diff_digest)
+        binding.head_sha,
+        binding.diff_digest,
+    )
     approved = transfers and not unjudged and not blocking and not undisposed
     stopped = legacy.stopped or streak >= TRIAL_P1_STOP
     exhausted = len(completed) >= TRIAL_MAX_ROUNDS and not approved
@@ -861,11 +890,16 @@ def trial_review_decision(
         ("binding_stale", done is not None and not unjudged and not transfers),
     )
     state = (
-        "review_quarantined" if stopped or exhausted
-        else "changes_required" if undisposed or blocking
-        else "approved" if approved
-        else "binding_stale" if done is not None and not unjudged
-        else "correction_review" if completed
+        "review_quarantined"
+        if stopped or exhausted
+        else "changes_required"
+        if undisposed or blocking
+        else "approved"
+        if approved
+        else "binding_stale"
+        if done is not None and not unjudged
+        else "correction_review"
+        if completed
         else "unreviewed"
     )
     return TrialReviewDecision(

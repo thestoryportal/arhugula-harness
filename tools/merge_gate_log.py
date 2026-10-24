@@ -61,6 +61,8 @@ CONFIG_CARRIER_GLOB = (REPO / ".codex" / "notes" / "merge-gate-lenses", "*.md")
 CHANNEL = "merge-gate"
 PROMPT_VERSION = "merge-gate-lens-v1"
 _LENS_RE = re.compile(r"^merge-gate-[a-z-]+$")
+
+
 #: The structured markdown line this module writes (the reducer reads ONLY this shape):
 #: `| <ts> | #<pr> | <head12> | <lens> | <APPROVE|BLOCK|REVIEWER_UNAVAILABLE> | <n> finding(s)
 #: | r<round> |`.
@@ -756,10 +758,14 @@ def binding_path(lens: str, values: Mapping[str, str]) -> Path:
 #: What a trial landing may append after the reviewed head: verdict and receipt observations,
 #: and adjudications accepting a finding. Releasing a finding, a proof or a demotion is a
 #: judgment the reviewed cycle never made, so it reopens judgment instead of transferring.
-_TRANSFERABLE_ROWS = frozenset({
-    ("finding", None), ("no_finding", None), ("reviewer_unavailable", None),
-    ("finding_adjudication", "accepted"),
-})
+_TRANSFERABLE_ROWS = frozenset(
+    {
+        ("finding", None),
+        ("no_finding", None),
+        ("reviewer_unavailable", None),
+        ("finding_adjudication", "accepted"),
+    }
+)
 
 
 def _parse_rows(text: str) -> list[dict]:
@@ -845,7 +851,10 @@ class LandingDelta:
 
 
 def landing_proof(
-    reviewed_head: str, final_head: str = "HEAD", *, base: str = rlg.FULL_DIFF_REF,
+    reviewed_head: str,
+    final_head: str = "HEAD",
+    *,
+    base: str = rlg.FULL_DIFF_REF,
     repo: Path | None = None,
 ) -> LandingDelta:
     """The trial transfer proof: both (head, digest) bindings computed here over one base,
@@ -857,7 +866,7 @@ def landing_proof(
     for path, check in _GATE_ROW_CHECKS.items():
         before, after = (_blob(repo, ref, path) for ref in (reviewed[0], final[0]))
         # a non-append is already in `changed`; only an append's new lines are judged here
-        appended = after[len(before):] if after.startswith(before) else b""
+        appended = after[len(before) :] if after.startswith(before) else b""
         try:
             check(before.decode("utf-8"), appended.decode("utf-8").splitlines())
         except ValueError as exc:
@@ -866,8 +875,15 @@ def landing_proof(
 
 
 def trial_review_decision(
-    *, policy: rlg.TrialPolicy, unit: str, arc: str, authors: frozenset[str], doc_only: bool,
-    final_head: str = "HEAD", base: str = rlg.FULL_DIFF_REF, repo: Path | None = None,
+    *,
+    policy: rlg.TrialPolicy,
+    unit: str,
+    arc: str,
+    authors: frozenset[str],
+    doc_only: bool,
+    final_head: str = "HEAD",
+    base: str = rlg.FULL_DIFF_REF,
+    repo: Path | None = None,
 ) -> rlg.TrialReviewDecision:
     """The trial approval boundary over Git: the gate log committed at `final_head`, its
     binding, and whether the recorded reviewed binding's approval transfers onto it are all
@@ -884,8 +900,13 @@ def trial_review_decision(
     # approval lands on final only if the recorded review named exactly those bytes
     judged = proof.final if proof.changed else proof.reviewed
     return rlg.trial_review_decision(
-        rows, policy=policy, unit=unit, arc=arc,
-        binding=rlg.TrialBinding(*judged, authors=authors, doc_only=doc_only))
+        rows,
+        policy=policy,
+        unit=unit,
+        arc=arc,
+        binding=rlg.TrialBinding(*judged, authors=authors, doc_only=doc_only),
+    )
+
 
 def _read_text(arg: str) -> str:
     """`-` (stdin) or a REGULAR file that RESOLVES under `.harness/tmp/` -- the documented

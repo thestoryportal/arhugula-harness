@@ -3990,41 +3990,60 @@ _TRIAL_PRODUCERS = {
 }
 
 
-def _trial_rows(cycle_pass, *, arc=ARC, head=HEAD, digest=DIGEST, producers=None,
-                finding=None):
+def _trial_rows(cycle_pass, *, arc=ARC, head=HEAD, digest=DIGEST, producers=None, finding=None):
     """One reviewer set delivering on (arc, pass, head); `finding` is (id, severity,
     disposition) carried by the first producer, disposition None = not adjudicated."""
     producers = _TRIAL_PRODUCERS[cycle_pass] if producers is None else producers
     rows = [
-        dict(arc_id=arc, cycle_pass=cycle_pass, head_sha=head, diff_digest=digest,
-             producer=p, record_kind="no_finding", round_n=1)
+        dict(
+            arc_id=arc,
+            cycle_pass=cycle_pass,
+            head_sha=head,
+            diff_digest=digest,
+            producer=p,
+            record_kind="no_finding",
+            round_n=1,
+        )
         for p in producers
     ]
     if finding is not None:
         fid, severity, disposition = finding
         rows[0].update(record_kind="finding", finding_id=fid, severity=severity)
         if disposition is not None:
-            rows.append(dict(record_kind="finding_adjudication", finding_id=fid,
-                             disposition=disposition))
+            rows.append(
+                dict(record_kind="finding_adjudication", finding_id=fid, disposition=disposition)
+            )
     return rows
 
 
 def _policy(legacy_rounds=(), p1_streak=0, stopped=False, arcs=(ARC,), unit="u07"):
-    return rlg.parse_trial_policy({
-        "version": "wo-u07-trial-v1",
-        "units": {unit: {"arcs": list(arcs), "legacy": {
-            "rounds": list(legacy_rounds), "p1_streak": p1_streak, "stopped": stopped}}},
-    })
+    return rlg.parse_trial_policy(
+        {
+            "version": "wo-u07-trial-v1",
+            "units": {
+                unit: {
+                    "arcs": list(arcs),
+                    "legacy": {
+                        "rounds": list(legacy_rounds),
+                        "p1_streak": p1_streak,
+                        "stopped": stopped,
+                    },
+                }
+            },
+        }
+    )
 
 
 def _binding(head=HEAD, digest=DIGEST, authors=("claude",)):
-    return rlg.TrialBinding(head_sha=head, diff_digest=digest, authors=frozenset(authors),
-                            doc_only=False)
+    return rlg.TrialBinding(
+        head_sha=head, diff_digest=digest, authors=frozenset(authors), doc_only=False
+    )
 
 
 def _trial(rows, policy=None, unit="u07", arc=ARC, binding=None):
-    return rlg.trial_review_decision(rows, policy=policy or _policy(), unit=unit, arc=arc,
-                                     binding=binding or _binding())
+    return rlg.trial_review_decision(
+        rows, policy=policy or _policy(), unit=unit, arc=arc, binding=binding or _binding()
+    )
 
 
 _CLEAN_CYCLE = _trial_rows("1") + _trial_rows("2") + _trial_rows("3")
@@ -4045,8 +4064,9 @@ def test_new_rounds_append_after_legacy_across_member_arcs():
 
 
 def test_no_sixth_launch_or_renamed_unit_escape():
-    rows = (_trial_rows("1", finding=("f1", "P1", "accepted"))
-            + _trial_rows("esc", head="d" * 40, finding=("f2", "P1", "accepted")))
+    rows = _trial_rows("1", finding=("f1", "P1", "accepted")) + _trial_rows(
+        "esc", head="d" * 40, finding=("f2", "P1", "accepted")
+    )
     d = _trial(rows, policy=_policy(legacy_rounds=("L1", "L2", "L3")))
     assert len(d.completed_rounds) == 5
     assert not d.admit_launch and d.state == "review_quarantined"
@@ -4057,15 +4077,28 @@ def test_no_sixth_launch_or_renamed_unit_escape():
 
 
 def test_missing_or_corrupt_legacy_state_refuses_instead_of_clearing():
-    for doc in ({"version": "v", "units": {"u07": {"arcs": [ARC]}}},
-                {"version": "v", "units": {"u07": {"arcs": [ARC], "legacy": {
-                    "rounds": "L1", "p1_streak": 0, "stopped": False}}}},
-                {"version": "v", "units": {"u07": {"arcs": [ARC], "legacy": {
-                    "rounds": [], "p1_streak": 0, "stopped": "no"}}}},
-                {"version": "v", "units": {"a": {"arcs": [ARC], "legacy": {
-                    "rounds": [], "p1_streak": 0, "stopped": False}},
-                    "b": {"arcs": [ARC], "legacy": {
-                        "rounds": [], "p1_streak": 0, "stopped": False}}}}):
+    for doc in (
+        {"version": "v", "units": {"u07": {"arcs": [ARC]}}},
+        {
+            "version": "v",
+            "units": {
+                "u07": {"arcs": [ARC], "legacy": {"rounds": "L1", "p1_streak": 0, "stopped": False}}
+            },
+        },
+        {
+            "version": "v",
+            "units": {
+                "u07": {"arcs": [ARC], "legacy": {"rounds": [], "p1_streak": 0, "stopped": "no"}}
+            },
+        },
+        {
+            "version": "v",
+            "units": {
+                "a": {"arcs": [ARC], "legacy": {"rounds": [], "p1_streak": 0, "stopped": False}},
+                "b": {"arcs": [ARC], "legacy": {"rounds": [], "p1_streak": 0, "stopped": False}},
+            },
+        },
+    ):
         with pytest.raises(rlg.TrialInputError) as err:
             rlg.parse_trial_policy(doc)
         assert err.value.code == "invalid_input"
@@ -4077,8 +4110,10 @@ def test_correction_carries_legacy_p1_streak():
     stopped = _trial(rows, policy=_policy(p1_streak=1))
     assert stopped.p1_streak == 2 and stopped.state == "review_quarantined"
     assert not stopped.admit_launch and "review_blocked" in stopped.reasons
-    clean = _trial(_trial_rows("1", finding=("f1", "P1", "accepted")) + _trial_rows("2"),
-                   policy=_policy(p1_streak=1))
+    clean = _trial(
+        _trial_rows("1", finding=("f1", "P1", "accepted")) + _trial_rows("2"),
+        policy=_policy(p1_streak=1),
+    )
     assert clean.p1_streak == 0 and clean.state != "review_quarantined"
     assert _trial([], policy=_policy(stopped=True)).state == "review_quarantined"
 
@@ -4088,9 +4123,11 @@ def test_author_cannot_approve_own_material_fix():
     d = _trial(_CLEAN_CYCLE, binding=codex_fixed)
     assert d.state != "approved" and "codex" in d.missing_concerns
     assert "review_blocked" in d.reasons
-    gemini = (_trial_rows("1", producers=["gemini_review_wrapper", *_LENSES3])
-              + _trial_rows("2", producers=["gemini_review_wrapper", rlg._WITNESS_LENS])
-              + _trial_rows("3"))
+    gemini = (
+        _trial_rows("1", producers=["gemini_review_wrapper", *_LENSES3])
+        + _trial_rows("2", producers=["gemini_review_wrapper", rlg._WITNESS_LENS])
+        + _trial_rows("3")
+    )
     assert _trial(gemini, binding=codex_fixed).state == "approved"
 
 
@@ -4113,8 +4150,11 @@ def test_the_reducer_approves_only_the_exact_reviewed_binding():
 def test_same_head_with_another_reviewed_diff_does_not_inherit_approval():
     # [LAW:behavior-not-structure] F1: the approval names (head, digest), never head alone
     other = ("a" * 40, "b" * 64)
-    clean = (_trial_rows("1", digest=other[1]) + _trial_rows("2", digest=other[1])
-             + _trial_rows("3", digest=other[1]))
+    clean = (
+        _trial_rows("1", digest=other[1])
+        + _trial_rows("2", digest=other[1])
+        + _trial_rows("3", digest=other[1])
+    )
     assert _trial(clean, binding=_binding(*other)).state == "approved"
     d = _trial(clean, binding=_binding(HEAD, DIGEST))
     assert d.state == "binding_stale" and "binding_stale" in d.reasons
@@ -4128,11 +4168,17 @@ def test_prior_member_arc_finding_blocks_until_its_own_cycle_verifies_it():
     d = _trial(raised + _CLEAN_CYCLE, policy=policy)
     assert d.state == "changes_required" and d.blocking_findings == ("fp2",)
     assert "review_blocked" in d.reasons and not d.admit_launch
-    verified = raised + _trial_rows("2", arc=prior, head="9" * 40) + _trial_rows(
-        "3", arc=prior, head="9" * 40)
+    verified = (
+        raised
+        + _trial_rows("2", arc=prior, head="9" * 40)
+        + _trial_rows("3", arc=prior, head="9" * 40)
+    )
     assert _trial(verified + _CLEAN_CYCLE, policy=policy).state == "approved"
-    at_close = (_trial_rows("1", arc=prior) + _trial_rows("2", arc=prior) + _trial_rows(
-        "3", arc=prior, finding=("fp1", "P2", "accepted")))
+    at_close = (
+        _trial_rows("1", arc=prior)
+        + _trial_rows("2", arc=prior)
+        + _trial_rows("3", arc=prior, finding=("fp1", "P2", "accepted"))
+    )
     d = _trial(at_close + _trial_rows("1"), policy=policy)
     assert d.state == "changes_required" and d.blocking_findings == ("fp1",)
     rejected = _trial_rows("1", arc=prior, head="f" * 40, finding=("fp2", "P2", "rejected"))
@@ -4140,12 +4186,12 @@ def test_prior_member_arc_finding_blocks_until_its_own_cycle_verifies_it():
 
 
 def test_substantive_findings_never_become_followups():
-    rows = (_trial_rows("1") + _trial_rows("2")
-            + _trial_rows("3", finding=("p2", "P2", "accepted")))
+    rows = _trial_rows("1") + _trial_rows("2") + _trial_rows("3", finding=("p2", "P2", "accepted"))
     d = _trial(rows)
     assert d.state == "changes_required" and d.blocking_findings == ("p2",)
-    p3 = _trial(_trial_rows("1") + _trial_rows("2")
-                + _trial_rows("3", finding=("p3", "P3", "accepted")))
+    p3 = _trial(
+        _trial_rows("1") + _trial_rows("2") + _trial_rows("3", finding=("p3", "P3", "accepted"))
+    )
     assert p3.state == "approved" and p3.blocking_findings == ()
 
 
@@ -4163,10 +4209,18 @@ def test_trial_decision_leaves_legacy_rows_unchanged():
 
 
 def test_arc_of_another_unit_is_an_identity_mismatch():
-    policy = rlg.parse_trial_policy({"version": "v", "units": {
-        "u07": {"arcs": [ARC], "legacy": {"rounds": [], "p1_streak": 0, "stopped": False}},
-        "other": {"arcs": ["b-002-test"], "legacy": {
-            "rounds": [], "p1_streak": 0, "stopped": False}}}})
+    policy = rlg.parse_trial_policy(
+        {
+            "version": "v",
+            "units": {
+                "u07": {"arcs": [ARC], "legacy": {"rounds": [], "p1_streak": 0, "stopped": False}},
+                "other": {
+                    "arcs": ["b-002-test"],
+                    "legacy": {"rounds": [], "p1_streak": 0, "stopped": False},
+                },
+            },
+        }
+    )
     with pytest.raises(rlg.TrialInputError) as err:
         _trial([], policy=policy, unit="other")
     assert err.value.code == "identity_mismatch"
