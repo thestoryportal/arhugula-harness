@@ -688,6 +688,197 @@ def unfixed_after_pass_3(rows: list[dict], arc_id: str) -> int:
     return n
 
 
+# ── WO-U07 trial progression (inactive until the merge-gate procedure adopts it) ──
+# One stable review unit spans arcs, PRs and clears. Its budget is its legacy rounds
+# carried verbatim plus every completed run of its member arcs; nothing here rewrites a
+# row or recounts an old pass under a newer definition.
+
+#: The WS-09 ceiling: completed canonical rounds per stable unit, across arcs and PRs.
+TRIAL_MAX_ROUNDS = 5
+#: Consecutive correction rounds raising an accepted P1 that quarantine the unit.
+TRIAL_P1_STOP = 2
+#: The authoring route each loop producer's judgment comes from; a lens has no route of
+#: its own. A route that materially authored the subject cannot judge it.
+_PRODUCER_ROUTE = {"codex_review_wrapper": "codex", "gemini_review_wrapper": "gemini"}
+_NEXT_ACTION = {
+    "unreviewed": "launch one complete independent judgment covering the concern map",
+    "correction_review": "independently verify the frozen correction and affected concerns",
+    "changes_required": "adjudicate or fix the listed findings, then freeze the correction",
+    "approved": "proceed to required CI on exactly the approved binding",
+    "binding_stale": "reopen the affected judgment on the new frozen inputs",
+    "review_quarantined": "preserve unmerged work; resolve through governance, no new launch",
+}
+
+
+class TrialInputError(GateError):
+    """A trial input refused before any judgment: `code` is a WS-18 reason string."""
+
+    def __init__(self, code: str, detail: str) -> None:
+        super().__init__(f"{code}: {detail}")
+        self.code = code
+
+
+@dataclass(frozen=True)
+class LegacyAccount:
+    """What the unit recorded before this progression, carried as originally labelled."""
+
+    rounds: tuple[str, ...]
+    p1_streak: int
+    stopped: bool
+
+
+@dataclass(frozen=True)
+class TrialPolicy:
+    version: str
+    units: Mapping[str, tuple[str, ...]]  # unit -> member arcs, in chronological order
+    legacy: Mapping[str, LegacyAccount]
+
+
+@dataclass(frozen=True)
+class LandingDelta:
+    """`merge_gate_log.landing_delta(reviewed_head, final)`: empty `changed` proves a
+    gate-row-only landing delta."""
+
+    reviewed_head: str
+    changed: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class TrialBinding:
+    head_sha: str
+    diff_digest: str
+    authors: frozenset[str]  # routes that materially authored the subject or a correction
+    doc_only: bool
+    landing: LandingDelta | None
+
+
+@dataclass(frozen=True)
+class TrialReviewDecision:
+    state: str  # one of _NEXT_ACTION's keys
+    reasons: tuple[str, ...]
+    completed_rounds: tuple[str, ...]
+    p1_streak: int
+    admit_launch: bool
+    next_pass: str | None
+    missing_concerns: tuple[str, ...]
+    blocking_findings: tuple[str, ...]
+    undisposed_findings: tuple[str, ...]
+    next_action: str
+
+
+def _parse_legacy(unit: str, raw: object) -> LegacyAccount:
+    if not (
+        isinstance(raw, dict)
+        and isinstance(raw.get("rounds"), list)
+        and all(isinstance(r, str) and r for r in raw["rounds"])
+        and type(raw.get("p1_streak")) is int
+        and raw["p1_streak"] >= 0
+        and type(raw.get("stopped")) is bool
+    ):
+        raise TrialInputError("invalid_input", f"unit {unit}: legacy rounds/p1_streak/stopped")
+    return LegacyAccount(tuple(raw["rounds"]), raw["p1_streak"], raw["stopped"])
+
+
+def parse_trial_policy(doc: object) -> TrialPolicy:
+    """The tracked trial policy, parsed once. Missing or malformed legacy state refuses:
+    an absent account would otherwise read as zero spent rounds."""
+    # [LAW:parse-dont-validate] the policy crosses here; the reducer trusts TrialPolicy
+    units = doc.get("units") if isinstance(doc, dict) else None
+    if not (isinstance(doc, dict) and isinstance(doc.get("version"), str) and doc["version"]
+            and isinstance(units, dict) and units):
+        raise TrialInputError("invalid_input", "policy needs a version and units")
+    arcs: dict[str, tuple[str, ...]] = {}
+    for unit, raw in units.items():
+        members = raw.get("arcs") if isinstance(raw, dict) else None
+        if not (isinstance(members, list) and members
+                and all(isinstance(a, str) and a for a in members)):
+            raise TrialInputError("invalid_input", f"unit {unit}: arcs")
+        arcs[unit] = tuple(members)
+    seen = [a for members in arcs.values() for a in members]
+    if len(seen) != len(set(seen)):
+        raise TrialInputError("invalid_input", "an arc belongs to more than one unit")
+    legacy = {unit: _parse_legacy(unit, raw.get("legacy")) for unit, raw in units.items()}
+    return TrialPolicy(doc["version"], arcs, legacy)
+
+
+def _round_id(arc_id: str, run: PassRun) -> str:
+    return f"{arc_id}:{run.cycle_pass}:{run.head_sha}:{run.diff_digest}"
+
+
+def trial_review_decision(
+    rows: list[dict], *, policy: TrialPolicy, unit: str, arc: str, binding: TrialBinding
+) -> TrialReviewDecision:
+    """The WS-09 progression for `arc` of stable `unit` on `binding`. Pure: the caller
+    reads the log, the policy and the landing delta."""
+    if policy.units.get(unit) is None or arc not in policy.units[unit]:
+        raise TrialInputError("identity_mismatch", f"arc {arc} is not a member of unit {unit}")
+    legacy = policy.legacy[unit]
+    disposed = _last_dispositions(rows)
+    # [LAW:one-source-of-truth] budget and streak come from every completed run, eligible
+    # or not: an ineligible round still spent the unit's budget.
+    spent = [(a, r) for a in policy.units[unit] for r in pass_runs(rows, a) if r.complete]
+    streak = legacy.p1_streak
+    for _, run in spent:
+        if run.cycle_pass != "1":
+            streak = streak + 1 if _accepted(run, ("P1",), disposed) else 0
+    completed = legacy.rounds + tuple(_round_id(a, r) for a, r in spent)
+    undisposed = sorted({f["finding_id"] for a in policy.units[unit] for r in pass_runs(rows, a)
+                         for f in r.findings if disposed.get(f["finding_id"]) is None})
+    # [LAW:single-enforcer] independence is decided here once. The cycle's shape comes
+    # from every run; a judgment from an authoring route delivers nothing toward approval,
+    # so each completed run must also complete on the eligible rows alone.
+    eligible = [r for r in rows if _PRODUCER_ROUTE.get(r.get("producer")) not in binding.authors]
+    cycle = replay(rows, arc, doc_only=binding.doc_only)
+    done = cycle.completed_by
+    expected = cycle.expected or "3"
+    runs = pass_runs(rows, arc)
+    judged = {(r.cycle_pass, r.head_sha, r.diff_digest): r for r in pass_runs(eligible, arc)}
+    unjudged = {(r.cycle_pass, r.head_sha, r.diff_digest) for r in runs if r.complete} - {
+        k for k, r in judged.items() if r.complete}
+    joining = (expected, binding.head_sha, binding.diff_digest)
+    pending = unjudged | ({joining} if done is None else set())
+    missing = tuple(sorted(set().union(*(
+        _PASS_REVIEWERS[k[0]] - (judged[k].delivered if k in judged else frozenset())
+        for k in pending if not (k in judged and judged[k].complete)))))
+    head = done.head_sha if done is not None else binding.head_sha
+    blocking = sorted({f["finding_id"] for r in runs if r.complete and r.head_sha == head
+                       for f in r.findings
+                       if f["severity"] in ("P1", "P2")
+                       and disposed.get(f["finding_id"]) == "accepted"})
+    transfers = done is not None and (
+        done.head_sha == binding.head_sha
+        or binding.landing == LandingDelta(done.head_sha, ())
+    )
+    approved = transfers and not unjudged and not blocking and not undisposed
+    stopped = legacy.stopped or streak >= TRIAL_P1_STOP
+    exhausted = len(completed) >= TRIAL_MAX_ROUNDS and not approved
+    flags = (
+        ("review_blocked", stopped or bool(undisposed) or bool(blocking) or bool(unjudged)),
+        ("review_budget_exhausted", exhausted),
+        ("binding_stale", done is not None and not unjudged and not transfers),
+    )
+    state = (
+        "review_quarantined" if stopped or exhausted
+        else "changes_required" if undisposed or blocking
+        else "approved" if approved
+        else "binding_stale" if done is not None and not unjudged
+        else "correction_review" if completed
+        else "unreviewed"
+    )
+    return TrialReviewDecision(
+        state=state,
+        reasons=tuple(code for code, on in flags if on),
+        completed_rounds=completed,
+        p1_streak=streak,
+        admit_launch=state in ("unreviewed", "correction_review", "binding_stale"),
+        next_pass=None if approved else expected,
+        missing_concerns=missing,
+        blocking_findings=tuple(blocking),
+        undisposed_findings=tuple(undisposed),
+        next_action=_NEXT_ACTION[state],
+    )
+
+
 @dataclass(frozen=True)
 class CycleRequest:
     """One reviewer asking to deliver its verdict into a pass of the bounded cycle: the
