@@ -40,6 +40,7 @@ import subprocess
 import sys
 import time
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from pathlib import Path
 
 import finding_record as fr
@@ -788,16 +789,45 @@ def _binding_at(repo: Path, base: str, ref: str) -> tuple[str, str]:
     return head, hashlib.sha256(rw.bound_diff(repo, merge_base, head)).hexdigest()
 
 
+@dataclass(frozen=True)
+class LandingDelta:
+    """The reviewed and final (head, digest) bindings, both computed over one base, and what
+    between them is not a gate-row append. Empty `changed` proves a gate-row-only landing
+    delta between exactly those bindings."""
+
+    reviewed: tuple[str, str]
+    final: tuple[str, str]
+    changed: tuple[str, ...]
+
+
 def landing_proof(
     reviewed_head: str, final_head: str = "HEAD", *, base: str = rlg.FULL_DIFF_REF,
     repo: Path | None = None,
-) -> rlg.LandingDelta:
-    """The trial reducer's transfer proof: both (head, digest) bindings computed here over one
-    base, with `landing_delta` between them. An unresolvable ref raises; it is never a clean
-    delta."""
+) -> LandingDelta:
+    """The trial transfer proof: both (head, digest) bindings computed here over one base,
+    with `landing_delta` between them. An unresolvable ref raises; it is never a clean delta."""
     repo = repo or REPO
     reviewed, final = (_binding_at(repo, base, ref) for ref in (reviewed_head, final_head))
-    return rlg.LandingDelta(reviewed, final, tuple(landing_delta(reviewed[0], final[0], repo)))
+    return LandingDelta(reviewed, final, tuple(landing_delta(reviewed[0], final[0], repo)))
+
+
+def trial_review_decision(
+    rows: list[dict], *, policy: rlg.TrialPolicy, unit: str, arc: str,
+    authors: frozenset[str], doc_only: bool, final_head: str = "HEAD",
+    base: str = rlg.FULL_DIFF_REF, repo: Path | None = None,
+) -> rlg.TrialReviewDecision:
+    """The trial approval boundary over Git: `final_head`'s binding, and whether the recorded
+    reviewed binding's approval transfers onto it, are computed here and never supplied."""
+    done = rlg.replay(rows, arc, doc_only=doc_only).completed_by
+    proof = landing_proof(final_head if done is None else done.head_sha, final_head,
+                          base=base, repo=repo)
+    # [LAW:effects-at-boundaries] the pure reducer judges one exact binding; when Git proves
+    # only gate rows follow the reviewed head, it judges that head's Git-derived binding, so an
+    # approval lands on final only if the recorded review named exactly those bytes
+    judged = proof.final if proof.changed else proof.reviewed
+    return rlg.trial_review_decision(
+        rows, policy=policy, unit=unit, arc=arc,
+        binding=rlg.TrialBinding(*judged, authors=authors, doc_only=doc_only))
 
 def _read_text(arg: str) -> str:
     """`-` (stdin) or a REGULAR file that RESOLVES under `.harness/tmp/` -- the documented

@@ -735,23 +735,11 @@ class TrialPolicy:
 
 
 @dataclass(frozen=True)
-class LandingDelta:
-    """`merge_gate_log.landing_proof`: the reviewed and final (head, digest) bindings, both
-    computed by the checker over one base, and what between them is not a gate-row append.
-    Empty `changed` proves a gate-row-only landing delta between exactly those bindings."""
-
-    reviewed: tuple[str, str]
-    final: tuple[str, str]
-    changed: tuple[str, ...]
-
-
-@dataclass(frozen=True)
 class TrialBinding:
     head_sha: str
     diff_digest: str
     authors: frozenset[str]  # routes that materially authored the subject or a correction
     doc_only: bool
-    landing: LandingDelta | None
 
 
 @dataclass(frozen=True)
@@ -810,8 +798,9 @@ def _round_id(arc_id: str, run: PassRun) -> str:
 def trial_review_decision(
     rows: list[dict], *, policy: TrialPolicy, unit: str, arc: str, binding: TrialBinding
 ) -> TrialReviewDecision:
-    """The WS-09 progression for `arc` of stable `unit` on `binding`. Pure: the caller
-    reads the log, the policy and the landing delta."""
+    """The WS-09 progression for `arc` of stable `unit` on exactly `binding`. Pure: the
+    caller reads the log and the policy. An approval crosses a gate-row landing only through
+    `merge_gate_log.trial_review_decision`, which proves that delta from Git."""
     if policy.units.get(unit) is None or arc not in policy.units[unit]:
         raise TrialInputError("identity_mismatch", f"arc {arc} is not a member of unit {unit}")
     legacy = policy.legacy[unit]
@@ -860,12 +849,9 @@ def trial_review_decision(
                        if f["severity"] in ("P1", "P2")
                        and disposed.get(f["finding_id"]) == "accepted"})
     # [LAW:one-source-of-truth] an approval names (head, digest): the same head with another
-    # reviewed diff, or a delta not bound to both bindings, transfers nothing
-    reviewed = (done.head_sha, done.diff_digest) if done is not None else None
-    final = (binding.head_sha, binding.diff_digest)
-    transfers = reviewed is not None and (
-        reviewed == final or binding.landing == LandingDelta(reviewed, final, ())
-    )
+    # reviewed diff transfers nothing
+    transfers = done is not None and (done.head_sha, done.diff_digest) == (
+        binding.head_sha, binding.diff_digest)
     approved = transfers and not unjudged and not blocking and not undisposed
     stopped = legacy.stopped or streak >= TRIAL_P1_STOP
     exhausted = len(completed) >= TRIAL_MAX_ROUNDS and not approved

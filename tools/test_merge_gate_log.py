@@ -450,11 +450,8 @@ def test_landing_delta_transfers_only_over_gate_row_files(tmp_path: Path):
     ]
 
 
-def test_landing_proof_binds_the_reviewed_and_final_bindings(tmp_path: Path):
-    """WO-U07 F1: the checker computes both (head, digest) bindings over one base, so the
-    reducer's transfer proof cannot name another final head or another reviewed diff."""
-    import hashlib
-
+def _landing_repo(tmp_path: Path):
+    """A topic branch off `main`: a reviewed commit changing code.py, then a gate-row append."""
     repo = tmp_path / "r"
     repo.mkdir()
     g = lambda *a: subprocess.run(  # noqa: E731
@@ -474,20 +471,63 @@ def test_landing_proof_binds_the_reviewed_and_final_bindings(tmp_path: Path):
     reviewed = g("rev-parse", "HEAD")
     log.write_text('{"a": 1}\n{"b": 2}\n')
     g("commit", "-qam", "gate rows")
-    final = g("rev-parse", "HEAD")
+    return repo, g, reviewed, g("rev-parse", "HEAD")
+
+
+def test_landing_proof_binds_the_reviewed_and_final_bindings(tmp_path: Path):
+    """WO-U07 F1: the checker computes both (head, digest) bindings over one base, so the
+    transfer proof cannot name another final head or another reviewed diff."""
+    import hashlib
+
+    repo, g, reviewed, final = _landing_repo(tmp_path)
 
     def binding(head: str) -> tuple[str, str]:
         base = g("merge-base", "main", head)
         return head, hashlib.sha256(rw.bound_diff(repo, base, head)).hexdigest()
 
     proof = mgl.landing_proof(reviewed, "HEAD", base="main", repo=repo)
-    assert proof == rlg.LandingDelta(binding(reviewed), binding(final), ())
+    assert proof == mgl.LandingDelta(binding(reviewed), binding(final), ())
     (repo / "code.py").write_text("x = 2\n")
     g("commit", "-qam", "sneaky")
     sneaky = mgl.landing_proof(reviewed, "HEAD", base="main", repo=repo)
     assert sneaky.final == binding(g("rev-parse", "HEAD")) and sneaky.changed == ("code.py",)
     with pytest.raises(subprocess.CalledProcessError):
         mgl.landing_proof("not-a-ref", "HEAD", base="main", repo=repo)
+
+
+def _clean_trial_cycle(arc: str, head: str, digest: str) -> list[dict]:
+    """Independent passes 1, 2 and 3 completing one trial cycle on exactly (head, digest)."""
+    passes = {"1": ["codex_review_wrapper", *rlg.LENSES],
+              "2": ["codex_review_wrapper", rlg._WITNESS_LENS], "3": [rlg.LENSES[0]]}
+    return [dict(arc_id=arc, cycle_pass=p, head_sha=head, diff_digest=digest, producer=producer,
+                 record_kind="no_finding", round_n=1)
+            for p, producers in passes.items() for producer in producers]
+
+
+def test_trial_approval_transfers_only_across_a_git_proven_gate_row_delta(tmp_path: Path):
+    """WO-U07 F1 (review pass 2): the approval boundary derives the landing proof from Git, so
+    no caller-asserted empty delta carries approval across an unreviewed source change."""
+    repo, g, reviewed, _ = _landing_repo(tmp_path)
+    arc = "b-000-test"
+    policy = rlg.parse_trial_policy({"version": "wo-u07-trial-v1", "units": {"u07": {
+        "arcs": [arc], "legacy": {"rounds": [], "p1_streak": 0, "stopped": False}}}})
+
+    def state(rows: list[dict], final_head: str = "HEAD") -> str:
+        return mgl.trial_review_decision(
+            rows, policy=policy, unit="u07", arc=arc, authors=frozenset({"claude"}),
+            doc_only=False, final_head=final_head, base="main", repo=repo).state
+
+    recorded = mgl.landing_proof(reviewed, reviewed, base="main", repo=repo).reviewed
+    clean = _clean_trial_cycle(arc, *recorded)
+    assert state([]) == "unreviewed"
+    assert state(clean, reviewed) == "approved"  # the exact reviewed binding
+    assert state(clean) == "approved"  # only gate rows were appended since
+    misrecorded = _clean_trial_cycle(arc, reviewed, "d" * 64)  # not the reviewed head's diff
+    assert state(misrecorded, reviewed) == state(misrecorded) == "binding_stale"
+    (repo / "code.py").write_text("x = 2\n")  # the reviewer's repro: an unreviewed final edit
+    g("commit", "-qam", "sneaky")
+    assert state(clean) == "binding_stale"
+
 
 def test_one_lens_sibling_never_vouches_for_another_lens(tmp_path: Path):
     md, jl = tmp_path / "log.md", tmp_path / "log.jsonl"

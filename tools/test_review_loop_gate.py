@@ -4017,9 +4017,9 @@ def _policy(legacy_rounds=(), p1_streak=0, stopped=False, arcs=(ARC,), unit="u07
     })
 
 
-def _binding(head=HEAD, digest=DIGEST, authors=("claude",), landing=None):
+def _binding(head=HEAD, digest=DIGEST, authors=("claude",)):
     return rlg.TrialBinding(head_sha=head, diff_digest=digest, authors=frozenset(authors),
-                            doc_only=False, landing=landing)
+                            doc_only=False)
 
 
 def _trial(rows, policy=None, unit="u07", arc=ARC, binding=None):
@@ -4102,19 +4102,11 @@ def test_consolidated_review_requires_complete_concerns():
     assert _trial(_CLEAN_CYCLE).state == "approved"
 
 
-def test_only_a_gate_row_delta_bound_to_both_bindings_transfers_approval():
-    reviewed, final = (HEAD, DIGEST), ("e" * 40, "x" * 64)
-    landed = _trial(_CLEAN_CYCLE, binding=_binding(
-        *final, landing=rlg.LandingDelta(reviewed=reviewed, final=final, changed=())))
-    assert landed.state == "approved"
-    rewritten = ".harness/merge-gate-log.md (not an append)"
-    for landing in (None, rlg.LandingDelta(reviewed, final, ("tools/review_loop_gate.py",)),
-                    rlg.LandingDelta(reviewed, final, (rewritten,)),
-                    rlg.LandingDelta(("f" * 40, DIGEST), final, ()),
-                    rlg.LandingDelta((HEAD, "b" * 64), final, ()),
-                    rlg.LandingDelta(reviewed, ("f" * 40, "x" * 64), ()),
-                    rlg.LandingDelta(reviewed, ("e" * 40, "y" * 64), ())):
-        d = _trial(_CLEAN_CYCLE, binding=_binding(*final, landing=landing))
+def test_the_reducer_approves_only_the_exact_reviewed_binding():
+    # F1: a different final binding is stale here; a gate-row landing transfers only through
+    # merge_gate_log.trial_review_decision's Git-derived proof
+    for final in (("e" * 40, "x" * 64), ("e" * 40, DIGEST)):
+        d = _trial(_CLEAN_CYCLE, binding=_binding(*final))
         assert d.state == "binding_stale" and "binding_stale" in d.reasons
 
 
