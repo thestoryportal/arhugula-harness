@@ -2,12 +2,12 @@
 """C-HE-08 §2–§5: server-side X9 fence for `main` as recipes — show / apply / rollback /
 verify / tiebreaker.
 
-The required-status-context list is RE-DERIVED from .github/workflows/ci.yml at run time
-(job `name:` values ending "— blocking", workflow "CI"), so the payload never drifts from
-the workflow. `apply` is operator-gated (one AskUserQuestion with the printed diff) and
-refuses to run in loop mode (the permission guard denies `gh api -X` there anyway); a
-confirmed apply is PROVISIONAL — the §4 tiebreaker runs immediately and a FAIL rolls the
-protection back to the pre-change state.
+The required-status-context list is RE-DERIVED at run time from the PR-gate workflows
+(job `name:` values ending "— blocking" in ci.yml and pr-metadata.yml), so the payload
+never drifts from the workflows. `apply` is operator-gated (one AskUserQuestion with the
+printed diff) and refuses to run in loop mode (the permission guard denies `gh api -X`
+there anyway); a confirmed apply is PROVISIONAL — the §4 tiebreaker runs immediately and a
+FAIL rolls the protection back to the pre-change state.
 """
 
 from __future__ import annotations
@@ -24,7 +24,12 @@ from pathlib import Path
 import yaml
 
 REPO = Path(__file__).resolve().parent.parent
-CI_YML = REPO / ".github" / "workflows" / "ci.yml"
+WORKFLOWS = REPO / ".github" / "workflows"
+#: The workflows whose `— blocking` jobs are required PR contexts: code verification and
+#: the WO-U10 title-dependent metadata gate (which runs under its own check name).
+REQUIRED_WORKFLOWS = (WORKFLOWS / "ci.yml", WORKFLOWS / "pr-metadata.yml")
+#: GitHub's default `pull_request` activity types — the events that put a new head on a PR.
+_PR_HEAD_EVENTS = frozenset({"opened", "synchronize", "reopened"})
 EVIDENCE_LOG = REPO / ".harness" / "plan" / "evidence-log-he-loop-lanes.md"
 REQUIRED: dict[str, object] = {
     "required_pull_request_reviews": None,
@@ -35,14 +40,63 @@ REQUIRED: dict[str, object] = {
 }
 
 
-def blocking_contexts(ci_yml: Path = CI_YML) -> list[str]:
-    ci = yaml.safe_load(ci_yml.read_text())
-    assert ci.get("name") == "CI", "workflow name must be CI (status contexts are keyed by it)"
-    return sorted(
-        j["name"]
-        for j in ci["jobs"].values()
-        if isinstance(j.get("name"), str) and j["name"].endswith("— blocking")
-    )
+class RequiredWorkflowError(ValueError):
+    """A required workflow cannot report its contexts on every PR head."""
+
+
+def _pr_actions(workflow: dict) -> frozenset[str]:
+    on = workflow.get("on", workflow.get(True))  # PyYAML reads the bare `on` key as True
+    events = on if isinstance(on, dict) else dict.fromkeys([on] if isinstance(on, str) else on)
+    if "pull_request" not in events:
+        return frozenset()
+    types = (events["pull_request"] or {}).get("types")
+    return _PR_HEAD_EVENTS if types is None else frozenset(types)
+
+
+def blocking_contexts(workflows: tuple[Path, ...] = REQUIRED_WORKFLOWS) -> list[str]:
+    names: list[str] = []
+    for path in workflows:
+        wf = yaml.safe_load(path.read_text())
+        # [LAW:parse-dont-validate] strict protection waits on every required context for
+        # each new head; a gate that does not run on every head event would block all merges.
+        missing = _PR_HEAD_EVENTS - _pr_actions(wf)
+        if missing:
+            raise RequiredWorkflowError(
+                f"{path.name} declares required contexts but does not run on pull_request "
+                f"{sorted(missing)}"
+            )
+        names += [
+            j["name"]
+            for j in wf["jobs"].values()
+            if isinstance(j.get("name"), str) and j["name"].endswith("— blocking")
+        ]
+    return sorted(names)
+
+
+def _unlanded_workflows(
+    repo: Path = REPO, workflows: tuple[Path, ...] = REQUIRED_WORKFLOWS
+) -> list[str]:
+    """Required workflows whose checkout copy is not what origin/main runs. The tiebreaker's
+    scratch PR runs main's own workflows, so the fence may only require contexts derived
+    from workflows main already carries: land them first, then apply (WT-14 bootstrap)."""
+
+    def git(*args: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(["git", *args], capture_output=True, text=True, timeout=60, cwd=repo)
+
+    fetched = git("fetch", "-q", "origin", "main")
+    if fetched.returncode != 0:
+        raise SystemExit(f"cannot read origin/main workflows: {fetched.stderr.strip()}")
+    unlanded: list[str] = []
+    for path in workflows:
+        rel = path.relative_to(repo).as_posix()
+        here = git("hash-object", "--", rel)
+        if here.returncode != 0:
+            raise SystemExit(f"cannot hash {rel}: {here.stderr.strip()}")
+        # A workflow absent on main (non-zero exit) is as unlanded as a different blob.
+        on_main = git("rev-parse", "--verify", "-q", f"origin/main:{rel}")
+        if on_main.returncode != 0 or on_main.stdout.strip() != here.stdout.strip():
+            unlanded.append(rel)
+    return unlanded
 
 
 def desired_payload(contexts: list[str]) -> dict[str, object]:
@@ -458,6 +512,14 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--confirm", action="store_true")
     p.add_argument("--approved-digest", default=None)
     a = p.parse_args(argv)
+    if a.cmd in ("apply", "tiebreaker"):
+        unlanded = _unlanded_workflows()
+        if unlanded:
+            raise SystemExit(
+                f"{a.cmd} refused: origin/main does not run this checkout's {unlanded}; the "
+                "fence would require contexts the tiebreaker's scratch PR cannot report — "
+                "land these workflows first, then apply"
+            )
     desired = desired_payload(blocking_contexts())
     if a.cmd == "verify":
         if _gh("auth", "status").returncode != 0:
