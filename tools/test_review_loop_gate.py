@@ -4059,6 +4059,8 @@ def test_missing_or_corrupt_legacy_state_refuses_instead_of_clearing():
     for doc in ({"version": "v", "units": {"u07": {"arcs": [ARC]}}},
                 {"version": "v", "units": {"u07": {"arcs": [ARC], "legacy": {
                     "rounds": "L1", "p1_streak": 0, "stopped": False}}}},
+                {"version": "v", "units": {"u07": {"arcs": [ARC], "legacy": {
+                    "rounds": [], "p1_streak": 0, "stopped": "no"}}}},
                 {"version": "v", "units": {"a": {"arcs": [ARC], "legacy": {
                     "rounds": [], "p1_streak": 0, "stopped": False}},
                     "b": {"arcs": [ARC], "legacy": {
@@ -4132,3 +4134,19 @@ def test_trial_decision_leaves_legacy_rows_unchanged():
     before = json.dumps(rows, sort_keys=True)
     _trial(rows)
     assert json.dumps(rows, sort_keys=True) == before
+
+
+def test_arc_of_another_unit_is_an_identity_mismatch():
+    policy = rlg.parse_trial_policy({"version": "v", "units": {
+        "u07": {"arcs": [ARC], "legacy": {"rounds": [], "p1_streak": 0, "stopped": False}},
+        "other": {"arcs": ["b-002-test"], "legacy": {
+            "rounds": [], "p1_streak": 0, "stopped": False}}}})
+    with pytest.raises(rlg.TrialInputError) as err:
+        _trial([], policy=policy, unit="other")
+    assert err.value.code == "identity_mismatch"
+
+
+def test_undisposed_finding_at_ceiling_quarantines():
+    rows = _trial_rows("1") + _trial_rows("2") + _trial_rows("3", finding=("p3", "P3", None))
+    d = _trial(rows, policy=_policy(legacy_rounds=("L1", "L2")))
+    assert d.state == "review_quarantined" and "review_budget_exhausted" in d.reasons
