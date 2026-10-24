@@ -812,6 +812,54 @@ def test_status_refuses_a_receipt_whose_bytes_are_not_canonical(tmp_path, capsys
     assert_status_refuses(capsys)
 
 
+def status(capsys) -> tuple[int, dict, str]:
+    code = cg.main(["workflow", "status", "--unit", UNIT])
+    captured = capsys.readouterr()
+    return code, json.loads(captured.out), captured.err
+
+
+def test_status_never_reports_a_completion_whose_producer_records_are_absent(capsys, store, trial):
+    request = parse_request(UNIT, "integrate", "after")
+    absent = Reference("/nonexistent/producer.json", "0" * 64, 17)
+    record = wb.boundary_record(
+        request,
+        SUBJECT,
+        {req.name: absent for req in requirements(request.step)},
+        created_at="2026-10-24T00:00:00.000000Z",
+    )
+    wb.publish(record)  # canonical bytes under the canonical name
+
+    code, out, err = status(capsys)
+    assert (code, out["result"]) == (0, "passed")
+    assert out["observed_state"]["integrate"] == "unknown"
+    assert str(record["record_id"]) in err
+
+
+def test_status_forgets_a_passing_check_whose_producer_was_deleted(tmp_path, capsys, store, trial):
+    path, doc = published(tmp_path, capsys)
+    Path(doc["inputs"]["observations"]["lint_format"]["uri"]).unlink()
+
+    code, out, err = status(capsys)
+    assert code == 0
+    assert out["observed_state"]["develop"] == "unknown"
+    assert path.name in err
+
+
+def test_status_reports_the_last_receipt_whose_producers_still_verify(
+    tmp_path, capsys, store, trial
+):
+    first, _ = published(tmp_path, capsys)
+    later = tmp_path / "later"
+    later.mkdir()
+    second, doc = published(later, capsys)
+    Path(doc["inputs"]["observations"]["behavior_proof"]["uri"]).write_bytes(b"changed")
+
+    code, out, err = status(capsys)
+    assert code == 0
+    assert out["observed_state"]["develop"]["receipt"]["uri"] == str(first)
+    assert second.name in err and first.name not in err
+
+
 # --- existing guard contract ------------------------------------------------------------
 
 

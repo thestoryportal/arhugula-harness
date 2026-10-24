@@ -20,7 +20,8 @@ the tracked policy's `boundary_rules` contracts for that requirement; the tracke
 contracts none yet, so every check requirement holds. Requirements sourced from LIT,
 review, CI, remote readback or the merge door hold until their producers' adapters
 exist. `status` reports a stored receipt only when its bytes are exactly what this guard
-publishes for its own parsed inputs. Until the coherent activation (WP-17) every unit
+publishes for its own parsed inputs and its producer records still pass the same
+decision a check makes. Until the coherent activation (WP-17) every unit
 selects `legacy`, so the interface is inactive.
 """
 
@@ -598,6 +599,24 @@ def observe_selection(
     return select_profile(policy, facts)
 
 
+def observe_facts(
+    request: BoundaryRequest,
+    subject: Subject,
+    claims: tuple[Claim, ...],
+    policy: WorkflowPolicy | PolicyDefect,
+) -> BoundaryFacts:
+    """[LAW:single-enforcer] the one route from producer references to boundary facts, for a
+    new check and for re-deciding a stored receipt alike."""
+    rules = parse_check_rules(policy)
+    return BoundaryFacts(
+        selection=observe_selection(policy, request.unit, subject.repository),
+        subject=subject,
+        observations={
+            claim.requirement.name: observe(claim, request, subject, rules) for claim in claims
+        },
+    )
+
+
 def _serialized(record: dict[str, object]) -> bytes:
     return json.dumps(record, sort_keys=True, separators=(",", ":")).encode()
 
@@ -614,9 +633,12 @@ def publish(record: dict[str, object]) -> dict[str, str]:
 
 @dataclass(frozen=True)
 class StoredReceipt:
-    """A stored receipt proved to be exactly what `publish` writes for its own inputs."""
+    """A stored receipt proved to be exactly what `publish` writes for its own inputs. Its
+    claims are the producer references it consumed, which may since have lapsed."""
 
     request: BoundaryRequest
+    subject: Subject
+    claims: tuple[Claim, ...]
     created_at: str
     state: dict[str, object]
 
@@ -637,27 +659,26 @@ def parse_stored(path: Path) -> StoredReceipt:
             cast(str, inputs["boundary"]),
             cast("str | None", inputs["point"]),
         )
-        observed = _object(inputs["observations"], field + ".inputs.observations")
+        references = {
+            name: _reference(ref, f"{field}.inputs.observations.{name}")
+            for name, ref in _object(inputs["observations"], field + ".inputs.observations").items()
+        }
+        subject = _subject(doc["subject"], field + ".subject")
         created_at = cast(str, doc["created_at"])
         datetime.strptime(created_at, _TIMESTAMP)  # the one format, so order is chronological
-        record = boundary_record(
-            request,
-            _subject(doc["subject"], field + ".subject"),
-            {
-                name: _reference(ref, f"{field}.inputs.observations.{name}")
-                for name, ref in observed.items()
-            },
-            created_at=created_at,
-        )
+        record = boundary_record(request, subject, references, created_at=created_at)
     except (KeyError, TypeError, ValueError) as exc:
         raise BoundaryError(field, f"not a boundary receipt: {exc}") from exc
     # A passing receipt binds a record for every requirement of its step, no more or fewer.
-    if set(observed) != {req.name for req in requirements(request.step)}:
+    by_name = {req.name: req for req in requirements(request.step)}
+    if set(references) != set(by_name):
         raise BoundaryError(field, "does not bind exactly its boundary's requirements")
     if raw != _serialized(record) or path.name != f"{record['record_id']}.json":
         raise BoundaryError(field, "is not the receipt this guard publishes for its inputs")
     return StoredReceipt(
         request,
+        subject,
+        tuple(Claim(by_name[name], ref) for name, ref in sorted(references.items())),
         created_at,
         {
             "record_type": record["record_type"],
@@ -667,16 +688,28 @@ def parse_stored(path: Path) -> StoredReceipt:
     )
 
 
-def observed_state(unit: str) -> dict[str, object]:
-    """Each boundary's last verified receipt for `unit`, or `unknown`; reads only. Any
-    store entry that is not a verified receipt raises, so status never reports past it."""
+def observed_state(unit: str) -> tuple[dict[str, object], tuple[str, ...]]:
+    """Each boundary's last receipt for `unit` that still verifies, or `unknown`, and a line
+    naming each receipt that no longer does; reads only. A store entry that is not a
+    receipt this guard published raises, so status never reports past it.
+
+    A receipt is evidence only while its producers are: each stored receipt is decided
+    again by `evaluate_boundary` over its producer records as they are now, so a deleted,
+    changed or never-existing record (WS-08 invalidation) leaves its boundary unverified."""
+    policy = observe_policy()
     stored = [parse_stored(path) for path in sorted(RECEIPT_ROOT.glob("*.json"))]
+    decided = [
+        (r, evaluate_boundary(r.request, observe_facts(r.request, r.subject, r.claims, policy)))
+        for r in sorted((r for r in stored if r.request.unit == unit), key=lambda r: r.created_at)
+    ]
     latest: dict[str, object] = {boundary: "unknown" for boundary in BOUNDARIES}
-    for receipt in sorted(
-        (r for r in stored if r.request.unit == unit), key=lambda r: r.created_at
-    ):
-        latest[receipt.request.boundary] = receipt.state
-    return latest
+    latest.update({r.request.boundary: r.state for r, d in decided if d.result == "passed"})
+    lapsed = tuple(
+        f"{r.state['receipt']}: {d.result} {', '.join(d.reasons)}"
+        for r, d in decided
+        if d.result != "passed"
+    )
+    return latest, lapsed
 
 
 # --- CLI ---------------------------------------------------------------------------------
@@ -737,16 +770,7 @@ def _check(
 ) -> tuple[dict[str, object], int]:
     request = parse_request(unit, boundary, point)
     manifest = parse_manifest(manifest_path.read_bytes(), request)
-    policy = observe_policy()
-    rules = parse_check_rules(policy)
-    facts = BoundaryFacts(
-        selection=observe_selection(policy, request.unit, manifest.subject.repository),
-        subject=manifest.subject,
-        observations={
-            claim.requirement.name: observe(claim, request, manifest.subject, rules)
-            for claim in manifest.claims
-        },
-    )
+    facts = observe_facts(request, manifest.subject, manifest.claims, observe_policy())
     decision = evaluate_boundary(request, facts)
     if decision.record_type is None:
         return _wire(
@@ -773,12 +797,14 @@ def _status(unit: str) -> tuple[dict[str, object], int]:
     if not _UNIT.fullmatch(unit):
         raise BoundaryError("unit", "must be a LIT unit id")
     try:
-        state = observed_state(unit)
+        state, lapsed = observed_state(unit)
     except (OSError, BoundaryError) as exc:
         print(f"workflow status: receipt store unreadable: {exc}", file=sys.stderr)
         return _wire(
             unit, None, "error", ("artifact_unavailable",), None, _NEXT_ACTION["error"]
         ), _EXIT["error"]
+    for line in lapsed:
+        print(f"workflow status: receipt no longer verifies: {line}", file=sys.stderr)
     output = _wire(
         unit, None, "passed", (), None, "Read-only status; run workflow check at a boundary."
     )
