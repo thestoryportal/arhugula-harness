@@ -254,6 +254,32 @@ def test_unrelated_documents_and_classified_logs_preserve_results(repo: Path) ->
     assert decision.reusable is True
 
 
+def test_discovery_never_reads_classified_artifact_bytes(repo: Path) -> None:
+    # WS-15 §17.1: routine checks prune validated artifact domains without reading
+    # their raw bytes, so an unreadable retained log cannot touch the source result.
+    prior = _passed_receipt(build_manifest(repo, _request(repo)))
+    locked = repo / "evidence/logs/locked.log"
+    _write(repo, "evidence/logs/locked.log", "raw output\n")
+    locked.chmod(0)
+    try:
+        assert _reuse(repo, prior).reusable is True
+    finally:
+        locked.chmod(0o600)
+
+
+def test_staged_discovery_never_reads_classified_artifact_objects(repo: Path) -> None:
+    _write(repo, "evidence/logs/tracked.log", "retained output\n")
+    _git(repo, "add", "evidence/logs/tracked.log")
+    oid = _git(repo, "rev-parse", ":evidence/logs/tracked.log")
+    (repo / ".git/objects" / oid[:2] / oid[2:]).unlink()
+
+    manifest = build_manifest(repo, _request(repo, scope=Index()))
+
+    assert manifest.refusals == ()
+    assert "evidence/logs/tracked.log" not in {entry.path for entry in manifest.files}
+    assert "ops/core.py" in {entry.path for entry in manifest.files}
+
+
 def test_untracked_source_overrides_artifact_domain(repo: Path) -> None:
     prior = _passed_receipt(build_manifest(repo, _request(repo)))
     # No artifact root may overlap a code root, whether it claims the whole root or a
