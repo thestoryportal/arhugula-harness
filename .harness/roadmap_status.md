@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `30a44dfdbc24` |
-| `last_refreshed` | 2026-10-24T00:00:00Z |
-| `git_head` | `9d4a8f9a` —  |
+| `workspace_state_hash` | `2cdbef518cb0` |
+| `last_refreshed` | 2026-10-28T00:00:00Z |
+| `git_head` | `3081a9a1` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 125 |
 
@@ -22,7 +22,7 @@
 
 **Purpose.** Live pointer to the next Claude/Codex-executable frontier. Full round-by-round history (every prior round, verbatim, most-recent-first) lives in the archive below — grep it by PR/`B-`/`R-`-id/round, never read wholesale.
 
-**Current next action (post-#1661).** Continue the released WO-U01..WO-U25 batch through live LIT arhugula-harness-trial-193 and canonical paired-lanes guidance. Host cleanup source is merged in PR1661; require this terminating refresh and its own-main CI before further H integration. Host acceptance at arhugula-host-cleanup-vib remains held at Runtime cmt-5276023c: automatic approval rejected terminal delivery before execution, with no installation, fixture or process effect. Preserve the authenticated workspace3 terminal and Runtime handles; resolve approval through its normal boundary without replay or rerouting. After truthful host acceptance, separately admit the exact-current-main U10 fence15 witness, then reconcile and land StageB separately; all five U10 source passes remain spent. U17 already has explicit O writer release; safe cleanup ownership still requires host proof. Preserve U06 unresolved process ownership, U14 PR43 external-review hold, U15 quarantine, U19 UNKNOWN installed acceptance, protected work and original counters. Source landing does not close these tickets.
+**Current next action (post-#1666).** Continue the released WO-U01..WO-U25 batch through live LIT arhugula-harness-trial-193 and canonical paired-lanes guidance. H PR1666 landed inactive WO-U07 review tooling at main 0231fdd7; exact own-main CI40699399523 completed SUCCESS. Complete this terminating refresh and its own-main CI before another H main arc. U07 root PR47 remains held: smoke check121014500582 reports status in_progress with conclusion success, so no terminal CI or merge claim; revalidate its exact head, current base and coherent required checks at the next real transition. U06 binding, integrated acceptance, activation and U07 closure remain held. U15 acceptance FAILED at C2r H1; Runtime is RELEASED with no handles, and no rerun or correction is authorized. Preserve all review passes, findings, quarantines, protected work, claims, raw-evidence debts and other LIT holds; source landing does not close these tickets.
 
 **Archive.** `.harness/roadmap-next-action-archive.md` (PRIOR rounds only, verbatim as each stood when superseded — the current round lives only in this head; the newest superseded round may lag there until the next content PR archives it, and is always losslessly recoverable from this file's own git history meanwhile).
 
@@ -43,6 +43,8 @@
 | PR | Branch | R-NNN | Posture |
 |---|---|---|---|
 | #1292 | `fix/codex-hook-contract-recovery` | — | — |
+| #1663 | `feat/profile-coder-wo-u21-cache` | — | — |
+| #1664 | `feat/wo-u20-scoped-discovery` | — | — |
 
 ---
 
@@ -50,11 +52,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #1665 | 2026-10-28 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
+| PR #1666 | 2026-10-28 | WO-U07 inactive H review tooling landed; exact own-main CI 40699399523 SUCCESS. Root landing and integrated acceptance remain held. |
 | PR #1661 | 2026-10-24 | Host cleanup source landed; installed acceptance remains held at the recorded Runtime approval boundary. |
 | PR #1659 | 2026-10-24 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1656 | 2026-10-24 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
-| PR #1654 | 2026-10-24 | WO-U19 reviewed source landed; original own-main CI40077549029 SUCCESS; installed reuse and acceptance remain UNKNOWN |
-| PR #1653 | 2026-10-24 | WO-U10 Stage A merged after independent pass-4 SOURCE GREEN; exact own-main CI 40075373303 succeeded. Fence-15 witness and separate Stage B remain. |
 
 ---
 
