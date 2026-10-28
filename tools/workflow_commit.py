@@ -23,11 +23,15 @@ closeout. Stop runs the Ruff subset over the working tree.
 
 Commit checks run in a private Git checkout of exactly the staged tree
 (`index_snapshot`), so unstaged or untracked work neither reaches nor blocks them while a
-check that asks Git still sees the commit's tree, and the index is observed again once
-they finish: a change while they ran holds. Every check and checker probe receives only
-`checker_environment`, the pinned variables its manifest records. Every check is keyed by
-its WP-03 input manifest, which includes the observed checker identity (`Toolchain`, for
-`uv run` checks the interpreter and every installed distribution) and that environment.
+check that asks Git still sees the commit's tree. Each check's manifest and subject bytes
+are observed from that same checkout, so a receipt names exactly the bytes its checker ran
+on however the root's index moves meanwhile; the index is observed again once they finish,
+and a change while they ran holds. The gate drops the variables Git hands its hook to
+locate a repository, so each Git command finds its repository from the directory it
+names. Every check and checker probe receives only `checker_environment`, the pinned
+variables its manifest records. Every check is keyed by its WP-03 input manifest, which
+includes the observed checker identity (`Toolchain`, for `uv run` checks the interpreter
+and every installed distribution) and that environment.
 A stored passed receipt is reused only when `reuse_result` accepts it for the current
 manifest, so an unchanged commit or turn runs nothing, while any material change runs
 the check again; a concurrent identical check accepts the receipt that published first
@@ -811,16 +815,16 @@ def run_check(
     trial: Trial,
     scope: Scope,
     check: Check,
-    cwd: Path,
     *,
     created_at: str,
     environment: Mapping[str, str],
     run: Runner,
     timeout: float,
 ) -> Outcome:
-    """One check: reuse an accepted identical result, otherwise run it in `cwd`, which
-    holds exactly the scope's files, with exactly `environment`, and publish a passed
-    receipt for later reuse."""
+    """One check: reuse an accepted identical result, otherwise run it in `root` with
+    exactly `environment`, and publish a passed receipt for later reuse.
+    [LAW:one-source-of-truth] `root` is both what the manifest observes and where the
+    checker runs, so the receipt's key is the bytes the checker read."""
     label = check.subject or " ".join(check.argv)
     request = CheckRequest(
         unit=trial.unit,
@@ -852,7 +856,7 @@ def run_check(
     # edit between observation and execution invalidates the binding.
     if entry is not None and hashlib.sha256(content).hexdigest() != entry.sha256:
         return Outcome("held", ("binding_stale",), (f"{label}: changed while being checked",))
-    proc = run(check.argv, content, cwd, timeout, environment)
+    proc = run(check.argv, content, root, timeout, environment)
     output = (proc.stdout + proc.stderr).decode("utf-8", "replace").strip()[-2000:]
     if proc.returncode == 1:
         return Outcome("failed", ("check_failed",), (f"{label}: {check.name}: {output}",))
@@ -887,14 +891,14 @@ def run_obligations(
     trial: Trial,
     scope: Scope,
     obligations: Sequence[Obligation],
-    cwd: Path,
     *,
     created_at: str,
     environment: Mapping[str, str],
     run: Runner,
     clock: Clock,
 ) -> Outcome:
-    """Every obligation in order within one time budget, each run in `cwd`; a Gap holds."""
+    """Every obligation in order within one time budget, each observed and run in `root`;
+    a Gap holds."""
     deadline = clock() + COMMIT_BUDGET_SECONDS
     outcomes: list[Outcome] = []
     for obligation in obligations:
@@ -909,7 +913,6 @@ def run_obligations(
                         trial,
                         scope,
                         check,
-                        cwd,
                         created_at=created_at,
                         environment=environment,
                         run=run,
@@ -958,7 +961,7 @@ def commit_outcome(
     obligations = commit_obligations(staged, trial.policy, toolchain, observe_naming(root, terms))
     with index_snapshot(root, environment) as snapshot:
         checked = run_obligations(
-            root, trial, Index(), obligations, snapshot,
+            snapshot, trial, Index(), obligations,
             created_at=created_at, environment=environment, run=run, clock=clock,
         )  # fmt: skip
     return combine([checked, rebound(staged, observe_staged(root))])
@@ -977,7 +980,7 @@ def stop_outcome(
     toolchain = observe_toolchain(root, run, environment)
     obligations = ruff_obligations(changed_worktree_paths(root), toolchain)
     return run_obligations(
-        root, trial, WorkingTree(), obligations, root,
+        root, trial, WorkingTree(), obligations,
         created_at=created_at, environment=environment, run=run, clock=clock,
     )  # fmt: skip
 
@@ -1022,10 +1025,16 @@ def main(argv: list[str]) -> int:
         return 2
     root = Path(argv[2]).resolve()
     profile = worktree_profile(root)
+    index_file = os.environ.get("GIT_INDEX_FILE")
+    # [LAW:effects-at-boundaries] Git hands its hook the variables that locate the root's
+    # repository and index; kept, they would point Git inside a snapshot back at the root's
+    # live index. The recorded index stays a value; Git's own list names the rest.
+    for name in _git(root, "rev-parse", "--local-env-vars").decode("utf-8").split():
+        os.environ.pop(name, None)
     environment = checker_environment(os.environ)
     if argv[0] == "pre-commit":
         outcome = pre_commit_outcome(
-            root, profile, os.environ.get("GIT_INDEX_FILE"), created_at=now(),
+            root, profile, index_file, created_at=now(),
             environment=environment,
         )  # fmt: skip
         if outcome.result != "passed":

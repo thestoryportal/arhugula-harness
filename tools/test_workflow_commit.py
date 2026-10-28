@@ -1077,6 +1077,7 @@ def select_profile(policy: object, facts: object) -> ProfileSelection:
     return ProfileSelection("trial", (), ())
 """
 _LEGAL = "def w() -> int:\n    return 1 + 0\n"
+_ILLEGAL = "def w() -> int:\n    return 2\n"  # Ruff-clean; its behavior test fails
 
 
 @pytest.fixture
@@ -1131,6 +1132,15 @@ def _witness_env(tmp_path: Path, **extra: str) -> dict[str, str]:
     return {"HOME": os.environ["HOME"], "PATH": path, **extra}
 
 
+def _git_commit(
+    root: Path, env: Mapping[str, str], message: str
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["git", "-C", str(root), "commit", "-q", "-m", message],
+        env=dict(env), capture_output=True, text=True, check=False,
+    )  # fmt: skip
+
+
 def test_the_real_git_gate_refuses_admits_and_reuses(trial_repo: Path, tmp_path: Path) -> None:
     """Pass-1 W1: `git commit` through the unmodified pre-commit hook and router refuses a
     change its real behavior test rejects, admits a legal change, and reuses that result
@@ -1138,12 +1148,9 @@ def test_the_real_git_gate_refuses_admits_and_reuses(trial_repo: Path, tmp_path:
     env, log, base = _witness_env(tmp_path), tmp_path / "pytest.log", head(trial_repo)
 
     def commit_with(message: str) -> subprocess.CompletedProcess[str]:
-        return subprocess.run(
-            ["git", "-C", str(trial_repo), "commit", "-q", "-m", message],
-            env=env, capture_output=True, text=True, check=False,
-        )  # fmt: skip
+        return _git_commit(trial_repo, env, message)
 
-    stage(trial_repo, "tools/w.py", "def w() -> int:\n    return 2\n")
+    stage(trial_repo, "tools/w.py", _ILLEGAL)
     refused = commit_with("illegal")
     assert refused.returncode != 0 and "check_failed" in refused.stderr, refused.stderr
     assert (head(trial_repo), log.read_text()) == (base, "ran\n")
@@ -1155,6 +1162,46 @@ def test_the_real_git_gate_refuses_admits_and_reuses(trial_repo: Path, tmp_path:
     assert admitted.returncode == 0, admitted.stderr
     assert head(trial_repo) != base
     assert log.read_text() == "ran\n" * 2  # the unchanged index reused its receipt
+
+
+@pytest.mark.parametrize("linked", [False, True], ids=["main-worktree", "linked-worktree"])
+def test_a_restage_during_the_gate_keys_no_pass_to_bytes_never_checked(
+    trial_repo: Path, tmp_path: Path, linked: bool
+) -> None:
+    """Pass-3 row 1 reproduction with real Git, Ruff and pytest: while the gate checks
+    staged index A, another process restages the worktree to B, whose behavior test fails.
+    The gate holds A, and B, committed next, runs its own test and is refused instead of
+    reusing a pass the test earned on A's snapshot. In a linked worktree Git hands the
+    hook an absolute GIT_DIR and GIT_INDEX_FILE naming the live index."""
+    root = tmp_path / "linked" if linked else trial_repo
+    if linked:
+        git(trial_repo, "worktree", "add", "-q", str(root))
+        (root / ".venv").symlink_to(sys.prefix)
+    env, log, base = _witness_env(tmp_path), tmp_path / "pytest.log", head(root)
+    restaged = tmp_path / "restaged"
+    # The other process: the first Ruff check of the gate, a real child of Git's hook,
+    # restages B once, after the gate has taken A's snapshot and before the test runs.
+    racer = tmp_path / "racer" / "ruff"
+    racer.parent.mkdir()
+    racer.write_text(
+        "#!/bin/sh\n"
+        f'if [ "$1" != --version ] && [ ! -e {restaged} ]; then\n'
+        f"  touch {restaged}\n"
+        f"  printf '%s' '{_ILLEGAL}' > {root / 'tools' / 'w.py'}\n"
+        f"  git -C {root} add tools/w.py || exit 2\n"
+        "fi\n"
+        f'exec {tmp_path / "bin" / "ruff"} "$@"\n'
+    )
+    racer.chmod(0o755)
+    env = {**env, "PATH": f"{racer.parent}:{env['PATH']}"}
+    stage(root, "tools/w.py", _LEGAL)
+    held = _git_commit(root, env, "A")
+    assert held.returncode != 0 and "binding_stale" in held.stderr, held.stderr
+    assert restaged.exists() and log.read_text() == "ran\n"  # the test passed on A
+    assert (root / "tools" / "w.py").read_text() == _ILLEGAL
+    refused = _git_commit(root, env, "B")
+    assert refused.returncode != 0 and "check_failed" in refused.stderr, refused.stderr
+    assert (head(root), log.read_text()) == (base, "ran\n" * 2)
 
 
 def test_the_real_stop_hook_refuses_admits_and_reuses(trial_repo: Path, tmp_path: Path) -> None:
