@@ -15,6 +15,10 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT))
+
+from tools import workflow_commit  # noqa: E402 -- resolved from this checkout's root
+
 DEFAULT_UV_CACHE_DIR = "/tmp/arhugula-uv-cache"
 PATCH_FILE_RE = re.compile(r"^\*\*\* (?:Add|Update) File:\s+(.+?)\s*$", re.MULTILINE)
 COMMIT_RE = re.compile(r"^\s*(?:(?:/usr/local/bin/)?rtk\s+)?(?:/usr/bin/)?git\s+commit(?:\s|$)")
@@ -298,6 +302,25 @@ def pre_commit(payload: dict[str, Any]) -> int:
         return 0
 
     cwd = project_dir(payload)
+    # WO-U06: Git's pre-commit hook gates a trial commit however it is spelled, over the
+    # index Git records (tools/workflow_commit.py), so a trial commit runs neither
+    # whole-project Pyright nor release closeout here; legacy work keeps this gate.
+    try:
+        profile = workflow_commit.profile_at(cwd)
+    except (ValueError, OSError, subprocess.CalledProcessError) as exc:
+        print(f"Codex hook adapter: workflow profile unreadable: {exc}", file=sys.stderr)
+        return 2
+    match profile:
+        case workflow_commit.Legacy():
+            return legacy_pre_commit(cwd)
+        case workflow_commit.Held(reasons=reasons):
+            print(f"trial selection held: {', '.join(reasons)}", file=sys.stderr)
+            return 2
+        case workflow_commit.Trial():
+            return 0
+
+
+def legacy_pre_commit(cwd: Path) -> int:
     env = os.environ.copy()
     env.setdefault("UV_CACHE_DIR", DEFAULT_UV_CACHE_DIR)
     # Preserve the canonical Claude hook's two independent gates: static typing and an

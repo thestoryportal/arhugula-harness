@@ -1467,3 +1467,22 @@ The original spec-conformance finding `merge-gate-spec-conformance:06cf67784e867
 Correction `2772d2dc5a765ea7bb422ae668dbac4abe252e22` closes the three accepted findings recorded at `be990e27`: later accepted substantive findings remain blocking, both landing bindings use one resolved base commit, and parsed policy maps are immutable snapshots. The original findings and reports remain unchanged. Pair-1 independent correction judgment is GREEN at LIT cmt-fe3fdb3e; all three fresh corrective merge lenses APPROVE the exact correction with matching bindings.
 
 Original source passes 1–4 remain spent. The three initial extended lenses, one independent correction judgment and three corrective lens invocations are separately attributed under U07 cmt-34575f50; no new product reservation/cycle or budget reset was created. Current product reservation `wo-u07` is absent, so these are standalone legacy rows. Raw logs and final reports: `/mnt/mac/arhugula-artifacts/buford-u07-correction-gates-01a1828b/`; hashes and bindings: `.local/recovery-20261028/buford-continuation-01a1828b/correction-lens-results.json` in the canonical O workspace. Concurrency lens ran 292 focused tests; witness lens ran nine targeted checks and six discriminating isolated mutations. Blast-radius graph was not run because graft is unavailable; no static-completeness claim. Full changed-input local/remote CI, main landing, post-main CI and applicable acceptance remain separate gates. No activation or ticket closure is claimed here.
+| 2026-10-28T18:48:21Z | #1665 | 82c63dbb6e17 | merge-gate-concurrency | BLOCK | 2 finding(s) | r1 |
+| 2026-10-28T18:48:22Z | #1665 | 82c63dbb6e17 | merge-gate-spec-conformance | BLOCK | 3 finding(s) | r1 |
+| 2026-10-28T18:48:23Z | #1665 | 82c63dbb6e17 | merge-gate-witness-adequacy | BLOCK | 1 finding(s) | r1 |
+
+PR #1665 — 2026-10-28 — integrate/buford-wo-u06-currentmain — additional authorized generation2 cycle, pass1 at82c63dbb6e1783abecf446cd0b8ec5cf9a75650b/baseb29c52dff8fef83fdc080dc0df7a885feb37079e: codex BLOCK; concurrency BLOCK; spec-conformance BLOCK; witness-adequacy BLOCK. Outcome BLOCK pending technical adjudication/corrections; original five source passes remain spent. blast-radius: NOT RUN (graft unavailable); grep-derived consumer floor retained in lens prompts. Original reports/native round logs: /mnt/mac/arhugula-artifacts/u06-cycle-82c63dbb-20261028; manifest851ff0681b7d38fec3c2d4147af0d23a0df136b4c1af2484a8cd6666150f7a68. No pass2, escalation, pass3, source correction, main landing or closure.
+| 2026-10-28T19:22:43Z | #1665 | 2c2d1c434de3 | merge-gate-witness-adequacy | APPROVE | 0 finding(s) | r2 |
+| 2026-10-28T19:56:31Z | #1665 | 5dcd018d6ce2 | merge-gate-concurrency | BLOCK | 1 finding(s) | r2 |
+| 2026-10-28T20:25:18Z | #1665 | 9ef7cd76678b | merge-gate-concurrency | BLOCK | 2 finding(s) | r3 |
+| 2026-10-28T21:20:23Z | #1665 | 780aa547ee05 | merge-gate-concurrency | BLOCK | 1 finding(s) | r4 |
+
+### WO-U06 pass3 run3 — 780aa547
+
+PR #1665 / integrate/buford-wo-u06-currentmain / base b29c52dff8fef83fdc080dc0df7a885feb37079e. The single operator-authorized +1 concurrency rerun reviewed the full diff at 780aa547ee05b648ba74fef968ab0494d92c6e10. Its exact report is BLOCK with one P2 and no P1. The ABA snapshot/rebound path is concurrency-sound. Native X9a reducer reports the cycle complete on this binding; no further review is authorized. Original five source passes, additional pass1/pass2, and pass3 runs1/2/3 remain spent. Provider-free hook witness on this code HEAD passed all lifecycle/tool phases, three model requests and both effects. Author checks remain separately attributed.
+
+| Arc follow-up register | Accepted pass3 P2 findings | Timing |
+| --- | --- | --- |
+| wo-u06-pr1665 | 9ef7cd76:0b1b1065679a:1 — Stop cross-revision receipt; 780aa547:069d909585e4:1 — Stop timeout can strand a separate-session checker supervisor | Next PR under X9a; both findings retained, no current source expansion |
+
+Evidence: /mnt/mac/arhugula-artifacts/u06-pass3-run3-780aa547-20261028; bounded receipts: O/.local/u06-pass3-run3-20261028. Buford verified the P2 timeout/process-group trace and recorded accepted disposition; no process-survival reproduction claimed. Final-head required CI, main landing/post-main CI and applicable installed acceptance remain separate gates. No ticket closure or cleanup credit.
