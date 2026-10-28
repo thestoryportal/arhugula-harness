@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `94d749921fac` |
-| `last_refreshed` | 2026-10-28T14:02:57Z |
-| `git_head` | `0231fdd7` —  |
+| `workspace_state_hash` | `2cdbef518cb0` |
+| `last_refreshed` | 2026-10-28T00:00:00Z |
+| `git_head` | `3081a9a1` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 125 |
 
@@ -45,7 +45,6 @@
 | #1292 | `fix/codex-hook-contract-recovery` | — | — |
 | #1663 | `feat/profile-coder-wo-u21-cache` | — | — |
 | #1664 | `feat/wo-u20-scoped-discovery` | — | — |
-| #1665 | `integrate/facade-wo-u06-main207471a6` | — | — |
 
 ---
 
@@ -53,11 +52,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #1665 | 2026-10-28 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1666 | 2026-10-28 | WO-U07 inactive H review tooling landed; exact own-main CI 40699399523 SUCCESS. Root landing and integrated acceptance remain held. |
 | PR #1661 | 2026-10-24 | Host cleanup source landed; installed acceptance remains held at the recorded Runtime approval boundary. |
 | PR #1659 | 2026-10-24 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1656 | 2026-10-24 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
-| PR #1654 | 2026-10-24 | WO-U19 reviewed source landed; original own-main CI40077549029 SUCCESS; installed reuse and acceptance remain UNKNOWN |
 
 ---
 
