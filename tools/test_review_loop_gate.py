@@ -4185,6 +4185,42 @@ def test_prior_member_arc_finding_blocks_until_its_own_cycle_verifies_it():
     assert _trial(rejected + _CLEAN_CYCLE, policy=policy).state == "approved"
 
 
+def test_accepted_finding_raised_after_the_completed_cycle_blocks_its_approval():
+    # U07 lens F1: no completed run reviewed past a finding raised after the cycle closed,
+    # whether or not its own pass completes and whichever head it names
+    for late in (
+        _trial_rows(
+            "1", head="f" * 40, producers=[LOOP_PRODUCER], finding=("late", "P2", "accepted")
+        ),
+        _trial_rows("esc", producers=[LOOP_PRODUCER], finding=("late", "P1", "accepted")),
+    ):
+        d = _trial(_CLEAN_CYCLE + late)
+        assert d.state == "changes_required" and d.blocking_findings == ("late",)
+        assert "review_blocked" in d.reasons and not d.admit_launch
+
+
+def test_accepted_finding_of_an_incomplete_pass_is_reviewed_past_by_a_later_cycle():
+    early = _trial_rows(
+        "1", head="f" * 40, producers=[LOOP_PRODUCER], finding=("e", "P2", "accepted")
+    )
+    assert _trial(early, binding=_binding("f" * 40)).blocking_findings == ("e",)
+    assert _trial(early).blocking_findings == ()  # a corrected head awaits its review
+    assert _trial(early + _CLEAN_CYCLE).state == "approved"
+
+
+def test_trial_policy_is_a_snapshot_its_holders_cannot_rewrite():
+    # U07 lens F3: a policy's maps neither accept writes nor follow the dicts it was built from
+    exhausted = rlg.LegacyAccount(("L1", "L2", "L3", "L4", "L5"), 0, False)
+    units, legacy = {"u07": (ARC,)}, {"u07": exhausted}
+    policy = rlg.TrialPolicy("v", units, legacy)
+    units["u07"], legacy["u07"] = (ARC, "b-009-other"), rlg.LegacyAccount((), 0, False)
+    with pytest.raises(TypeError):
+        policy.legacy["u07"] = legacy["u07"]
+    with pytest.raises(TypeError):
+        policy.units["u07"] = ()
+    assert _trial([], policy=policy).state == "review_quarantined"
+
+
 def test_substantive_findings_never_become_followups():
     rows = _trial_rows("1") + _trial_rows("2") + _trial_rows("3", finding=("p2", "P2", "accepted"))
     d = _trial(rows)

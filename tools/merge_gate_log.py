@@ -831,10 +831,14 @@ def landing_delta(
     return sorted(bad)
 
 
+def _commit(repo: Path, ref: str) -> str:
+    return rw._git(repo, "rev-parse", "--verify", f"{ref}^{{commit}}")
+
+
 def _binding_at(repo: Path, base: str, ref: str) -> tuple[str, str]:
     # [LAW:one-source-of-truth] exception: rw.code_binding's digest formula, which binds only
     # the checked-out HEAD; the reviewed head is a commit, not the worktree.
-    head = rw._git(repo, "rev-parse", "--verify", f"{ref}^{{commit}}")
+    head = _commit(repo, ref)
     merge_base = rw._git(repo, "merge-base", base, head)
     return head, hashlib.sha256(rw.bound_diff(repo, merge_base, head)).hexdigest()
 
@@ -861,7 +865,10 @@ def landing_proof(
     with `landing_delta` between them plus every appended gate-row line a transfer does not
     permit. An unresolvable ref raises; it is never a clean delta."""
     repo = repo or REPO
-    reviewed, final = (_binding_at(repo, base, ref) for ref in (reviewed_head, final_head))
+    # [LAW:no-ambient-temporal-coupling] the base ref can move under a concurrent writer;
+    # resolving it once makes "one base" the commit both bindings are computed over
+    base_commit = _commit(repo, base)
+    reviewed, final = (_binding_at(repo, base_commit, ref) for ref in (reviewed_head, final_head))
     changed = landing_delta(reviewed[0], final[0], repo)
     for path, check in _GATE_ROW_CHECKS.items():
         before, after = (_blob(repo, ref, path) for ref in (reviewed[0], final[0]))
@@ -891,7 +898,7 @@ def trial_review_decision(
     repo = repo or REPO
     # [LAW:no-ambient-temporal-coupling] one resolved commit supplies both the rows and the
     # proof's final binding, so a moving ref cannot pair one head's log with another's diff
-    final = rw._git(repo, "rev-parse", "--verify", f"{final_head}^{{commit}}")
+    final = _commit(repo, final_head)
     rows = _parse_rows(_blob(repo, final, _GATE_LOG_ROWS).decode("utf-8"))
     done = rlg.replay(rows, arc, doc_only=doc_only).completed_by
     proof = landing_proof(final if done is None else done.head_sha, final, base=base, repo=repo)

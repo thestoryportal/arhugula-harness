@@ -79,6 +79,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from types import MappingProxyType
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -538,12 +539,17 @@ class PassRun:
     diff_digest: str
     delivered: frozenset[str]
     findings: tuple[dict, ...]
+    completed_at: int | None  # log position of the verdict that completed it
 
     @property
     def complete(self) -> bool:
-        if self.cycle_pass == "3":
-            return bool(self.delivered)
-        return _PASS_REVIEWERS[self.cycle_pass] <= self.delivered
+        return self.completed_at is not None
+
+
+def _completes(cycle_pass: str, delivered: set[str]) -> bool:
+    if cycle_pass == "3":
+        return bool(delivered)
+    return _PASS_REVIEWERS[cycle_pass] <= delivered
 
 
 def _role(producer: str) -> str | None:
@@ -573,8 +579,8 @@ def pass_runs(rows: list[dict], arc_id: str) -> list[PassRun]:
     # [LAW:one-source-of-truth] append order is the log's own order; wall-clock ts is not
     delivered: dict[tuple[str, str, str], set[str]] = {}
     findings: dict[tuple[str, str, str], list[dict]] = {}
-    completed: list[tuple[str, str, str]] = []
-    for r in rows:
+    completed: dict[tuple[str, str, str], int] = {}
+    for i, r in enumerate(rows):
         # [LAW:one-source-of-truth] the same predicate admits a delivery at write time
         role = _delivering_role(r)
         if r.get("arc_id") != arc_id or role is None:
@@ -583,11 +589,13 @@ def pass_runs(rows: list[dict], arc_id: str) -> list[PassRun]:
         delivered.setdefault(key, set()).add(role)
         if r["record_kind"] == "finding" and r.get("severity") in _REVIEW_SEVERITIES:
             findings.setdefault(key, []).append(r)
-        run = PassRun(*key, frozenset(delivered[key]), ())
-        if run.complete and key not in completed:
-            completed.append(key)
-    order = completed + [k for k in delivered if k not in completed]
-    return [PassRun(*k, frozenset(delivered[k]), tuple(findings.get(k, ()))) for k in order]
+        if key not in completed and _completes(key[0], delivered[key]):
+            completed[key] = i
+    order = [*completed, *(k for k in delivered if k not in completed)]
+    return [
+        PassRun(*k, frozenset(delivered[k]), tuple(findings.get(k, ())), completed.get(k))
+        for k in order
+    ]
 
 
 def _last_dispositions(rows: list[dict]) -> dict[str, str | None]:
@@ -733,6 +741,12 @@ class TrialPolicy:
     units: Mapping[str, tuple[str, ...]]  # unit -> member arcs, in chronological order
     legacy: Mapping[str, LegacyAccount]
 
+    def __post_init__(self) -> None:
+        # [LAW:no-shared-mutable-globals] a trusted policy is a snapshot: its maps are private
+        # read-only copies, so no holder of the source dicts or the policy can rewrite them
+        object.__setattr__(self, "units", MappingProxyType(dict(self.units)))
+        object.__setattr__(self, "legacy", MappingProxyType(dict(self.legacy)))
+
 
 @dataclass(frozen=True)
 class TrialBinding:
@@ -807,13 +821,14 @@ def trial_review_decision(
     """The WS-09 progression for `arc` of stable `unit` on exactly `binding`. Pure: the
     caller reads the log and the policy. An approval crosses a gate-row landing only through
     `merge_gate_log.trial_review_decision`, which proves that delta from Git."""
-    if policy.units.get(unit) is None or arc not in policy.units[unit]:
+    members = policy.units.get(unit, ())
+    if arc not in members:
         raise TrialInputError("identity_mismatch", f"arc {arc} is not a member of unit {unit}")
     legacy = policy.legacy[unit]
     disposed = _last_dispositions(rows)
     # [LAW:one-source-of-truth] budget and streak come from every completed run, eligible
     # or not: an ineligible round still spent the unit's budget.
-    spent = [(a, r) for a in policy.units[unit] for r in pass_runs(rows, a) if r.complete]
+    spent = [(a, r) for a in members for r in pass_runs(rows, a) if r.complete]
     streak = legacy.p1_streak
     for _, run in spent:
         if run.cycle_pass != "1":
@@ -822,7 +837,7 @@ def trial_review_decision(
     undisposed = sorted(
         {
             f["finding_id"]
-            for a in policy.units[unit]
+            for a in members
             for r in pass_runs(rows, a)
             for f in r.findings
             if disposed.get(f["finding_id"]) is None
@@ -853,26 +868,33 @@ def trial_review_decision(
             )
         )
     )
-    head = done.head_sha if done is not None else binding.head_sha
+    # where each finding was first raised: reversed, so the earliest row's position wins
+    raised = {
+        r["finding_id"]: i
+        for i, r in reversed(list(enumerate(rows)))
+        if r.get("record_kind") == "finding"
+    }
 
-    def unverified(member: str, run: PassRun) -> bool:
-        # A finding's obligation ends only where its own arc's cycle reviewed past it: a
-        # later arc's clean passes never judged that finding. Earlier heads of this arc
-        # await its correction review; an earlier arc carries all but what its completed
-        # cycle verified past.
-        if member == arc:
-            return run.head_sha == head
-        closing = completing_run(rows, member)
-        return closing is None or run.head_sha == closing.head_sha
+    def unverified(member: str, run: PassRun, finding_id: str) -> bool:
+        # A finding's obligation ends only where its own arc's cycle reviewed past it: a run on
+        # another head completed that cycle after the finding was raised. A later arc's clean
+        # passes never judged it, and no closed cycle judged a finding raised after it closed,
+        # whether or not that finding's own pass completed. Until this arc's cycle closes,
+        # its earlier heads await their correction review.
+        closing = done if member == arc else completing_run(rows, member)
+        if closing is None:
+            return member != arc or run.head_sha == binding.head_sha
+        return run.head_sha == closing.head_sha or raised[finding_id] > closing.completed_at
 
     blocking = sorted(
         {
             f["finding_id"]
-            for a in policy.units[unit]
+            for a in members
             for r in pass_runs(rows, a)
-            if r.complete and unverified(a, r)
             for f in r.findings
-            if f["severity"] in ("P1", "P2") and disposed.get(f["finding_id"]) == "accepted"
+            if f["severity"] in ("P1", "P2")
+            and disposed.get(f["finding_id"]) == "accepted"
+            and unverified(a, r, f["finding_id"])
         }
     )
     # [LAW:one-source-of-truth] an approval names (head, digest): the same head with another

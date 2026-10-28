@@ -563,6 +563,23 @@ def test_landing_proof_binds_the_reviewed_and_final_bindings(tmp_path: Path):
         mgl.landing_proof("not-a-ref", "HEAD", base="main", repo=repo)
 
 
+def test_landing_proof_binds_both_heads_to_one_base_commit(tmp_path: Path, monkeypatch):
+    """U07 lens F2: a base ref that moves between the two bindings cannot split the proof
+    across two merge bases."""
+    repo, g, reviewed, final = _landing_repo(tmp_path)
+    expected = (mgl._binding_at(repo, "main", reviewed), mgl._binding_at(repo, "main", final))
+    binding_at = mgl._binding_at
+
+    def concurrent_base_update(repo_: Path, base: str, ref: str) -> tuple[str, str]:
+        value = binding_at(repo_, base, ref)
+        g("update-ref", "refs/heads/main", reviewed)  # another writer advances main
+        return value
+
+    monkeypatch.setattr(mgl, "_binding_at", concurrent_base_update)
+    proof = mgl.landing_proof(reviewed, final, base="main", repo=repo)
+    assert (proof.reviewed, proof.final) == expected
+
+
 def _trial_cycle(jl: Path, head: str, digest: str, *, finding: str | None = None) -> list[dict]:
     """Independent passes 1, 2 and 3 on exactly (head, digest), committed to the gate log; pass
     1's loop reviewer raises a `finding`-severity observation when one is given."""
@@ -663,6 +680,23 @@ def test_trial_transfer_refuses_appended_rows_that_release_a_finding(tmp_path: P
         d = _trial_decision(repo)
         assert d.state != "approved" and "binding_stale" in d.reasons, name
         assert mgl.landing_proof(reviewed, "HEAD", base="main", repo=repo).changed, name
+
+
+def test_trial_transfer_never_carries_approval_past_a_later_accepted_finding(tmp_path: Path):
+    """U07 lens F1: an accepted P1/P2 appended after the approving cycle is a permitted gate-row
+    append, so the reducer, not the transfer allowlist, refuses the stale approval."""
+    repo, g, reviewed, _ = _landing_repo(tmp_path)
+    jl = repo / ".harness" / "merge-gate-log.jsonl"
+    recorded = mgl.landing_proof(reviewed, reviewed, base="main", repo=repo).reviewed
+    _trial_cycle(jl, *recorded)
+    g("commit", "-qam", "verdicts")
+    assert _trial_decision(repo).state == "approved"
+    late = _observe(jl, *recorded, "codex_review_wrapper", cycle_pass="esc", severity="P2")
+    _adjudicate(jl, late, "accepted", "2026-01-02T00:00:00Z")
+    g("commit", "-qam", "late finding")
+    assert not mgl.landing_proof(reviewed, "HEAD", base="main", repo=repo).changed
+    d = _trial_decision(repo)
+    assert d.state == "changes_required" and d.blocking_findings == (late["finding_id"],)
 
 
 def test_one_lens_sibling_never_vouches_for_another_lens(tmp_path: Path):
