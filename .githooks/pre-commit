@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash -p
 # Local pre-commit advisory check for X-AL-3 silent-absorption discipline.
 #
 # Non-blocking by design — the enforceable gate is the GitHub Action at
@@ -7,6 +7,16 @@
 #
 # Enable: git config core.hooksPath .githooks
 # (See .githooks/README.md for setup details.)
+
+# WO-U06: the trial commit gate runs first, for a commit however the command that made
+# it was spelled, and blocks unless it passes; Git's own bypasses (--no-verify, another
+# core.hooksPath) skip it and required CI still runs. Legacy work exits 0 there and
+# continues to the advisory check below unchanged.
+# [LAW:single-enforcer] Startup state the caller exports runs before this line, so the
+# interpreters take none: Bash's -p ignores BASH_ENV, ENV, SHELLOPTS, BASHOPTS and
+# exported functions, and Python's -I ignores every PYTHON* variable.
+ROOT=$(git rev-parse --show-toplevel) || exit 1
+/usr/bin/python3 -I "$ROOT/tools/workflow_commit.py" pre-commit --root "$ROOT" || exit $?
 
 STAGED=$(git diff --cached --name-only --diff-filter=AM 2>/dev/null || true)
 

@@ -3975,3 +3975,294 @@ def test_the_codex_wrapper_refuses_a_verdict_its_pass_received_while_it_reviewed
     assert cr.main(["--base", "main"]) == 3
     assert "codex-review: GATE_REFUSED (ALREADY_DELIVERED)" in capsys.readouterr().err
     assert [r["record_kind"] for r in fr.read_rows()] == ["no_finding"]
+
+
+# ── WO-U07 trial progression: stable-unit accounting and independent judgment ──
+# Pure reducer, no git and no log file ([LAW:effects-at-boundaries]); every case
+# feeds rows, a tracked policy document and a binding, and reads the decision.
+
+_LENSES3 = list(rlg.LENSES)
+_TRIAL_PRODUCERS = {
+    "1": [LOOP_PRODUCER, *_LENSES3],
+    "2": [LOOP_PRODUCER, rlg._WITNESS_LENS],
+    "esc": [LOOP_PRODUCER, *_LENSES3],
+    "3": [_LENSES3[0]],
+}
+
+
+def _trial_rows(cycle_pass, *, arc=ARC, head=HEAD, digest=DIGEST, producers=None, finding=None):
+    """One reviewer set delivering on (arc, pass, head); `finding` is (id, severity,
+    disposition) carried by the first producer, disposition None = not adjudicated."""
+    producers = _TRIAL_PRODUCERS[cycle_pass] if producers is None else producers
+    rows = [
+        dict(
+            arc_id=arc,
+            cycle_pass=cycle_pass,
+            head_sha=head,
+            diff_digest=digest,
+            producer=p,
+            record_kind="no_finding",
+            round_n=1,
+        )
+        for p in producers
+    ]
+    if finding is not None:
+        fid, severity, disposition = finding
+        rows[0].update(record_kind="finding", finding_id=fid, severity=severity)
+        if disposition is not None:
+            rows.append(
+                dict(record_kind="finding_adjudication", finding_id=fid, disposition=disposition)
+            )
+    return rows
+
+
+def _policy(legacy_rounds=(), p1_streak=0, stopped=False, arcs=(ARC,), unit="u07"):
+    return rlg.parse_trial_policy(
+        {
+            "version": "wo-u07-trial-v1",
+            "units": {
+                unit: {
+                    "arcs": list(arcs),
+                    "legacy": {
+                        "rounds": list(legacy_rounds),
+                        "p1_streak": p1_streak,
+                        "stopped": stopped,
+                    },
+                }
+            },
+        }
+    )
+
+
+def _binding(head=HEAD, digest=DIGEST, authors=("claude",)):
+    return rlg.TrialBinding(
+        head_sha=head, diff_digest=digest, authors=frozenset(authors), doc_only=False
+    )
+
+
+def _trial(rows, policy=None, unit="u07", arc=ARC, binding=None):
+    return rlg.trial_review_decision(
+        rows, policy=policy or _policy(), unit=unit, arc=arc, binding=binding or _binding()
+    )
+
+
+_CLEAN_CYCLE = _trial_rows("1") + _trial_rows("2") + _trial_rows("3")
+
+
+def test_legacy_three_passes_remain_three():
+    legacy = ("source09-p1", "source09-p2", "source09-p3")
+    d = _trial([], policy=_policy(legacy_rounds=legacy))
+    assert d.completed_rounds == legacy
+    assert d.admit_launch and d.state == "correction_review"
+
+
+def test_new_rounds_append_after_legacy_across_member_arcs():
+    other = "b-001-test"
+    rows = _trial_rows("1", arc=other, finding=("f1", "P1", "accepted")) + _trial_rows("1")
+    d = _trial(rows, policy=_policy(legacy_rounds=("L1",), arcs=(ARC, other)))
+    assert d.completed_rounds[0] == "L1" and len(d.completed_rounds) == 3
+
+
+def test_no_sixth_launch_or_renamed_unit_escape():
+    rows = _trial_rows("1", finding=("f1", "P1", "accepted")) + _trial_rows(
+        "esc", head="d" * 40, finding=("f2", "P1", "accepted")
+    )
+    d = _trial(rows, policy=_policy(legacy_rounds=("L1", "L2", "L3")))
+    assert len(d.completed_rounds) == 5
+    assert not d.admit_launch and d.state == "review_quarantined"
+    assert "review_budget_exhausted" in d.reasons
+    with pytest.raises(rlg.TrialInputError) as renamed:
+        _trial(rows, policy=_policy(legacy_rounds=("L1", "L2", "L3")), unit="u07-renamed")
+    assert renamed.value.code == "identity_mismatch"
+
+
+def test_missing_or_corrupt_legacy_state_refuses_instead_of_clearing():
+    for doc in (
+        {"version": "v", "units": {"u07": {"arcs": [ARC]}}},
+        {
+            "version": "v",
+            "units": {
+                "u07": {"arcs": [ARC], "legacy": {"rounds": "L1", "p1_streak": 0, "stopped": False}}
+            },
+        },
+        {
+            "version": "v",
+            "units": {
+                "u07": {"arcs": [ARC], "legacy": {"rounds": [], "p1_streak": 0, "stopped": "no"}}
+            },
+        },
+        {
+            "version": "v",
+            "units": {
+                "a": {"arcs": [ARC], "legacy": {"rounds": [], "p1_streak": 0, "stopped": False}},
+                "b": {"arcs": [ARC], "legacy": {"rounds": [], "p1_streak": 0, "stopped": False}},
+            },
+        },
+    ):
+        with pytest.raises(rlg.TrialInputError) as err:
+            rlg.parse_trial_policy(doc)
+        assert err.value.code == "invalid_input"
+
+
+def test_correction_carries_legacy_p1_streak():
+    rows = _trial_rows("1", finding=("f1", "P1", "accepted"))
+    rows += _trial_rows("2", finding=("f2", "P1", "accepted"))
+    stopped = _trial(rows, policy=_policy(p1_streak=1))
+    assert stopped.p1_streak == 2 and stopped.state == "review_quarantined"
+    assert not stopped.admit_launch and "review_blocked" in stopped.reasons
+    clean = _trial(
+        _trial_rows("1", finding=("f1", "P1", "accepted")) + _trial_rows("2"),
+        policy=_policy(p1_streak=1),
+    )
+    assert clean.p1_streak == 0 and clean.state != "review_quarantined"
+    assert _trial([], policy=_policy(stopped=True)).state == "review_quarantined"
+
+
+def test_author_cannot_approve_own_material_fix():
+    codex_fixed = _binding(authors=("claude", "codex"))
+    d = _trial(_CLEAN_CYCLE, binding=codex_fixed)
+    assert d.state != "approved" and "codex" in d.missing_concerns
+    assert "review_blocked" in d.reasons
+    gemini = (
+        _trial_rows("1", producers=["gemini_review_wrapper", *_LENSES3])
+        + _trial_rows("2", producers=["gemini_review_wrapper", rlg._WITNESS_LENS])
+        + _trial_rows("3")
+    )
+    assert _trial(gemini, binding=codex_fixed).state == "approved"
+
+
+def test_consolidated_review_requires_complete_concerns():
+    partial = _trial_rows("1", producers=[LOOP_PRODUCER, *_LENSES3[:2]])
+    d = _trial(partial)
+    assert d.state == "unreviewed" and d.missing_concerns == (rlg._WITNESS_LENS,)
+    assert d.completed_rounds == () and d.admit_launch
+    assert _trial(_CLEAN_CYCLE).state == "approved"
+
+
+def test_the_reducer_approves_only_the_exact_reviewed_binding():
+    # F1: a different final binding is stale here; a gate-row landing transfers only through
+    # merge_gate_log.trial_review_decision's Git-derived proof
+    for final in (("e" * 40, "x" * 64), ("e" * 40, DIGEST)):
+        d = _trial(_CLEAN_CYCLE, binding=_binding(*final))
+        assert d.state == "binding_stale" and "binding_stale" in d.reasons
+
+
+def test_same_head_with_another_reviewed_diff_does_not_inherit_approval():
+    # [LAW:behavior-not-structure] F1: the approval names (head, digest), never head alone
+    other = ("a" * 40, "b" * 64)
+    clean = (
+        _trial_rows("1", digest=other[1])
+        + _trial_rows("2", digest=other[1])
+        + _trial_rows("3", digest=other[1])
+    )
+    assert _trial(clean, binding=_binding(*other)).state == "approved"
+    d = _trial(clean, binding=_binding(HEAD, DIGEST))
+    assert d.state == "binding_stale" and "binding_stale" in d.reasons
+
+
+def test_prior_member_arc_finding_blocks_until_its_own_cycle_verifies_it():
+    # F2: a later arc's clean passes never reviewed an earlier arc's accepted finding
+    prior = "b-001-prior"
+    raised = _trial_rows("1", arc=prior, head="f" * 40, finding=("fp2", "P2", "accepted"))
+    policy = _policy(arcs=(prior, ARC))
+    d = _trial(raised + _CLEAN_CYCLE, policy=policy)
+    assert d.state == "changes_required" and d.blocking_findings == ("fp2",)
+    assert "review_blocked" in d.reasons and not d.admit_launch
+    verified = (
+        raised
+        + _trial_rows("2", arc=prior, head="9" * 40)
+        + _trial_rows("3", arc=prior, head="9" * 40)
+    )
+    assert _trial(verified + _CLEAN_CYCLE, policy=policy).state == "approved"
+    at_close = (
+        _trial_rows("1", arc=prior)
+        + _trial_rows("2", arc=prior)
+        + _trial_rows("3", arc=prior, finding=("fp1", "P2", "accepted"))
+    )
+    d = _trial(at_close + _trial_rows("1"), policy=policy)
+    assert d.state == "changes_required" and d.blocking_findings == ("fp1",)
+    rejected = _trial_rows("1", arc=prior, head="f" * 40, finding=("fp2", "P2", "rejected"))
+    assert _trial(rejected + _CLEAN_CYCLE, policy=policy).state == "approved"
+
+
+def test_accepted_finding_raised_after_the_completed_cycle_blocks_its_approval():
+    # U07 lens F1: no completed run reviewed past a finding raised after the cycle closed,
+    # whether or not its own pass completes and whichever head it names
+    for late in (
+        _trial_rows(
+            "1", head="f" * 40, producers=[LOOP_PRODUCER], finding=("late", "P2", "accepted")
+        ),
+        _trial_rows("esc", producers=[LOOP_PRODUCER], finding=("late", "P1", "accepted")),
+    ):
+        d = _trial(_CLEAN_CYCLE + late)
+        assert d.state == "changes_required" and d.blocking_findings == ("late",)
+        assert "review_blocked" in d.reasons and not d.admit_launch
+
+
+def test_accepted_finding_of_an_incomplete_pass_is_reviewed_past_by_a_later_cycle():
+    early = _trial_rows(
+        "1", head="f" * 40, producers=[LOOP_PRODUCER], finding=("e", "P2", "accepted")
+    )
+    assert _trial(early, binding=_binding("f" * 40)).blocking_findings == ("e",)
+    assert _trial(early).blocking_findings == ()  # a corrected head awaits its review
+    assert _trial(early + _CLEAN_CYCLE).state == "approved"
+
+
+def test_trial_policy_is_a_snapshot_its_holders_cannot_rewrite():
+    # U07 lens F3: a policy's maps neither accept writes nor follow the dicts it was built from
+    exhausted = rlg.LegacyAccount(("L1", "L2", "L3", "L4", "L5"), 0, False)
+    units, legacy = {"u07": (ARC,)}, {"u07": exhausted}
+    policy = rlg.TrialPolicy("v", units, legacy)
+    units["u07"], legacy["u07"] = (ARC, "b-009-other"), rlg.LegacyAccount((), 0, False)
+    with pytest.raises(TypeError):
+        policy.legacy["u07"] = legacy["u07"]
+    with pytest.raises(TypeError):
+        policy.units["u07"] = ()
+    assert _trial([], policy=policy).state == "review_quarantined"
+
+
+def test_substantive_findings_never_become_followups():
+    rows = _trial_rows("1") + _trial_rows("2") + _trial_rows("3", finding=("p2", "P2", "accepted"))
+    d = _trial(rows)
+    assert d.state == "changes_required" and d.blocking_findings == ("p2",)
+    p3 = _trial(
+        _trial_rows("1") + _trial_rows("2") + _trial_rows("3", finding=("p3", "P3", "accepted"))
+    )
+    assert p3.state == "approved" and p3.blocking_findings == ()
+
+
+def test_undisposed_finding_holds_judgment():
+    d = _trial(_trial_rows("1", finding=("f1", "P2", None)))
+    assert d.state == "changes_required" and d.undisposed_findings == ("f1",)
+    assert "review_blocked" in d.reasons and not d.admit_launch
+
+
+def test_trial_decision_leaves_legacy_rows_unchanged():
+    rows = _trial_rows("1", finding=("f1", "P1", "accepted"))
+    before = json.dumps(rows, sort_keys=True)
+    _trial(rows)
+    assert json.dumps(rows, sort_keys=True) == before
+
+
+def test_arc_of_another_unit_is_an_identity_mismatch():
+    policy = rlg.parse_trial_policy(
+        {
+            "version": "v",
+            "units": {
+                "u07": {"arcs": [ARC], "legacy": {"rounds": [], "p1_streak": 0, "stopped": False}},
+                "other": {
+                    "arcs": ["b-002-test"],
+                    "legacy": {"rounds": [], "p1_streak": 0, "stopped": False},
+                },
+            },
+        }
+    )
+    with pytest.raises(rlg.TrialInputError) as err:
+        _trial([], policy=policy, unit="other")
+    assert err.value.code == "identity_mismatch"
+
+
+def test_undisposed_finding_at_ceiling_quarantines():
+    rows = _trial_rows("1") + _trial_rows("2") + _trial_rows("3", finding=("p3", "P3", None))
+    d = _trial(rows, policy=_policy(legacy_rounds=("L1", "L2")))
+    assert d.state == "review_quarantined" and "review_budget_exhausted" in d.reasons
