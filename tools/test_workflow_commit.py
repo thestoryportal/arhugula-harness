@@ -1,8 +1,9 @@
 """WO-U06 / WP-04 — proportionate trial commits without duplicate unchanged local gates
 (spec WS-07, WS-08 §10.1-10.2; verification WT-10, WT-11 local part).
 
-Git's pre-commit hook runs the trial gate for every commit, however the command that
-makes it is spelled, and only a worktree where Git runs that hook can select trial. The
+Git's pre-commit hook runs the trial gate for a commit however the command that makes
+it is spelled (Git's own bypasses aside), and only a worktree where Git runs that hook
+can select trial; real-path witnesses drive the unmodified hooks and router. The
 gate holds a commit whose staging is implicit, inspects the actual index and runs the
 proportionate local set: Ruff and the behavior test for changed Python, the CI record
 producers and parsers for records, and the named risk expansion — never whole-project
@@ -100,8 +101,9 @@ class FakeRuff:
         timeout: float,
         environment: Mapping[str, str],
     ) -> subprocess.CompletedProcess[bytes]:
-        if argv[-1] == "--version":
-            answer = self.versions.get(argv[-2], self.version)
+        if argv[-1] in ("--version", wc.ENVIRONMENT_PROBE):
+            program = "python" if argv[-1] == wc.ENVIRONMENT_PROBE else argv[-2]
+            answer = self.versions.get(program, self.version)
             code, out = (127, b"") if answer is None else (0, answer + b"\n")
             return subprocess.CompletedProcess(argv, code, out, b"")
         self.checks.append(list(argv))
@@ -887,7 +889,253 @@ def test_a_shell_test_runs_without_the_callers_bash_startup(
             run=counting,
         )  # fmt: skip
         assert outcome == wc.PASSED
-    assert [argv for argv, _ in runs if argv[-1] != "--version"] == [
+    probes = ("--version", wc.ENVIRONMENT_PROBE)
+    assert [argv for argv, _ in runs if argv[-1] not in probes] == [
         ["bash", "scripts/test_gate.sh"]
     ]
     assert all("BASH_ENV" not in env for _, env in runs)
+
+
+# --- additional cycle pass-1 corrections -------------------------------------------------
+
+
+def test_a_deleted_source_runs_the_tests_that_remain(repo: Path) -> None:
+    """Pass-1 C1/S2 reproduction: deleting a source can break the tests that still import
+    it, so they run as its behavior check."""
+    git(repo, "rm", "-q", "tools/a.py")
+    assert commit(repo, FakeRuff(exit_code=1)).result == "failed"
+    ruff = FakeRuff()
+    assert commit(repo, ruff) == wc.PASSED
+    assert _pytest_targets(ruff) == ["tools/test_a.py"]
+
+
+def test_a_deleted_source_and_its_test_leave_nothing_to_hold(repo: Path) -> None:
+    git(repo, "rm", "-q", "tools/a.py", "tools/test_a.py")
+    ruff = FakeRuff()
+    assert commit(repo, ruff) == wc.PASSED
+    assert _pytest_targets(ruff) == []
+
+
+def _environment_identity(python: Path) -> str:
+    return subprocess.run(
+        [str(python), "-I", "-c", wc.ENVIRONMENT_PROBE], capture_output=True, text=True,
+        check=True,
+    ).stdout  # fmt: skip
+
+
+def test_environment_identity_names_every_installed_distribution(tmp_path: Path) -> None:
+    """Pass-1 C2 reproduction with a real interpreter: reinstalling a dependency under the
+    same Python changes the identity that keys every `uv run` check; nothing else does."""
+    env = tmp_path / "env"
+    subprocess.run([sys.executable, "-m", "venv", "--without-pip", str(env)], check=True)
+    python = env / "bin" / "python"
+    purelib = subprocess.run(
+        [str(python), "-I", "-c", "import sysconfig; print(sysconfig.get_paths()['purelib'])"],
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()  # fmt: skip
+    plugin = Path(purelib) / "plugin-1.0.dist-info"
+    plugin.mkdir()
+    identities = [_environment_identity(python)]
+    for version, record in (
+        ("1.0", "plugin.py,sha256=aaaa,1\n"),
+        ("1.0", "plugin.py,sha256=bbbb,1\n"),
+        ("1.1", "plugin.py,sha256=bbbb,1\n"),
+    ):
+        (plugin / "METADATA").write_text(
+            f"Metadata-Version: 2.1\nName: plugin\nVersion: {version}\n"
+        )
+        (plugin / "RECORD").write_text(record)
+        identities.append(_environment_identity(python))
+    assert len(set(identities)) == 4
+    assert _environment_identity(python) == identities[-1]
+    assert all(identity.startswith("Python ") for identity in identities)
+
+
+@pytest.mark.parametrize("winner_verifies", [True, False])
+def test_a_concurrent_identical_check_accepts_the_receipt_published_first(
+    repo: Path, winner_verifies: bool
+) -> None:
+    """Pass-1 C4/K1 reproduction: two gates both miss the stored receipt and run the same
+    check; the one publishing second accepts the first's receipt when it verifies the
+    check, and only otherwise reports the publication uncertain."""
+    stage(repo, "tools/b.py", "y = 1\n")
+    fake, concurrent = FakeRuff(), list[wc.Outcome]()
+
+    def racing(
+        argv: Sequence[str], stdin: bytes, cwd: Path, timeout: float, env: Mapping[str, str]
+    ) -> subprocess.CompletedProcess[bytes]:
+        if argv[-1] not in ("--version", wc.ENVIRONMENT_PROBE) and not concurrent:
+            concurrent.append(commit(repo, FakeRuff()))  # the other gate finishes first
+            for receipt in wc.CHECK_ROOT.glob("*.json"):
+                receipt.write_bytes(receipt.read_bytes() if winner_verifies else b"{}")
+        return fake(argv, stdin, cwd, timeout, env)
+
+    outcome = wc.commit_outcome(repo, TRIAL, created_at=CREATED, environment=ENV, run=racing)
+    assert concurrent == [wc.PASSED]
+    expected = wc.PASSED if winner_verifies else ("error", ("publication_uncertain",))
+    assert (outcome if winner_verifies else (outcome.result, outcome.reasons)) == expected
+
+
+def _alive(pid: int) -> bool:
+    """Whether `pid` is a live process; a zombie awaiting its reaper has already ended."""
+    for _ in range(50):
+        state = subprocess.run(
+            ["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True, check=False
+        ).stdout.strip()
+        if not state or state.startswith("Z"):
+            return False
+        subprocess.run(["sleep", "0.1"], check=True)  # SIGKILL lands when it is scheduled
+    return True
+
+
+@pytest.mark.parametrize(
+    ("script", "timeout", "code"),
+    [
+        ("sleep 60 >/dev/null 2>&1 & echo $! > {pid}; exit 0", 30.0, 0),
+        ("sleep 60 & echo $! > {pid}; sleep 60", 1.0, 124),
+    ],
+    ids=["leader-exits", "leader-times-out"],
+)
+def test_no_checker_descendant_outlives_its_result(
+    tmp_path: Path, script: str, timeout: float, code: int
+) -> None:
+    """Pass-1 K2 reproduction with real processes: a background descendant, detached from
+    the output or holding it, ends with the checker's result instead of outliving it."""
+    pid = tmp_path / "pid"
+    proc = wc.run_bounded(["bash", "-c", script.format(pid=pid)], b"", tmp_path, timeout, ENV)
+    assert proc.returncode == code
+    assert not _alive(int(pid.read_text()))
+
+
+# --- real-path trial witness (pass-1 W1) -------------------------------------------------
+
+# Copied byte for byte into the witness repository: Git's hook, the Stop hook and the
+# router with the modules it imports.
+_REAL_PATH = (
+    ".githooks/pre-commit",
+    "tools/hooks/stop-gate.sh",
+    "tools/hooks/lib.sh",
+    "tools/workflow_commit.py",
+    "tools/workflow_boundaries.py",
+    "tools/workflow_evidence.py",
+    "tools/workflow_policy.py",
+)
+# The witness's only stand-ins, appended to its copy of WP-02: selection yields trial,
+# which every unit is held from until activation (WP-17) supplies its LIT facts, and the
+# canonical root that holds receipts is private to the test.
+_SELECTION_STAND_IN = """
+
+CANONICAL_ROOT = Path({root!r})
+
+
+def select_profile(policy: object, facts: object) -> ProfileSelection:
+    return ProfileSelection("trial", (), ())
+"""
+_LEGAL = "def w() -> int:\n    return 1 + 0\n"
+
+
+@pytest.fixture
+def trial_repo(tmp_path: Path) -> Path:
+    """An enrolled worktree whose commits and Stop run the unmodified hooks and router,
+    with a real behavior test that logs each execution to `pytest.log`."""
+    root = tmp_path / "repo"
+    for name in _REAL_PATH:
+        (root / name).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(REPO_ROOT / name, root / name)
+    with (root / "tools" / "workflow_policy.py").open("a") as policy:
+        policy.write(_SELECTION_STAND_IN.format(root=str(tmp_path / "canonical")))
+    enrolled = {**json.loads(wb.POLICY_PATH.read_bytes()), "eligible_units": [
+        {"unit": UNIT, "arc": "u06"}
+    ]}  # fmt: skip
+    (root / ".harness").mkdir()
+    (root / ".harness" / "workflow-policy.json").write_text(json.dumps(enrolled))
+    _bind_arc(root)
+    (root / "pyproject.toml").write_text("[tool.ruff]\n")
+    (root / ".gitignore").write_text(".venv\n")
+    (root / ".venv").symlink_to(sys.prefix)  # the environment `uv run` checks resolve
+    (root / "tools" / "w.py").write_text("def w() -> int:\n    return 1\n")
+    (root / "tools" / "test_w.py").write_text(
+        "import w\n\n\ndef test_w() -> None:\n"
+        f"    with open({str(tmp_path / 'pytest.log')!r}, 'a') as log:\n"
+        "        log.write('ran\\n')\n"
+        "    assert w.w() == 1\n"
+    )
+    git(root.parent, "init", "-q", "-b", "main", str(root))
+    git(root, "config", "user.email", "t@t.t")
+    git(root, "config", "user.name", "t")
+    git(root, "remote", "add", "origin", "https://github.com/thestoryportal/arhugula-harness.git")
+    git(root, "add", ".")
+    git(root, "commit", "-qm", "base")
+    git(root, "config", "core.hooksPath", ".githooks")
+    return root
+
+
+def _witness_env(tmp_path: Path, **extra: str) -> dict[str, str]:
+    """The caller's environment: real uv, Ruff and pytest, with Ruff behind a shim that
+    logs every check it runs to `ruff.log`."""
+    tools, uv = Path(sys.executable).parent, shutil.which("uv")
+    assert uv and (tools / "ruff").exists(), "the witness needs real uv and Ruff"
+    shim = tmp_path / "bin" / "ruff"
+    shim.parent.mkdir()
+    shim.write_text(
+        f'#!/bin/sh\n[ "$1" = --version ] || echo "$*" >> {tmp_path / "ruff.log"}\n'
+        f'exec {tools / "ruff"} "$@"\n'
+    )
+    shim.chmod(0o755)
+    path = f"{shim.parent}:{tools}:{Path(uv).parent}:/usr/bin:/bin"
+    return {"HOME": os.environ["HOME"], "PATH": path, **extra}
+
+
+def test_the_real_git_gate_refuses_admits_and_reuses(trial_repo: Path, tmp_path: Path) -> None:
+    """Pass-1 W1: `git commit` through the unmodified pre-commit hook and router refuses a
+    change its real behavior test rejects, admits a legal change, and reuses that result
+    for the unchanged index instead of running the test again."""
+    env, log, base = _witness_env(tmp_path), tmp_path / "pytest.log", head(trial_repo)
+
+    def commit_with(message: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["git", "-C", str(trial_repo), "commit", "-q", "-m", message],
+            env=env, capture_output=True, text=True, check=False,
+        )  # fmt: skip
+
+    stage(trial_repo, "tools/w.py", "def w() -> int:\n    return 2\n")
+    refused = commit_with("illegal")
+    assert refused.returncode != 0 and "check_failed" in refused.stderr, refused.stderr
+    assert (head(trial_repo), log.read_text()) == (base, "ran\n")
+    stage(trial_repo, "tools/w.py", _LEGAL)
+    aborted = commit_with("")  # Git runs the gate, then aborts on the empty message
+    assert "Aborting commit due to empty commit message" in aborted.stderr, aborted.stderr
+    assert (head(trial_repo), log.read_text()) == (base, "ran\n" * 2)
+    admitted = commit_with("legal")
+    assert admitted.returncode == 0, admitted.stderr
+    assert head(trial_repo) != base
+    assert log.read_text() == "ran\n" * 2  # the unchanged index reused its receipt
+
+
+def test_the_real_stop_hook_refuses_admits_and_reuses(trial_repo: Path, tmp_path: Path) -> None:
+    """Pass-1 W1: the unmodified Stop hook and router block a turn whose change real Ruff
+    rejects, allow a legal change, and do not run Ruff again for an unchanged turn."""
+    env = _witness_env(tmp_path, CLAUDE_PROJECT_DIR=str(trial_repo))
+
+    def stop() -> str:
+        return subprocess.run(
+            ["bash", str(trial_repo / "tools" / "hooks" / "stop-gate.sh")],
+            input='{"stop_hook_active":false}', env=env, cwd=trial_repo,
+            capture_output=True, text=True, check=True,
+        ).stdout  # fmt: skip
+
+    (trial_repo / "tools" / "w.py").write_text("import os\n\n\ndef w() -> int:\n    return 1\n")
+    blocked = stop()
+    assert "trial changed-subject check failed (check_failed)" in blocked, blocked
+    (trial_repo / "tools" / "w.py").write_text(_LEGAL)
+    assert (stop(), stop()) == ("", "")
+    runs = (tmp_path / "ruff.log").read_text().splitlines()
+    assert [run.split()[0] for run in runs] == ["check", "format", "check", "format"]
+
+
+def test_uv_checks_are_keyed_by_the_installed_environment(trial_repo: Path, tmp_path: Path) -> None:
+    """Pass-1 C2 wiring: the identity keying every `uv run` check is the environment
+    probe's answer from the interpreter `uv run` resolves for the worktree."""
+    toolchain = wc.observe_toolchain(trial_repo, wc.run_bounded, _witness_env(tmp_path))
+    identity = _environment_identity(Path(sys.executable)).strip()
+    assert toolchain.python is not None and toolchain.python.endswith(f"; {identity}")

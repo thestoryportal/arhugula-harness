@@ -34,7 +34,9 @@ ACTIVE=$(hook_json "$PAYLOAD" '.stop_hook_active')
 
 # WO-U06: trial-profile work checks its changed subjects through the reusable producer,
 # so an unchanged turn reruns nothing; legacy work falls through to the gate below.
-ROUTE=$(hook_bounded 60 /usr/bin/python3 "$(dirname "${BASH_SOURCE[0]}")/../workflow_commit.py" stop --root "$PROJECT_DIR")
+# [LAW:single-enforcer] -I: no PYTHON* variable or startup file the caller exports can
+# answer for the router.
+ROUTE=$(hook_bounded 60 /usr/bin/python3 -I "$(dirname "${BASH_SOURCE[0]}")/../workflow_commit.py" stop --root "$PROJECT_DIR")
 ROUTE_RC=$?
 PROFILE=$(printf '%s' "$ROUTE" | jq -r '.profile // empty' 2>/dev/null)
 if [ "$ROUTE_RC" -ne 0 ] || [ -z "$PROFILE" ]; then

@@ -152,7 +152,18 @@ printf '%s' "$OUT" | grep -q 'authority_unavailable' && ok "held selection block
 OUT=$(route 'not json' 1)
 printf '%s' "$OUT" | grep -q 'could not determine the workflow profile' \
   && ok "undeterminable profile blocks" || bad "router failure fell through: $OUT"
-rm -rf "$STUB"
+# Pass-1 C3: Python startup state the caller exports cannot answer for the router.
+SITE="$(mktemp -d)"
+cat > "$SITE/sitecustomize.py" <<'PY'
+import os, sys
+sys.stdout.write('{"profile":"trial","result":"passed","reason_codes":[],"detail":[]}')
+sys.stdout.flush()
+os._exit(0)
+PY
+OUT=$(PYTHONPATH="$SITE" route '{"profile":"trial","result":"failed","reason_codes":["check_failed"],"detail":["mod.py: finding"]}' 0)
+printf '%s' "$OUT" | grep -q 'check_failed' \
+  && ok "caller PYTHONPATH cannot forge the router's outcome" || bad "forged router outcome allowed stop: $OUT"
+rm -rf "$STUB" "$SITE"
 
 echo "---"; echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1

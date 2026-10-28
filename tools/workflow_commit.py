@@ -3,9 +3,10 @@
 WS-08 §10.1-10.2; verification WT-10, WT-11 local part).
 
 Git's own pre-commit hook is the trial commit gate (`pre-commit --root`, run first by
-`.githooks/pre-commit`), so every `git commit` reaches it however the command that makes
-it is spelled, and the gate reads the index Git hands the hook rather than any shell
-text. A worktree selects `trial` only where Git runs that hook. Legacy work exits 0 and
+`.githooks/pre-commit`), so a `git commit` reaches it however the command that makes it
+is spelled, and the gate reads the index Git hands the hook rather than any shell text.
+Git's own bypasses (`--no-verify`, another `core.hooksPath`) skip it; required CI still
+runs. A worktree selects `trial` only where Git runs that hook. Legacy work exits 0 and
 the existing hooks continue unchanged; a held selection holds. A trial commit must leave
 staging explicit (`recorded_index`): Git records the repository's own index only when no
 `-a`, `-i`, `--only`, pathspec or interactive mode built another, so only then is the
@@ -14,22 +15,25 @@ inspected index exactly what Git records.
 `parse_staged` turns Git's listings into a `StagedScope`, and a staged path whose
 worktree bytes differ from the index holds (`binding_stale`). `commit_obligations` names
 the proportionate local set (WS-07): Ruff lint and format for each changed Python
-subject, the behavior tests of each changed Python or shell subject (`tests_for`), the
-named risk expansion for hook and guard paths, the CI record producers for any record
-path, and a parser for JSON records. A subject with no behavior test is a `Gap` and
-holds. There is no whole-project Pyright, suite or closeout. Stop runs the Ruff subset
-over the working tree.
+subject, the behavior tests the commit still records of each changed or deleted Python
+or shell subject (`tests_for`), the named risk expansion for hook and guard paths, the CI
+record producers for any record path, and a parser for JSON records. A staged subject
+with no behavior test is a `Gap` and holds. There is no whole-project Pyright, suite or
+closeout. Stop runs the Ruff subset over the working tree.
 
 Commit checks run in a private Git checkout of exactly the staged tree
 (`index_snapshot`), so unstaged or untracked work neither reaches nor blocks them while a
 check that asks Git still sees the commit's tree, and the index is observed again once
 they finish: a change while they ran holds. Every check and checker probe receives only
 `checker_environment`, the pinned variables its manifest records. Every check is keyed by
-its WP-03 input manifest, which includes the observed checker identity (`Toolchain`) and
-that environment. A stored passed receipt is reused only when `reuse_result` accepts it
-for the current manifest, so an unchanged commit or turn runs nothing, while any material
-change runs the check again. Failed, unavailable or unreadable results are never reused
-as a pass.
+its WP-03 input manifest, which includes the observed checker identity (`Toolchain`, for
+`uv run` checks the interpreter and every installed distribution) and that environment.
+A stored passed receipt is reused only when `reuse_result` accepts it for the current
+manifest, so an unchanged commit or turn runs nothing, while any material change runs
+the check again; a concurrent identical check accepts the receipt that published first
+on the same terms. Failed, unavailable or unreadable results are never reused as a pass.
+Each checker runs in its own process group, ended with it, so no descendant outlives the
+result.
 
 `worktree_profile` routes a worktree: only a unit bound through its Codex loop arc can
 select `trial` (WP-02 `select_profile`). Until the coherent activation (WP-17) every unit
@@ -43,12 +47,13 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
 import time
 from collections.abc import Callable, Generator, Iterable, Mapping, Sequence
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
@@ -355,15 +360,29 @@ Obligation = Check | Gap
 @dataclass(frozen=True)
 class Toolchain:
     """The checker environment, observed once per gate: the project `uv run` uses, the
-    Ruff command, and the identity of Ruff, Bash and the `uv run` interpreter. An
-    identity is None when it could not be observed, which makes each check needing it a
-    `Gap`."""
+    Ruff command, and the identity of Ruff, Bash and the `uv run` environment (uv, its
+    interpreter and installed distributions). An identity is None when it could not be
+    observed, which makes each check needing it a `Gap`."""
 
     project: Path
     ruff_argv: tuple[str, ...]
     ruff: str | None
     bash: str | None
     python: str | None
+
+
+# Run by the `uv run` interpreter in isolated mode: its version and a digest of every
+# installed distribution's name, version and RECORD (the hash of each file it installed),
+# so reinstalling pytest, a plugin or any dependency changes the checker identity.
+ENVIRONMENT_PROBE = """\
+import hashlib, importlib.metadata as m, json, platform
+rows = sorted(
+    json.dumps([d.metadata["Name"], d.version, d.read_text("RECORD")])
+    for d in m.distributions()
+)
+digest = hashlib.sha256("\\n".join(rows).encode()).hexdigest()
+print(f"Python {platform.python_version()}; distributions sha256:{digest}")
+"""
 
 
 def uv_prefix(project: Path) -> tuple[str, ...]:
@@ -408,12 +427,18 @@ def source_subjects(paths: Sequence[str]) -> tuple[str, ...]:
     return tuple(path for path in paths if path.endswith(_SOURCE_SUFFIXES))
 
 
+def changed_subjects(staged: StagedScope) -> tuple[str, ...]:
+    """[LAW:one-source-of-truth] the source subjects a commit changes, deletions included:
+    removing a source can break the tests that remain, so they run as its behavior check."""
+    return source_subjects((*staged.paths, *staged.deleted))
+
+
 def behavior_tests(path: str, tracked: Sequence[str]) -> tuple[str, ...]:
-    """A source subject's sibling tests: itself when it is a test, otherwise every tracked
-    `test_<name>` under the same top-level directory."""
+    """A source subject's sibling tests the index records: itself when it is a test,
+    otherwise every tracked `test_<name>` under the same top-level directory."""
     name = PurePosixPath(path).name
     if name.startswith("test_"):
-        return (path,)
+        return tuple(test for test in tracked if test == path)
     wanted = "test_" + name.replace("-", "_")
     return tuple(t for t in tracked if PurePosixPath(t).name == wanted and _top(t) == _top(path))
 
@@ -492,7 +517,7 @@ def _uv_check(
     explicit: tuple[str, ...],
     timeout: float,
 ) -> Obligation:
-    """A check `uv run` executes, identified by the interpreter it resolves."""
+    """A check `uv run` executes, identified by the environment it resolves."""
     if toolchain.python is None:
         return Gap(f"{name}: the uv interpreter identity is unavailable")
     argv = (*uv_prefix(toolchain.project), *argv)
@@ -552,11 +577,10 @@ def commit_obligations(
     """[LAW:single-enforcer] the one place WS-07's proportionate local set is decided for
     a staged scope; required CI stays a later gate. A record under a risk prefix adds its
     expansion, and a deletion can orphan any record reference, so it runs the record
-    producers."""
+    producers. Only a staged subject can lack a test: a deleted one runs whatever tests of
+    it remain."""
     code_roots = parse_classification(policy.rules["artifact_roots"]).code_roots
-    tests = {
-        path: tests_for(path, staged.tracked, naming) for path in source_subjects(staged.paths)
-    }
+    tests = {path: tests_for(path, staged.tracked, naming) for path in changed_subjects(staged)}
     records = [path for path in staged.paths if not path.endswith(_SOURCE_SUFFIXES)]
     selected = [
         *(test for found in tests.values() for test in found),
@@ -564,7 +588,11 @@ def commit_obligations(
     ]
     return (
         *ruff_obligations(staged.paths, toolchain),
-        *(Gap(f"{path}: no behavior test names it") for path, found in tests.items() if not found),
+        *(
+            Gap(f"{path}: no behavior test names it")
+            for path in source_subjects(staged.paths)
+            if not tests[path]
+        ),
         *(_test_check(test, code_roots, toolchain) for test in dict.fromkeys(selected)),
         *(_record_check(p, toolchain) for p in RECORD_PRODUCERS if records or staged.deleted),
         *(_json_check(path, toolchain) for path in records if path.endswith((".json", ".jsonl"))),
@@ -609,22 +637,34 @@ def checker_environment(source: Mapping[str, str]) -> dict[str, str]:
 def run_bounded(
     argv: Sequence[str], stdin: bytes, cwd: Path, timeout: float, environment: Mapping[str, str]
 ) -> subprocess.CompletedProcess[bytes]:
-    """[LAW:effects-at-boundaries] one checker process in `cwd` with exactly `environment`;
-    a timeout or a missing executable is an undecided result, never a pass."""
+    """[LAW:effects-at-boundaries] one checker in `cwd` with exactly `environment`, as the
+    leader of its own process group, which is killed once the leader exits or times out,
+    so nothing the checker started outlives its result. A timeout or a missing executable
+    is an undecided result, never a pass."""
     try:
-        return subprocess.run(
+        proc = subprocess.Popen(
             list(argv),
-            input=stdin,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             cwd=cwd,
             env=dict(environment),
-            capture_output=True,
-            timeout=timeout,
-            check=False,
+            start_new_session=True,
         )
-    except subprocess.TimeoutExpired:
-        return subprocess.CompletedProcess(list(argv), 124, b"", b"checker timed out")
     except OSError as exc:
         return subprocess.CompletedProcess(list(argv), 127, b"", str(exc).encode())
+    with proc:
+        try:
+            stdout, stderr = proc.communicate(stdin, timeout=timeout)
+            result = subprocess.CompletedProcess(list(argv), proc.returncode, stdout, stderr)
+        except subprocess.TimeoutExpired:
+            result = subprocess.CompletedProcess(list(argv), 124, b"", b"checker timed out")
+        finally:
+            # [LAW:no-ambient-temporal-coupling] the group ends here, not whenever its
+            # members do; an empty group is already ended.
+            with suppress(ProcessLookupError):
+                os.killpg(proc.pid, signal.SIGKILL)
+    return result
 
 
 def ruff_command(project: Path) -> tuple[str, ...]:
@@ -644,7 +684,8 @@ def observe_toolchain(root: Path, run: Runner, environment: Mapping[str, str]) -
     def probe(*argv: str) -> str | None:
         return _first_line(run(argv, b"", root, 30.0, environment))
 
-    uv, python = probe("uv", "--version"), probe(*uv_prefix(root), "python", "--version")
+    uv = probe("uv", "--version")
+    python = probe(*uv_prefix(root), "python", "-I", "-c", ENVIRONMENT_PROBE)
     return Toolchain(
         root,
         ruff_argv,
@@ -690,6 +731,15 @@ def publish_receipt(path: Path, record: dict[str, object]) -> None:
         raise OSError(f"{path}: readback differs from the published bytes")
 
 
+def stored_pass(stored: Path, manifest: InputManifest) -> bool:
+    """[LAW:single-enforcer] whether the receipt stored for `manifest` passes it."""
+    try:
+        raw = stored.read_bytes()
+    except FileNotFoundError:
+        return False
+    return reuse_result(load_receipt(raw), manifest).reusable
+
+
 def run_check(
     root: Path,
     trial: Trial,
@@ -726,7 +776,7 @@ def run_check(
         codes = ", ".join(r.code for r in manifest.refusals)
         return Outcome("held", ("identity_mismatch",), (f"{label}: inputs refused: {codes}",))
     stored = _receipt_path(manifest)
-    if stored.exists() and reuse_result(load_receipt(stored.read_bytes()), manifest).reusable:
+    if stored_pass(stored, manifest):
         return PASSED
     if timeout <= 0:
         return Outcome("held", ("check_pending",), (f"{label}: commit check budget exhausted",))
@@ -754,6 +804,13 @@ def run_check(
     )
     try:
         publish_receipt(stored, record)
+    except FileExistsError:
+        # A concurrent identical check published first and the link never overwrites;
+        # its receipt is the stored result, accepted only as any stored one is.
+        if not stored_pass(stored, manifest):
+            return Outcome(
+                "error", ("publication_uncertain",), (f"{label}: {stored} does not verify it",)
+            )
     except OSError as exc:
         return Outcome("error", ("publication_uncertain",), (f"{label}: receipt: {exc}",))
     return PASSED
@@ -830,7 +887,7 @@ def commit_outcome(
                 for path in staged.divergent
             ),
         )
-    terms = (term for path in source_subjects(staged.paths) for term in subject_terms(path))
+    terms = (term for path in changed_subjects(staged) for term in subject_terms(path))
     toolchain = observe_toolchain(root, run, environment)
     obligations = commit_obligations(staged, trial.policy, toolchain, observe_naming(root, terms))
     with index_snapshot(root, environment) as snapshot:
