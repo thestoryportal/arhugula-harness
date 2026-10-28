@@ -923,29 +923,38 @@ def _environment_identity(python: Path) -> str:
     ).stdout  # fmt: skip
 
 
-def test_environment_identity_names_every_installed_distribution(tmp_path: Path) -> None:
-    """Pass-1 C2 reproduction with a real interpreter: reinstalling a dependency under the
-    same Python changes the identity that keys every `uv run` check; nothing else does."""
+def test_environment_identity_is_the_bytes_the_interpreter_imports(tmp_path: Path) -> None:
+    """Pass-1 C2 and pass-2 row 1 reproduction with a real interpreter: reinstalling a
+    dependency, editing an installed module in place under an unchanged RECORD, or editing
+    the source an editable install imports each change the identity that keys every
+    `uv run` check; bytecode its runs write does not."""
     env = tmp_path / "env"
     subprocess.run([sys.executable, "-m", "venv", "--without-pip", str(env)], check=True)
     python = env / "bin" / "python"
-    purelib = subprocess.run(
-        [str(python), "-I", "-c", "import sysconfig; print(sysconfig.get_paths()['purelib'])"],
-        capture_output=True, text=True, check=True,
-    ).stdout.strip()  # fmt: skip
-    plugin = Path(purelib) / "plugin-1.0.dist-info"
-    plugin.mkdir()
+    purelib = Path(
+        subprocess.run(
+            [str(python), "-I", "-c", "import sysconfig; print(sysconfig.get_paths()['purelib'])"],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+    )  # fmt: skip
+    editable = tmp_path / "src"
+    editable.mkdir()
+    (purelib / "plugin.py").write_text("x = 1\n")
+    (purelib / "plugin-1.0.dist-info").mkdir()
+    (purelib / "plugin-1.0.dist-info" / "RECORD").write_text("plugin.py,sha256=aaaa,6\n")
+    (purelib / "editable.pth").write_text(f"{editable}\n")
+    (editable / "local.py").write_text("y = 1\n")
     identities = [_environment_identity(python)]
-    for version, record in (
-        ("1.0", "plugin.py,sha256=aaaa,1\n"),
-        ("1.0", "plugin.py,sha256=bbbb,1\n"),
-        ("1.1", "plugin.py,sha256=bbbb,1\n"),
+    for path, content in (
+        (purelib / "plugin-1.0.dist-info" / "RECORD", "plugin.py,sha256=bbbb,6\n"),
+        (purelib / "plugin.py", "x = 2\n"),
+        (editable / "local.py", "y = 2\n"),
     ):
-        (plugin / "METADATA").write_text(
-            f"Metadata-Version: 2.1\nName: plugin\nVersion: {version}\n"
-        )
-        (plugin / "RECORD").write_text(record)
+        path.write_text(content)
         identities.append(_environment_identity(python))
+    for cache in (purelib / "__pycache__", editable / "__pycache__"):
+        cache.mkdir()
+        (cache / "plugin.cpython-312.pyc").write_bytes(b"derived")
     assert len(set(identities)) == 4
     assert _environment_identity(python) == identities[-1]
     assert all(identity.startswith("Python ") for identity in identities)
@@ -993,17 +1002,53 @@ def _alive(pid: int) -> bool:
     [
         ("sleep 60 >/dev/null 2>&1 & echo $! > {pid}; exit 0", 30.0, 0),
         ("sleep 60 & echo $! > {pid}; sleep 60", 1.0, 124),
+        (
+            "setsid sh -c 'echo $$ > {pid}; exec sleep 60' >/dev/null 2>&1 &"
+            " until [ -s {pid} ]; do sleep 0.05; done; exit 0",
+            30.0,
+            0,
+        ),
+        ("setsid bash -c 'sleep 60 >/dev/null 2>&1 & echo $! > {pid}' & wait; exit 0", 30.0, 0),
+        ("setsid sleep 60 & echo $! > {pid}; sleep 60", 1.0, 124),
     ],
-    ids=["leader-exits", "leader-times-out"],
+    ids=[
+        "leader-exits",
+        "leader-times-out",
+        "descendant-leaves-the-session",
+        "descendant-daemonizes",
+        "descendant-leaves-the-session-and-leader-times-out",
+    ],
 )
 def test_no_checker_descendant_outlives_its_result(
     tmp_path: Path, script: str, timeout: float, code: int
 ) -> None:
-    """Pass-1 K2 reproduction with real processes: a background descendant, detached from
-    the output or holding it, ends with the checker's result instead of outliving it."""
+    """Pass-1 K2 and pass-2 row 2 reproduction with real processes: a background
+    descendant, detached from the output or holding it, in the checker's process group or
+    a session of its own, orphaned or not, ends with the checker's result instead of
+    outliving it."""
     pid = tmp_path / "pid"
     proc = wc.run_bounded(["bash", "-c", script.format(pid=pid)], b"", tmp_path, timeout, ENV)
     assert proc.returncode == code
+    assert not _alive(int(pid.read_text()))
+
+
+def test_a_supervisor_that_does_not_finish_is_ended_undecided(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Past the supervisor's grace the gate ends the supervisor's whole process group,
+    including a member that would outlive the supervisor, and reports the check
+    undecided."""
+    pid = tmp_path / "pid"
+    monkeypatch.setattr(
+        wc,
+        "SUPERVISOR",
+        "import subprocess, time\n"
+        f"open({str(pid)!r}, 'w').write(str(subprocess.Popen(['sleep', '600']).pid))\n"
+        "time.sleep(60)\n",
+    )
+    monkeypatch.setattr(wc, "SUPERVISOR_GRACE_SECONDS", 1.0)
+    proc = wc.run_bounded(["true"], b"", tmp_path, 1.0, ENV)
+    assert proc.returncode == 124
     assert not _alive(int(pid.read_text()))
 
 

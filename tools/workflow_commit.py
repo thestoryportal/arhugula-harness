@@ -32,8 +32,8 @@ A stored passed receipt is reused only when `reuse_result` accepts it for the cu
 manifest, so an unchanged commit or turn runs nothing, while any material change runs
 the check again; a concurrent identical check accepts the receipt that published first
 on the same terms. Failed, unavailable or unreadable results are never reused as a pass.
-Each checker runs in its own process group, ended with it, so no descendant outlives the
-result.
+Each checker runs under a subreaper that ends every descendant with it, including one that
+left its process group or session, so no descendant outlives the result.
 
 `worktree_profile` routes a worktree: only a unit bound through its Codex loop arc can
 select `trial` (WP-02 `select_profile`). Until the coherent activation (WP-17) every unit
@@ -371,17 +371,29 @@ class Toolchain:
     python: str | None
 
 
-# Run by the `uv run` interpreter in isolated mode: its version and a digest of every
-# installed distribution's name, version and RECORD (the hash of each file it installed),
-# so reinstalling pytest, a plugin or any dependency changes the checker identity.
+# Run by the `uv run` interpreter in isolated mode: its version and a digest of the bytes
+# of every file under its environment and import path, so reinstalling or editing pytest,
+# a plugin, any dependency or an editable source it imports changes the checker identity.
+# [LAW:one-source-of-truth] the files themselves, not RECORD's install-time account of
+# them; bytecode caches are derived from them and written by every run.
 ENVIRONMENT_PROBE = """\
-import hashlib, importlib.metadata as m, json, platform
-rows = sorted(
-    json.dumps([d.metadata["Name"], d.version, d.read_text("RECORD")])
-    for d in m.distributions()
-)
-digest = hashlib.sha256("\\n".join(rows).encode()).hexdigest()
-print(f"Python {platform.python_version()}; distributions sha256:{digest}")
+import hashlib, os, platform, sys
+
+def files(root):
+    if os.path.isfile(root):
+        yield root
+    for top, dirs, names in os.walk(root):
+        dirs[:] = sorted(d for d in dirs if d != "__pycache__")
+        yield from (os.path.join(top, name) for name in sorted(names))
+
+paths = sorted({os.path.realpath(p) for p in (sys.prefix, *sys.path)})
+digest = hashlib.sha256()
+for root in [r for r in paths if not any(r.startswith(o + os.sep) for o in paths)]:
+    for path in files(root):
+        with open(path, "rb") as handle:
+            content = hashlib.file_digest(handle, "sha256").hexdigest()
+        digest.update(f"{os.path.relpath(path, root)}\\0{content}\\n".encode())
+print(f"Python {platform.python_version()}; environment sha256:{digest.hexdigest()}")
 """
 
 
@@ -634,16 +646,68 @@ def checker_environment(source: Mapping[str, str]) -> dict[str, str]:
     return {name: source[name] for name in CHECK_VARIABLES if name in source}
 
 
+# Run by the gate's interpreter in isolated mode as each checker's parent: a child
+# subreaper, so every descendant that leaves the checker's process group or session is
+# re-parented here rather than to init. It runs the checker with exactly the given
+# environment, ends it at its timeout, then kills and reaps every descendant still
+# alive before reporting the checker's status. It cannot decide (125) if it cannot
+# become a subreaper.
+SUPERVISOR = """\
+import ctypes, json, os, signal, subprocess, sys
+
+def children():
+    me = str(os.getpid())
+    for pid in filter(str.isdigit, os.listdir("/proc")):
+        try:
+            with open(f"/proc/{pid}/stat") as stat:
+                parent = stat.read().rsplit(")", 1)[1].split()[1]
+        except (FileNotFoundError, ProcessLookupError):
+            continue  # a process that exited after the listing
+        if parent == me:
+            yield int(pid)
+
+def finish(code, message):
+    print(message, file=sys.stderr)
+    sys.exit(code)
+
+PR_SET_CHILD_SUBREAPER = 36
+libc = ctypes.CDLL(None, use_errno=True)
+if not hasattr(libc, "prctl") or libc.prctl(PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) != 0:
+    finish(125, f"checker supervisor: no subreaper: {os.strerror(ctypes.get_errno())}")
+environment, timeout, argv = json.loads(sys.argv[1]), float(sys.argv[2]), sys.argv[3:]
+try:
+    checker = subprocess.Popen(argv, env=environment)
+except OSError as exc:
+    finish(127, str(exc))
+try:
+    code = checker.wait(timeout)
+except subprocess.TimeoutExpired:
+    code = None
+# Our children are only the checker and descendants re-parented to us; each stays
+# ours, so its PID stays valid, until the waitpid below reaps it.
+while left := list(children()):
+    for pid in left:
+        os.kill(pid, signal.SIGKILL)
+    os.waitpid(-1, 0)
+if code is None:
+    finish(124, "checker timed out")
+sys.exit(code if code >= 0 else 128 - code)
+"""
+# The supervisor's own start and sweep beyond the checker's timeout; past it the
+# supervisor itself is ended and the check is undecided.
+SUPERVISOR_GRACE_SECONDS = 10.0
+
+
 def run_bounded(
     argv: Sequence[str], stdin: bytes, cwd: Path, timeout: float, environment: Mapping[str, str]
 ) -> subprocess.CompletedProcess[bytes]:
-    """[LAW:effects-at-boundaries] one checker in `cwd` with exactly `environment`, as the
-    leader of its own process group, which is killed once the leader exits or times out,
-    so nothing the checker started outlives its result. A timeout or a missing executable
-    is an undecided result, never a pass."""
+    """[LAW:effects-at-boundaries] one checker in `cwd` with exactly `environment`, under
+    `SUPERVISOR`, so nothing the checker started outlives its result. A timeout or a
+    missing executable is an undecided result, never a pass."""
+    supervised = [sys.executable, "-I", "-c", SUPERVISOR, json.dumps(dict(environment))]
     try:
         proc = subprocess.Popen(
-            list(argv),
+            [*supervised, str(timeout), *argv],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -655,13 +719,15 @@ def run_bounded(
         return subprocess.CompletedProcess(list(argv), 127, b"", str(exc).encode())
     with proc:
         try:
-            stdout, stderr = proc.communicate(stdin, timeout=timeout)
+            stdout, stderr = proc.communicate(stdin, timeout=timeout + SUPERVISOR_GRACE_SECONDS)
             result = subprocess.CompletedProcess(list(argv), proc.returncode, stdout, stderr)
         except subprocess.TimeoutExpired:
-            result = subprocess.CompletedProcess(list(argv), 124, b"", b"checker timed out")
+            result = subprocess.CompletedProcess(
+                list(argv), 124, b"", b"checker supervisor did not finish"
+            )
         finally:
-            # [LAW:no-ambient-temporal-coupling] the group ends here, not whenever its
-            # members do; an empty group is already ended.
+            # [LAW:no-ambient-temporal-coupling] the supervisor's group ends here, not
+            # whenever its members do; an empty group is already ended.
             with suppress(ProcessLookupError):
                 os.killpg(proc.pid, signal.SIGKILL)
     return result
