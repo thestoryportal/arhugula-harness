@@ -19,7 +19,6 @@ unreadable policy holds enrolled work. Legacy work keeps the existing gates.
 from __future__ import annotations
 
 import dataclasses
-import hashlib
 import importlib.util
 import json
 import os
@@ -144,14 +143,11 @@ def stage(root: Path, path: str, text: str) -> None:
 
 
 def test_parse_staged_excludes_deletions_and_names_divergent_paths() -> None:
-    stage = b"100644 aa 0\ta.py\x00100644 bb 0\tb.md\x00"
-    staged = wc.parse_staged(b"M\0a.py\0D\0gone.py\0A\0b.md\0", b"a.py\0other.py\0", stage)
+    staged = wc.parse_staged(
+        "h", "t", b"M\0a.py\0D\0gone.py\0A\0b.md\0", b"a.py\0other.py\0", b"a.py\0b.md\0"
+    )
     assert staged == wc.StagedScope(
-        ("a.py", "b.md"),
-        ("gone.py",),
-        ("a.py",),
-        ("a.py", "b.md"),
-        hashlib.sha256(stage).hexdigest(),
+        ("a.py", "b.md"), ("gone.py",), ("a.py",), ("a.py", "b.md"), "h", "t"
     )
 
 
@@ -799,7 +795,7 @@ def test_snapshot_is_a_git_checkout_of_the_staged_tree(
     monkeypatch.setenv("GIT_DIR", str(repo / ".git"))
     monkeypatch.setenv("GIT_INDEX_FILE", ".git/index")
     environment = wc.checker_environment(os.environ)
-    with wc.index_snapshot(repo, environment) as snapshot:
+    with wc.index_snapshot(repo, wc.observe_staged(repo), environment) as snapshot:
 
         def inside(*args: str) -> str:
             proc = subprocess.run(
@@ -1202,6 +1198,55 @@ def test_a_restage_during_the_gate_keys_no_pass_to_bytes_never_checked(
     refused = _git_commit(root, env, "B")
     assert refused.returncode != 0 and "check_failed" in refused.stderr, refused.stderr
     assert (head(root), log.read_text()) == (base, "ran\n" * 2)
+
+
+@pytest.mark.parametrize("linked", [False, True], ids=["main-worktree", "linked-worktree"])
+def test_an_index_restaged_back_during_the_gate_commits_only_checked_bytes(
+    trial_repo: Path, tmp_path: Path, linked: bool
+) -> None:
+    """Pass-3 rerun P1 reproduction with real Git, Ruff and pytest: index A's behavior
+    test fails. Once the gate has read A, another process restages B, whose test passes,
+    then restages A before the checks finish, so the index ends where it began. The
+    checks run on A, the tree the gate read, and the commit is refused; B's pass never
+    admits A."""
+    root = tmp_path / "linked" if linked else trial_repo
+    if linked:
+        git(trial_repo, "worktree", "add", "-q", str(root))
+        (root / ".venv").symlink_to(sys.prefix)
+    env, log, base = _witness_env(tmp_path), tmp_path / "pytest.log", head(root)
+    swapped, restored = tmp_path / "swapped", tmp_path / "restaged-back"
+    # The other process: the gate's Ruff identity probe, a real child of Git's hook after
+    # it read A, stages B; the first Ruff check restages A.
+    racer = tmp_path / "racer" / "ruff"
+    racer.parent.mkdir()
+    racer.write_text(
+        "#!/bin/sh\n"
+        f'if [ "$1" = --version ] && [ ! -e {swapped} ]; then\n'
+        f"  touch {swapped}\n"
+        f"  printf '%s' '{_LEGAL}' > {root / 'tools' / 'w.py'}\n"
+        f"  git -C {root} add tools/w.py || exit 2\n"
+        f'elif [ "$1" != --version ] && [ -e {swapped} ] && [ ! -e {restored} ]; then\n'
+        f"  touch {restored}\n"
+        f"  printf '%s' '{_ILLEGAL}' > {root / 'tools' / 'w.py'}\n"
+        f"  git -C {root} add tools/w.py || exit 2\n"
+        "fi\n"
+        f'exec {tmp_path / "bin" / "ruff"} "$@"\n'
+    )
+    racer.chmod(0o755)
+    env = {**env, "PATH": f"{racer.parent}:{env['PATH']}"}
+    stage(root, "tools/w.py", _ILLEGAL)
+
+    def tree() -> bytes:
+        return subprocess.run(
+            ["git", "-C", str(root), "write-tree"], capture_output=True, check=True
+        ).stdout
+
+    staged = tree()
+    refused = _git_commit(root, env, "A")
+    assert swapped.exists() and restored.exists()
+    assert tree() == staged  # the index ended where it began
+    assert refused.returncode != 0 and "check_failed" in refused.stderr, refused.stderr
+    assert (head(root), log.read_text()) == (base, "ran\n")  # the test ran once, on A
 
 
 def test_the_real_stop_hook_refuses_admits_and_reuses(trial_repo: Path, tmp_path: Path) -> None:

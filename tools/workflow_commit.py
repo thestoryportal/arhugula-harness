@@ -12,8 +12,9 @@ staging explicit (`recorded_index`): Git records the repository's own index only
 `-a`, `-i`, `--only`, pathspec or interactive mode built another, so only then is the
 inspected index exactly what Git records.
 
-`parse_staged` turns Git's listings into a `StagedScope`, and a staged path whose
-worktree bytes differ from the index holds (`binding_stale`). `commit_obligations` names
+`observe_staged` reads the index once, as the tree Git would record from it, and
+`parse_staged` turns Git's listings of that one tree into a `StagedScope`; a staged path
+whose worktree bytes differ from it holds (`binding_stale`). `commit_obligations` names
 the proportionate local set (WS-07): Ruff lint and format for each changed Python
 subject, the behavior tests the commit still records of each changed or deleted Python
 or shell subject (`tests_for`), the named risk expansion for hook and guard paths, the CI
@@ -21,15 +22,16 @@ record producers for any record path, and a parser for JSON records. A staged su
 with no behavior test is a `Gap` and holds. There is no whole-project Pyright, suite or
 closeout. Stop runs the Ruff subset over the working tree.
 
-Commit checks run in a private Git checkout of exactly the staged tree
+Commit checks run in a private Git checkout of exactly the scope's tree
 (`index_snapshot`), so unstaged or untracked work neither reaches nor blocks them while a
 check that asks Git still sees the commit's tree. Each check's manifest and subject bytes
 are observed from that same checkout, so a receipt names exactly the bytes its checker ran
-on however the root's index moves meanwhile; the index is observed again once they finish,
-and a change while they ran holds. The gate drops the variables Git hands its hook to
-locate a repository, so each Git command finds its repository from the directory it
-names. Every check and checker probe receives only `checker_environment`, the pinned
-variables its manifest records. Every check is keyed by its WP-03 input manifest, which
+on however the root's index moves meanwhile. Once they finish the index is observed again
+and must still write that same tree, so whatever it held in between, Git records only bytes
+the checks ran on. The gate drops the variables Git hands its hook to locate a repository,
+so each Git command finds its repository from the directory it names. Every check and
+checker probe receives only `checker_environment`, the pinned variables its manifest
+records. Every check is keyed by its WP-03 input manifest, which
 includes the observed checker identity (`Toolchain`, for `uv run` checks the interpreter
 and every installed distribution) and that environment.
 A stored passed receipt is reused only when `reuse_result` accepts it for the current
@@ -227,25 +229,29 @@ def profile_at(path: Path) -> Profile:
 
 @dataclass(frozen=True)
 class StagedScope:
-    """What a commit records: staged non-deleted paths, staged deletions, those staged
-    paths whose worktree bytes differ from the index (WS-08: verified only by checking
-    staged bytes), every path the index tracks, and the index's identity, a digest of
-    every entry's mode, object and stage."""
+    """What a commit records, all read from one captured tree: staged non-deleted paths,
+    staged deletions, those staged paths whose worktree bytes differ from the tree (WS-08:
+    verified only by checking staged bytes), every path the tree tracks, the HEAD it was
+    compared with, and the tree itself, exactly what Git records from that index."""
 
     paths: tuple[str, ...]
     deleted: tuple[str, ...]
     divergent: tuple[str, ...]
     tracked: tuple[str, ...]
-    index: str
+    head: str
+    tree: str
 
 
 def _z_fields(raw: bytes) -> list[str]:
     return [field.decode("utf-8") for field in raw.split(b"\0") if field]
 
 
-def parse_staged(name_status: bytes, unstaged: bytes, stage: bytes) -> StagedScope:
-    """The single checkpoint for Git's `-z` listings (`git diff --cached --name-status
-    --no-renames -z`, `git diff --name-only -z` and `git ls-files --stage -z`)."""
+def parse_staged(
+    head: str, tree: str, name_status: bytes, unstaged: bytes, listed: bytes
+) -> StagedScope:
+    """The single checkpoint for Git's `-z` listings of one tree (`git diff-tree -r
+    --name-status --no-renames -z <head> <tree>`, `git diff --name-only -z <tree>` and
+    `git ls-tree -r --name-only -z <tree>`)."""
     fields = _z_fields(name_status)
     if len(fields) % 2:
         raise ValueError("staged listing: status without a path")
@@ -256,8 +262,9 @@ def parse_staged(name_status: bytes, unstaged: bytes, stage: bytes) -> StagedSco
         paths,
         tuple(path for status, path in entries if status == "D"),
         tuple(path for path in paths if path in worktree_changed),
-        tuple(dict.fromkeys(row.split("\t", 1)[1] for row in _z_fields(stage))),
-        hashlib.sha256(stage).hexdigest(),
+        tuple(_z_fields(listed)),
+        head,
+        tree,
     )
 
 
@@ -267,11 +274,17 @@ def _git(root: Path, *args: str) -> bytes:
 
 def observe_staged(root: Path) -> StagedScope:
     """[LAW:effects-at-boundaries] the actual index and worktree state, never a command's
-    spelling."""
+    spelling. [LAW:one-source-of-truth] `write-tree` is the one read of the live index;
+    every other fact is read from that tree, so a restage meanwhile cannot pair one
+    index's scope with another index's bytes."""
+    tree = _git(root, "write-tree").decode("utf-8").strip()
+    head = _git(root, "rev-parse", "--verify", "HEAD").decode("utf-8").strip()
     return parse_staged(
-        _git(root, "diff", "--cached", "--name-status", "--no-renames", "-z"),
-        _git(root, "diff", "--name-only", "-z"),
-        _git(root, "ls-files", "--stage", "-z"),
+        head,
+        tree,
+        _git(root, "diff-tree", "-r", "--name-status", "--no-renames", "-z", head, tree),
+        _git(root, "diff", "--name-only", "-z", tree),
+        _git(root, "ls-tree", "-r", "--name-only", "-z", tree),
     )
 
 
@@ -302,14 +315,15 @@ def recorded_index(root: Path, index_file: str | None) -> Outcome:
 
 
 @contextmanager
-def index_snapshot(root: Path, environment: Mapping[str, str]) -> Generator[Path]:
-    """[LAW:effects-at-boundaries] a private Git checkout of exactly the tree the commit
-    records, at the root's HEAD with its origin, so a check that reads files or asks Git
-    (`ls-files`, `grep --cached`, `diff --cached`) sees the staged bytes and no unstaged
-    or untracked work. It borrows the root's objects and writes no root ref or worktree;
-    its own Git commands get `environment`, never the hook's GIT_DIR or GIT_INDEX_FILE."""
-    tree = _git(root, "write-tree").decode("utf-8").strip()
-    head = _git(root, "rev-parse", "--verify", "HEAD").decode("utf-8").strip()
+def index_snapshot(
+    root: Path, staged: StagedScope, environment: Mapping[str, str]
+) -> Generator[Path]:
+    """[LAW:effects-at-boundaries] a private Git checkout of exactly `staged`'s tree, at
+    its HEAD with the root's origin, so a check that reads files or asks Git (`ls-files`,
+    `grep --cached`, `diff --cached`) sees the bytes its scope was read from and no
+    unstaged or untracked work. It borrows the root's objects and writes no root ref or
+    worktree; its own Git commands get `environment`, never the hook's GIT_DIR or
+    GIT_INDEX_FILE."""
     objects = root / _git(root, "rev-parse", "--git-path", "objects").decode("utf-8").strip()
     origin = subprocess.run(
         ["git", "-C", str(root), "remote", "get-url", "origin"], capture_output=True, text=True
@@ -325,9 +339,9 @@ def index_snapshot(root: Path, environment: Mapping[str, str]) -> Generator[Path
 
         inside("init", "-q")
         (snapshot / ".git" / "objects" / "info" / "alternates").write_text(f"{objects.resolve()}\n")
-        inside("read-tree", tree)
+        inside("read-tree", staged.tree)
         inside("checkout-index", "--all")
-        inside("update-ref", "--no-deref", "HEAD", head)
+        inside("update-ref", "--no-deref", "HEAD", staged.head)
         for url in [origin.stdout.strip()] if origin.returncode == 0 else []:
             inside("remote", "add", "origin", url)
         yield snapshot
@@ -923,10 +937,10 @@ def run_obligations(
 
 
 def rebound(before: StagedScope, after: StagedScope) -> Outcome:
-    """[LAW:single-enforcer] the checks describe the index observed before them; a change
-    to it, or to which staged paths the worktree differs from, while they ran voids that
-    binding."""
-    if (after.index, after.divergent) == (before.index, before.divergent):
+    """[LAW:single-enforcer] the checks describe the tree observed before them, and Git
+    records the tree the index writes once they finish; any other tree, or a change to
+    which staged paths the worktree differs from, voids that binding."""
+    if (after.tree, after.divergent) == (before.tree, before.divergent):
         return PASSED
     return Outcome(
         "held",
@@ -945,7 +959,7 @@ def commit_outcome(
     clock: Clock = time.monotonic,
 ) -> Outcome:
     """The trial commit gate: the actual staged scope, its proportionate checks over a
-    snapshot of exactly that index, then the index observed again."""
+    snapshot of exactly the tree that scope was read from, then the index observed again."""
     staged = observe_staged(root)
     if staged.divergent:
         return Outcome(
@@ -959,7 +973,7 @@ def commit_outcome(
     terms = (term for path in changed_subjects(staged) for term in subject_terms(path))
     toolchain = observe_toolchain(root, run, environment)
     obligations = commit_obligations(staged, trial.policy, toolchain, observe_naming(root, terms))
-    with index_snapshot(root, environment) as snapshot:
+    with index_snapshot(root, staged, environment) as snapshot:
         checked = run_obligations(
             snapshot, trial, Index(), obligations,
             created_at=created_at, environment=environment, run=run, clock=clock,
