@@ -779,3 +779,59 @@ def test_watch_checks_bounds_each_watch_by_the_remaining_deadline(monkeypatch, t
     _fake_clock(monkeypatch)
     assert mp._watch_checks("7", tmp_path, ["a — blocking"], deadline_s=300) is False
     assert timeouts[0] == 300 and timeouts[1] == 280  # one 20 s poll consumed in between
+
+
+def test_watch_checks_refuses_a_names_reply_that_lands_after_the_deadline(monkeypatch, tmp_path):
+    """The names query shares the one deadline: its timeout is what the watch left, and a
+    complete registration that arrives only after the deadline is a timeout refusal, not
+    a green (PASS7 F1: 0.6 s watch + 0.6 s names under a 1 s deadline returned True)."""
+    timeouts: dict[str, float] = {}
+
+    def fake_run(cmd, **kw):
+        kind = "names" if "--json" in cmd else "watch"
+        timeouts[kind] = kw["timeout"]
+        now[0] += 0.6
+        return subprocess.CompletedProcess(cmd, 0, "a — blocking\n" if kind == "names" else "", "")
+
+    monkeypatch.setattr(mp.subprocess, "run", fake_run)
+    now = _fake_clock(monkeypatch)
+    assert mp._watch_checks("7", tmp_path, ["a — blocking"], deadline_s=1) is False
+    assert timeouts == {"watch": 1, "names": pytest.approx(0.4)}
+
+
+def test_watch_checks_names_query_timeout_is_a_refusal(monkeypatch, tmp_path):
+    """A names query that hits its timeout is a timeout refusal (False) like a watch that
+    does — never an exception escaping the tiebreaker's refusal handling."""
+
+    def fake_run(cmd, **kw):
+        if "--json" in cmd:
+            raise subprocess.TimeoutExpired(cmd, kw["timeout"])
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(mp.subprocess, "run", fake_run)
+    _fake_clock(monkeypatch)
+    assert mp._watch_checks("7", tmp_path, ["a — blocking"]) is False
+
+
+@pytest.mark.parametrize(
+    "watch",
+    [(1, "no required checks reported on the 'x' branch"), (0, "")],
+    ids=["not-yet-started", "green-partial-registration"],
+)
+def test_watch_checks_pauses_never_overrun_the_deadline(monkeypatch, tmp_path, watch):
+    """Both retry pauses are the poll interval or what remains, whichever is shorter, so
+    the wait ends AT the deadline rather than up to one poll past it."""
+
+    def fake_run(cmd, **kw):
+        if "--json" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, "a — blocking\n", "")
+        return subprocess.CompletedProcess(cmd, *watch, "")
+
+    monkeypatch.setattr(mp.subprocess, "run", fake_run)
+    now = _fake_clock(monkeypatch)
+    pauses: list[float] = []
+    advance = mp.time.sleep
+    monkeypatch.setattr(mp.time, "sleep", lambda s: (pauses.append(s), advance(s)))
+    required = ["a — blocking", "b — blocking"]
+    assert mp._watch_checks("7", tmp_path, required, deadline_s=30) is False
+    assert pauses == [20, 10] and now[0] == 30

@@ -709,41 +709,39 @@ def _watch_checks(
     job fail by that job's own contract, so an all-checks watch read a fully green set of
     required contexts as red and rolled the fence back (scratch PR #1552, 2026-09-17);
     `--required` scopes the exit code to what strict:true actually enforces. All of it runs
-    under ONE overall deadline: each watch may use only what remains, and reaching the
-    deadline — registration incomplete or a watch still pending — is a timeout refusal."""
+    under ONE overall deadline: every gh call and every pause may use only what remains,
+    and reaching the deadline — registration incomplete, a gh call still pending, or a
+    complete registration that arrived too late — is a timeout refusal."""
     # [LAW:no-ambient-temporal-coupling] the wait is owned by one deadline, not a retry count
     deadline = time.monotonic() + deadline_s
-    while (remaining := deadline - time.monotonic()) > 0:
-        try:
-            w = subprocess.run(
-                ["gh", "pr", "checks", prno, "--watch", "--required"],
-                capture_output=True,
-                text=True,
-                timeout=remaining,
-                cwd=cwd,
-            )
-        except subprocess.TimeoutExpired:
-            return False
-        blob = (w.stdout + w.stderr).lower()
-        if w.returncode == 0:
-            names = subprocess.run(
-                ["gh", "pr", "checks", prno, "--json", "name", "--jq", ".[].name"],
-                capture_output=True,
-                text=True,
-                timeout=60,
-                cwd=cwd,
-            )
-            reported = set(names.stdout.splitlines())
-            if names.returncode == 0 and set(required) <= reported:
-                return True
-            time.sleep(_POLL_S)
-            continue
-        # gh's not-yet-started diagnostic is "no checks reported on the '<b>' branch" for an
-        # unscoped watch and "no required checks reported on the '<b>' branch" under
-        # `--required` (both strings live in the gh binary; codex r1 P2 on #1553).
-        if "checks reported on the" in blob:
-            time.sleep(_POLL_S)
-            continue
+
+    def remaining() -> float:
+        return deadline - time.monotonic()
+
+    def checks(*args: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["gh", "pr", "checks", prno, *args],
+            capture_output=True,
+            text=True,
+            timeout=remaining(),
+            cwd=cwd,
+        )
+
+    # [LAW:single-enforcer] one catch turns any gh call reaching the deadline into a refusal
+    try:
+        while remaining() > 0:
+            w = checks("--watch", "--required")
+            if w.returncode == 0:
+                names = checks("--json", "name", "--jq", ".[].name")
+                if names.returncode == 0 and set(required) <= set(names.stdout.splitlines()):
+                    return remaining() > 0
+            # gh's not-yet-started diagnostic is "no checks reported on the '<b>' branch" for
+            # an unscoped watch and "no required checks reported on the '<b>' branch" under
+            # `--required` (both strings live in the gh binary; codex r1 P2 on #1553).
+            elif "checks reported on the" not in (w.stdout + w.stderr).lower():
+                return False
+            time.sleep(max(0.0, min(_POLL_S, remaining())))
+    except subprocess.TimeoutExpired:
         return False
     return False
 
