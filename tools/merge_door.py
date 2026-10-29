@@ -26,12 +26,13 @@ import subprocess
 import sys
 import time
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import ci_result_binding as cb
 import reservations as rs
+import workflow_policy as wp
 from arc_metrics import QUEUE_DIR, REPO, _process_is_alive, ci_is_green, publish_exclusive
 
 # The default branch every landing targets: the branch `gh_main_runs_in_progress`
@@ -62,6 +63,10 @@ REFRESH_TITLE_PREFIX = "ops: roadmap status refresh "
 # file-set discriminator as an uninventoried QUEUE_DIR store literal
 REFRESH_ONLY_FILE = ".harness" + "/roadmap_status.md"
 POST_MERGE_CI_BOUND_S = 45 * 60
+# The tracked WO-U03 policy beside this tool; tools/workflow_boundaries.py reads the same
+# file, but its package-qualified imports do not resolve when the door runs as a script.
+# Concatenated like REFRESH_ONLY_FILE: tracked read-only config, not a QUEUE_DIR store.
+POLICY_PATH = Path(__file__).resolve().parent.parent / (".harness" + "/workflow-policy.json")
 REFRESH_BOUND_S = 45 * 60
 BACKOFF = {"base_s": 30.0, "factor": 2.0, "cap_s": 600.0, "max_attempts": 12}
 KILL_STEPS = (
@@ -103,6 +108,10 @@ class DoorBlocked(LeaseError):  # noqa: N818 — U-HE-22 plan signature verbatim
 
 class DoorFailed(LeaseError):  # noqa: N818 — U-HE-22 plan signature verbatim
     ...
+
+
+class ProfileHeld(LeaseError):  # noqa: N818 — sibling of DoorBlocked/DoorFailed
+    """WO-U03 selection held this landing (WS-18 reasons); raised before any lease."""
 
 
 def _now_iso() -> str:
@@ -1050,8 +1059,9 @@ def default_ground() -> Ground:
             "--json",
             # headBranch so a consumer can prove a run is the DEFAULT-BRANCH run and not a
             # same-commit run from another branch (codex r7 P2); additive — `event` and the
-            # rest are unchanged, and existing consumers ignore the extra key.
-            "status,conclusion,event,headBranch",
+            # rest are unchanged, and existing consumers ignore the extra key. databaseId and
+            # attempt name each run in a trial landing receipt (WO-U08), equally additive.
+            "status,conclusion,event,headBranch,databaseId,attempt",
             "--limit",
             "20",
             timeout=30,
@@ -1335,6 +1345,15 @@ def runs_are_settled(runs: list[dict]) -> bool:
 def wait_post_merge_ci(sha: str, ground: Ground, *, bound_s: float, lane_id: str = "") -> str:
     """Poll the merge SHA's OWN main run until completed. success → 'success'; anything
     else → 'blocked:<why>' (CANCELLED blocks the door — C-HE-19 §2's ci_is_green)."""
+    return wait_own_main(sha, ground, bound_s=bound_s, lane_id=lane_id)[0]
+
+
+def wait_own_main(
+    sha: str, ground: Ground, *, bound_s: float, lane_id: str = ""
+) -> tuple[str, list[dict]]:
+    """`wait_post_merge_ci` plus the settled runs its verdict was read from, so a trial
+    landing's receipt names exactly the runs that passed it (WS-11) — no second read that
+    a rerun could change between the verdict and the record."""
     deadline = ground.clock() + bound_s
     notified = False
     while ground.clock() < deadline:
@@ -1345,8 +1364,8 @@ def wait_post_merge_ci(sha: str, ground: Ground, *, bound_s: float, lane_id: str
             bad = [r for r in runs if not ci_is_green(r.get("conclusion"))]
             if bad:
                 # CANCELLED/failure blocks the door (C-HE-19 §2) — never read as green
-                return f"blocked:post_merge_ci_not_green:{bad[0].get('conclusion')}"
-            return "success"
+                return f"blocked:post_merge_ci_not_green:{bad[0].get('conclusion')}", runs
+            return "success", runs
         if not notified and ground.gh_main_runs_in_progress() > 2:
             _notify(
                 "NOTIFY",
@@ -1356,7 +1375,7 @@ def wait_post_merge_ci(sha: str, ground: Ground, *, bound_s: float, lane_id: str
             )
             notified = True
         ground.sleep(30)
-    return "blocked:post_merge_ci_not_green:timeout"
+    return "blocked:post_merge_ci_not_green:timeout", []
 
 
 def wait_pr_head_checks(sha: str, ground: Ground, *, bound_s: float, lane_id: str = "") -> str:
@@ -1396,6 +1415,102 @@ def reconcile_ground(lease: dict, ground: Ground) -> str:
     raise DoorFailed(f"reconcile: pr #{lease['pr']} state {state!r} is not reconcilable")
 
 
+def observe_policy() -> wp.WorkflowPolicy | wp.PolicyDefect:
+    """[LAW:effects-at-boundaries] the tracked policy bytes, read once per landing."""
+    try:
+        raw: bytes | None = POLICY_PATH.read_bytes()
+    except FileNotFoundError:
+        raw = None
+    return wp.load_policy(raw)
+
+
+def landing_profile(
+    policy: wp.WorkflowPolicy | wp.PolicyDefect, activation: wp.ActivationState, arc_id: str
+) -> wp.ProfileSelection:
+    """The WO-U03 selection for the arc being landed. [LAW:single-enforcer] eligibility is
+    `select_profile`'s alone: the door has no flag, env or caller input that reaches it.
+
+    The policy binds each enrolled unit to its arc, so the arc names the unit. An arc no
+    entry names has no unit to report; `select_profile` then decides outside the policy,
+    and an arc string that happens to equal some unit id still fails that unit's arc
+    identity. The door has no LIT-relation or native-admission adapter, so both stay
+    `unknown`: before activation every landing is legacy, after it enrolled work holds
+    until those adapters exist rather than landing on an unread authority."""
+    members = () if isinstance(policy, wp.PolicyDefect) else policy.eligible_units
+    entry = next((e for e in members if e.arc == arc_id), None)
+    facts = wp.SelectionFacts(
+        repository=wp.REPOSITORY,
+        unit=arc_id if entry is None else entry.unit,
+        arc=arc_id,
+        trial_relation="unknown",
+        admission="unknown",
+        activation=activation,
+    )
+    return wp.select_profile(policy, facts)
+
+
+def observe_landing_profile(arc_id: str) -> wp.ProfileSelection:
+    """[LAW:effects-at-boundaries] tracked policy + canonical activation receipt."""
+    return landing_profile(observe_policy(), wp.read_activation(), arc_id)
+
+
+def require_landable(profile: wp.ProfileSelection, arc_id: str) -> None:
+    """[LAW:single-enforcer] the one refusal of a held selection; the CLI and `profile`
+    call it before touching any lease, `land` on its own observation before any merge
+    attempt."""
+    if profile.kind == "held":
+        raise ProfileHeld(
+            f"{arc_id}: landing profile held {list(profile.reasons)} "
+            f"(unknown {list(profile.unknown)})"
+        )
+
+
+@dataclass(frozen=True)
+class OwnMainRun:
+    run_id: int
+    attempt: int
+    conclusion: str
+
+
+@dataclass(frozen=True)
+class LandingReceipt:
+    """WS-11 landing receipt: what was reviewed, what landed where, and the landed SHA's
+    own default-branch runs. Published only after those runs passed, so it records a
+    completion, never an admission."""
+
+    arc_id: str
+    pr: int
+    reviewed_head: str
+    final_head: str
+    prior_base: str
+    landed_sha: str
+    remote_state: str
+    own_main: tuple[OwnMainRun, ...]
+    record_type: str = "landing"
+    profile: str = "trial"
+    merge_method: str = "squash"  # the one merge string gh_merge issues (C-HE-07 §1)
+
+
+def own_main_runs(runs: list[dict]) -> tuple[OwnMainRun, ...]:
+    """[LAW:parse-dont-validate] green settled runs to identified runs, or refuse: an
+    unnamed run cannot be bound to this landing or told apart from a later one."""
+    try:
+        return tuple(
+            OwnMainRun(int(r["databaseId"]), int(r["attempt"]), str(r["conclusion"])) for r in runs
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise DoorFailed(f"own-main run identity missing from {runs!r}") from exc
+
+
+def publish_landing(lease: dict, receipt: LandingReceipt) -> None:
+    """The receipt is a token-named sidecar: it keeps the lease's history clock and
+    containment, and a resumed pass under a reclaimed token writes its own."""
+    _check_door()
+    body = asdict(receipt)
+    body["own_main"] = [asdict(r) for r in receipt.own_main]
+    publish_exclusive(_sidecar(lease["lease_token"], "landing"), json.dumps(body))
+
+
 def _merge_once(
     lease: dict, pr: int, head_sha: str, ground: Ground, *, suffix: str = "", budget: int = 2
 ) -> bool:
@@ -1424,6 +1539,7 @@ def _merge_once(
 def land(
     pr: int,
     *,
+    expected: wp.SelectionKind,
     lane_id: str,
     arc_id: str,
     ground: Ground,
@@ -1431,7 +1547,11 @@ def land(
     lease: dict | None = None,
 ) -> str:
     """Steps (i)–(ix). `lease` is passed on self-resume (reclaimed); otherwise acquired
-    here (one attempt, fail-fast)."""
+    here (one attempt, fail-fast). The door observes the arc's WO-U03 selection itself:
+    `legacy` keeps the §4(viii) terminating refresh; `trial` replaces it with a landing
+    receipt for the merge SHA's own green main runs (WS-11); `held` lands nothing.
+    `expected` is the selection the caller prepared its refresh posture for; it grants
+    nothing, and a differing observation refuses before any merge attempt."""
     res = rs.current(arc_id)
     if res is None:
         raise DoorFailed(f"{arc_id}: no reservation")
@@ -1514,6 +1634,17 @@ def land(
         )
     reconciled = False
     try:
+        # [LAW:single-enforcer] eligibility is never a caller input (pass-1 F3): the door
+        # observes it here, inside the adjudication, so a refusal releases a pre-attempt
+        # lease whether this call or the CLI acquired it
+        profile = observe_landing_profile(arc_id)
+        require_landable(profile, arc_id)
+        if profile.kind != expected:
+            raise DoorFailed(
+                f"{arc_id}: landing profile is {profile.kind}, caller expected {expected}"
+            )
+        if profile.kind == "trial" and refresh is not None:
+            raise DoorFailed(f"{arc_id}: a trial landing has no terminating refresh to drive")
         resumed_attempt = lease.get("merge_attempted_at") is not None
         already = resumed_attempt and reconcile_ground(lease, ground) == "MERGED"
         reconciled = reconciled or already
@@ -1573,7 +1704,7 @@ def land(
                 f"`just merge-door-unblock {pr} {merge_sha}`",
             )
             raise DoorBlocked("base_toctou_first_parent_mismatch")
-        status = wait_post_merge_ci(
+        status, runs = wait_own_main(
             merge_sha, ground, bound_s=POST_MERGE_CI_BOUND_S, lane_id=lane_id
         )  # (vii)
         if status != "success":
@@ -1596,9 +1727,32 @@ def land(
             )
             raise DoorBlocked(status)
         _kill_after("post-ci")
-        recorded = (read_lease() or {}).get("refresh")
-        refresh_confirmed = False  # §10: only a refresh-green cycle can count clean (r9 P2)
-        if (
+        view = read_lease() or {}
+        recorded = view.get("refresh")
+        # §10: only a cycle whose terminal result is confirmed can count clean (r9 P2) —
+        # the green refresh for legacy, the receipted own-main runs for trial
+        cycle_confirmed = False
+        if profile.kind == "trial":
+            if recorded is not None or view.get("refresh_intent"):
+                # a lease that began a refresh arc under legacy still owes it: a later
+                # trial selection must not silently abandon that refresh
+                mark_blocked(lease, sha=merge_sha, reason="refresh_outstanding_under_trial")
+                raise DoorBlocked("refresh_outstanding_under_trial")
+            publish_landing(
+                lease,
+                LandingReceipt(
+                    arc_id=arc_id,
+                    pr=pr,
+                    reviewed_head=head_sha,
+                    final_head=str(v.get("headRefOid")),
+                    prior_base=base_sha,
+                    landed_sha=merge_sha,
+                    remote_state=str(v.get("state")),
+                    own_main=own_main_runs(runs),
+                ),
+            )
+            cycle_confirmed = True
+        elif (
             refresh is None
             and recorded is None
             and os.environ.get("MERGE_DOOR_ALLOW_NO_REFRESH") != "1"
@@ -1612,7 +1766,7 @@ def land(
                 reason="refresh_skipped_without_optin",
             )
             raise DoorBlocked("refresh_skipped_without_optin")
-        if refresh is not None or recorded is not None:  # (viii)
+        if refresh is not None or recorded is not None:  # (viii) — legacy: trial refused both
             rpr_rhead = None
             if recorded is not None:
                 # self-resume: NEVER create a second refresh PR
@@ -1824,9 +1978,9 @@ def land(
                     f"door blocked; fix, then `just merge-door-unblock {rpr} {rsha}`",
                 )
                 raise DoorBlocked(rstatus)
-            refresh_confirmed = True
+            cycle_confirmed = True
         release(lease)  # (ix)
-        if not reconciled and refresh_confirmed:
+        if not reconciled and cycle_confirmed:
             # a CLEAN cycle (C-HE-06 §10) requires no reconcile pass, no HITL, AND a
             # CONFIRMED refresh (codex r9 P2: a refresh-skipped run must never count)
             tcc = DOOR / "tier-clean-cycles"
@@ -2018,17 +2172,19 @@ def wait_for_door(
 
 
 def main(argv: list[str] | None = None) -> int:
-    """CLI. Exit codes: 0 released / nothing to land; 3 blocked (HITL); 4 door failed
-    (re-gate); 5 budget exhausted."""
+    """CLI. Exit codes: 0 released / nothing to land; 2 usage; 3 blocked (HITL); 4 door
+    failed (re-gate); 5 budget exhausted; 6 landing profile held (WS-18, no lease taken)."""
     p = argparse.ArgumentParser(prog="merge_door", description=__doc__)
     sub = p.add_subparsers(dest="cmd", required=True)
     landp = sub.add_parser("land")
     landp.add_argument("pr", type=int)
     landp.add_argument("--lane-id", required=True)
     landp.add_argument("--arc-id", required=True)
-    # the terminating-refresh continuation is MANDATORY (C-HE-06 §4(viii)) — skipping it
-    # must be an explicit operator choice, never a silent default (codex r5 P2)
-    refresh_mode = landp.add_mutually_exclusive_group(required=True)
+    # the terminating-refresh continuation is MANDATORY for legacy landings (C-HE-06
+    # §4(viii)) — skipping it must be an explicit operator choice, never a silent default
+    # (codex r5 P2). The arc's selection, not these flags, decides trial vs legacy; a
+    # trial landing never runs a refresh, so the posture is enforced once that is known.
+    refresh_mode = landp.add_mutually_exclusive_group()
     refresh_mode.add_argument("--no-refresh", action="store_true")
     refresh_mode.add_argument("--refresh-cmd", help="command printing JSON {pr, head_sha}")
     ub = sub.add_parser("unblock")
@@ -2055,6 +2211,8 @@ def main(argv: list[str] | None = None) -> int:
     rel.add_argument("--lane-id", required=True)
     sub.add_parser("status")
     sub.add_parser("gc")
+    prof = sub.add_parser("profile")
+    prof.add_argument("--arc-id", required=True)
     args = p.parse_args(argv)
     try:
         if args.cmd == "land":
@@ -2070,9 +2228,16 @@ def main(argv: list[str] | None = None) -> int:
                     file=sys.stderr,
                 )
                 return 4
+            profile = observe_landing_profile(args.arc_id)
+            require_landable(profile, args.arc_id)
+            # a legacy landing needs exactly one refresh posture and a trial landing none, so
+            # a wrapper that routed on a different selection is refused before any lease
+            if (profile.kind == "legacy") != bool(args.no_refresh or args.refresh_cmd):
+                posture = {"legacy": "--refresh-cmd or --no-refresh", "trial": "no refresh flag"}
+                landp.error(f"a {profile.kind} landing takes {posture[profile.kind]}")
             ground = default_ground()
             refresh = None
-            if args.refresh_cmd and not args.no_refresh:
+            if args.refresh_cmd:
 
                 def refresh():
                     out = subprocess.run(
@@ -2158,6 +2323,7 @@ def main(argv: list[str] | None = None) -> int:
                 )
             out = land(
                 args.pr,
+                expected=profile.kind,
                 lane_id=args.lane_id,
                 arc_id=args.arc_id,
                 ground=ground,
@@ -2266,12 +2432,21 @@ def main(argv: list[str] | None = None) -> int:
         elif args.cmd == "status":
             print(json.dumps(read_lease(), sort_keys=True))
             return 0
+        elif args.cmd == "profile":
+            # the landing selection `land` would act on: `trial` or `legacy`, else exit 6
+            profile = observe_landing_profile(args.arc_id)
+            require_landable(profile, args.arc_id)
+            print(profile.kind)
+            return 0
         else:
             print(json.dumps([str(x) for x in gc()]))
             return 0
     except DoorBlocked as exc:
         print(f"BLOCKED: {exc}", file=sys.stderr)
         return 3
+    except ProfileHeld as exc:
+        print(f"HELD: {exc}", file=sys.stderr)
+        return 6
     except BudgetExhausted as exc:
         # the wedged door is human-actionable state (codex r2 P2): §9 gate row + HIL row,
         # never only a stderr line
