@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `57c5a5d24777` |
-| `last_refreshed` | 2026-10-29T17:04:34.171422Z |
-| `git_head` | `4c781f59` — PR #1677 landed; own-main CI 40916333255 passed all 23 jobs. |
+| `workspace_state_hash` | `d35d107e265d` |
+| `last_refreshed` | 2026-10-29T00:00:00Z |
+| `git_head` | `b38362a3` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 125 |
 
@@ -22,7 +22,7 @@
 
 **Purpose.** Live pointer to the next Claude/Codex-executable frontier. Full round-by-round history (every prior round, verbatim, most-recent-first) lives in the archive below — grep it by PR/`B-`/`R-`-id/round, never read wholesale.
 
-**Current next action (post-#1677).** Continue only released WO-U10 (LIT arhugula-harness-trial-193.6cw.nfc): prepare and inspect a fresh user-launched strict-15 package on the verified current main, then admit Runtime for the exact installed acceptance. PR #1677 landed the pass-8 correction at `4c781f59`; independent passes 1–8 are spent. Strict-15 acceptance, Stage B reconciliation, affected review/CI, verified final main and own-main CI, applicable installed acceptance, terminating refresh and eligible cleanup remain required before closure. Preserve the user-only auth-shell launch boundary, all spent packages and failure receipts. Other remaining units U06/U07/U08/U14/U19/U23/U24/U25 stay held with repair_paused=true; no source pass or release is created by this refresh. Current authority is live LIT c12 and U10.
+**Current next action (post-#1681).** Use live LIT arhugula-harness-trial-193.6cw.nfc for WO-U10 final integration attestation and closure status. Stage B PR #1681 preserves code verification across PR metadata edits under the independently witnessed strict 15-context protection. Buford retains final refresh-own-main verification, eligible worktree/branch disposition and full LIT closeout; no source GREEN or refresh alone establishes ticket closure. The other eight units WO-U06/U07/U08/U14/U19/U23/U24/U25 remain HELD and repair_paused=true until a matching direct user release. Preserve original passes 1–8, protected dirty work, denial records and accepted one-shot runtime cleanup evidence; do not replay that apply or cleanup.
 
 **Archive.** `.harness/roadmap-next-action-archive.md` (PRIOR rounds only, verbatim as each stood when superseded — the current round lives only in this head; the newest superseded round may lag there until the next content PR archives it, and is always losslessly recoverable from this file's own git history meanwhile).
 
@@ -50,11 +50,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #1681 | 2026-10-29 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1677 | 2026-10-29 | U10 deadline and pipefail corrections landed; exact own-main CI 40916333255 passed all 23 jobs. Installed acceptance and full U10 closure remain pending. |
 | PR #1675 | 2026-10-29 | Empty diffs require the full CI path; U10 live acceptance remains pending. |
 | PR #1673 | 2026-10-29 | Terminating roadmap refresh after PR #1672. |
 | PR #1672 | 2026-10-29 | Root-independent fixture correction; host-cleanup closeout evidence remains in LIT. |
-| PR #1671 | 2026-10-29 | Preserve locked setup inputs and verify environment identity. |
 
 ---
 
