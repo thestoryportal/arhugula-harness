@@ -12,6 +12,11 @@ set dotenv-load := true
 set dotenv-required := false
 set positional-arguments := true
 export UV_CACHE_DIR := env_var_or_default("UV_CACHE_DIR", "/tmp/arhugula-uv-cache")
+# Every uv command a recipe runs syncs against the committed uv.lock: a manifest that
+# drifted from it fails instead of being re-locked and installed. Updating the lock is
+# an explicit `uv lock` outside these recipes.
+# [LAW:single-enforcer] one export covers every recipe rather than a flag per command.
+export UV_LOCKED := "1"
 
 # Default recipe: list everything.
 default:
@@ -20,7 +25,7 @@ default:
 # ─── core dev loop ─────────────────────────────────────────────────────────
 
 # Run the default provider-free pytest suite, matching CI's blocking test lane.
-test:
+test: _project-env-identity
     env -u ANTHROPIC_API_KEY -u OPENAI_API_KEY -u E2B_API_KEY -u GOOGLE_APPLICATION_CREDENTIALS -u GOOGLE_CLOUD_PROJECT PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring uv run pytest -m "not e2e"
 
 # Run a single test file or node id. Example: just test-one harness-cp/cp_tests/test_foo.py
@@ -47,12 +52,44 @@ fmt-check:
 check: codex-sync lint fmt-check typecheck docs-completeness-check memory-closeout-check closure-certification-check clearance-parse-check artifact-heads-check test
 
 # Codex provider-free pytest lane. Strips live provider env and mirrors CI's non-e2e gate.
-codex-test *args:
+codex-test *args: _project-env-identity
     env -u ANTHROPIC_API_KEY -u OPENAI_API_KEY -u E2B_API_KEY -u GOOGLE_APPLICATION_CREDENTIALS -u GOOGLE_CLOUD_PROJECT PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring uv run pytest -m "not e2e" {{args}}
 
 # Synchronize all workspace packages before the Codex PR-ready gate.
-codex-sync:
+codex-sync: _project-env-identity
     uv sync --all-packages
+
+# The project environment is reusable only if it is the environment uv will sync.
+# Without pyvenv.cfg uv takes the venv's python symlink for the base interpreter: sync
+# installs the workspace into that shared interpreter and run executes outside the
+# venv, both exiting 0. uv caches that reading per interpreter path in
+# $UV_CACHE_DIR/interpreter-v4, so it survives a restored pyvenv.cfg and a recreated
+# venv. Refuse before any install; an absent environment is created normally by sync.
+_project-env-identity:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    env="${UV_PROJECT_ENVIRONMENT:-.venv}"
+    # Checked before uv runs at all: querying an environment without pyvenv.cfg is what
+    # records the wrong reading in uv's cache.
+    if [ -e "$env" ] && [ ! -f "$env/pyvenv.cfg" ]; then
+        echo "ERROR: $env has no pyvenv.cfg, so its interpreter is unknown." >&2
+        echo "  Remove $env and run 'just codex-sync' to recreate it." >&2
+        exit 1
+    fi
+    # [LAW:one-source-of-truth] uv's own sync plan names the environment it would install
+    # into; the plan schema is preview, so a missing key fails rather than passing.
+    plan=$(uv sync --dry-run --output-format json --quiet)
+    python3 -c '
+    import json, os, sys
+    plan, env, cache = sys.argv[1:]
+    selected = json.loads(plan)["sync"]["environment"]["path"]
+    if os.path.realpath(selected) != os.path.realpath(env):
+        sys.exit(
+            f"ERROR: uv would sync {selected}, not the project environment {env}.\n"
+            f"  uv cached a stale interpreter reading for {env}; remove"
+            f" {cache}/interpreter-v4 and retry."
+        )
+    ' "$plan" "$env" "$UV_CACHE_DIR"
 
 # Blocking provider-free regression lane for Codex hooks, permissions, lifecycle, and GC.
 codex-parity-check:
