@@ -84,7 +84,9 @@ def _policy(artifact_roots: dict | None = None) -> WorkflowPolicy:
         "artifact_roots": artifact_roots
         or {
             "code_roots": ["ops", "tests", "tools"],
-            "artifact_roots": [{"root": "evidence/logs", "purpose": "generated pytest logs"}],
+            "artifact_roots": [
+                {"root": "evidence/logs", "purpose": "generated pytest logs", "suffixes": [".log"]}
+            ],
         },
         "review_rules": {},
         "compatibility": {"phase_record_versions": [1]},
@@ -280,6 +282,41 @@ def test_staged_discovery_never_reads_classified_artifact_objects(repo: Path) ->
     assert "ops/core.py" in {entry.path for entry in manifest.files}
 
 
+def test_new_source_in_an_artifact_root_refuses_reuse_without_reading_it(repo: Path) -> None:
+    # WS-15 §17.1 / WT-22: a path in an artifact root without a declared artifact suffix
+    # is unknown, so source-relevant; the overlap holds reuse on its name alone.
+    prior = _passed_receipt(build_manifest(repo, _request(repo)))
+    source = repo / "evidence/logs/new_source.py"
+    _write(repo, "evidence/logs/new_source.py", "VALUE = 2\n")
+    source.chmod(0)
+    try:
+        decision = _reuse(repo, prior)
+    finally:
+        source.chmod(0o600)
+    assert decision.reusable is False
+    assert "classification_overlap" in decision.reasons
+
+    # Named as a task input it is read like any other input, not refused.
+    subject = ("pyproject.toml", "uv.lock", "tools/checker.py", "evidence/logs/new_source.py")
+    manifest = build_manifest(repo, _request(repo, explicit=subject))
+    assert manifest.refusals == ()
+    assert "evidence/logs/new_source.py" in {entry.path for entry in manifest.files}
+
+
+def test_staged_new_source_in_an_artifact_root_refuses_without_reading_its_object(
+    repo: Path,
+) -> None:
+    _write(repo, "evidence/logs/new_source.py", "VALUE = 2\n")
+    _git(repo, "add", "evidence/logs/new_source.py")
+    oid = _git(repo, "rev-parse", ":evidence/logs/new_source.py")
+    (repo / ".git/objects" / oid[:2] / oid[2:]).unlink()
+
+    manifest = build_manifest(repo, _request(repo, scope=Index()))
+
+    assert {refusal.code for refusal in manifest.refusals} == {"classification_overlap"}
+    assert "evidence/logs/new_source.py" not in {entry.path for entry in manifest.files}
+
+
 def test_untracked_source_overrides_artifact_domain(repo: Path) -> None:
     prior = _passed_receipt(build_manifest(repo, _request(repo)))
     # No artifact root may overlap a code root, whether it claims the whole root or a
@@ -288,7 +325,9 @@ def test_untracked_source_overrides_artifact_domain(repo: Path) -> None:
         overlapping = _policy(
             {
                 "code_roots": ["ops", "tests", "tools"],
-                "artifact_roots": [{"root": root, "purpose": "claims code as artifacts"}],
+                "artifact_roots": [
+                    {"root": root, "purpose": "claims code as artifacts", "suffixes": [".log"]}
+                ],
             }
         )
         ambiguous = _reuse(repo, prior, policy=overlapping)
@@ -463,7 +502,11 @@ def test_manifest_is_canonical_and_preserves_every_byte(repo: Path) -> None:
     [
         {"code_roots": ["ops"]},
         {"code_roots": ["../ops"], "artifact_roots": []},
-        {"code_roots": ["ops"], "artifact_roots": [{"root": "logs", "purpose": ""}]},
+        {"code_roots": ["ops"], "artifact_roots": [{"root": "logs", "purpose": "", "suffixes": [".log"]}]},
+        {"code_roots": ["ops"], "artifact_roots": [{"root": "logs", "purpose": "logs"}]},
+        {"code_roots": ["ops"], "artifact_roots": [{"root": "logs", "purpose": "logs", "suffixes": []}]},
+        {"code_roots": ["ops"], "artifact_roots": [{"root": "logs", "purpose": "logs", "suffixes": ["log"]}]},
+        {"code_roots": ["ops"], "artifact_roots": [{"root": "logs", "purpose": "logs", "suffixes": ["a/.log"]}]},
         {"code_roots": ["/abs"], "artifact_roots": []},
     ],
 )
