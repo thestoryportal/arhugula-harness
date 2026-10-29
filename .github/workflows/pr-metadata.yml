@@ -36,7 +36,7 @@ jobs:
           enable-cache: true
 
       - name: Sync workspace (all members; provides pyyaml via harness-runtime)
-        run: uv sync --all-packages
+        run: uv sync --locked --all-packages
 
       - name: Title-dependent refresh-shape gate (§12.2.1)
         env:
