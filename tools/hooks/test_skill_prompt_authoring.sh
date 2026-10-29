@@ -13,6 +13,10 @@
 # paste-the-values form the change replaced.
 
 set -uo pipefail
+# No predicate below pipes into an early-exiting `grep -q`: once grep matches and exits, a
+# producer still writing gets SIGPIPE, and pipefail turns a PRESENT match into a false
+# negative -- a spurious FAIL on a large carrier, or a masked violation where the match
+# means bad (CI parity job 123541478385). Files are grepped directly; strings via <<<.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
@@ -66,9 +70,9 @@ for rel in "${CARRIERS[@]}"; do
 done
 
 # The paragraph must actually say the three things it exists to say.
-printf '%s' "$REF" | grep -q 'skill-canonical template' \
+grep -q 'skill-canonical template' <<<"$REF" \
   && ok "rule states the inline exception" || bad "rule omits the skill-canonical-template exception"
-printf '%s' "$REF" | grep -q 'never denies' \
+grep -q 'never denies' <<<"$REF" \
   && ok "rule states the hook is advisory" || bad "rule omits that the hook never denies"
 
 # The mechanism the paragraph names must exist.
@@ -101,7 +105,7 @@ grep -q "laws:prompt" "$CODEX_MG" \
   || bad "Codex carrier does not reference the rule it translates"
 
 # The base case, without which the rule recurses forever (codex r1 P2).
-printf '%s' "$REF" | grep -q 'base case' \
+grep -q 'base case' <<<"$REF" \
   && ok "rule names the delegation base case" || bad "rule has no bootstrap base case"
 
 # WR-09: neither merge-gate carrier may hand the lens its binding values inline.
@@ -114,15 +118,14 @@ printf '%s' "$REF" | grep -q 'base case' \
 # prose or backticked identifiers) and points at a path, and never writes `field=`. This is
 # the same spelling-bound-ban defect U-SR-02 carried forward as a named residual.
 for rel in ".claude/skills/merge-gate/SKILL.md" ".agents/skills/merge-gate/SKILL.md"; do
-  text=$(cat "$REPO/$rel")
   assigned=""
   for field in head_sha base_sha diff_digest reviewer_identity prompt_version config_hash; do
-    printf '%s' "$text" | grep -Eq "$field[[:space:]]*=" && assigned="$assigned $field"
+    grep -Eq "$field[[:space:]]*=" "$REPO/$rel" && assigned="$assigned $field"
   done
   [ -z "$assigned" ] \
     && ok "$rel assigns no binding value inline" \
     || bad "$rel writes binding value(s) into the prompt:$assigned"
-  printf '%s' "$text" | grep -q 'merge-gate-binding' \
+  grep -q 'merge-gate-binding' "$REPO/$rel" \
     && ok "$rel still routes through the binding recipe" \
     || bad "$rel lost the binding recipe reference"
 done
@@ -138,16 +141,15 @@ if [ -z "$CODEX_TAIL" ]; then
   bad "could not extract the Codex prompt tail block"
 else
   ok "extracted the Codex prompt tail block"
-  printf '%s' "$CODEX_TAIL" | grep -Eq '<[0-9]*-?(char-)?(head|sha)>|head[[:space:]]+<' \
+  grep -Eq '<[0-9]*-?(char-)?(head|sha)>|head[[:space:]]+<' <<<"$CODEX_TAIL" \
     && bad "the Codex prompt tail still hands the lens a head value to transcribe" \
     || ok "the Codex prompt tail hands the lens no binding value"
 fi
 
 for rel in ".claude/skills/merge-gate/SKILL.md" ".agents/skills/merge-gate/SKILL.md"; do
-  text=$(cat "$REPO/$rel")
   # ...and the positive half: it must actually tell the lens to READ the published path,
   # so deleting the by-file instruction cannot pass merely by assigning nothing.
-  printf '%s' "$text" | grep -Eqi 'read (it|the values|the six)|reads? the values from it' \
+  grep -Eqi 'read (it|the values|the six)|reads? the values from it' "$REPO/$rel" \
     && ok "$rel instructs the lens to read the published file" \
     || bad "$rel no longer tells the lens to read the binding file"
 done
