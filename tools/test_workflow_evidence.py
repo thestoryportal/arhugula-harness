@@ -317,6 +317,26 @@ def test_staged_new_source_in_an_artifact_root_refuses_without_reading_its_objec
     assert "evidence/logs/new_source.py" not in {entry.path for entry in manifest.files}
 
 
+def test_nested_artifact_roots_refuse_in_either_declaration_order(repo: Path) -> None:
+    # Declared parent-first, `evidence` (.py) would silently prune the new source the
+    # nested `evidence/logs` (.log) leaves unknown; the order must not decide that.
+    prior = _passed_receipt(build_manifest(repo, _request(repo)))
+    _write(repo, "evidence/logs/new_source.py", "VALUE = 2\n")
+    _git(repo, "add", "evidence/logs/new_source.py")
+    _git(repo, "commit", "-q", "-m", "new source")
+    parent = {"root": "evidence", "purpose": "generated stubs", "suffixes": [".py"]}
+    child = {"root": "evidence/logs", "purpose": "generated pytest logs", "suffixes": [".log"]}
+    for declared in ([parent, child], [child, parent]):
+        nested = _policy({"code_roots": ["ops", "tests", "tools"], "artifact_roots": declared})
+        decision = _reuse(repo, prior, policy=nested)
+        assert decision.reusable is False
+        assert "classification_ambiguous" in decision.reasons
+        for scope in (WorkingTree(), Index(), GitTree("HEAD")):
+            manifest = build_manifest(repo, _request(repo, scope=scope, policy=nested))
+            assert {refusal.code for refusal in manifest.refusals} == {"classification_ambiguous"}
+            assert "evidence/logs/new_source.py" in {entry.path for entry in manifest.files}
+
+
 def test_untracked_source_overrides_artifact_domain(repo: Path) -> None:
     prior = _passed_receipt(build_manifest(repo, _request(repo)))
     # No artifact root may overlap a code root, whether it claims the whole root or a
