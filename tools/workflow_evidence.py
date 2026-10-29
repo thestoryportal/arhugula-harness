@@ -6,7 +6,8 @@
 everything Git can discover under its discovery domains (tracked plus genuine untracked
 files), every explicit input (checker, config, lock and task subjects, read even when
 ignored), each with byte-exact path, kind, effective Git mode and content digest. Files
-under a policy-validated artifact root leave discovery; explicit inputs never do.
+under a policy-validated artifact root leave discovery before any of their bytes are read;
+explicit inputs never do.
 Anything the manifest cannot identify faithfully becomes a typed `Refusal`.
 
 `reuse_result` is a pure decision: a prior passed `CheckReceipt` is reusable only when
@@ -209,9 +210,24 @@ class Refusal:
 
 
 @dataclass(frozen=True)
+class ArtifactRoot:
+    """A validated non-source domain: each file in it ends with a declared suffix. Any
+    other path under `root` is unknown, so source-relevant (WS-15 §17.1)."""
+
+    root: str
+    suffixes: tuple[str, ...]
+
+    def contains(self, raw: bytes) -> bool:
+        return raw == self.root.encode() or raw.startswith(self.root.encode() + b"/")
+
+    def holds_artifact(self, raw: bytes) -> bool:
+        return raw.endswith(tuple(suffix.encode() for suffix in self.suffixes))
+
+
+@dataclass(frozen=True)
 class Classification:
     code_roots: tuple[str, ...]
-    artifact_roots: tuple[str, ...]
+    artifact_roots: tuple[ArtifactRoot, ...]
 
 
 @dataclass(frozen=True)
@@ -293,17 +309,31 @@ def _text(value: object, field: str) -> str:
     return value
 
 
+def _suffix(value: object, field: str) -> str:
+    if not isinstance(value, str) or not value.startswith(".") or "/" in value or value == ".":
+        raise EvidenceError(field, f"{value!r} is not a file suffix such as '.log'")
+    return value
+
+
 def parse_classification(rule: Mapping[str, object]) -> Classification:
     """The policy's `artifact_roots` rule: declared code roots and validated artifact roots."""
     _exact_keys(dict(rule), ("code_roots", "artifact_roots"), "artifact_roots")
     code_roots = _array(rule["code_roots"], "artifact_roots.code_roots")
-    artifact_roots: list[str] = []
+    artifact_roots: list[ArtifactRoot] = []
     for index, item in enumerate(_array(rule["artifact_roots"], "artifact_roots.artifact_roots")):
         field = f"artifact_roots.artifact_roots[{index}]"
         entry = _object(item, field)
-        _exact_keys(entry, ("root", "purpose"), field)
+        _exact_keys(entry, ("root", "purpose", "suffixes"), field)
         _text(entry["purpose"], field + ".purpose")
-        artifact_roots.append(_relative(entry["root"], field + ".root"))
+        suffixes = _array(entry["suffixes"], field + ".suffixes")
+        if not suffixes:
+            raise EvidenceError(field + ".suffixes", "must declare at least one suffix")
+        artifact_roots.append(
+            ArtifactRoot(
+                _relative(entry["root"], field + ".root"),
+                tuple(_suffix(item, f"{field}.suffixes[{i}]") for i, item in enumerate(suffixes)),
+            )
+        )
     return Classification(
         code_roots=tuple(
             _relative(root, f"artifact_roots.code_roots[{index}]")
@@ -313,19 +343,50 @@ def parse_classification(rule: Mapping[str, object]) -> Classification:
     )
 
 
+def _discovered_sources(
+    raws: Iterable[bytes], artifact_roots: tuple[ArtifactRoot, ...], explicit: tuple[str, ...]
+) -> tuple[list[bytes], list[Refusal]]:
+    """The listed raw paths discovery observes, and a refusal for each new source that
+    overlaps an artifact root (WS-15 §17.1). Decided by name; no byte is read."""
+    kept: list[bytes] = []
+    overlaps: list[Refusal] = []
+    named = {path.encode() for path in explicit}
+    for raw in raws:
+        domain = next((a for a in artifact_roots if a.contains(raw)), None)
+        if domain is None:
+            kept.append(raw)
+        elif not domain.holds_artifact(raw) and raw not in named:
+            # [LAW:one-source-of-truth] an explicit input is read by name elsewhere; any
+            # other unknown path here could be source, so reuse holds until inspected.
+            overlaps.append(
+                Refusal(
+                    "classification_overlap",
+                    f"{raw.decode(errors='backslashreplace')} is in artifact root {domain.root}"
+                    f" without a declared suffix {', '.join(domain.suffixes)}",
+                )
+            )
+    return kept, overlaps
+
+
 def _classification(policy: WorkflowPolicy) -> tuple[Classification, tuple[Refusal, ...]]:
     """The roots discovery may prune, plus refusals; an unusable rule prunes nothing."""
     try:
         classification = parse_classification(policy.rules["artifact_roots"])
     except EvidenceError as exc:
         return Classification((), ()), (Refusal("classification_invalid", str(exc)),)
-    # [LAW:single-enforcer] no artifact declaration may claim any part of a code root
-    # (WS-15 §17.1); the overlap is ambiguous, so it prunes nothing and forbids reuse.
+    # [LAW:single-enforcer] no artifact declaration may claim any part of a code root or
+    # of another artifact root (WS-15 §17.1). Either overlap is ambiguous: nested roots
+    # with different suffixes would classify a path by declaration order. It prunes
+    # nothing and forbids reuse.
+    roots = [a.root for a in classification.artifact_roots]
+    claims = [(root, "code", code) for root in roots for code in classification.code_roots]
+    claims += [
+        (root, "artifact", other) for i, root in enumerate(roots) for other in roots[i + 1 :]
+    ]
     overlaps = tuple(
-        Refusal("classification_ambiguous", f"{artifact} overlaps code root {code}")
-        for artifact in classification.artifact_roots
-        for code in classification.code_roots
-        if _under(artifact, code) or _under(code, artifact)
+        Refusal("classification_ambiguous", f"{root} overlaps {kind} root {other}")
+        for root, kind, other in claims
+        if _under(root, other) or _under(other, root)
     )
     usable = classification.artifact_roots if not overlaps else ()
     return Classification(classification.code_roots, usable), overlaps
@@ -416,12 +477,22 @@ def _read_worktree(root: Path, path: str) -> FileEntry | Refusal:
         return _entry(path, mode, handle.read())
 
 
-def _observe_worktree(root: Path, request: CheckRequest) -> list[FileEntry | Refusal]:
+def _observe_worktree(
+    root: Path, request: CheckRequest, artifact_roots: tuple[ArtifactRoot, ...]
+) -> list[FileEntry | Refusal]:
     listed = ("ls-files", "-z", "--cached", "--others", "--exclude-standard")
-    names = [_decoded(raw) for raw in _listing(root, listed, request.domains)]
-    # Explicit inputs are read by name, so an ignored historical driver stays visible.
+    # [LAW:single-enforcer] pruned at the listing, so no retained raw log is ever opened.
+    discovered, overlaps = _discovered_sources(
+        _listing(root, listed, request.domains), artifact_roots, request.explicit
+    )
+    names = [_decoded(raw) for raw in discovered]
+    # [LAW:one-source-of-truth] an explicit task input outranks any artifact declaration:
+    # it is read by name, so an ignored historical driver stays visible.
     paths = sorted({name for name in names if isinstance(name, str)} | set(request.explicit))
-    refusals: list[FileEntry | Refusal] = [name for name in names if isinstance(name, Refusal)]
+    refusals: list[FileEntry | Refusal] = [
+        *overlaps,
+        *(name for name in names if isinstance(name, Refusal)),
+    ]
     return refusals + [_read_worktree(root, path) for path in paths]
 
 
@@ -461,9 +532,14 @@ def _object_rows(
 
 
 def _observe_objects(
-    root: Path, scope: Index | GitTree, request: CheckRequest
+    root: Path,
+    scope: Index | GitTree,
+    request: CheckRequest,
+    artifact_roots: tuple[ArtifactRoot, ...],
 ) -> list[FileEntry | Refusal]:
-    rows = _object_rows(root, scope, request.domains) | _object_rows(root, scope, request.explicit)
+    discovered = _object_rows(root, scope, request.domains)
+    kept, overlaps = _discovered_sources(discovered, artifact_roots, request.explicit)
+    rows = {raw: discovered[raw] for raw in kept} | _object_rows(root, scope, request.explicit)
     names = {raw: _decoded(raw) for raw in rows}
     # Only blob modes have content to hash; any other mode becomes a refusal in `_entry`.
     readable = [
@@ -475,7 +551,7 @@ def _observe_objects(
         for raw, name in names.items()
     ]
     absent = [path for path in request.explicit if path.encode() not in rows]
-    return observed + [FileEntry(path, "deleted", None, None) for path in absent]
+    return overlaps + observed + [FileEntry(path, "deleted", None, None) for path in absent]
 
 
 def build_manifest(root: Path, request: CheckRequest) -> InputManifest:
@@ -483,17 +559,21 @@ def build_manifest(root: Path, request: CheckRequest) -> InputManifest:
     toplevel = _git(root, "rev-parse", "--show-toplevel").decode().strip()
     if Path(toplevel).resolve() != root.resolve():
         raise EvidenceError("root", f"{root} is not the repository top level {toplevel}")
+    classification, refusals = _classification(request.policy)
+    pruned = classification.artifact_roots
     match request.scope:
         case WorkingTree():
-            head, observed = _revision(root, "HEAD"), _observe_worktree(root, request)
+            head, observed = _revision(root, "HEAD"), _observe_worktree(root, request, pruned)
         case Index() as index:
-            head, observed = _revision(root, "HEAD"), _observe_objects(root, index, request)
+            head, observed = _revision(root, "HEAD"), _observe_objects(root, index, request, pruned)
         case GitTree(rev=rev) as tree:
-            head, observed = _revision(root, rev), _observe_objects(root, tree, request)
+            head, observed = _revision(root, rev), _observe_objects(root, tree, request, pruned)
     material_base = (
         None if request.material_base is None else _revision(root, request.material_base)
     )
-    return assemble_manifest(request, head=head, material_base=material_base, observed=observed)
+    return assemble_manifest(
+        request, head=head, material_base=material_base, observed=[*refusals, *observed]
+    )
 
 
 def assemble_manifest(
@@ -503,16 +583,8 @@ def assemble_manifest(
     material_base: str | None,
     observed: list[FileEntry | Refusal],
 ) -> InputManifest:
-    """Pure: observed entries to a canonical manifest, pruning only validated artifacts."""
-    classification, refusals = _classification(request.policy)
-    entries = [item for item in observed if isinstance(item, FileEntry)]
-    # [LAW:one-source-of-truth] an explicit task input outranks any artifact declaration.
-    kept = {
-        entry.path: entry
-        for entry in entries
-        if entry.path in request.explicit
-        or not any(_under(entry.path, root) for root in classification.artifact_roots)
-    }
+    """Pure: observed entries, already source-scoped by discovery, to a canonical manifest."""
+    entries = {item.path: item for item in observed if isinstance(item, FileEntry)}
     closure = (
         (Refusal("dependency_closure_unknown", request.checker.name),)
         if request.closure == "unknown"
@@ -531,8 +603,8 @@ def assemble_manifest(
         domains=_utf8_order(tuple(set(request.domains))),
         explicit=_utf8_order(tuple(set(request.explicit))),
         environment=MappingProxyType(dict(sorted(request.environment.items()))),
-        files=tuple(kept[path] for path in _utf8_order(tuple(kept))),
-        refusals=refusals + tuple(item for item in observed if isinstance(item, Refusal)) + closure,
+        files=tuple(entries[path] for path in _utf8_order(tuple(entries))),
+        refusals=tuple(item for item in observed if isinstance(item, Refusal)) + closure,
     )
 
 
