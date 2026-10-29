@@ -210,9 +210,24 @@ class Refusal:
 
 
 @dataclass(frozen=True)
+class ArtifactRoot:
+    """A validated non-source domain: each file in it ends with a declared suffix. Any
+    other path under `root` is unknown, so source-relevant (WS-15 §17.1)."""
+
+    root: str
+    suffixes: tuple[str, ...]
+
+    def contains(self, raw: bytes) -> bool:
+        return raw == self.root.encode() or raw.startswith(self.root.encode() + b"/")
+
+    def holds_artifact(self, raw: bytes) -> bool:
+        return raw.endswith(tuple(suffix.encode() for suffix in self.suffixes))
+
+
+@dataclass(frozen=True)
 class Classification:
     code_roots: tuple[str, ...]
-    artifact_roots: tuple[str, ...]
+    artifact_roots: tuple[ArtifactRoot, ...]
 
 
 @dataclass(frozen=True)
@@ -294,17 +309,31 @@ def _text(value: object, field: str) -> str:
     return value
 
 
+def _suffix(value: object, field: str) -> str:
+    if not isinstance(value, str) or not value.startswith(".") or "/" in value or value == ".":
+        raise EvidenceError(field, f"{value!r} is not a file suffix such as '.log'")
+    return value
+
+
 def parse_classification(rule: Mapping[str, object]) -> Classification:
     """The policy's `artifact_roots` rule: declared code roots and validated artifact roots."""
     _exact_keys(dict(rule), ("code_roots", "artifact_roots"), "artifact_roots")
     code_roots = _array(rule["code_roots"], "artifact_roots.code_roots")
-    artifact_roots: list[str] = []
+    artifact_roots: list[ArtifactRoot] = []
     for index, item in enumerate(_array(rule["artifact_roots"], "artifact_roots.artifact_roots")):
         field = f"artifact_roots.artifact_roots[{index}]"
         entry = _object(item, field)
-        _exact_keys(entry, ("root", "purpose"), field)
+        _exact_keys(entry, ("root", "purpose", "suffixes"), field)
         _text(entry["purpose"], field + ".purpose")
-        artifact_roots.append(_relative(entry["root"], field + ".root"))
+        suffixes = _array(entry["suffixes"], field + ".suffixes")
+        if not suffixes:
+            raise EvidenceError(field + ".suffixes", "must declare at least one suffix")
+        artifact_roots.append(
+            ArtifactRoot(
+                _relative(entry["root"], field + ".root"),
+                tuple(_suffix(item, f"{field}.suffixes[{i}]") for i, item in enumerate(suffixes)),
+            )
+        )
     return Classification(
         code_roots=tuple(
             _relative(root, f"artifact_roots.code_roots[{index}]")
@@ -314,11 +343,29 @@ def parse_classification(rule: Mapping[str, object]) -> Classification:
     )
 
 
-def _classified(raw: bytes, artifact_roots: tuple[str, ...]) -> bool:
-    """Whether a listed raw path lies in a validated artifact root (WS-15 §17.1)."""
-    return any(
-        raw == root.encode() or raw.startswith(root.encode() + b"/") for root in artifact_roots
-    )
+def _discovered_sources(
+    raws: Iterable[bytes], artifact_roots: tuple[ArtifactRoot, ...], explicit: tuple[str, ...]
+) -> tuple[list[bytes], list[Refusal]]:
+    """The listed raw paths discovery observes, and a refusal for each new source that
+    overlaps an artifact root (WS-15 §17.1). Decided by name; no byte is read."""
+    kept: list[bytes] = []
+    overlaps: list[Refusal] = []
+    named = {path.encode() for path in explicit}
+    for raw in raws:
+        domain = next((a for a in artifact_roots if a.contains(raw)), None)
+        if domain is None:
+            kept.append(raw)
+        elif not domain.holds_artifact(raw) and raw not in named:
+            # [LAW:one-source-of-truth] an explicit input is read by name elsewhere; any
+            # other unknown path here could be source, so reuse holds until inspected.
+            overlaps.append(
+                Refusal(
+                    "classification_overlap",
+                    f"{raw.decode(errors='backslashreplace')} is in artifact root {domain.root}"
+                    f" without a declared suffix {', '.join(domain.suffixes)}",
+                )
+            )
+    return kept, overlaps
 
 
 def _classification(policy: WorkflowPolicy) -> tuple[Classification, tuple[Refusal, ...]]:
@@ -331,7 +378,7 @@ def _classification(policy: WorkflowPolicy) -> tuple[Classification, tuple[Refus
     # (WS-15 §17.1); the overlap is ambiguous, so it prunes nothing and forbids reuse.
     overlaps = tuple(
         Refusal("classification_ambiguous", f"{artifact} overlaps code root {code}")
-        for artifact in classification.artifact_roots
+        for artifact in (a.root for a in classification.artifact_roots)
         for code in classification.code_roots
         if _under(artifact, code) or _under(code, artifact)
     )
@@ -425,16 +472,21 @@ def _read_worktree(root: Path, path: str) -> FileEntry | Refusal:
 
 
 def _observe_worktree(
-    root: Path, request: CheckRequest, artifact_roots: tuple[str, ...]
+    root: Path, request: CheckRequest, artifact_roots: tuple[ArtifactRoot, ...]
 ) -> list[FileEntry | Refusal]:
     listed = ("ls-files", "-z", "--cached", "--others", "--exclude-standard")
     # [LAW:single-enforcer] pruned at the listing, so no retained raw log is ever opened.
-    discovered = _listing(root, listed, request.domains)
-    names = [_decoded(raw) for raw in discovered if not _classified(raw, artifact_roots)]
+    discovered, overlaps = _discovered_sources(
+        _listing(root, listed, request.domains), artifact_roots, request.explicit
+    )
+    names = [_decoded(raw) for raw in discovered]
     # [LAW:one-source-of-truth] an explicit task input outranks any artifact declaration:
     # it is read by name, so an ignored historical driver stays visible.
     paths = sorted({name for name in names if isinstance(name, str)} | set(request.explicit))
-    refusals: list[FileEntry | Refusal] = [name for name in names if isinstance(name, Refusal)]
+    refusals: list[FileEntry | Refusal] = [
+        *overlaps,
+        *(name for name in names if isinstance(name, Refusal)),
+    ]
     return refusals + [_read_worktree(root, path) for path in paths]
 
 
@@ -474,12 +526,14 @@ def _object_rows(
 
 
 def _observe_objects(
-    root: Path, scope: Index | GitTree, request: CheckRequest, artifact_roots: tuple[str, ...]
+    root: Path,
+    scope: Index | GitTree,
+    request: CheckRequest,
+    artifact_roots: tuple[ArtifactRoot, ...],
 ) -> list[FileEntry | Refusal]:
     discovered = _object_rows(root, scope, request.domains)
-    rows = {
-        raw: row for raw, row in discovered.items() if not _classified(raw, artifact_roots)
-    } | _object_rows(root, scope, request.explicit)
+    kept, overlaps = _discovered_sources(discovered, artifact_roots, request.explicit)
+    rows = {raw: discovered[raw] for raw in kept} | _object_rows(root, scope, request.explicit)
     names = {raw: _decoded(raw) for raw in rows}
     # Only blob modes have content to hash; any other mode becomes a refusal in `_entry`.
     readable = [
@@ -491,7 +545,7 @@ def _observe_objects(
         for raw, name in names.items()
     ]
     absent = [path for path in request.explicit if path.encode() not in rows]
-    return observed + [FileEntry(path, "deleted", None, None) for path in absent]
+    return overlaps + observed + [FileEntry(path, "deleted", None, None) for path in absent]
 
 
 def build_manifest(root: Path, request: CheckRequest) -> InputManifest:

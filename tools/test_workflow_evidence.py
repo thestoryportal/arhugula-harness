@@ -502,11 +502,23 @@ def test_manifest_is_canonical_and_preserves_every_byte(repo: Path) -> None:
     [
         {"code_roots": ["ops"]},
         {"code_roots": ["../ops"], "artifact_roots": []},
-        {"code_roots": ["ops"], "artifact_roots": [{"root": "logs", "purpose": "", "suffixes": [".log"]}]},
+        {
+            "code_roots": ["ops"],
+            "artifact_roots": [{"root": "logs", "purpose": "", "suffixes": [".log"]}],
+        },
         {"code_roots": ["ops"], "artifact_roots": [{"root": "logs", "purpose": "logs"}]},
-        {"code_roots": ["ops"], "artifact_roots": [{"root": "logs", "purpose": "logs", "suffixes": []}]},
-        {"code_roots": ["ops"], "artifact_roots": [{"root": "logs", "purpose": "logs", "suffixes": ["log"]}]},
-        {"code_roots": ["ops"], "artifact_roots": [{"root": "logs", "purpose": "logs", "suffixes": ["a/.log"]}]},
+        {
+            "code_roots": ["ops"],
+            "artifact_roots": [{"root": "logs", "purpose": "logs", "suffixes": []}],
+        },
+        {
+            "code_roots": ["ops"],
+            "artifact_roots": [{"root": "logs", "purpose": "logs", "suffixes": ["log"]}],
+        },
+        {
+            "code_roots": ["ops"],
+            "artifact_roots": [{"root": "logs", "purpose": "logs", "suffixes": ["a/.log"]}],
+        },
         {"code_roots": ["/abs"], "artifact_roots": []},
     ],
 )
