@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `abfb003349bf` |
-| `last_refreshed` | 2026-10-29T00:00:00Z |
-| `git_head` | `e9117565` —  |
+| `workspace_state_hash` | `57c5a5d24777` |
+| `last_refreshed` | 2026-10-29T17:04:34.171422Z |
+| `git_head` | `4c781f59` — PR #1677 landed; own-main CI 40916333255 passed all 23 jobs. |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 125 |
 
@@ -22,7 +22,7 @@
 
 **Purpose.** Live pointer to the next Claude/Codex-executable frontier. Full round-by-round history (every prior round, verbatim, most-recent-first) lives in the archive below — grep it by PR/`B-`/`R-`-id/round, never read wholesale.
 
-**Current next action (post-#1672).** Complete only the explicitly accepted host-cleanup ticket arhugula-host-cleanup-vib through verified final-main CI, exact executable-blob rebinding to the accepted user-run disposable witness, retained finding disposition, eligible owned-worktree/branch cleanup and LIT closure. Host correction source pass3 is GREEN/SPENT alongside original spent passes1-2; no additional review pass is authorized. After verified closure, STOP/HOLD FOR USER: no next ticket, U10/U17 activation, broader WO release or automatic runtime rerun. Preserve repair_paused=true and every unrelated hold, protected worktree, quarantine, ownership boundary, denied agent terminal attempt, actual runtime limitations and completion counter. Current authority and evidence remain in live LIT arhugula-harness-trial-193.c12 and arhugula-host-cleanup-vib; historical roadmap paragraphs do not release work.
+**Current next action (post-#1677).** Continue only released WO-U10 (LIT arhugula-harness-trial-193.6cw.nfc): prepare and inspect a fresh user-launched strict-15 package on the verified current main, then admit Runtime for the exact installed acceptance. PR #1677 landed the pass-8 correction at `4c781f59`; independent passes 1–8 are spent. Strict-15 acceptance, Stage B reconciliation, affected review/CI, verified final main and own-main CI, applicable installed acceptance, terminating refresh and eligible cleanup remain required before closure. Preserve the user-only auth-shell launch boundary, all spent packages and failure receipts. Other remaining units U06/U07/U08/U14/U19/U23/U24/U25 stay held with repair_paused=true; no source pass or release is created by this refresh. Current authority is live LIT c12 and U10.
 
 **Archive.** `.harness/roadmap-next-action-archive.md` (PRIOR rounds only, verbatim as each stood when superseded — the current round lives only in this head; the newest superseded round may lag there until the next content PR archives it, and is always losslessly recoverable from this file's own git history meanwhile).
 
@@ -50,11 +50,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
-| PR #1672 | 2026-10-29 | Root-independent fake-fd fixture correction; original source pass3 GREEN/SPENT and required PR/main CI verified. Host ticket closure remains pending final refresh CI and eligible closeout. |
-| PR #1665 | 2026-10-28 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
-| PR #1666 | 2026-10-28 | WO-U07 inactive H review tooling landed; exact own-main CI 40699399523 SUCCESS. Root landing and integrated acceptance remain held. |
-| PR #1661 | 2026-10-24 | Host cleanup source landed; installed acceptance remains held at the recorded Runtime approval boundary. |
-| PR #1659 | 2026-10-24 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
+| PR #1677 | 2026-10-29 | U10 deadline and pipefail corrections landed; exact own-main CI 40916333255 passed all 23 jobs. Installed acceptance and full U10 closure remain pending. |
+| PR #1675 | 2026-10-29 | Empty diffs require the full CI path; U10 live acceptance remains pending. |
+| PR #1673 | 2026-10-29 | Terminating roadmap refresh after PR #1672. |
+| PR #1672 | 2026-10-29 | Root-independent fixture correction; host-cleanup closeout evidence remains in LIT. |
+| PR #1671 | 2026-10-29 | Preserve locked setup inputs and verify environment identity. |
 
 ---
 
