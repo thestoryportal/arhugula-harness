@@ -585,12 +585,11 @@ def _group(wf: dict[str, Any], ctx: dict[str, Any]) -> tuple[str, bool]:
     return _render(conc["group"], ctx), _render(conc["cancel-in-progress"], ctx) == "True"
 
 
-def test_code_workflow_keeps_edit_routing_until_the_title_gate_is_required():
-    """WT-14 bootstrap: until main's fence requires the metadata title gate, a retitle must
-    still re-run the code workflow, whose required arc-ledger job checks the title. The
-    activation commit removes `edited` here only after that protection is live."""
+def test_body_edit_preserves_inflight_code_run():
+    """Activation: with the title gate required by main's fence, a body or title edit
+    (pull_request/edited) runs only the metadata workflow, never the code workflow."""
     ci, meta = _workflow("ci.yml"), _workflow("pr-metadata.yml")
-    assert _triggers(ci, "pull_request", "edited")
+    assert not _triggers(ci, "pull_request", "edited")
     assert _triggers(meta, "pull_request", "edited")
 
 
