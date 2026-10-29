@@ -688,7 +688,16 @@ def _classify_merge_refusal(stderr: str) -> str:
     return "transport"
 
 
-def _watch_checks(prno: str, cwd: Path, required: list[str], attempts: int = 8) -> bool:
+#: The whole-wait bound for one scratch PR's required checks: registration plus green.
+#: Downstream contexts (the `pytest (all axis packages)` aggregate) register only after the
+#: suites they gate finish, so no fixed poll count fits a healthy run (U10 fence15, PR #1676).
+CHECKS_DEADLINE_S = 1800.0
+_POLL_S = 20
+
+
+def _watch_checks(
+    prno: str, cwd: Path, required: list[str], deadline_s: float = CHECKS_DEADLINE_S
+) -> bool:
     """`gh pr checks --watch` hardened three ways (all live-witnessed):
     (a) not-yet-started retry — the watch exits 1 with "no checks reported" when polled
     before CI registers any check-run on a fresh branch (scratch PR #1419); that is
@@ -699,15 +708,22 @@ def _watch_checks(prno: str, cwd: Path, required: list[str], attempts: int = 8) 
     listed check fails, and the scratch PR's empty diff once made the non-required classify
     job fail by that job's own contract, so an all-checks watch read a fully green set of
     required contexts as red and rolled the fence back (scratch PR #1552, 2026-09-17);
-    `--required` scopes the exit code to what strict:true actually enforces."""
-    for _ in range(attempts):
-        w = subprocess.run(
-            ["gh", "pr", "checks", prno, "--watch", "--required"],
-            capture_output=True,
-            text=True,
-            timeout=1800,
-            cwd=cwd,
-        )
+    `--required` scopes the exit code to what strict:true actually enforces. All of it runs
+    under ONE overall deadline: each watch may use only what remains, and reaching the
+    deadline — registration incomplete or a watch still pending — is a timeout refusal."""
+    # [LAW:no-ambient-temporal-coupling] the wait is owned by one deadline, not a retry count
+    deadline = time.monotonic() + deadline_s
+    while (remaining := deadline - time.monotonic()) > 0:
+        try:
+            w = subprocess.run(
+                ["gh", "pr", "checks", prno, "--watch", "--required"],
+                capture_output=True,
+                text=True,
+                timeout=remaining,
+                cwd=cwd,
+            )
+        except subprocess.TimeoutExpired:
+            return False
         blob = (w.stdout + w.stderr).lower()
         if w.returncode == 0:
             names = subprocess.run(
@@ -720,13 +736,13 @@ def _watch_checks(prno: str, cwd: Path, required: list[str], attempts: int = 8) 
             reported = set(names.stdout.splitlines())
             if names.returncode == 0 and set(required) <= reported:
                 return True
-            time.sleep(20)
+            time.sleep(_POLL_S)
             continue
         # gh's not-yet-started diagnostic is "no checks reported on the '<b>' branch" for an
         # unscoped watch and "no required checks reported on the '<b>' branch" under
         # `--required` (both strings live in the gh binary; codex r1 P2 on #1553).
         if "checks reported on the" in blob:
-            time.sleep(20)
+            time.sleep(_POLL_S)
             continue
         return False
     return False
@@ -824,8 +840,8 @@ def tiebreaker() -> int:
         )
         pr = url.rsplit("/", 1)[-1]
         print(f"tiebreaker: waiting for checks on #{pr} (strict:true requires up-to-date + green)")
-        # Same 1800 s allowance as the stale PR's watch — sh()'s 180 s would misread any
-        # healthy CI run longer than three minutes as a tiebreaker failure (codex r6 P2).
+        # Same CHECKS_DEADLINE_S allowance as the stale PR's watch — sh()'s 180 s would
+        # misread any healthy CI run longer than three minutes as a failure (codex r6 P2).
         if not _watch_checks(pr, wt, required_contexts):
             print("precondition failed: scratch PR checks did not go green")
             return 1

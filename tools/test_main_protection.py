@@ -710,3 +710,72 @@ def test_watch_checks_only_gh_not_yet_started_phrasing_retries(monkeypatch, tmp_
 def test_watch_checks_genuine_failure_is_false(monkeypatch, tmp_path):
     _watch_seq(monkeypatch, [("watch", 1, "X ruff (lint + format) — blocking fail")])
     assert mp._watch_checks("7", tmp_path, ["a — blocking"]) is False
+
+
+def _fake_clock(monkeypatch):
+    """A monotonic clock that only `time.sleep` advances, so a deadline test runs instantly
+    and its elapsed time is exact."""
+    now = [0.0]
+    monkeypatch.setattr(mp.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(mp.time, "sleep", lambda s: now.__setitem__(0, now[0] + s))
+    return now
+
+
+def test_watch_checks_waits_past_eight_polls_for_a_late_registering_aggregate(
+    monkeypatch, tmp_path
+):
+    """U10 fence15 (cmt-7cc95f39): the downstream `pytest (all axis packages)` aggregate
+    registers only after the package and parity suites finish, so a healthy run can read
+    green-but-partial for longer than any fixed poll count. Registration waiting is bounded
+    by the overall deadline, not by attempts — the old 8-attempt budget refused this run."""
+    required = ["a — blocking", "pytest (all axis packages) — blocking"]
+    partial = [("watch", 0, ""), ("names", 0, "a — blocking\n")]
+    seq = _watch_seq(
+        monkeypatch,
+        partial * 12 + [("watch", 0, ""), ("names", 0, "\n".join(required) + "\n")],
+    )
+    now = _fake_clock(monkeypatch)
+    assert mp._watch_checks("7", tmp_path, required) is True
+    assert seq == []  # all 12 partial polls were waited through, then the aggregate counted
+    assert now[0] < mp.CHECKS_DEADLINE_S
+
+
+def test_watch_checks_refuses_when_registration_never_completes_by_the_deadline(
+    monkeypatch, tmp_path
+):
+    """The deadline still refuses: a required context that never registers is a timeout,
+    never a green, and the wait ends once the overall deadline has passed."""
+    polls: list[float] = []
+
+    def fake_run(cmd, **kw):
+        if "--json" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, "a — blocking\n", "")
+        polls.append(now[0])
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(mp.subprocess, "run", fake_run)
+    now = _fake_clock(monkeypatch)
+    assert mp._watch_checks("7", tmp_path, ["a — blocking", "never — blocking"]) is False
+    assert len(polls) > 8
+    assert max(polls) < mp.CHECKS_DEADLINE_S <= now[0]
+
+
+def test_watch_checks_bounds_each_watch_by_the_remaining_deadline(monkeypatch, tmp_path):
+    """A single `--watch` may not outlive the overall deadline: its timeout is what remains,
+    and a watch that hits it is a timeout refusal (False), not an escaping exception."""
+    timeouts: list[float] = []
+
+    def fake_run(cmd, **kw):
+        if "--json" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, "a — blocking\n", "")
+        timeouts.append(kw["timeout"])
+        if len(timeouts) == 2:
+            raise subprocess.TimeoutExpired(cmd, kw["timeout"])
+        return subprocess.CompletedProcess(
+            cmd, 1, "no required checks reported on the 'x' branch", ""
+        )
+
+    monkeypatch.setattr(mp.subprocess, "run", fake_run)
+    _fake_clock(monkeypatch)
+    assert mp._watch_checks("7", tmp_path, ["a — blocking"], deadline_s=300) is False
+    assert timeouts[0] == 300 and timeouts[1] == 280  # one 20 s poll consumed in between
