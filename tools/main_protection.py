@@ -696,7 +696,7 @@ def _watch_checks(prno: str, cwd: Path, required: list[str], attempts: int = 8) 
     watch during PARTIAL registration must not count until every required blocking
     context has actually reported, else a later refusal for a missing required check
     could masquerade as strict enforcement; (c) REQUIRED-only watch — gh exits 1 when ANY
-    listed check fails, and the scratch PR's empty diff makes the non-required classify
+    listed check fails, and the scratch PR's empty diff once made the non-required classify
     job fail by that job's own contract, so an all-checks watch read a fully green set of
     required contexts as red and rolled the fence back (scratch PR #1552, 2026-09-17);
     `--required` scopes the exit code to what strict:true actually enforces."""
