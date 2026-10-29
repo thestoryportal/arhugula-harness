@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `2cdbef518cb0` |
-| `last_refreshed` | 2026-10-28T00:00:00Z |
-| `git_head` | `3081a9a1` —  |
+| `workspace_state_hash` | `abfb003349bf` |
+| `last_refreshed` | 2026-10-29T00:00:00Z |
+| `git_head` | `e9117565` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 125 |
 
@@ -22,7 +22,7 @@
 
 **Purpose.** Live pointer to the next Claude/Codex-executable frontier. Full round-by-round history (every prior round, verbatim, most-recent-first) lives in the archive below — grep it by PR/`B-`/`R-`-id/round, never read wholesale.
 
-**Current next action (post-#1666).** Continue the released WO-U01..WO-U25 batch through live LIT arhugula-harness-trial-193 and canonical paired-lanes guidance. H PR1666 landed inactive WO-U07 review tooling at main 0231fdd7; exact own-main CI40699399523 completed SUCCESS. Complete this terminating refresh and its own-main CI before another H main arc. U07 root PR47 remains held: smoke check121014500582 reports status in_progress with conclusion success, so no terminal CI or merge claim; revalidate its exact head, current base and coherent required checks at the next real transition. U06 binding, integrated acceptance, activation and U07 closure remain held. U15 acceptance FAILED at C2r H1; Runtime is RELEASED with no handles, and no rerun or correction is authorized. Preserve all review passes, findings, quarantines, protected work, claims, raw-evidence debts and other LIT holds; source landing does not close these tickets.
+**Current next action (post-#1672).** Complete only the explicitly accepted host-cleanup ticket arhugula-host-cleanup-vib through verified final-main CI, exact executable-blob rebinding to the accepted user-run disposable witness, retained finding disposition, eligible owned-worktree/branch cleanup and LIT closure. Host correction source pass3 is GREEN/SPENT alongside original spent passes1-2; no additional review pass is authorized. After verified closure, STOP/HOLD FOR USER: no next ticket, U10/U17 activation, broader WO release or automatic runtime rerun. Preserve repair_paused=true and every unrelated hold, protected worktree, quarantine, ownership boundary, denied agent terminal attempt, actual runtime limitations and completion counter. Current authority and evidence remain in live LIT arhugula-harness-trial-193.c12 and arhugula-host-cleanup-vib; historical roadmap paragraphs do not release work.
 
 **Archive.** `.harness/roadmap-next-action-archive.md` (PRIOR rounds only, verbatim as each stood when superseded — the current round lives only in this head; the newest superseded round may lag there until the next content PR archives it, and is always losslessly recoverable from this file's own git history meanwhile).
 
@@ -43,8 +43,6 @@
 | PR | Branch | R-NNN | Posture |
 |---|---|---|---|
 | #1292 | `fix/codex-hook-contract-recovery` | — | — |
-| #1663 | `feat/profile-coder-wo-u21-cache` | — | — |
-| #1664 | `feat/wo-u20-scoped-discovery` | — | — |
 
 ---
 
@@ -52,11 +50,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #1672 | 2026-10-29 | Root-independent fake-fd fixture correction; original source pass3 GREEN/SPENT and required PR/main CI verified. Host ticket closure remains pending final refresh CI and eligible closeout. |
 | PR #1665 | 2026-10-28 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1666 | 2026-10-28 | WO-U07 inactive H review tooling landed; exact own-main CI 40699399523 SUCCESS. Root landing and integrated acceptance remain held. |
 | PR #1661 | 2026-10-24 | Host cleanup source landed; installed acceptance remains held at the recorded Runtime approval boundary. |
 | PR #1659 | 2026-10-24 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
-| PR #1656 | 2026-10-24 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 
 ---
 
