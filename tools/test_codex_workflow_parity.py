@@ -934,6 +934,138 @@ def test_local_premerge_gates_match_ci_format_check() -> None:
     assert "codex-check: codex-sync lint fmt-check typecheck" in justfile
 
 
+# The setup recipes are EXECUTED by the real `just` from an empty project directory,
+# with a `uv` shim first on PATH recording each call's argv and UV_LOCKED. The shim
+# answers the identity check's dry-run with a sync plan naming the project environment,
+# as uv does when its interpreter reading is current, unless a test hands it another
+# plan. It stands in for uv, so these pin what the recipes hand uv and when they refuse
+# to install; uv's own lock refusal and its stale interpreter reading are witnessed
+# against the real binary in 8a2's implementation evidence.
+SETUP_RECIPES = ("codex-sync", "codex-test", "test")
+PLAN_QUERY = ["sync", "--dry-run", "--output-format", "json", "--quiet"]
+
+
+def _sync_plan(environment: Path) -> str:
+    return json.dumps({"sync": {"environment": {"path": str(environment)}}})
+
+
+def _run_setup_recipe(
+    tmp_path: Path, recipe: str, env: dict[str, str], *, plan: str | None = None
+) -> tuple[subprocess.CompletedProcess[str], list[dict[str, Any]]]:
+    shim_dir = tmp_path / "bin"
+    shim_dir.mkdir()
+    log = tmp_path / "uv-calls.jsonl"
+    plan_file = tmp_path / "uv-plan.json"
+    if plan is not None:
+        plan_file.write_text(plan)
+    shim = shim_dir / "uv"
+    shim.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, os, sys\n"
+        f"open({str(log)!r}, 'a').write(json.dumps("
+        "{'argv': sys.argv[1:], 'UV_LOCKED': os.environ.get('UV_LOCKED')}) + '\\n')\n"
+        "if '--dry-run' in sys.argv:\n"
+        "    env = os.path.abspath(os.environ.get('UV_PROJECT_ENVIRONMENT', '.venv'))\n"
+        f"    plan = {str(plan_file)!r}\n"
+        "    print(open(plan).read() if os.path.exists(plan) else json.dumps("
+        "{'sync': {'environment': {'path': env}}}))\n"
+    )
+    shim.chmod(0o755)
+    real = shutil.which("just")
+    assert real is not None, "just must be installed: the setup recipe tests execute it"
+    project = tmp_path / "project"
+    project.mkdir(exist_ok=True)
+    base_env = {k: v for k, v in os.environ.items() if not k.startswith("UV_")}
+    proc = subprocess.run(
+        [real, "--justfile", str(ROOT / "justfile"), "--working-directory", str(project), recipe],
+        capture_output=True,
+        text=True,
+        env={**base_env, "PATH": f"{shim_dir}{os.pathsep}{os.environ['PATH']}", **env},
+    )
+    calls = [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
+    return proc, calls
+
+
+def _project_env(tmp_path: Path, name: str, *, identified: bool) -> None:
+    env_dir = tmp_path / "project" / name
+    (env_dir / "bin").mkdir(parents=True)
+    if identified:
+        (env_dir / "pyvenv.cfg").write_text("home = /usr/bin\n")
+
+
+@pytest.mark.parametrize("recipe", SETUP_RECIPES)
+def test_setup_recipes_run_uv_against_the_committed_lock(tmp_path: Path, recipe: str) -> None:
+    # An ambient UV_LOCKED=0 cannot opt a recipe out of the committed lock.
+    _project_env(tmp_path, ".venv", identified=True)
+    proc, calls = _run_setup_recipe(tmp_path, recipe, {"UV_LOCKED": "0"})
+
+    assert proc.returncode == 0, proc.stderr
+    expected_head = ["sync", "--all-packages"] if recipe == "codex-sync" else ["run", "pytest"]
+    assert [call["argv"] for call in calls][:1] == [PLAN_QUERY]
+    assert [call["argv"][:2] for call in calls][1:] == [expected_head]
+    assert [call["UV_LOCKED"] for call in calls] == ["1", "1"]
+
+
+def test_setup_creates_an_absent_project_environment(tmp_path: Path) -> None:
+    proc, calls = _run_setup_recipe(tmp_path, "codex-sync", {})
+
+    assert proc.returncode == 0, proc.stderr
+    assert [call["argv"] for call in calls] == [PLAN_QUERY, ["sync", "--all-packages"]]
+
+
+@pytest.mark.parametrize("recipe", SETUP_RECIPES)
+def test_setup_recipes_refuse_an_environment_without_pyvenv_cfg(
+    tmp_path: Path, recipe: str
+) -> None:
+    # No uv call at all: even the plan query would record a wrong interpreter reading.
+    _project_env(tmp_path, ".venv", identified=False)
+    proc, calls = _run_setup_recipe(tmp_path, recipe, {})
+
+    assert proc.returncode != 0
+    assert calls == []
+    assert ".venv has no pyvenv.cfg" in proc.stderr
+
+
+def test_identity_check_reads_the_environment_uv_selects(tmp_path: Path) -> None:
+    # UV_PROJECT_ENVIRONMENT moves uv's environment, so the check must follow it: an
+    # intact .venv beside it does not vouch for the selected one.
+    _project_env(tmp_path, ".venv", identified=True)
+    _project_env(tmp_path, "selected-env", identified=False)
+    proc, calls = _run_setup_recipe(
+        tmp_path, "codex-sync", {"UV_PROJECT_ENVIRONMENT": "selected-env"}
+    )
+
+    assert proc.returncode != 0
+    assert calls == []
+    assert "selected-env has no pyvenv.cfg" in proc.stderr
+
+
+@pytest.mark.parametrize("recipe", SETUP_RECIPES)
+def test_setup_recipes_refuse_when_uv_would_sync_another_environment(
+    tmp_path: Path, recipe: str
+) -> None:
+    # A stale interpreter reading makes uv plan to install into the base interpreter even
+    # though .venv carries pyvenv.cfg.
+    _project_env(tmp_path, ".venv", identified=True)
+    base = tmp_path / "base-python"
+    proc, calls = _run_setup_recipe(tmp_path, recipe, {}, plan=_sync_plan(base))
+
+    assert proc.returncode != 0
+    assert [call["argv"] for call in calls] == [PLAN_QUERY]
+    assert f"uv would sync {base}, not the project environment .venv." in proc.stderr
+    assert "/interpreter-v4" in proc.stderr
+
+
+def test_setup_refuses_a_sync_plan_without_its_environment(tmp_path: Path) -> None:
+    # The plan schema is preview: a renamed key must stop setup, not wave it through.
+    _project_env(tmp_path, ".venv", identified=True)
+    proc, calls = _run_setup_recipe(tmp_path, "codex-sync", {}, plan='{"sync": {}}')
+
+    assert proc.returncode != 0
+    assert [call["argv"] for call in calls] == [PLAN_QUERY]
+    assert "KeyError: 'environment'" in proc.stderr
+
+
 def test_session_end_hook_uses_supported_timeout() -> None:
     payload = json.loads((ROOT / ".codex" / "hooks.json").read_text(encoding="utf-8"))
     hooks = [hook for group in payload["hooks"]["SessionEnd"] for hook in group["hooks"]]
