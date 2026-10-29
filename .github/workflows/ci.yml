@@ -29,6 +29,10 @@ name: CI
 #     the `streamablehttp_client` → `streamable_http_client` mcp deprecation
 #     rename + targeted narrowing/casts + a handful of documented library-boundary
 #     ignores. 3543 passed / 0 regression. New findings fail the PR.
+#   - Every setup `uv sync` (here and in pr-metadata.yml) passes `--locked` (WS-10
+#     §12.4): CI tests the committed uv.lock, so a manifest dependency that was never
+#     re-locked fails setup instead of being re-locked and passing against a lock
+#     nobody committed. [LAW:no-silent-failure]
 
 on:
   pull_request:
@@ -215,7 +219,7 @@ jobs:
           enable-cache: true
 
       - name: Sync workspace (all members)
-        run: uv sync --all-packages
+        run: uv sync --locked --all-packages
 
       # Excludes the `e2e` marker — those tests exercise real external services
       # (Anthropic API etc.) and are gated on credentials not available in CI
@@ -326,7 +330,7 @@ jobs:
           enable-cache: true
 
       - name: Sync workspace (all members)
-        run: uv sync --all-packages
+        run: uv sync --locked --all-packages
 
       # B-230 Task 3: tools/test_arc_close_recipe.py (run by codex-parity-check.sh below)
       # EXECUTES `just arc-close` against a PATH shim — a dry run cannot prove `$@`
@@ -389,7 +393,7 @@ jobs:
           enable-cache: true
 
       - name: Sync workspace (all members)
-        run: uv sync --all-packages
+        run: uv sync --locked --all-packages
 
       - name: Ruff lint
         run: uv run ruff check .
@@ -405,7 +409,7 @@ jobs:
     # Blocking as of R-200-ci-lint-typecheck-blocking (pyright half) — the tree
     # is pyright-clean (0 errors) tree-wide. New findings fail the PR. See header
     # note for the drive-clean approach (test-dir executionEnvironments + src
-    # fixes). Run locally exactly as here: `uv sync --all-packages && uv run pyright`.
+    # fixes). Run locally exactly as here: `uv sync --locked --all-packages && uv run pyright`.
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -419,7 +423,7 @@ jobs:
           enable-cache: true
 
       - name: Sync workspace (all members)
-        run: uv sync --all-packages
+        run: uv sync --locked --all-packages
 
       - name: Pyright (strict; config at root pyproject [tool.pyright])
         run: uv run pyright
@@ -479,7 +483,7 @@ jobs:
           enable-cache: true
 
       - name: Sync ONLY harness-${{ matrix.axis }} (+ declared deps; prune siblings)
-        run: uv sync --package harness-${{ matrix.axis }}
+        run: uv sync --locked --package harness-${{ matrix.axis }}
 
       - name: Layer test tooling (no harness deps — isolation preserved)
         run: uv pip install "pytest>=8.3" "pytest-asyncio>=0.25"
@@ -515,7 +519,7 @@ jobs:
           enable-cache: true
 
       - name: Sync workspace (all members; provides pyyaml via harness-runtime)
-        run: uv sync --all-packages
+        run: uv sync --locked --all-packages
 
       - name: Validate the substitution ledger (impossible tally = CI failure)
         run: uv run python tools/substitution_ledger.py --check
@@ -557,7 +561,7 @@ jobs:
           enable-cache: true
 
       - name: Sync workspace (all members)
-        run: uv sync --all-packages
+        run: uv sync --locked --all-packages
 
       - name: Resolve every tracked CLAUDE.md citation (unresolvable cite = CI failure)
         run: uv run python tools/claude_md_citation_resolver.py --check
@@ -611,7 +615,7 @@ jobs:
           enable-cache: true
 
       - name: Sync workspace (all members; provides pyyaml via harness-runtime)
-        run: uv sync --all-packages
+        run: uv sync --locked --all-packages
 
       - name: Validate the arc ledger (impossible/stale tally = CI failure)
         run: uv run python tools/arc_ledger.py --check
@@ -671,7 +675,7 @@ jobs:
           enable-cache: true
 
       - name: Sync workspace (all members; provides pyyaml via harness-runtime)
-        run: uv sync --all-packages
+        run: uv sync --locked --all-packages
 
       - name: Validate the semantic overlay (seam drift / stale artifact = CI failure)
         run: uv run python tools/semantic_overlay/overlay.py check
@@ -707,7 +711,7 @@ jobs:
           enable-cache: true
 
       - name: Sync workspace
-        run: uv sync --all-packages
+        run: uv sync --locked --all-packages
 
       - name: tools/ test-coverage invariant
         run: uv run python tools/tools_test_coverage_guard.py
@@ -749,7 +753,7 @@ jobs:
           enable-cache: true
 
       - name: Sync workspace
-        run: uv sync --all-packages
+        run: uv sync --locked --all-packages
 
       - name: Q1 review-gate tests
         run: uv run python -m pytest tools/test_q1_review_gate.py -q
@@ -780,7 +784,7 @@ jobs:
           enable-cache: true
 
       - name: Sync workspace (all members; provides pyyaml via harness-runtime)
-        run: uv sync --all-packages
+        run: uv sync --locked --all-packages
 
       - name: Q3 evidence-matrix + closure-gate + r500-proof tests
         working-directory: tools
@@ -821,7 +825,7 @@ jobs:
           enable-cache: true
 
       - name: Sync workspace (all members)
-        run: uv sync --all-packages
+        run: uv sync --locked --all-packages
 
       - name: JSONL ↔ Markdown gate-log consistency (mismatch = CI failure)
         run: uv run python tools/merge_gate_log.py check
@@ -857,7 +861,7 @@ jobs:
           enable-cache: true
 
       - name: Sync workspace
-        run: uv sync --all-packages
+        run: uv sync --locked --all-packages
 
       - name: Codex context guard runtime check
         run: >
@@ -934,7 +938,7 @@ jobs:
           enable-cache: true
 
       - name: Sync workspace (all members; provides pyyaml via harness-runtime)
-        run: uv sync --all-packages
+        run: uv sync --locked --all-packages
 
       - name: Clearance frontmatter parse gate (unparseable + unlisted = failure)
         run: uv run python tools/clearance_frontmatter.py --check
