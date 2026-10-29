@@ -374,13 +374,19 @@ def _classification(policy: WorkflowPolicy) -> tuple[Classification, tuple[Refus
         classification = parse_classification(policy.rules["artifact_roots"])
     except EvidenceError as exc:
         return Classification((), ()), (Refusal("classification_invalid", str(exc)),)
-    # [LAW:single-enforcer] no artifact declaration may claim any part of a code root
-    # (WS-15 §17.1); the overlap is ambiguous, so it prunes nothing and forbids reuse.
+    # [LAW:single-enforcer] no artifact declaration may claim any part of a code root or
+    # of another artifact root (WS-15 §17.1). Either overlap is ambiguous: nested roots
+    # with different suffixes would classify a path by declaration order. It prunes
+    # nothing and forbids reuse.
+    roots = [a.root for a in classification.artifact_roots]
+    claims = [(root, "code", code) for root in roots for code in classification.code_roots]
+    claims += [
+        (root, "artifact", other) for i, root in enumerate(roots) for other in roots[i + 1 :]
+    ]
     overlaps = tuple(
-        Refusal("classification_ambiguous", f"{artifact} overlaps code root {code}")
-        for artifact in (a.root for a in classification.artifact_roots)
-        for code in classification.code_roots
-        if _under(artifact, code) or _under(code, artifact)
+        Refusal("classification_ambiguous", f"{root} overlaps {kind} root {other}")
+        for root, kind, other in claims
+        if _under(root, other) or _under(other, root)
     )
     usable = classification.artifact_roots if not overlaps else ()
     return Classification(classification.code_roots, usable), overlaps
