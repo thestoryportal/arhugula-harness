@@ -512,7 +512,7 @@ fi
 
 # Linux: the read-only observer classifies a procfs tree exactly - found, none, or
 # unknown - for the user it is told to observe. A fake procfs root makes every arm
-# hermetic, including the same-user process this host hides (unreadable entries).
+# hermetic, including a same-user process the observer cannot fully list.
 if [ -d /proc/self/fd ]; then
   OBS="$SCRIPT_DIR/worktree_references.py"
   OBS_UID=$(id -u)
@@ -527,16 +527,19 @@ if [ -d /proc/self/fd ]; then
   OBS_FOUND="$REPO/proc-found"; fake_process "$OBS_FOUND" 100 "$OBS_TARGET/sub"
   OBS_NONE="$REPO/proc-none"; fake_process "$OBS_NONE" 101 /
   ln -s "$REPO/elsewhere" "$OBS_NONE/101/fd/3"
-  OBS_HIDDEN="$REPO/proc-hidden"; fake_process "$OBS_HIDDEN" 102 /; chmod 000 "$OBS_HIDDEN/102/fd"
+  # [LAW:behavior-not-structure] the contract is "an fd table that cannot be listed is
+  # unknown"; a non-directory fails that listing for every runner, while chmod 000
+  # is still listable by a root runner with DAC bypass.
+  OBS_HIDDEN="$REPO/proc-hidden"; fake_process "$OBS_HIDDEN" 102 /
+  rmdir "$OBS_HIDDEN/102/fd"; : > "$OBS_HIDDEN/102/fd"
   OBS_OUT=$(/usr/bin/python3 -I "$OBS" --uid "$OBS_UID" --proc-root "$OBS_FOUND" "$OBS_TARGET"); OBS_RC=$?
   eq "observer reports a retained cwd and its PID" "$OBS_RC:$OBS_OUT" "0:100"
   /usr/bin/python3 -I "$OBS" --uid "$OBS_UID" --proc-root "$OBS_NONE" "$OBS_TARGET" >/dev/null
   eq "observer proves absence only after a complete observation" "$?" "10"
   /usr/bin/python3 -I "$OBS" --uid "$OBS_UID" --proc-root "$OBS_HIDDEN" "$OBS_TARGET" >/dev/null
-  eq "an unreadable same-user process is unknown, not absence" "$?" "20"
+  eq "a same-user process whose fds cannot be listed is unknown, not absence" "$?" "20"
   /usr/bin/python3 -I "$OBS" --uid "$((OBS_UID + 1))" --proc-root "$OBS_FOUND" "$OBS_TARGET" >/dev/null
   eq "observer filters on the named uid, not its own identity" "$?" "10"
-  chmod 700 "$OBS_HIDDEN/102/fd"
 
   # The launcher seam runs only the observer argv. Each fixture launcher appends a
   # fake procfs root so a privileged answer can be simulated without privilege.
