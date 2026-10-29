@@ -151,10 +151,10 @@ jobs:
 
       - name: Classify base...head
         id: classify
-        # `shell: bash` gives pipefail, so the classifier's exit 2 (empty or unresolvable
-        # diff) fails the step through the tee; on that path the script writes nothing
-        # to stdout, so no partial line reaches $GITHUB_OUTPUT. Same base/head
-        # expression as the codex-context-guard job.
+        # `shell: bash` gives pipefail, so the classifier's exit 2 (unresolvable range;
+        # an empty diff is classified, bookkeeping=false) fails the step through the tee;
+        # on that path the script writes nothing to stdout, so no partial line reaches
+        # $GITHUB_OUTPUT. Same base/head expression as the codex-context-guard job.
         #
         # Self-guard first (codex r1 P1 on b-230-task-1): the classifier executes from
         # the PR head, so a diff that changes the classifier or this workflow may not be

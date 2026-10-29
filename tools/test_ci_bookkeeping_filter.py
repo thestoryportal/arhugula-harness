@@ -14,6 +14,7 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import ci_aggregate
 import codex_context_guard as ccg
 import merge_gate_log as mgl
 import roadmap_status_refresh as rsr
@@ -52,9 +53,10 @@ def test_any_other_file_is_not():
     assert classify([".harness/roadmap_status.md", "harness-cp/src/x.py"]) is False
 
 
-def test_empty_diff_raises():
-    with pytest.raises(ValueError):
-        classify([])
+def test_empty_diff_is_not_bookkeeping():
+    # The vacuous `set() <= BOOKKEEPING_PATHS` must not license a skip: a diff that wrote
+    # no bookkeeping file takes the full run.
+    assert classify([]) is False
 
 
 def test_jsonl_without_markdown_sibling_is_not_bookkeeping():
@@ -169,12 +171,14 @@ def test_cli_rename_onto_bookkeeping_path_is_not_bookkeeping(tmp_path: Path):
     assert p.stdout == "bookkeeping=false\n"
 
 
-def test_cli_empty_diff_exits_2_with_empty_stdout(tmp_path: Path):
-    repo, _, head = _repo_with_two_commits(tmp_path)
-    p = _run_script(repo, head, head, isolated=False)
-    assert p.returncode == 2
-    assert p.stdout == ""
-    assert "empty diff" in p.stderr
+def test_cli_empty_witness_commit_prints_false(tmp_path: Path):
+    # The main-protection tiebreaker's scratch PR is one `--allow-empty` commit on main.
+    repo, _, base = _repo_with_two_commits(tmp_path)
+    _git(repo, "commit", "-q", "--allow-empty", "-m", "chore: main-protection tiebreaker")
+    head = _git(repo, "rev-parse", "HEAD")
+    p = _run_script(repo, base, head, isolated=True)
+    assert p.returncode == 0, p.stderr
+    assert p.stdout == "bookkeeping=false\n"
 
 
 def test_cli_unresolvable_sha_exits_2_with_empty_stdout(tmp_path: Path):
@@ -342,13 +346,39 @@ def test_changes_step_lets_the_unchanged_classifier_answer_true_on_a_status_only
     assert "self-guard" not in p.stderr
 
 
-def test_changes_step_fails_loud_on_an_empty_range(tmp_path: Path):
-    # The classifier's exit 2 must fail the STEP (pipefail through the tee) and leave
-    # GITHUB_OUTPUT empty — this is the arm `always()` on the gated jobs exists for.
+def test_changes_step_fails_loud_on_an_unresolvable_range(tmp_path: Path):
+    # An unresolvable range must fail the STEP and leave GITHUB_OUTPUT empty — this is the
+    # arm `always()` on the gated jobs exists for. The self-guard's own `git diff` meets the
+    # bad range first, so the exit status is git's, not the classifier's 2.
     repo, base = _repo_with_step_files(tmp_path)
-    p, out = _run_changes_step(repo, base, base)
-    assert p.returncode == 2
+    p, out = _run_changes_step(repo, base, "0" * 40)
+    assert p.returncode != 0
     assert out == ""
+
+
+def test_empty_witness_commit_takes_the_full_run_and_the_aggregate_accepts_it(
+    tmp_path: Path,
+):
+    # WO-U10 fence15 regression: the tiebreaker's empty scratch commit failed the `changes`
+    # job, and the aggregate rightly refuses a failed classifier. The step must classify it
+    # as a full run, and that classification plus two passing suites must be a pass.
+    repo, base = _repo_with_step_files(tmp_path)
+    _git(repo, "commit", "-q", "--allow-empty", "-m", "chore: main-protection tiebreaker")
+    head = _git(repo, "rev-parse", "HEAD")
+    p, out = _run_changes_step(repo, base, head)
+    assert p.returncode == 0, p.stderr
+    assert out == "bookkeeping=false\n"
+    verdict = ci_aggregate.decide(
+        ci_aggregate.parse_inputs(
+            {
+                "CLASSIFIER_RESULT": "success",
+                "BOOKKEEPING": out.removeprefix("bookkeeping=").strip(),
+                "PACKAGE_RESULT": "success",
+                "PARITY_RESULT": "success",
+            }
+        )
+    )
+    assert verdict.passed, verdict.reason
 
 
 def test_gate_log_consistency_is_unconditional_and_blocking():

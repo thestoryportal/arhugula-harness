@@ -18,11 +18,15 @@ The workflow, not this script, refuses the fast path when the diff touches this 
 change to itself (codex r1 P1 on b-230-task-1) — on an unchanged classifier, head and
 base bytes are identical, so running from head is running from base.
 
-Exit codes are the contract: 0 = classified (the line is on stdout); 2 = nothing could be
-classified (an empty diff, or git could not resolve the range) with the cause on stderr
-and NOTHING on stdout, so no partial line reaches `$GITHUB_OUTPUT`. The gated jobs'
-`always()` turns that failure into a full run — an unclassifiable diff is a broken input,
-never a licence to skip.
+An empty diff is classified, not refused: it wrote no bookkeeping file, so it earns no
+skip and answers `bookkeeping=false`. The main-protection tiebreaker's scratch PR is one
+`--allow-empty` commit, and the required aggregate (`ci_aggregate.py`) fails any run whose
+classifier failed, so refusing that diff failed the witness (WO-U10 fence15).
+
+Exit codes are the contract: 0 = classified (the line is on stdout); 2 = git could not
+resolve the range, with the cause on stderr and NOTHING on stdout, so no partial line
+reaches `$GITHUB_OUTPUT`. The gated jobs' `always()` turns that failure into a full run —
+an unclassifiable diff is a broken input, never a licence to skip.
 
 Stdlib only ON PURPOSE: the `changes` job runs under the runner's `/usr/bin/python3` with
 no uv setup so it finishes in seconds. The two path sets have owners elsewhere —
@@ -46,15 +50,13 @@ BOOKKEEPING_PATHS: frozenset[str] = frozenset(
 
 
 def classify(paths: list[str]) -> bool:
-    """True iff every changed path is a bookkeeping file and a gate-log JSONL change
-    carries its Markdown sibling. Raises on an empty list."""
-    # [LAW:parse-dont-validate] an empty diff is not "no non-bookkeeping files" — it is
-    # an input the caller cannot have meant; raise rather than answer.
-    if not paths:
-        raise ValueError("empty diff: nothing to classify")
+    """True iff the diff is non-empty, every changed path is a bookkeeping file and a
+    gate-log JSONL change carries its Markdown sibling."""
     changed = set(paths)
     lone_jsonl = GATE_LOG_JSONL in changed and GATE_LOG_MD not in changed
-    return changed <= BOOKKEEPING_PATHS and not lone_jsonl
+    # [LAW:dataflow-not-control-flow] the empty diff is one more value with an answer: the
+    # vacuous `set() <= BOOKKEEPING_PATHS` must not license a skip, so it takes the full run.
+    return bool(changed) and changed <= BOOKKEEPING_PATHS and not lone_jsonl
 
 
 def changed_paths(base: str, head: str) -> list[str]:
@@ -77,7 +79,7 @@ def main(argv: list[str]) -> int:
         print("usage: ci_bookkeeping_diff.py <base-sha> <head-sha>", file=sys.stderr)
         return 2
     base, head = argv
-    # [LAW:no-silent-failure] both failure arms are loud, on stderr, and leave stdout
+    # [LAW:no-silent-failure] the failure arm is loud, on stderr, and leaves stdout
     # empty — exit 2 is the "could not classify" contract the workflow relies on.
     try:
         verdict = classify(changed_paths(base, head))
@@ -86,9 +88,6 @@ def main(argv: list[str]) -> int:
             f"ci_bookkeeping_diff: git diff failed for {base}...{head}: {e.stderr.strip()}",
             file=sys.stderr,
         )
-        return 2
-    except ValueError as e:
-        print(f"ci_bookkeeping_diff: {e} ({base}...{head})", file=sys.stderr)
         return 2
     print(f"bookkeeping={'true' if verdict else 'false'}")
     return 0
