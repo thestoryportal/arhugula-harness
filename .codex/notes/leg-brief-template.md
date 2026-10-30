@@ -53,5 +53,5 @@ check-tool results; review rounds; PR number; deviations.>
 1. **Ground before writing** — verify at HEAD every cite the brief hands over; a brief inherits your errors at full fidelity.
 2. **Read the artifact, not the report** — validate the leg's diff against the brief's deliverables yourself; implementer self-assessments over-claim.
 3. **Gate before merge** — three lenses (see `merge-gate-lenses/README.md`); scoped re-gate on any post-approval fix commit, empirical not formal.
-4. **Merge sequence** — gate-log row commit → merge → terminating refresh as the IMMEDIATE next commit (`tools/roadmap_status_refresh.py --refresh --pr N --date D --notes "..."` then `--check`) → worktree removal.
+4. **Merge sequence** — gate-log row commit → merge → terminating refresh as the IMMEDIATE next commit (`tools/roadmap_status_refresh.py --refresh --pr N --date D --notes "..."` then `--check`) → worktree removal Legacy landings only: a `trial` landing under a published activation has no terminating refresh (WS-11).
 5. **Honest disposition beats shipping** — a premise falsified at the gate becomes a premise-falsified close with a reopening trigger, not a rework-to-save-the-arc.

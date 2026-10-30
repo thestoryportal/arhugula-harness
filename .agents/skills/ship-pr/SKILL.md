@@ -196,7 +196,9 @@ and the requested PR/head SHA. Do not interpolate an empty PR number, SHA, branc
    (`--trim-drift-log --drift-source ... --drift-resolution ... --date ...`).
 6. Land the terminating refresh as the immediate next commit/PR. Its title starts exactly
    `ops: roadmap status refresh ` and its closed changed-file set is only
-   `.harness/roadmap_status.md`. Do not recurse on a terminating refresh.
+   `.harness/roadmap_status.md`. Do not recurse on a terminating refresh. This governs
+   every legacy landing; an arc that `tools/merge_door.py` lands under the `trial` profile
+   (published activation only, WS-11) has no terminating refresh.
 7. Wait for the refresh merge's own main CI to be green and fast-forward local `main`.
    Order the arc exit report before removing the arc worktree and pruning the topic branch.
    The ledger itself is no longer at risk from disposition — since U-HE-29 it is the SHARED
