@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `a297597f74c2` |
-| `last_refreshed` | 2026-10-30T00:00:00Z |
-| `git_head` | `55535e56` —  |
+| `workspace_state_hash` | `e2b8d8def571` |
+| `last_refreshed` | 2026-10-30T15:19:29.031905Z |
+| `git_head` | `5ad2759b` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 125 |
 
@@ -22,7 +22,7 @@
 
 **Purpose.** Live pointer to the next Claude/Codex-executable frontier. Full round-by-round history (every prior round, verbatim, most-recent-first) lives in the archive below — grep it by PR/`B-`/`R-`-id/round, never read wholesale.
 
-**Current next action (post-#1683).** Finish only WO-U07 (LIT arhugula-harness-trial-193.7x7.2je) at its compatible inactive scope: verify this terminating refresh own-main CI, exact review/source/main proofs and current writer/process release, then close U07. Source PR1683 completes the original companion correction lineage and its accepted witness gap. Activation remains with U23/U24; current-final installed product acceptance is not claimed. Hold U08/U14/U19/U23/U24/U25 with repair_paused=true; no next ticket or destructive cleanup. After verified U07 closure the paired lanes preserve evidence and perform their own Memento once, then hold.
+**Current next action (post-#1685).** Finish WO-U23 inactive closeout (LIT arhugula-harness-trial-193.99c.mn6): verify exact own-main CI for H5ad2759b and O575faec8 plus this terminating refresh, retain the five RED findings and user landing exception, and reconcile inactive inventory/rollback evidence before verified closure. U14 and U19 are user-directed non-success closures with their acceptance limits retained; they supply no activation or installed GO. The remaining released frontier is U24 then U25 under their actual prerequisites, including F1 historical-contract correction, authoritative adapters and final installed evidence. Buford alone performs Git work. Preserve protected work, source branches/worktrees and original accounting; no destructive cleanup or sixth U23 source review.
 
 **Archive.** `.harness/roadmap-next-action-archive.md` (PRIOR rounds only, verbatim as each stood when superseded — the current round lives only in this head; the newest superseded round may lag there until the next content PR archives it, and is always losslessly recoverable from this file's own git history meanwhile).
 
@@ -50,11 +50,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #1685 | 2026-10-30 | WO-U23 inactive carrier reconciliation landed under USER exception; five RED reports/F1 retained. Own-main and inactive closeout follow; activation remains gated. |
 | PR #1683 | 2026-10-30 | WO-U07 G1 inactive companion lineage and accepted witness correction landed; source own-main verified by merge door before this continuation. |
 | PR #1681 | 2026-10-29 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1677 | 2026-10-29 | U10 deadline and pipefail corrections landed; exact own-main CI 40916333255 passed all 23 jobs. Installed acceptance and full U10 closure remain pending. |
 | PR #1675 | 2026-10-29 | Empty diffs require the full CI path; U10 live acceptance remains pending. |
-| PR #1673 | 2026-10-29 | Terminating roadmap refresh after PR #1672. |
 
 ---
 
