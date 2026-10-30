@@ -4,22 +4,30 @@
 `evaluate_adoption` judges how far a carrier set has progressed through the WS-17 §19.2
 states and every reason activation is held. It never activates: publishing the private
 receipt (`workflow_policy.ACTIVATION_PATH`) stays a separate, last, authorized act, and
-this module only says whether that act would be admissible.
+this module only says whether that act would be admissible. The set it judges is the
+inventory's required consumers, bound to the inventory digest and the parsed policy: a
+caller cannot narrow it by observing fewer consumers.
 
-`plan_rollback` (§19.3) restores the prior coherent policy binding while carrying the
-adopted version's history forward unchanged. Its inputs have no field for prior counters
-or a replay list, so a plan cannot reset a budget, delete a record or re-send an uncertain
-merge or prompt; uncertain intents are returned for reconciliation instead. Holds the
-current user authority superseded are not restored.
+`plan_rollback` (§19.3) only plans: it binds the prior coherent carrier versions to
+restore and a by-value snapshot of the adopted version's history, and stays
+`rollback_required`. `verify_rollback` alone can return `rolled_back`, and only when the
+restored carriers are observed at those versions, every uncertain intent has been
+reconciled and the history after the transition still holds everything the snapshot did.
+Neither input has a field for prior counters or a replay list, so rollback cannot reset a
+budget, delete a record or re-send an uncertain merge or prompt. Holds the current user
+authority superseded are not restored.
 
-Both functions are pure; adapters observe the facts. Reasons are WS-18 codes.
+All functions are pure; adapters observe the facts. Reasons are WS-18 codes.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Literal
+
+import workflow_policy as wp
 
 AdoptionState = Literal[
     "inactive", "prepared", "validated", "active", "rollback_required", "rolled_back"
@@ -29,17 +37,28 @@ IntentOutcome = Literal["confirmed", "failed", "uncertain"]
 
 
 @dataclass(frozen=True)
+class Inventory:
+    """The adoption inventory (WS-17 §19.1): its digest and the consumers it requires."""
+
+    digest: str
+    required: frozenset[str]
+
+
+@dataclass(frozen=True)
 class Consumer:
-    """One carrier/enforcer row; `accepts` is the policy digest it consumes, None if unmigrated."""
+    """One observed carrier/enforcer: the policy digest it accepts (None if unmigrated) and
+    the inventory digest it was verified against."""
 
     name: str
     accepts: str | None
+    inventory: str
     retired_rule_present: bool  # e.g. a fixture or instruction still requiring a refresh PR
 
 
 @dataclass(frozen=True)
 class AdoptionFacts:
-    policy_digest: str
+    policy: wp.WorkflowPolicy | wp.PolicyDefect
+    inventory: Inventory
     consumers: tuple[Consumer, ...]
     active_writers: tuple[str, ...]
     independent_review: Observation
@@ -65,13 +84,42 @@ _RELEASE = {
 }
 
 
+def _consumer_detail(facts: AdoptionFacts) -> tuple[str, ...]:
+    """Every way the observed consumers fail to be the inventory's set on this policy."""
+    policy = facts.policy
+    # [LAW:parse-dont-validate] only a parsed policy has a digest; a defect has a reason
+    digest, unusable = (
+        (None, (f"policy unusable: {policy.reason}",))
+        if isinstance(policy, wp.PolicyDefect)
+        else (policy.digest, ())
+    )
+    observed = {c.name for c in facts.consumers}
+    required = facts.inventory.required
+    return (
+        unusable
+        + ("no consumers inventoried",) * (not required)
+        + tuple(f"required consumer missing: {name}" for name in sorted(required - observed))
+        + tuple(f"consumer not in the inventory: {name}" for name in sorted(observed - required))
+        + tuple(
+            f"consumer verified against another inventory: {c.name}"
+            for c in facts.consumers
+            if c.inventory != facts.inventory.digest
+        )
+        + tuple(
+            f"consumer not on the policy: {c.name}"
+            for c in facts.consumers
+            if digest is None or c.accepts != digest
+        )
+    )
+
+
 def evaluate_adoption(facts: AdoptionFacts) -> AdoptionDecision:
     # [LAW:dataflow-not-control-flow] every gate is evaluated every time; the facts decide
-    unmigrated = tuple(c.name for c in facts.consumers if c.accepts != facts.policy_digest)
-    stale = tuple(c.name for c in facts.consumers if c.retired_rule_present)
-    prepared_holds = ("policy_mismatch",) * bool(unmigrated or not facts.consumers) + (
-        "check_failed",
-    ) * bool(stale)
+    mismatch = _consumer_detail(facts)
+    stale = tuple(
+        f"retired rule still enforced: {c.name}" for c in facts.consumers if c.retired_rule_present
+    )
+    prepared_holds = ("policy_mismatch",) * bool(mismatch) + ("check_failed",) * bool(stale)
     validated_holds = (
         _REVIEW[facts.independent_review] + _CHECKS[facts.required_checks] + _CHECKS[facts.own_main]
     )
@@ -81,12 +129,7 @@ def evaluate_adoption(facts: AdoptionFacts) -> AdoptionDecision:
     state: AdoptionState = (
         "inactive" if prepared_holds else "prepared" if validated_holds else "validated"
     )
-    detail = (
-        tuple(f"consumer not on {facts.policy_digest[:12]}: {name}" for name in unmigrated)
-        + tuple(f"retired rule still enforced: {name}" for name in stale)
-        + tuple(f"active writer: {writer}" for writer in facts.active_writers)
-        + ("no consumers inventoried",) * (not facts.consumers)
-    )
+    detail = mismatch + stale + tuple(f"active writer: {writer}" for writer in facts.active_writers)
     holds = tuple(dict.fromkeys(prepared_holds + validated_holds + activation_holds))
     return AdoptionDecision(state, holds, detail)
 
@@ -116,23 +159,83 @@ class Ledger:
 
 
 @dataclass(frozen=True)
+class CarrierVersion:
+    """One carrier/enforcer of the prior coherent set, at the version rollback restores."""
+
+    name: str
+    version: str
+
+
+@dataclass(frozen=True)
 class RollbackPlan:
-    state: AdoptionState  # `rollback_required` until every uncertain intent is reconciled
+    state: AdoptionState  # always `rollback_required`: a plan restores nothing by itself
     restore_policy: str
+    restore_carriers: tuple[CarrierVersion, ...]
     restore_holds: tuple[str, ...]
-    retained: Ledger
+    retained: Ledger  # a by-value snapshot; later edits to the adopted ledger do not reach it
     reconcile: tuple[str, ...]  # observe actual outcome first; never replayed
 
 
+@dataclass(frozen=True)
+class RollbackVerification:
+    state: AdoptionState  # `rolled_back` only when `detail` is empty
+    detail: tuple[str, ...]
+
+
+def _snapshot(ledger: Ledger) -> Ledger:
+    return Ledger(
+        records=ledger.records,
+        counters=MappingProxyType(dict(ledger.counters)),
+        current_authority=ledger.current_authority,
+    )
+
+
 def plan_rollback(
-    prior_policy: str, prior_holds: tuple[Hold, ...], ledger: Ledger, intents: tuple[Intent, ...]
+    prior_policy: str,
+    prior_carriers: tuple[CarrierVersion, ...],
+    prior_holds: tuple[Hold, ...],
+    ledger: Ledger,
+    intents: tuple[Intent, ...],
 ) -> RollbackPlan:
-    reconcile = tuple(i.intent_id for i in intents if i.outcome == "uncertain")
     return RollbackPlan(
-        state="rollback_required" if reconcile else "rolled_back",
+        state="rollback_required",
         restore_policy=prior_policy,
+        restore_carriers=prior_carriers,
         # [LAW:one-source-of-truth] current user authority governs; a lifted hold stays lifted
         restore_holds=tuple(h.hold_id for h in prior_holds if h.superseded_by is None),
-        retained=ledger,
-        reconcile=reconcile,
+        retained=_snapshot(ledger),
+        reconcile=tuple(i.intent_id for i in intents if i.outcome == "uncertain"),
     )
+
+
+def verify_rollback(
+    plan: RollbackPlan,
+    observed_carriers: Mapping[str, str],
+    reconciled: Mapping[str, IntentOutcome],
+    ledger_after: Ledger,
+) -> RollbackVerification:
+    """[LAW:single-enforcer] the one place a rollback can be attested complete."""
+    kept = plan.retained
+    detail = (
+        tuple(
+            f"carrier not restored: {c.name} (want {c.version}, "
+            f"observed {observed_carriers.get(c.name, 'nothing')})"
+            for c in plan.restore_carriers
+            if observed_carriers.get(c.name) != c.version
+        )
+        + ("no prior carrier set bound",) * (not plan.restore_carriers)
+        + tuple(
+            f"intent not reconciled: {intent}"
+            for intent in plan.reconcile
+            if reconciled.get(intent, "uncertain") == "uncertain"
+        )
+        + tuple(f"record lost: {r}" for r in sorted(kept.records - ledger_after.records))
+        + tuple(
+            f"counter reset: {name}"
+            for name, value in sorted(kept.counters.items())
+            if name not in ledger_after.counters or ledger_after.counters[name] < value
+        )
+        + ("current authority not retained",)
+        * (ledger_after.current_authority != kept.current_authority)
+    )
+    return RollbackVerification("rollback_required" if detail else "rolled_back", detail)
