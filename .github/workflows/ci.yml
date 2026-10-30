@@ -833,9 +833,11 @@ jobs:
     needs: changes
     if: ${{ !cancelled() }}
     # R-600-codex-context-guard — Codex-side context-rot gate. The guard is stdlib-only
-    # so the runtime check uses /usr/bin/python3; pytest still runs under uv for the
-    # repo's pinned Python/test environment. Hard failures include root-checkout edits,
-    # design+implementation mixing, and default-branch roadmap_status.md drift.
+    # for its local callers (/usr/bin/python3). This runtime check runs under uv because
+    # its --allow-roadmap-drift trial-membership walk (WO-U23) admits review rows through
+    # the canonical finding_record contract, which needs the workspace's jsonschema.
+    # `just codex-context-check-ci` mirrors this argv. Hard failures include root-checkout
+    # edits, design+implementation mixing, and default-branch roadmap_status.md drift.
     runs-on: ubuntu-latest
     name: Codex context guard (anti-rot gate) — blocking
     steps:
@@ -864,7 +866,7 @@ jobs:
 
       - name: Codex context guard runtime check
         run: >
-          /usr/bin/python3 tools/codex_context_guard.py check
+          uv run python tools/codex_context_guard.py check
           --base-ref "${{ needs.changes.outputs.base }}"
           --head-ref "${{ needs.changes.outputs.head }}"
           --allow-roadmap-drift

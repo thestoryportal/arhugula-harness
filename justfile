@@ -154,7 +154,7 @@ codex-context-check-ci:
     base="$(git rev-parse origin/main)"
     head="$(git rev-parse HEAD)"
     git merge-base --is-ancestor "$base" "$head" || { echo "codex-context-check-ci: HEAD does not contain origin/main; rebase onto it first, or CI's diff will include main's newer commits" >&2; exit 1; }
-    /usr/bin/python3 tools/codex_context_guard.py check --base-ref "$base" --head-ref "$head" --allow-roadmap-drift
+    uv run python tools/codex_context_guard.py check --base-ref "$base" --head-ref "$head" --allow-roadmap-drift
     live="$(git rev-parse HEAD)"
     [ "$live" = "$head" ] || { echo "codex-context-check-ci: HEAD moved from $head to $live while the guard ran; the verdict describes the old commit -- re-run before pushing" >&2; exit 1; }
     echo "codex-context-check-ci: checked $head -- push this sha, not HEAD"

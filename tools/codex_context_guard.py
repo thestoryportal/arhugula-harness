@@ -444,7 +444,7 @@ def _lag_expected(root: Path) -> bool:
     return _is_verified_refresh_point(root, "HEAD")
 
 
-def _owed_lag(root: Path) -> bool:
+def _owed_lag(root: Path, *, trial_membership: bool) -> bool:
     """True when HEAD does NOT touch roadmap_status.md and HEAD's parent is a
     verified terminating-refresh point. This is the "refresh owed" case: the
     very next content commit after a refresh still (correctly, unavoidably)
@@ -464,27 +464,32 @@ def _owed_lag(root: Path) -> bool:
     unrelated content — it must qualify as a refresh entirely on its own merits
     via `_lag_expected`/`_is_verified_refresh_point`, never by riding its
     parent's owed-lag allowance.
+
+    `trial_membership` is the same caller gate: only a `--allow-roadmap-drift` run walks back
+    through tracked trial landings (`_owes_no_refresh`); every other caller keeps the one-step
+    legacy reading and never loads the canonical review-record contract.
     """
     parents = _out(["git", "rev-list", "--parents", "-n", "1", "HEAD"], cwd=root).split()
     if len(parents) < 2:
         return False
     if ".harness/roadmap_status.md" in _changed_files(root, base_ref=parents[1], head_ref="HEAD"):
         return False
-    return _owes_no_refresh(root, parents[1])
+    return _owes_no_refresh(root, parents[1], trial_membership=trial_membership)
 
 
-def _owes_no_refresh(root: Path, ref: str) -> bool:
+def _owes_no_refresh(root: Path, ref: str, *, trial_membership: bool) -> bool:
     """True when the roadmap status at `ref` owes no refresh: `ref` is a verified refresh
-    point, or a tracked trial landing over one, through any number of such landings.
+    point or, for a trial-membership caller, a tracked trial landing over one, through any
+    number of such landings.
 
     A trial landing has no terminating refresh (WS-11), so a second consecutive one would
-    otherwise sit two commits past the last refresh and fail its own-main run. Only the
-    caller-gated `_owed_lag` walks this chain: CI cannot read the private activation
-    receipt, so it trusts tracked membership (WS-01 §3.1), while local callers keep the
-    receipt-bound `refresh_rule` and still force a refresh the legacy rule owes."""
+    otherwise sit two commits past the last refresh and fail its own-main run. CI cannot read
+    the private activation receipt, so it trusts tracked membership (WS-01 §3.1), while local
+    callers keep the receipt-bound `refresh_rule` and still force a refresh the legacy rule
+    owes."""
     while not _is_verified_refresh_point(root, ref):
         parent = _out(["git", "rev-parse", "--verify", "--quiet", f"{ref}^"], cwd=root)
-        if not (parent and _is_tracked_trial_landing(root, ref, parent)):
+        if not (trial_membership and parent and _is_tracked_trial_landing(root, ref, parent)):
             return False
         ref = parent
     return True
@@ -492,9 +497,7 @@ def _owes_no_refresh(root: Path, ref: str) -> bool:
 
 _GATE_LOG_ROWS = ".harness/merge-gate-log.jsonl"
 _WORKFLOW_POLICY = ".harness/workflow-policy.json"
-_REVIEW_SCHEMA = "tools/review_schemas/finding_record.schema.json"
 _REVIEW_VERDICTS = ("finding", "no_finding")
-_SCHEMA_ANNOTATIONS = frozenset({"$schema", "title", "description"})
 
 
 def _blob(root: Path, ref: str, path: str) -> bytes | None:
@@ -502,88 +505,49 @@ def _blob(root: Path, ref: str, path: str) -> bytes | None:
     return proc.stdout if proc.returncode == 0 else None
 
 
-def _appended_review_arcs(before: bytes, after: bytes, schema: bytes | None) -> frozenset[str]:
-    """[LAW:parse-dont-validate] The arcs an append-only extension of the canonical review log
-    binds, when every appended row is a canonical finding record and at least one is a review
-    verdict. Empty for a rewritten log, a malformed or non-canonical row, rows with no verdict,
-    or a revision without the tracked record schema: none of those is review evidence."""
-    if schema is None or not after.startswith(before):
+def _appended_review_arcs(before: bytes, after: bytes) -> frozenset[str]:
+    """[LAW:single-enforcer] The arcs an append-only extension of the canonical review log
+    binds, when the writers' own contract (`finding_record.admit_appended`) admits every
+    appended row and at least one is a review verdict. Empty for a rewritten log, an
+    unparseable line, a row a writer would refuse, or an append with no verdict.
+
+    The contract needs jsonschema, so it loads only here: a `--allow-roadmap-drift` run whose
+    policy enrolls an arc, which CI runs in the workspace environment. Every other caller
+    stays stdlib-only."""
+    import finding_record
+
+    if not after.startswith(before):
         return frozenset()
     try:
-        contract = json.loads(schema)
-        rows = [json.loads(line) for line in after[len(before) :].splitlines() if line.strip()]
-    except ValueError:
+        prior, rows = (
+            [json.loads(line) for line in blob.splitlines() if line.strip()]
+            for blob in (before, after[len(before) :])
+        )
+        finding_record.admit_appended(prior, rows)
+    except ValueError:  # a JSON decode error or the contract's RecordError
         return frozenset()
-    canonical = all(_conforms(row, contract) for row in rows)
-    reviewed = canonical and any(row["record_kind"] in _REVIEW_VERDICTS for row in rows)
+    reviewed = any(row["record_kind"] in _REVIEW_VERDICTS for row in rows)
     return frozenset(row["arc_id"] for row in rows) if reviewed else frozenset()
-
-
-def _conforms(value: Any, schema: dict[str, Any]) -> bool:
-    """[LAW:single-enforcer] exception: `finding_record.validate` owns row validity, but it
-    needs jsonschema and CI runs this guard on the system interpreter. This evaluates the
-    tracked schema itself for exactly the keywords it uses and rejects any other keyword,
-    so a schema change fails closed instead of silently widening CI trial membership."""
-    return all(
-        key in _SCHEMA_ANNOTATIONS or _keyword(key, rule, value, schema)
-        for key, rule in schema.items()
-    )
-
-
-def _keyword(key: str, rule: Any, value: Any, schema: dict[str, Any]) -> bool:
-    # an applicator for one JSON type holds vacuously for the others, as in JSON Schema
-    match key, value:
-        case "type", _:
-            names = [rule] if isinstance(rule, str) else rule
-            return any(_is_json_type(value, name) for name in names)
-        case "enum", _:
-            return any(type(value) is type(option) and value == option for option in rule)
-        case "required", dict():
-            return all(name in value for name in rule)
-        case "properties", dict():
-            return all(_conforms(value[name], sub) for name, sub in rule.items() if name in value)
-        case "additionalProperties", dict():
-            return rule is False and value.keys() <= schema.get("properties", {}).keys()
-        case "minLength", str():
-            return len(value) >= rule
-        case "pattern", str():
-            return re.search(rule, value) is not None
-        case "minimum", int() | float():
-            return value >= rule
-        case _:
-            vacuous = ("required", "properties", "minLength", "pattern", "minimum")
-            return key in vacuous or (key == "additionalProperties" and rule is False)
-
-
-def _is_json_type(value: Any, name: str) -> bool:
-    match name:
-        case "integer":
-            return isinstance(value, int) and not isinstance(value, bool)
-        case "null":
-            return value is None
-        case _:
-            kind = {"object": dict, "string": str, "boolean": bool}.get(name)
-            return kind is not None and isinstance(value, kind)
 
 
 def _is_tracked_trial_landing(root: Path, ref: str, parent: str) -> bool:
     """[LAW:effects-at-boundaries] the Git facts for `workflow_policy.tracked_trial_landing`:
-    the squash landing's appended review rows, and the record schema and policy at its own
-    revision."""
+    the squash landing's appended review rows and the policy at its own revision. A policy
+    that enrolls no arc decides alone, before the review-record contract loads."""
     _tools_package()
     from tools import workflow_policy
 
+    policy = workflow_policy.load_policy(_blob(root, ref, _WORKFLOW_POLICY))
+    enrolls = isinstance(policy, workflow_policy.WorkflowPolicy) and bool(policy.eligible_units)
     merges = len(_out(["git", "rev-list", "--parents", "-n", "1", ref], cwd=root).split()) != 2
     after = _blob(root, ref, _GATE_LOG_ROWS)
     return not (
-        merges
+        not enrolls
+        or merges
         or after is None
         or ".harness/roadmap_status.md" in _changed_files(root, base_ref=parent, head_ref=ref)
     ) and workflow_policy.tracked_trial_landing(
-        workflow_policy.load_policy(_blob(root, ref, _WORKFLOW_POLICY)),
-        _appended_review_arcs(
-            _blob(root, parent, _GATE_LOG_ROWS) or b"", after, _blob(root, ref, _REVIEW_SCHEMA)
-        ),
+        policy, _appended_review_arcs(_blob(root, parent, _GATE_LOG_ROWS) or b"", after)
     )
 
 
@@ -679,6 +643,7 @@ def derive(
     base_ref: str = "",
     head_ref: str = "",
     include_branch_diff: bool = False,
+    trial_membership: bool = False,
 ) -> GuardState:
     root = repo_root(root or Path.cwd())
     head8 = _out(["git", "rev-parse", "--short=8", "HEAD"], cwd=root)
@@ -712,7 +677,7 @@ def derive(
         fork_doc_count=forks,
         latest_retirement_batch=batch,
         lag_expected=_lag_expected(root),
-        owed_lag=_owed_lag(root),
+        owed_lag=_owed_lag(root, trial_membership=trial_membership),
         refresh_rule=observe_refresh_rule(),
     )
 
@@ -1924,6 +1889,8 @@ def main(argv: list[str] | None = None) -> int:
         base_ref=args.base_ref,
         head_ref=args.head_ref,
         include_branch_diff=args.include_branch_diff,
+        # [LAW:single-enforcer] one caller gate: the drift allowance owns trial membership too
+        trial_membership=args.allow_roadmap_drift,
     )
     if args.mode == "credential-gate":
         try:

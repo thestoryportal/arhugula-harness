@@ -477,7 +477,7 @@ def test_content_merge_right_after_refresh_counts_as_owed_lag(tmp_path: Path) ->
     _git(repo, "add", ".")
     _git(repo, "commit", "-m", "feat: next content merge, does not touch roadmap_status.md")
 
-    assert cg._owed_lag(repo)
+    assert cg._owed_lag(repo, trial_membership=True)
 
 
 def test_content_merge_two_commits_past_refresh_is_not_owed_lag(tmp_path: Path) -> None:
@@ -511,7 +511,7 @@ def test_content_merge_two_commits_past_refresh_is_not_owed_lag(tmp_path: Path) 
     _git(repo, "add", ".")
     _git(repo, "commit", "-m", "feat: second unrefreshed content merge")
 
-    assert not cg._owed_lag(repo)
+    assert not cg._owed_lag(repo, trial_membership=True)
 
 
 def test_stale_status_touch_before_content_commit_is_not_owed_lag(
@@ -542,7 +542,7 @@ def test_stale_status_touch_before_content_commit_is_not_owed_lag(
     _git(repo, "add", ".")
     _git(repo, "commit", "-m", "feat: content merge")
 
-    assert not cg._owed_lag(repo)
+    assert not cg._owed_lag(repo, trial_membership=True)
 
 
 def test_malformed_status_edit_right_after_refresh_is_not_owed_lag(
@@ -591,7 +591,7 @@ def test_malformed_status_edit_right_after_refresh_is_not_owed_lag(
     _git(repo, "add", ".")
     _git(repo, "commit", "-m", "docs: bundled bad status edit")
 
-    assert not cg._owed_lag(repo)
+    assert not cg._owed_lag(repo, trial_membership=True)
 
 
 def test_content_merge_after_merge_based_refresh_counts_as_owed_lag(
@@ -617,7 +617,7 @@ def test_content_merge_after_merge_based_refresh_counts_as_owed_lag(
     _git(repo, "add", ".")
     _git(repo, "commit", "-m", "feat: next content merge")
 
-    assert cg._owed_lag(repo)
+    assert cg._owed_lag(repo, trial_membership=True)
 
 
 def test_refresh_with_stale_git_head_is_not_verified(tmp_path: Path) -> None:
@@ -652,7 +652,7 @@ def test_content_merge_after_stale_git_head_refresh_is_not_owed_lag(tmp_path: Pa
     _git(repo, "add", ".")
     _git(repo, "commit", "-m", "feat: next content merge")
 
-    assert not cg._owed_lag(repo)
+    assert not cg._owed_lag(repo, trial_membership=True)
 
 
 def test_stale_refresh_branch_merged_after_main_advanced_is_not_verified(
@@ -2360,6 +2360,9 @@ import yaml  # noqa: E402
 
 _ROOT = Path(__file__).resolve().parent.parent
 _GUARD = ["/usr/bin/python3", "tools/codex_context_guard.py"]
+# WO-U23: CI's runtime check and its local mirror run in the workspace environment, whose
+# jsonschema the --allow-roadmap-drift trial-membership walk needs for the record contract.
+_CI_GUARD = ["uv", "run", "python", "tools/codex_context_guard.py"]
 
 # C-HE-33 §2: the findings a CI-shaped and a local-shaped invocation may disagree on for
 # the same committed SHA, each for a reason no local run can reproduce.
@@ -2403,8 +2406,8 @@ def _ci_guard_argv(base: str, head: str) -> list[str]:
     )
     assert "${{" not in run, f"unrecognised CI ref expression: {run}"
     argv = shlex.split(run)
-    assert argv[:2] == _GUARD, argv
-    return argv[2:]
+    assert argv[: len(_CI_GUARD)] == _CI_GUARD, argv
+    return argv[len(_CI_GUARD) :]
 
 
 def _recipe_body(recipe: str) -> list[str]:
@@ -2417,8 +2420,14 @@ def _recipe_body(recipe: str) -> list[str]:
     return body
 
 
+def _guard_launcher(line: str) -> str | None:
+    """The guard launcher a recipe line starts with, if it is a guard call."""
+    launchers = (" ".join(_GUARD), " ".join(_CI_GUARD))
+    return next((launcher for launcher in launchers if line.startswith(launcher + " ")), None)
+
+
 def _is_guard_call(line: str) -> bool:
-    return line.startswith(" ".join(_GUARD) + " ")
+    return _guard_launcher(line) is not None
 
 
 def _recipe_guard_argvs(recipe: str, *, base: str, head: str) -> list[list[str]]:
@@ -2427,9 +2436,9 @@ def _recipe_guard_argvs(recipe: str, *, base: str, head: str) -> list[list[str]]
     the guard a live ref no longer matches CI's argv."""
     bound = {"$base": base, "$head": head}
     return [
-        [bound.get(tok, tok) for tok in shlex.split(line)[2:]]
+        [bound.get(tok, tok) for tok in shlex.split(line[len(launcher) + 1 :])]
         for line in _recipe_body(recipe)
-        if _is_guard_call(line)
+        if (launcher := _guard_launcher(line))
     ]
 
 
@@ -2645,8 +2654,8 @@ def _run_recipe_body(
     `guard_cmd` replaces that stub outright, so a witness can make something happen DURING
     the guard call -- a commit landing mid-run, say (codex u-he-42 r6 P2)."""
     script = "\n".join(
-        (guard_cmd or "printf '%s\\n' " + line[len(" ".join(_GUARD)) + 1 :])
-        if _is_guard_call(line)
+        (guard_cmd or "printf '%s\\n' " + line[len(launcher) + 1 :])
+        if (launcher := _guard_launcher(line))
         else line
         for line in _recipe_body(recipe)
         if not line.startswith("#!")
@@ -2903,31 +2912,12 @@ def test_ci_recipe_is_not_a_codex_loop_step(
 
 
 _TRIAL_UNIT = "arhugula-harness-trial-193.fx1"
+_REVIEWED_HEAD = "6e072e8422945df71fa5fb9345feccfff97c8724"
 
 
-def _trial_repo(tmp_path: Path) -> Path:
-    """A main whose tracked policy enrolls arc `wo-fx` and whose tip is a verified refresh."""
-    repo = _init_repo(tmp_path)
-    policy = json.loads(
-        (Path(__file__).resolve().parents[1] / ".harness" / "workflow-policy.json").read_text()
-    )
-    policy["eligible_units"] = [{"unit": _TRIAL_UNIT, "arc": "wo-fx"}]
-    (repo / ".harness" / "workflow-policy.json").write_text(json.dumps(policy))
-    schema = repo / cg._REVIEW_SCHEMA
-    schema.parent.mkdir(parents=True)
-    schema.write_bytes((Path(__file__).resolve().parents[1] / cg._REVIEW_SCHEMA).read_bytes())
-    (repo / ".harness" / "merge-gate-log.jsonl").write_text('{"arc_id": "wo-old"}\n')
-    _git(repo, "add", ".")
-    _git(repo, "commit", "-m", "feat: enroll the fixture arc")
-    _write_roadmap_status(repo, git_head=_git(repo, "rev-parse", "--short=8", "HEAD"))
-    _git(repo, "add", ".")
-    _git(repo, "commit", "-m", "ops: roadmap status refresh post-test")
-    return repo
-
-
-def _review_row(arc: str, **overrides: object) -> dict[str, object]:
-    """A canonical clean-approve verdict row, as the merge-gate wrapper appends it."""
-    head = "6e072e8422945df71fa5fb9345feccfff97c8724"
+def _review_row(arc: str, n: int = 1, **overrides: object) -> dict[str, object]:
+    """A canonical clean-approve verdict row, as the merge-gate wrapper appends it; `n` is
+    the finding_id's observation number."""
     return {
         "arc_id": arc,
         "base_sha": "1405ccbf4d8f0d41e29490fca172d2115be693f4",
@@ -2937,9 +2927,9 @@ def _review_row(arc: str, **overrides: object) -> dict[str, object]:
         "disposition": None,
         "disposition_actor": None,
         "expected_contract": "C-HE-15 §1 positive schema parse",
-        "finding_id": f"merge-gate-witness-adequacy:{head}:645dfba2a5c3:1",
+        "finding_id": f"merge-gate-witness-adequacy:{_REVIEWED_HEAD}:645dfba2a5c3:{n}",
         "finding_type": "clean-approve",
-        "head_sha": head,
+        "head_sha": _REVIEWED_HEAD,
         "lane_id": "host-fixture-lane",
         "lineage_claim": "wrapper",
         "location": "merge-gate",
@@ -2951,6 +2941,26 @@ def _review_row(arc: str, **overrides: object) -> dict[str, object]:
         "ts": "2026-10-30T09:44:24Z",
         "unique_catch": False,
     } | overrides
+
+
+def _trial_repo(tmp_path: Path, *units: dict[str, str]) -> Path:
+    """A main whose tracked policy enrolls `units` (default: arc `wo-fx`), whose review log
+    holds one earlier arc's canonical row, and whose tip is a verified refresh."""
+    repo = _init_repo(tmp_path)
+    policy = json.loads(
+        (Path(__file__).resolve().parents[1] / ".harness" / "workflow-policy.json").read_text()
+    )
+    policy["eligible_units"] = list(units) or [{"unit": _TRIAL_UNIT, "arc": "wo-fx"}]
+    (repo / ".harness" / "workflow-policy.json").write_text(json.dumps(policy))
+    (repo / ".harness" / "merge-gate-log.jsonl").write_text(
+        json.dumps(_review_row("wo-old", n=0)) + "\n"
+    )
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "feat: enroll the fixture arc")
+    _write_roadmap_status(repo, git_head=_git(repo, "rev-parse", "--short=8", "HEAD"))
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "ops: roadmap status refresh post-test")
+    return repo
 
 
 def _land(repo: Path, name: str, *rows: dict[str, object] | str) -> None:
@@ -2972,9 +2982,42 @@ def test_consecutive_trial_landings_owe_no_refresh_in_ci(tmp_path: Path) -> None
     _land(repo, "first", "wo-fx")
     _land(repo, "second", "wo-fx")
 
-    assert cg._owed_lag(repo)
+    assert cg._owed_lag(repo, trial_membership=True)
     # local callers stay on the receipt-bound rule: nothing here is a refresh point
     assert not cg._lag_expected(repo)
+    assert not cg._owed_lag(repo, trial_membership=False)
+
+
+def test_only_the_drift_allowance_walks_trial_landings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # WO-U23 pass-4 F1: the walk loads the jsonschema-backed record contract, so it belongs to
+    # the one caller gate that runs in the workspace environment, never to local callers.
+    repo = _trial_repo(tmp_path)
+    _land(repo, "first", "wo-fx")
+    _land(repo, "second", "wo-fx")
+    monkeypatch.chdir(repo)
+    monkeypatch.setattr(cg, "_open_prs", _open_prs_available)
+
+    cg.main(["check", "--json", "--allow-roadmap-drift"])
+    assert json.loads(capsys.readouterr().out)["owed_lag"] is True
+    cg.main(["check", "--json"])
+    assert json.loads(capsys.readouterr().out)["owed_lag"] is False
+
+
+def test_unenrolled_policy_never_loads_the_record_contract(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # stdlib-only callers stay safe while nothing is enrolled: the policy decides first
+    repo = _trial_repo(tmp_path)
+    (repo / ".harness" / "workflow-policy.json").write_text(
+        (Path(__file__).resolve().parents[1] / ".harness" / "workflow-policy.json").read_text()
+    )
+    _land(repo, "first", "wo-fx")
+    _land(repo, "second", "wo-fx")
+    monkeypatch.setitem(sys.modules, "finding_record", None)  # any import now raises
+
+    assert not cg._owed_lag(repo, trial_membership=True)
 
 
 def test_legacy_landing_after_trial_landings_is_the_one_owed_refresh(tmp_path: Path) -> None:
@@ -2982,7 +3025,7 @@ def test_legacy_landing_after_trial_landings_is_the_one_owed_refresh(tmp_path: P
     _land(repo, "trial", "wo-fx")
     _land(repo, "legacy", "wo-unenrolled")
 
-    assert cg._owed_lag(repo)
+    assert cg._owed_lag(repo, trial_membership=True)
 
 
 def test_trial_landing_after_an_unrefreshed_legacy_landing_still_drifts(tmp_path: Path) -> None:
@@ -2991,7 +3034,7 @@ def test_trial_landing_after_an_unrefreshed_legacy_landing_still_drifts(tmp_path
     _land(repo, "legacy", "wo-unenrolled")
     _land(repo, "trial", "wo-fx")
 
-    assert not cg._owed_lag(repo)
+    assert not cg._owed_lag(repo, trial_membership=True)
 
 
 @pytest.mark.parametrize(
@@ -3001,20 +3044,20 @@ def test_unbound_landing_is_not_a_tracked_trial_landing(
     tmp_path: Path, arcs: tuple[str, ...]
 ) -> None:
     repo = _trial_repo(tmp_path)
-    _land(repo, "middle", *arcs)
+    _land(repo, "middle", *(_review_row(arc, n=i + 1) for i, arc in enumerate(arcs)))
     _land(repo, "head", "wo-fx")
 
-    assert not cg._owed_lag(repo)
+    assert not cg._owed_lag(repo, trial_membership=True)
 
 
 def test_rewritten_review_log_is_not_a_tracked_trial_landing(tmp_path: Path) -> None:
     repo = _trial_repo(tmp_path)
-    (repo / ".harness" / "merge-gate-log.jsonl").write_text('{"arc_id": "wo-fx"}\n')
+    (repo / ".harness" / "merge-gate-log.jsonl").write_text(json.dumps(_review_row("wo-fx")) + "\n")
     _git(repo, "add", ".")
     _git(repo, "commit", "-m", "feat: replace the review log")
     _land(repo, "head", "wo-fx")
 
-    assert not cg._owed_lag(repo)
+    assert not cg._owed_lag(repo, trial_membership=True)
 
 
 def test_tracked_trial_landing_needs_the_policy_at_its_own_revision(tmp_path: Path) -> None:
@@ -3023,7 +3066,10 @@ def test_tracked_trial_landing_needs_the_policy_at_its_own_revision(tmp_path: Pa
     _land(repo, "middle", "wo-fx")
     _land(repo, "head", "wo-fx")
 
-    assert not cg._owed_lag(repo)
+    assert not cg._owed_lag(repo, trial_membership=True)
+
+
+_FOREIGN_ID = f"merge-gate-witness-adequacy:{_REVIEWED_HEAD}:645dfba2a5c3:0"
 
 
 @pytest.mark.parametrize(
@@ -3034,37 +3080,32 @@ def test_tracked_trial_landing_needs_the_policy_at_its_own_revision(tmp_path: Pa
         _review_row("wo-fx", record_kind="reviewer_unavailable"),
         _review_row("wo-fx", unexpected="field"),
         _review_row("wo-fx", ts="yesterday"),
+        _review_row("wo-fx", ts="9999-99-99T99:99:99Z"),
         _review_row("wo-fx", round_n=True),
+        _review_row("wo-fx", finding_id=f"other-producer:{_REVIEWED_HEAD}:645dfba2a5c3:1"),
+        _review_row("wo-fx", finding_id=_FOREIGN_ID),
     ],
-    ids=["bare", "unknown-kind", "no-verdict", "extra-key", "bad-ts", "bool-round"],
+    ids=[
+        "bare",
+        "unknown-kind",
+        "no-verdict",
+        "extra-key",
+        "bad-ts",
+        "impossible-ts",
+        "bool-round",
+        "id-producer-mismatch",
+        "rewrites-prior-core",
+    ],
 )
 def test_non_canonical_review_rows_are_not_a_tracked_trial_landing(
     tmp_path: Path, row: dict[str, object]
 ) -> None:
-    # WO-U23 pass-3 F1: an enrolled arc_id on an invalid or verdict-less append must not
-    # waive the legacy refresh; only canonical review verdicts carry CI trial membership.
+    # WO-U23 pass-3/pass-4 F1: an enrolled arc_id on a row the canonical writer would refuse,
+    # or on a verdict-less append, must not waive the legacy refresh. `rewrites-prior-core`
+    # reuses the earlier arc's finding_id under another arc, which the prior-row invariants
+    # refuse even though the row alone is schema-valid.
     repo = _trial_repo(tmp_path)
     _land(repo, "middle", row)
     _land(repo, "head", "wo-fx")
 
-    assert not cg._owed_lag(repo)
-
-
-def test_tracked_trial_landing_needs_the_record_schema_at_its_own_revision(
-    tmp_path: Path,
-) -> None:
-    repo = _trial_repo(tmp_path)
-    (repo / cg._REVIEW_SCHEMA).unlink()
-    _land(repo, "middle", "wo-fx")
-    _land(repo, "head", "wo-fx")
-
-    assert not cg._owed_lag(repo)
-
-
-def test_review_row_schema_keywords_fail_closed() -> None:
-    row = _review_row("wo-fx")
-    schema = json.loads((Path(__file__).resolve().parents[1] / cg._REVIEW_SCHEMA).read_text())
-
-    assert cg._conforms(row, schema)
-    assert not cg._conforms(row, schema | {"maxProperties": 100})
-    assert not cg._conforms(row, schema | {"additionalProperties": {"type": "string"}})
+    assert not cg._owed_lag(repo, trial_membership=True)

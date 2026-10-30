@@ -356,6 +356,19 @@ def _under_log_lock(path: Path, body) -> None:
         os.close(fd)
 
 
+def admit_appended(prior: list[dict[str, Any]], appended: list[dict[str, Any]]) -> None:
+    """The writers' append contract, for a reader judging rows already appended after `prior`:
+    each row in order passes `validate` and the prior-row invariants against everything before
+    it, exactly as `append_*` apply them under the log lock. Raises `RecordError` at the first
+    row a writer would have refused. [LAW:single-enforcer] the context guard's CI trial
+    membership calls this rather than re-deriving the record contract."""
+    rows = list(prior)
+    for row in appended:
+        validate(row)
+        _check_against_prior_rows(row, rows)
+        rows.append(row)
+
+
 def _encode(row: dict) -> bytes:
     return (json.dumps(row, sort_keys=True) + "\n").encode()
 
