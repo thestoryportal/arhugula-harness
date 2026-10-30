@@ -40,10 +40,12 @@ from types import MappingProxyType
 from typing import Literal, NoReturn, cast
 
 from tools.workflow_evidence import ReceiptDefect, load_receipt
+from tools.workflow_facts import Operation, observe_admission, observe_trial_relation
 from tools.workflow_policy import (
     CANONICAL_ROOT,
     POLICY_VERSION,
     PROFILE_ID,
+    TRIAL_ROOT,
     PolicyDefect,
     ProfileSelection,
     SelectionFacts,
@@ -83,6 +85,12 @@ ReasonCode = Literal[
 ]
 
 BOUNDARIES: tuple[Boundary, ...] = ("prepare", "develop", "publish", "integrate")
+# The author implements through prepare/develop; Buford, the sole integrator, publishes and
+# integrates. Each boundary is admitted for the session that acts there.
+OPERATION: Mapping[Boundary, Operation] = MappingProxyType(
+    {"prepare": "implementation", "develop": "implementation",
+     "publish": "integration", "integrate": "integration"}
+)  # fmt: skip
 _UNIT = re.compile(r"[a-z0-9][a-z0-9._-]*")
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 _GIT_OID = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
@@ -583,17 +591,17 @@ def observe_policy() -> WorkflowPolicy | PolicyDefect:
 
 
 def observe_selection(
-    policy: WorkflowPolicy | PolicyDefect, unit: str, repository: str
+    policy: WorkflowPolicy | PolicyDefect, unit: str, repository: str, boundary: Boundary
 ) -> ProfileSelection:
-    """[LAW:effects-at-boundaries] the WP-02 selection from the policy and canonical
-    activation. LIT trial relation and native admission have no adapter yet, so they stay
-    unknown and enrolled work holds rather than passing on an unread authority."""
+    """[LAW:effects-at-boundaries] the WP-02 selection from the policy, the unit's canonical
+    LIT trial relation, its native admission for the operation the boundary belongs to and
+    the canonical activation."""
     facts = SelectionFacts(
         repository=repository,
         unit=unit,
         arc=None,
-        trial_relation="unknown",
-        admission="unknown",
+        trial_relation=observe_trial_relation(CANONICAL_ROOT, unit, TRIAL_ROOT),
+        admission=observe_admission(CANONICAL_ROOT, unit, OPERATION[boundary]),
         activation=read_activation(),
     )
     return select_profile(policy, facts)
@@ -609,7 +617,7 @@ def observe_facts(
     new check and for re-deciding a stored receipt alike."""
     rules = parse_check_rules(policy)
     return BoundaryFacts(
-        selection=observe_selection(policy, request.unit, subject.repository),
+        selection=observe_selection(policy, request.unit, subject.repository, request.boundary),
         subject=subject,
         observations={
             claim.requirement.name: observe(claim, request, subject, rules) for claim in claims

@@ -81,8 +81,10 @@ from tools.workflow_evidence import (
     parse_classification,
     reuse_result,
 )
+from tools.workflow_facts import observe_admission, observe_trial_relation
 from tools.workflow_policy import (
     CANONICAL_ROOT,
+    TRIAL_ROOT,
     SelectionFacts,
     WorkflowPolicy,
     read_activation,
@@ -159,8 +161,9 @@ def worktree_profile(root: Path) -> Profile:
     """[LAW:single-enforcer] WP-02 `select_profile` decides every bound unit. A worktree
     with no loop arc has no unit and keeps the existing hooks, as does an arc a readable
     policy does not enroll. An arc whose enrollment cannot be read is selected under the
-    arc's own name, which `select_profile` holds. Trial also needs Git to run the gate
-    there; without it nothing would check the unit's commits."""
+    arc's own name, which `select_profile` holds. The unit's trial relation and its native
+    admission for implementation are read from the canonical checkout. Trial also needs Git
+    to run the gate there; without it nothing would check the unit's commits."""
     policy = observe_policy()
     try:
         raw: bytes | None = (root / LOOP_STATE).read_bytes()
@@ -182,8 +185,8 @@ def worktree_profile(root: Path) -> Profile:
             repository=repository,
             unit=unit,
             arc=arc,
-            trial_relation="unknown",
-            admission="unknown",
+            trial_relation=observe_trial_relation(CANONICAL_ROOT, unit, TRIAL_ROOT),
+            admission=observe_admission(CANONICAL_ROOT, unit, "implementation"),
             activation=read_activation(),
         ),
     )

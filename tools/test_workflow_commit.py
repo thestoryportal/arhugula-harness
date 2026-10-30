@@ -33,6 +33,9 @@ import pytest
 from tools import workflow_boundaries as wb
 from tools import workflow_commit as wc
 from tools.workflow_policy import (
+    REPOSITORY,
+    TRIAL_ROOT,
+    Activation,
     EligibleUnit,
     PolicyDefect,
     ProfileSelection,
@@ -57,6 +60,14 @@ TRIAL = wc.Trial(UNIT, "thestoryportal/arhugula-harness", _policy())
 
 def git(root: Path, *args: str) -> None:
     subprocess.run(["git", "-C", str(root), *args], check=True, capture_output=True)
+
+
+@pytest.fixture(autouse=True)
+def _unread_lit(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No test reads the live canonical LIT or native admission: both stay unread unless one
+    observes them."""
+    monkeypatch.setattr(wc, "observe_trial_relation", lambda *_: "unknown")
+    monkeypatch.setattr(wc, "observe_admission", lambda *_: "unknown")
 
 
 @pytest.fixture
@@ -499,6 +510,65 @@ def test_unreadable_policy_holds_an_arc_bound_worktree(
     assert wc.worktree_profile(repo) == wc.Legacy()  # no arc: nothing to enroll
     _bind_arc(repo)
     assert isinstance(wc.worktree_profile(repo), wc.Held)
+
+
+@pytest.mark.parametrize(
+    ("relation", "profile"),
+    [
+        ("contradicted", wc.Legacy()),
+        ("confirmed", wc.Held(("policy_mismatch",))),
+        ("unknown", wc.Held(("policy_mismatch", "authority_unavailable"))),
+    ],
+)
+def test_canonical_lit_relation_decides_unreadable_enrollment(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, relation: str, profile: wc.Profile
+) -> None:
+    """WO-U24: the gate reads the unit's relation from the canonical LIT. Work LIT verifies is
+    unrelated keeps legacy; trial-related or unread work holds."""
+    observed: list[tuple[Path, str, str]] = []
+    monkeypatch.setattr(wc, "observe_policy", lambda: PolicyDefect("unreadable"))
+    monkeypatch.setattr(
+        wc,
+        "observe_trial_relation",
+        lambda store, unit, root: observed.append((store, unit, root)) or relation,
+    )
+    _bind_arc(repo)
+    assert wc.worktree_profile(repo) == profile
+    assert observed == [(wc.CANONICAL_ROOT, "u06", TRIAL_ROOT)]
+
+
+@pytest.mark.parametrize(
+    ("admission", "profile"),
+    [
+        ("unknown", wc.Held(("authority_unavailable",))),
+        ("contradicted", wc.Held(("authority_changed",))),
+        ("confirmed", wc.Held(("commit_gate_unbound",))),
+    ],
+)
+def test_enrolled_work_is_selected_on_the_authors_implementation_admission(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, admission: str, profile: wc.Profile
+) -> None:
+    """WO-U24: with an active receipt, repository identity and a confirmed LIT relation, the
+    author's native admission for implementation decides: unread or refuted holds, and an
+    admitted unit is trial — held here only because this worktree binds no commit gate."""
+    policy = dataclasses.replace(_policy(), eligible_units=(EligibleUnit(UNIT, "u06"),))
+    active = Activation(
+        policy.policy_id, policy.policy_version, policy.digest, "1" * 40, "2" * 40, "3" * 64,
+        "cmt-x", "legacy",
+    )  # fmt: skip
+    observed: list[tuple[Path, str, str]] = []
+    monkeypatch.setattr(wc, "observe_policy", lambda: policy)
+    monkeypatch.setattr(wc, "read_activation", lambda: active)
+    monkeypatch.setattr(wc, "observe_repository", lambda _root: REPOSITORY)
+    monkeypatch.setattr(wc, "observe_trial_relation", lambda *_: "confirmed")
+    monkeypatch.setattr(
+        wc,
+        "observe_admission",
+        lambda root, unit, operation: observed.append((root, unit, operation)) or admission,
+    )
+    _bind_arc(repo)
+    assert wc.worktree_profile(repo) == profile
+    assert observed == [(wc.CANONICAL_ROOT, UNIT, "implementation")]
 
 
 def _adapter():  # type: ignore[no-untyped-def]
@@ -1059,6 +1129,7 @@ _REAL_PATH = (
     "tools/workflow_commit.py",
     "tools/workflow_boundaries.py",
     "tools/workflow_evidence.py",
+    "tools/workflow_facts.py",
     "tools/workflow_policy.py",
 )
 # The witness's only stand-ins, appended to its copy of WP-02: selection yields trial,

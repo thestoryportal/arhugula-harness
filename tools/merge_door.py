@@ -32,6 +32,7 @@ from pathlib import Path
 
 import ci_result_binding as cb
 import reservations as rs
+import workflow_facts as wf
 import workflow_policy as wp
 from arc_metrics import QUEUE_DIR, REPO, _process_is_alive, ci_is_green, publish_exclusive
 
@@ -1424,34 +1425,48 @@ def observe_policy() -> wp.WorkflowPolicy | wp.PolicyDefect:
     return wp.load_policy(raw)
 
 
+def landed_unit(policy: wp.WorkflowPolicy | wp.PolicyDefect, arc_id: str) -> str:
+    """The unit an arc lands. The policy binds each enrolled unit to its arc, so the arc
+    names the unit. An arc no entry names has no unit to report and stands for itself;
+    `select_profile` then decides outside the policy, and an arc string that happens to
+    equal some unit id still fails that unit's arc identity."""
+    members = () if isinstance(policy, wp.PolicyDefect) else policy.eligible_units
+    entry = next((e for e in members if e.arc == arc_id), None)
+    return arc_id if entry is None else entry.unit
+
+
 def landing_profile(
-    policy: wp.WorkflowPolicy | wp.PolicyDefect, activation: wp.ActivationState, arc_id: str
+    policy: wp.WorkflowPolicy | wp.PolicyDefect,
+    activation: wp.ActivationState,
+    arc_id: str,
+    trial_relation: wp.Observation,
+    admission: wp.Observation,
 ) -> wp.ProfileSelection:
     """The WO-U03 selection for the arc being landed. [LAW:single-enforcer] eligibility is
     `select_profile`'s alone: the door has no flag, env or caller input that reaches it.
 
-    The policy binds each enrolled unit to its arc, so the arc names the unit. An arc no
-    entry names has no unit to report; `select_profile` then decides outside the policy,
-    and an arc string that happens to equal some unit id still fails that unit's arc
-    identity. The door has no LIT-relation or native-admission adapter, so both stay
-    `unknown`: before activation every landing is legacy, after it enrolled work holds
-    until those adapters exist rather than landing on an unread authority."""
-    members = () if isinstance(policy, wp.PolicyDefect) else policy.eligible_units
-    entry = next((e for e in members if e.arc == arc_id), None)
+    `trial_relation` and `admission` are the landed unit's observed LIT relation and its
+    native admission for integration; an unread one is `unknown`, which holds enrolled work
+    rather than landing on an unread authority."""
     facts = wp.SelectionFacts(
         repository=wp.REPOSITORY,
-        unit=arc_id if entry is None else entry.unit,
+        unit=landed_unit(policy, arc_id),
         arc=arc_id,
-        trial_relation="unknown",
-        admission="unknown",
+        trial_relation=trial_relation,
+        admission=admission,
         activation=activation,
     )
     return wp.select_profile(policy, facts)
 
 
 def observe_landing_profile(arc_id: str) -> wp.ProfileSelection:
-    """[LAW:effects-at-boundaries] tracked policy + canonical activation receipt."""
-    return landing_profile(observe_policy(), wp.read_activation(), arc_id)
+    """[LAW:effects-at-boundaries] tracked policy, the landed unit's canonical LIT trial
+    relation and integration admission, and the canonical activation receipt."""
+    policy = observe_policy()
+    unit = landed_unit(policy, arc_id)
+    relation = wf.observe_trial_relation(wp.CANONICAL_ROOT, unit, wp.TRIAL_ROOT)
+    admission = wf.observe_admission(wp.CANONICAL_ROOT, unit, "integration")
+    return landing_profile(policy, wp.read_activation(), arc_id, relation, admission)
 
 
 def require_landable(profile: wp.ProfileSelection, arc_id: str) -> None:
