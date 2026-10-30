@@ -81,18 +81,23 @@ from tools.workflow_evidence import (
     parse_classification,
     reuse_result,
 )
-from tools.workflow_facts import observe_admission, observe_trial_relation
+from tools.workflow_facts import (
+    LOOP_STATE,
+    loop_arc,
+    observe_admission,
+    observe_trial_relation,
+)
 from tools.workflow_policy import (
     CANONICAL_ROOT,
     TRIAL_ROOT,
     SelectionFacts,
     WorkflowPolicy,
+    arc_unit,
     read_activation,
     select_profile,
 )
 
 CHECK_ROOT = CANONICAL_ROOT / ".local" / "buford-loop" / "workflow-checks"
-LOOP_STATE = Path(".harness/codex_loop_state.json")
 RUFF_CONFIG = "pyproject.toml"
 # The environment every `uv run` check resolves; hashed so a lock or interpreter change
 # runs the check again. A missing file is recorded as deleted, not refused.
@@ -147,16 +152,6 @@ def observe_repository(root: Path) -> str:
     return match.group(1) if match else url
 
 
-def loop_arc(raw: bytes | None) -> str | None:
-    """The arc a worktree's Codex loop ledger names; absent ledger means no arc."""
-    if raw is None:
-        return None
-    arc = json.loads(raw).get("arc_id")
-    if not isinstance(arc, str) or not arc:
-        raise ValueError(f"{LOOP_STATE}: arc_id must be a nonempty string")
-    return arc
-
-
 def worktree_profile(root: Path) -> Profile:
     """[LAW:single-enforcer] WP-02 `select_profile` decides every bound unit. A worktree
     with no loop arc has no unit and keeps the existing hooks, as does an arc a readable
@@ -170,14 +165,9 @@ def worktree_profile(root: Path) -> Profile:
     except FileNotFoundError:
         raw = None
     arc = loop_arc(raw)
-    if arc is None:
+    unit = None if arc is None else arc_unit(policy, arc)
+    if unit is None:
         return Legacy()
-    unit = arc
-    if isinstance(policy, WorkflowPolicy):
-        member = next((entry for entry in policy.eligible_units if entry.arc == arc), None)
-        if member is None:
-            return Legacy()
-        unit = member.unit
     repository = observe_repository(root)
     selection = select_profile(
         policy,

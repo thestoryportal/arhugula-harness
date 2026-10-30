@@ -15,6 +15,9 @@ session's measured context), so this module runs that script and accepts only it
 observation line. Anything else — a missing checkout, a failed or slow run, extra or
 malformed output — is `unknown`.
 
+`loop_arc` is the arc a worktree's Codex loop ledger names: the commit gate maps it to the
+unit it commits for, and a boundary check compares it with the arc the policy enrolls.
+
 The module is stdlib-only and imports nothing else from `tools/`: the commit gate loads its
 callers as the `tools` package under `python3 -I`, the merge door as flat modules, and both
 must reach it. The callers pass `workflow_policy.CANONICAL_ROOT` and `TRIAL_ROOT`.
@@ -37,6 +40,8 @@ EXPORT_VERSION = 2
 PARENT_EDGE = "parent-child"
 READ_TIMEOUT_SECONDS = 30
 ADMISSION_SCRIPT = Path("ops") / "orchestration" / "selection_facts.py"
+# A worktree's Codex loop ledger: the arc its work belongs to, relative to the checkout.
+LOOP_STATE = Path(".harness/codex_loop_state.json")
 # The script reads its own export and each acting transcript, so it gets more than one read.
 ADMISSION_TIMEOUT_SECONDS = 120
 # [LAW:one-source-of-truth] exception: the values of `workflow_policy.Observation`, which this
@@ -123,6 +128,18 @@ def observe_trial_relation(store: Path, unit: str, trial_root: str) -> Observati
         return trial_relation(parse_tree(export), unit, trial_root)
     except (OSError, subprocess.SubprocessError, ValueError):
         return "unknown"
+
+
+def loop_arc(raw: bytes | None) -> str | None:
+    """The arc a worktree's Codex loop ledger names; absent ledger means no arc."""
+    if raw is None:
+        return None
+    ledger: object = json.loads(raw)
+    # Decoded JSON object keys are always strings.
+    arc = cast(dict[str, object], ledger).get("arc_id") if isinstance(ledger, dict) else None
+    if not isinstance(arc, str) or not arc:
+        raise ValueError(f"{LOOP_STATE}: arc_id must be a nonempty string")
+    return arc
 
 
 def parse_admission(output: bytes) -> Observation:

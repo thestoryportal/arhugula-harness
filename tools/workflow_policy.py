@@ -346,6 +346,17 @@ def tracked_trial_landing(policy: WorkflowPolicy | PolicyDefect, arcs: frozenset
     )
 
 
+def arc_unit(policy: WorkflowPolicy | PolicyDefect, arc: str) -> str | None:
+    """[LAW:one-source-of-truth] The LIT unit work on `arc` is selected as. The tracked policy
+    is the only record binding an arc to a unit: an enrolled arc names its unit, and an arc a
+    readable policy does not enroll is not trial work, so it has none and keeps the legacy
+    workflow (WS-01 §3.2 missing membership). An unreadable policy cannot say, so the arc
+    stands for itself, which `select_profile` holds."""
+    if isinstance(policy, PolicyDefect):
+        return arc
+    return next((entry.unit for entry in policy.eligible_units if entry.arc == arc), None)
+
+
 def _enrolled_selection(
     policy: WorkflowPolicy, entry: EligibleUnit, facts: SelectionFacts
 ) -> ProfileSelection:

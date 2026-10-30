@@ -1425,32 +1425,27 @@ def observe_policy() -> wp.WorkflowPolicy | wp.PolicyDefect:
     return wp.load_policy(raw)
 
 
-def landed_unit(policy: wp.WorkflowPolicy | wp.PolicyDefect, arc_id: str) -> str:
-    """The unit an arc lands. The policy binds each enrolled unit to its arc, so the arc
-    names the unit. An arc no entry names has no unit to report and stands for itself;
-    `select_profile` then decides outside the policy, and an arc string that happens to
-    equal some unit id still fails that unit's arc identity."""
-    members = () if isinstance(policy, wp.PolicyDefect) else policy.eligible_units
-    entry = next((e for e in members if e.arc == arc_id), None)
-    return arc_id if entry is None else entry.unit
-
-
 def landing_profile(
     policy: wp.WorkflowPolicy | wp.PolicyDefect,
     activation: wp.ActivationState,
     arc_id: str,
-    trial_relation: wp.Observation,
-    admission: wp.Observation,
+    observe: Callable[[str], tuple[wp.Observation, wp.Observation]],
 ) -> wp.ProfileSelection:
     """The WO-U03 selection for the arc being landed. [LAW:single-enforcer] eligibility is
     `select_profile`'s alone: the door has no flag, env or caller input that reaches it.
 
-    `trial_relation` and `admission` are the landed unit's observed LIT relation and its
-    native admission for integration; an unread one is `unknown`, which holds enrolled work
+    [LAW:one-source-of-truth] `wp.arc_unit` binds the arc to its LIT unit, as it does for the
+    commit gate. An arc a readable policy does not enroll is not trial work and lands legacy
+    without a LIT read. Otherwise `observe(unit)` gives that unit's LIT trial relation and
+    its native integration admission; an unread one is `unknown`, which holds enrolled work
     rather than landing on an unread authority."""
+    unit = wp.arc_unit(policy, arc_id)
+    if unit is None:
+        return wp.ProfileSelection("legacy", (), ())
+    trial_relation, admission = observe(unit)
     facts = wp.SelectionFacts(
         repository=wp.REPOSITORY,
-        unit=landed_unit(policy, arc_id),
+        unit=unit,
         arc=arc_id,
         trial_relation=trial_relation,
         admission=admission,
@@ -1459,14 +1454,19 @@ def landing_profile(
     return wp.select_profile(policy, facts)
 
 
+def observe_landed(unit: str) -> tuple[wp.Observation, wp.Observation]:
+    """[LAW:effects-at-boundaries] the landed unit's canonical LIT trial relation and its
+    native admission for integration."""
+    return (
+        wf.observe_trial_relation(wp.CANONICAL_ROOT, unit, wp.TRIAL_ROOT),
+        wf.observe_admission(wp.CANONICAL_ROOT, unit, "integration"),
+    )
+
+
 def observe_landing_profile(arc_id: str) -> wp.ProfileSelection:
-    """[LAW:effects-at-boundaries] tracked policy, the landed unit's canonical LIT trial
-    relation and integration admission, and the canonical activation receipt."""
-    policy = observe_policy()
-    unit = landed_unit(policy, arc_id)
-    relation = wf.observe_trial_relation(wp.CANONICAL_ROOT, unit, wp.TRIAL_ROOT)
-    admission = wf.observe_admission(wp.CANONICAL_ROOT, unit, "integration")
-    return landing_profile(policy, wp.read_activation(), arc_id, relation, admission)
+    """[LAW:effects-at-boundaries] tracked policy, canonical activation receipt and the
+    landed unit's canonical facts."""
+    return landing_profile(observe_policy(), wp.read_activation(), arc_id, observe_landed)
 
 
 def require_landable(profile: wp.ProfileSelection, arc_id: str) -> None:

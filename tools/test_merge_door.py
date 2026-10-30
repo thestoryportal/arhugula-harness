@@ -3634,8 +3634,9 @@ def test_profile_verb_prints_the_selection_or_holds(selected, capsys):
 
 def test_landing_reads_the_landed_units_canonical_facts(monkeypatch):
     """WO-U24: the door observes the unit an arc lands in the canonical LIT and its native
-    admission for integration. An unenrolled arc LIT verifies is unrelated lands legacy; an
-    enrolled unit with a confirmed relation holds until its integration is admitted."""
+    admission for integration; an enrolled unit with a confirmed relation holds until its
+    integration is admitted. Pass-2 F1: after activation an ordinary arc the policy does not
+    enroll (`pr-7`, which names no LIT issue) lands legacy without either read."""
     unit = "arhugula-harness-trial-193.7x7.5tr"
     policy = md.observe_policy()
     assert isinstance(policy, wp.WorkflowPolicy)
@@ -3649,8 +3650,8 @@ def test_landing_reads_the_landed_units_canonical_facts(monkeypatch):
         enrolled.policy_id, enrolled.policy_version, enrolled.digest, "1" * 40, "2" * 40,
         "3" * 64, "cmt-x", "legacy",
     )  # fmt: skip
-    relations = {unit: "confirmed", "pr-7": "contradicted"}
-    admissions = ["unknown", "confirmed", "unknown"]
+    relations = {unit: "confirmed"}
+    admissions = ["unknown", "confirmed"]
     observed, admitted = [], []
     monkeypatch.setattr(md, "observe_policy", lambda: enrolled)
     monkeypatch.setattr(md.wp, "read_activation", lambda: active)
@@ -3673,12 +3674,10 @@ def test_landing_reads_the_landed_units_canonical_facts(monkeypatch):
     assert observed == [
         (wp.CANONICAL_ROOT, unit, wp.TRIAL_ROOT),
         (wp.CANONICAL_ROOT, unit, wp.TRIAL_ROOT),
-        (wp.CANONICAL_ROOT, "pr-7", wp.TRIAL_ROOT),
     ]
     assert admitted == [
         (wp.CANONICAL_ROOT, unit, "integration"),
         (wp.CANONICAL_ROOT, unit, "integration"),
-        (wp.CANONICAL_ROOT, "pr-7", "integration"),
     ]
 
 
@@ -3688,7 +3687,9 @@ def test_no_refresh_flag_cannot_grant_eligibility(door, monkeypatch):
     policy = md.observe_policy()
     assert isinstance(policy, wp.WorkflowPolicy)
     assert (
-        md.landing_profile(policy, wp.ActivationAbsent(), "pr-1", "confirmed", "confirmed").kind
+        md.landing_profile(
+            policy, wp.ActivationAbsent(), "pr-1", lambda _: ("confirmed", "confirmed")
+        ).kind
         == "legacy"
     )
     enrolled = wp.parse_policy(
@@ -3708,9 +3709,19 @@ def test_no_refresh_flag_cannot_grant_eligibility(door, monkeypatch):
         "legacy",
     )
     # an unread admission holds enrolled work even under a confirmed LIT relation
-    held = md.landing_profile(enrolled, active, "pr-1", "confirmed", "unknown")
+    held = md.landing_profile(enrolled, active, "pr-1", lambda _: ("confirmed", "unknown"))
     assert held.kind == "held" and held.unknown == ("admission",)
-    assert md.landing_profile(enrolled, active, "pr-9", "confirmed", "confirmed").kind == "held"
+    # an arc the readable policy does not enroll is not trial work, whatever LIT would say
+    assert md.landing_profile(enrolled, active, "pr-9", lambda _: ("confirmed", "confirmed")) == (
+        LEGACY
+    )
+    # an unreadable policy cannot tell, so the arc holds under its own name
+    assert (
+        md.landing_profile(
+            wp.PolicyDefect("unreadable"), active, "pr-9", lambda _: ("unknown", "unknown")
+        ).kind
+        == "held"
+    )
 
     observed = []
     monkeypatch.setattr(md, "observe_landing_profile", lambda arc: observed.append(arc) or LEGACY)
