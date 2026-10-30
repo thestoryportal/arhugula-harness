@@ -777,6 +777,42 @@ def test_post_review_correction_append_does_not_transfer_approval(tmp_path: Path
     assert _COMPANION in mgl.landing_proof(reviewed, "HEAD", base="main", repo=repo).changed
 
 
+def test_trial_decision_supplies_accepted_correction_to_reducer_without_rewriting_original(
+    tmp_path: Path, monkeypatch
+):
+    """WO-U07 G1 (PR1683 witness F1): the Git-backed boundary hands the reducer the committed
+    gate rows as their independently accepted companion corrects them; the committed log keeps
+    its original bytes, and the judgment is exactly the one the original rows earn."""
+    repo, g, reviewed, _ = _landing_repo(tmp_path)
+    jl = repo / ".harness" / "merge-gate-log.jsonl"
+    recorded = mgl.landing_proof(reviewed, reviewed, base="main", repo=repo).reviewed
+    cycle = _trial_cycle(jl, *recorded, finding="P3")
+    p3 = next(r for r in cycle if r["record_kind"] == "finding")
+    _write_lineage(repo / _COMPANION, _lineage(p3["finding_id"]))
+    g("add", "-A")
+    g("commit", "-qm", "verdicts and accepted correction")
+    original = jl.read_bytes()
+    reducer, received = rlg.trial_review_decision, []
+
+    # [LAW:behavior-not-structure] no judgment reads a correctable field, so the decision
+    # cannot witness the overlay; the rows crossing into the pure reducer are the contract
+    def observed(rows: list[dict], **kwargs):
+        received.append((rows, kwargs))
+        return reducer(rows, **kwargs)
+
+    monkeypatch.setattr(rlg, "trial_review_decision", observed)
+    decision = _trial_decision(repo)
+    ((rows, kwargs),) = received
+    originals = mgl._parse_rows(original.decode("utf-8"))
+    assert p3["cause_attribution"] != "spec-gap"
+    assert rows == [
+        {**r, "cause_attribution": "spec-gap"} if r.get("finding_id") == p3["finding_id"] else r
+        for r in originals
+    ]
+    assert mgl._blob(repo, "HEAD", ".harness/merge-gate-log.jsonl") == original == jl.read_bytes()
+    assert decision == reducer(originals, **kwargs)
+
+
 def test_append_report_correction_enforces_the_lineage_under_the_log_lock(tmp_path: Path):
     """WO-U07 G1: the writer validates every prior entry plus the new one with the same parser,
     inside the companion's locked append, and a refused entry leaves the companion unchanged."""
