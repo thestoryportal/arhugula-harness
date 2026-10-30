@@ -1495,3 +1495,5 @@ The only source change is the fake-procfs incomplete-observation fixture in `too
 | 2026-10-30T09:27:04Z | #1683 | 1405ccbf4d8f | merge-gate-concurrency | APPROVE | 0 finding(s) | r1 |
 | 2026-10-30T09:27:05Z | #1683 | 1405ccbf4d8f | merge-gate-spec-conformance | APPROVE | 0 finding(s) | r1 |
 | 2026-10-30T09:27:06Z | #1683 | 1405ccbf4d8f | merge-gate-witness-adequacy | BLOCK | 1 finding(s) | r1 |
+| 2026-10-30T09:44:24Z | #1683 | 6e072e842294 | merge-gate-witness-adequacy | APPROVE | 0 finding(s) | r2 |
+| 2026-10-30T09:48:31Z | #1683 | 6e072e842294 | merge-gate-witness-adequacy | APPROVE | 0 finding(s) | r3 |
