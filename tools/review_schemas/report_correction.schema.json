@@ -1,0 +1,126 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "WS-09 §11.3 report correction lineage entry",
+  "description": "One append-only entry of an original report's companion correction lineage. The report rows are never rewritten; a revision restates the report's whole current metadata correction, and an independent disposition accepts or rejects it. Field value types come from finding_record.schema.json.",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "report",
+        "revision",
+        "ts",
+        "actor",
+        "changes"
+      ],
+      "properties": {
+        "kind": {
+          "const": "revision"
+        },
+        "report": {
+          "$ref": "#/$defs/report"
+        },
+        "revision": {
+          "$ref": "#/$defs/revision"
+        },
+        "ts": {
+          "$ref": "#/$defs/ts"
+        },
+        "actor": {
+          "$ref": "#/$defs/actor"
+        },
+        "changes": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {
+            "$ref": "#/$defs/metadata"
+          }
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "report",
+        "revision",
+        "ts",
+        "actor",
+        "disposition"
+      ],
+      "properties": {
+        "kind": {
+          "const": "disposition"
+        },
+        "report": {
+          "$ref": "#/$defs/report"
+        },
+        "revision": {
+          "$ref": "#/$defs/revision"
+        },
+        "ts": {
+          "$ref": "#/$defs/ts"
+        },
+        "actor": {
+          "$ref": "#/$defs/actor"
+        },
+        "disposition": {
+          "enum": [
+            "accepted",
+            "rejected"
+          ]
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "report": {
+      "description": "The original report's identity: the rows one emission wrote share it.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "arc_id",
+        "producer",
+        "round_n"
+      ],
+      "properties": {
+        "arc_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "producer": {
+          "$ref": "#/$defs/actor"
+        },
+        "round_n": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "ts": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+    },
+    "actor": {
+      "type": "string",
+      "pattern": "^[^:]+$"
+    },
+    "metadata": {
+      "description": "Attribution/metadata only. Identity (location binds the finding id) and anything a judgment or the CI guard reads (severity, finding_type, evidence, bindings, dispositions) stay with adjudication or a new round.",
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": false,
+      "properties": {
+        "cause_attribution": {},
+        "expected_contract": {},
+        "lineage_claim": {}
+      }
+    }
+  }
+}

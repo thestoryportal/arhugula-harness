@@ -4266,3 +4266,194 @@ def test_undisposed_finding_at_ceiling_quarantines():
     rows = _trial_rows("1") + _trial_rows("2") + _trial_rows("3", finding=("p3", "P3", None))
     d = _trial(rows, policy=_policy(legacy_rounds=("L1", "L2")))
     assert d.state == "review_quarantined" and "review_budget_exhausted" in d.reasons
+
+
+# ── WO-U07 G1: report correction lineage (WS-09 §11.3) ──
+# One companion lineage per original report corrects its attribution/metadata; the
+# report rows stay byte-identical and nothing a judgment reads can move.
+
+_REPORT = {"arc_id": ARC, "producer": LOOP_PRODUCER, "round_n": 1}
+_ABSORBER = "claude_absorber"
+_INDEPENDENT = "independent_reviewer"
+
+
+def _report_rows(severity="P2"):
+    """One schema-valid report: a pass-1 loop finding, accepted by an absorber."""
+    location = "tools/x.py:1"
+    finding = fr.make_row(
+        fr.FindingCore(
+            fr.make_finding_id(LOOP_PRODUCER, HEAD, location, 1),
+            location,
+            "observed",
+            "contract",
+            severity,
+            "terminal-block",
+            "fresh",
+            LOOP_PRODUCER,
+        ),
+        fr.Envelope(
+            "finding",
+            "2026-01-01T00:00:00Z",
+            ARC,
+            "l",
+            HEAD,
+            BASE,
+            DIGEST,
+            1,
+            cause_attribution="lens-miss",
+            cycle_pass="1",
+        ),
+    )
+    accepted = {
+        **finding,
+        "record_kind": "finding_adjudication",
+        "ts": "2026-01-01T00:00:01Z",
+        "disposition": "accepted",
+        "disposition_actor": _ABSORBER,
+    }
+    return [finding, accepted]
+
+
+def _revision(n, changes, *, actor=_ABSORBER, ts=None, report=_REPORT):
+    return {
+        "kind": "revision",
+        "report": report,
+        "revision": n,
+        "ts": ts or f"2026-01-02T00:00:{2 * n:02d}Z",
+        "actor": actor,
+        "changes": changes,
+    }
+
+
+def _disposition(n, disposition="accepted", *, actor=_INDEPENDENT, ts=None):
+    return {
+        "kind": "disposition",
+        "report": _REPORT,
+        "revision": n,
+        "ts": ts or f"2026-01-02T00:00:{2 * n + 1:02d}Z",
+        "actor": actor,
+        "disposition": disposition,
+    }
+
+
+def _metadata(rows, *fields):
+    return [{k: r[k] for k in fields} for r in rows]
+
+
+def _parse(entries, rows):
+    return rlg.parse_report_corrections("".join(json.dumps(e) + "\n" for e in entries), rows)
+
+
+def _refused(entries, rows):
+    with pytest.raises(rlg.TrialInputError) as err:
+        _parse(entries, rows)
+    assert err.value.code == "invalid_input"
+
+
+def test_report_correction_lineage_supersedes_without_altering_originals():
+    rows = _report_rows()
+    fid = rows[0]["finding_id"]
+    before = json.dumps(rows, sort_keys=True)
+    entries = [
+        _revision(1, {fid: {"cause_attribution": "author-slip"}}),
+        _disposition(1),
+        _revision(2, {fid: {"expected_contract": "WS-09 §11.3"}}),
+        _disposition(2),
+    ]
+    corrections = _parse(entries, rows)
+    assert [r.revision for r in corrections.lineages[rlg.ReportKey(**_REPORT)]] == [1, 2]
+    assert corrections.current(rlg.ReportKey(**_REPORT)).revision == 2
+    # each revision is the whole current correction: revision 1's attribution is superseded
+    fields = ("cause_attribution", "expected_contract")
+    assert (
+        _metadata(corrections.corrected(rows), *fields)
+        == [{"cause_attribution": "lens-miss", "expected_contract": "WS-09 §11.3"}] * 2
+    )
+    assert json.dumps(rows, sort_keys=True) == before
+
+
+def test_rejected_or_pending_revision_does_not_become_current():
+    rows = _report_rows()
+    fid = rows[0]["finding_id"]
+    accepted = [_revision(1, {fid: {"lineage_claim": "regression"}}), _disposition(1)]
+    later = [
+        _revision(2, {fid: {"lineage_claim": "rejected-claim"}}),
+        _disposition(2, "rejected"),
+        _revision(3, {fid: {"lineage_claim": "pending-claim"}}),
+    ]
+    corrections = _parse(accepted + later, rows)
+    assert corrections.current(rlg.ReportKey(**_REPORT)).revision == 1
+    assert (
+        _metadata(corrections.corrected(rows), "lineage_claim")
+        == [{"lineage_claim": "regression"}] * 2
+    )
+    pending = [_revision(1, {fid: {"lineage_claim": "pending-claim"}})]
+    unaccepted = _parse(pending, rows)
+    assert unaccepted.current(rlg.ReportKey(**_REPORT)) is None
+    assert unaccepted.corrected(rows) == rows
+
+
+def test_correction_lineage_refuses_gaps_rewrites_and_unknown_reports():
+    rows = _report_rows()
+    fid = rows[0]["finding_id"]
+    rev1 = _revision(1, {fid: {"cause_attribution": "author-slip"}})
+    for entries in (
+        [_revision(2, {fid: {"cause_attribution": "x"}})],  # gap: no revision 1
+        [rev1, _revision(1, {fid: {"cause_attribution": "y"}}, ts="2026-01-02T00:00:09Z")],
+        [rev1, _disposition(1), _disposition(1, "rejected", ts="2026-01-02T00:00:09Z")],
+        [_disposition(1)],  # dispositions an absent revision
+        [_revision(1, {fid: {"cause_attribution": "x"}}, report={**_REPORT, "round_n": 9})],
+        [_revision(1, {"other:" + "f" * 40 + ":000000000000:1": {"cause_attribution": "x"}})],
+        [rev1, _disposition(1, ts=rev1["ts"])],  # not strictly later
+        [_revision(1, {fid: {"cause_attribution": "x"}}, ts="2026-99-99T00:00:00Z")],
+        [{"kind": "revision", "report": _REPORT}],  # not a lineage entry at all
+    ):
+        _refused(entries, rows)
+
+
+def test_correction_cannot_be_accepted_by_its_proposer_or_report_producer():
+    rows = _report_rows()
+    rev1 = _revision(1, {rows[0]["finding_id"]: {"cause_attribution": "author-slip"}})
+    for actor in (_ABSORBER, LOOP_PRODUCER):
+        for disposition in ("accepted", "rejected"):
+            _refused([rev1, _disposition(1, disposition, actor=actor)], rows)
+
+
+def test_correction_cannot_touch_judgment_fields():
+    rows = _report_rows()
+    fid = rows[0]["finding_id"]
+    for field, value in (
+        ("severity", "P3"),
+        ("producer", "gemini_review_wrapper"),
+        ("cycle_pass", "3"),
+        ("head_sha", "d" * 40),
+        ("diff_digest", "e" * 64),
+        ("round_n", 2),
+        ("disposition", "rejected"),
+        ("record_kind", "no_finding"),
+        ("finding_id", "x"),
+        ("location", "tools/y.py:2"),  # the finding id binds its location
+        ("finding_type", "clean-approve"),  # the CI guard's severity derives from it
+        ("observed_evidence", "rewritten"),
+    ):
+        _refused([_revision(1, {fid: {field: value}})], rows)
+    # a correctable field still obeys the row's own contract
+    _refused([_revision(1, {fid: {"expected_contract": ""}})], rows)
+    _refused([_revision(1, {fid: {"cause_attribution": 7}})], rows)
+
+
+def test_metadata_correction_leaves_trial_decision_unchanged():
+    rows = _report_rows() + _trial_rows("1", producers=_LENSES3)
+    fid = rows[0]["finding_id"]
+    corrections = _parse(
+        [
+            _revision(1, {fid: {"cause_attribution": "spec-gap", "lineage_claim": "regression"}}),
+            _disposition(1),
+        ],
+        rows,
+    )
+    corrected = corrections.corrected(rows)
+    assert corrected != rows
+    original = _trial(rows)
+    assert original.state == "changes_required" and original.blocking_findings == (fid,)
+    assert _trial(corrected) == original

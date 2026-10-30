@@ -798,6 +798,9 @@ _GATE_ROW_CHECKS = {
     ".harness/merge-gate-log.md": _check_appended_md,
 }
 GATE_ROW_FILES = frozenset(_GATE_ROW_CHECKS)
+#: WS-09 §11.3's companion correction lineage. Deliberately not a gate-row file: a correction
+#: is not a verdict or receipt row, so one appended after a review leaves its approval stale.
+_REPORT_CORRECTIONS = ".harness/review-corrections.jsonl"
 
 
 def _blob(repo: Path, ref: str, path: str) -> bytes:
@@ -900,6 +903,10 @@ def trial_review_decision(
     # proof's final binding, so a moving ref cannot pair one head's log with another's diff
     final = _commit(repo, final_head)
     rows = _parse_rows(_blob(repo, final, _GATE_LOG_ROWS).decode("utf-8"))
+    # the companion at the same commit, over the same rows: a corrupt lineage refuses here
+    corrections = rlg.parse_report_corrections(
+        _blob(repo, final, _REPORT_CORRECTIONS).decode("utf-8"), rows
+    )
     done = rlg.replay(rows, arc, doc_only=doc_only).completed_by
     proof = landing_proof(final if done is None else done.head_sha, final, base=base, repo=repo)
     # [LAW:effects-at-boundaries] the pure reducer judges one exact binding; when Git proves
@@ -907,12 +914,38 @@ def trial_review_decision(
     # approval lands on final only if the recorded review named exactly those bytes
     judged = proof.final if proof.changed else proof.reviewed
     return rlg.trial_review_decision(
-        rows,
+        corrections.corrected(rows),
         policy=policy,
         unit=unit,
         arc=arc,
         binding=rlg.TrialBinding(*judged, authors=authors, doc_only=doc_only),
     )
+
+
+def append_report_correction(
+    entry: dict, path: Path | None = None, *, gate_log: Path | None = None
+) -> None:
+    """Append one entry to a report's companion correction lineage. Under the companion's own
+    lock, the exact bytes the companion will hold afterwards are parsed against the gate log's
+    rows by the one lineage parser; a refused document raises `TrialInputError` and writes
+    nothing. Both paths resolve at call time, the companion beside the gate log it corrects."""
+    gate_log = gate_log or fr.GATE_LOG_JSONL
+    path = path or gate_log.with_name(Path(_REPORT_CORRECTIONS).name)
+    rows = fr.read_rows(gate_log)
+    line = fr._encode(entry)
+
+    def body(fd: int) -> None:
+        # [LAW:single-enforcer] judge the very document the approval boundary will read: the
+        # locked fd's prior bytes as they are, plus this line. Re-encoding parsed rows would
+        # drop a blank line or supply a missing newline the reader never sees repaired.
+        size = os.fstat(fd).st_size
+        prior = os.pread(fd, size, 0)
+        if len(prior) != size:
+            raise fr.RecordError(f"short read of {path}: {len(prior)} of {size} bytes")
+        rlg.parse_report_corrections((prior + line).decode("utf-8"), rows)
+        fr._append_line(fd, line, path)
+
+    fr._under_log_lock(path, body)
 
 
 def _read_text(arg: str) -> str:

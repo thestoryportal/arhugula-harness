@@ -699,6 +699,174 @@ def test_trial_transfer_never_carries_approval_past_a_later_accepted_finding(tmp
     assert d.state == "changes_required" and d.blocking_findings == (late["finding_id"],)
 
 
+_COMPANION = ".harness/review-corrections.jsonl"
+_LOOP_REPORT = {"arc_id": _TRIAL_ARC, "producer": "codex_review_wrapper", "round_n": 1}
+
+
+def _lineage(finding_id: str, *, disposition_actor: str = "independent_reviewer") -> list[dict]:
+    """Revision 1 of the loop report's companion, proposed by the absorber, then disposed."""
+    return [
+        {
+            "kind": "revision",
+            "report": _LOOP_REPORT,
+            "revision": 1,
+            "ts": "2026-01-05T00:00:00Z",
+            "actor": "claude_absorber",
+            "changes": {finding_id: {"cause_attribution": "spec-gap"}},
+        },
+        {
+            "kind": "disposition",
+            "report": _LOOP_REPORT,
+            "revision": 1,
+            "ts": "2026-01-05T00:00:01Z",
+            "actor": disposition_actor,
+            "disposition": "accepted",
+        },
+    ]
+
+
+def _write_lineage(path: Path, entries: list[dict]) -> None:
+    path.write_text("".join(json.dumps(e, sort_keys=True) + "\n" for e in entries))
+
+
+def test_trial_decision_refuses_a_corrupt_companion_at_the_final_commit(tmp_path: Path):
+    """WO-U07 G1: the approval boundary parses the companion committed at the final head
+    against that head's gate rows; a corrupt lineage refuses rather than reading as none."""
+    repo, g, reviewed, _ = _landing_repo(tmp_path)
+    jl = repo / ".harness" / "merge-gate-log.jsonl"
+    recorded = mgl.landing_proof(reviewed, reviewed, base="main", repo=repo).reviewed
+    cycle = _trial_cycle(jl, *recorded, finding="P2")
+    p2 = next(r for r in cycle if r["record_kind"] == "finding")
+    g("commit", "-qam", "verdicts")
+    rev1, accepted = _lineage(p2["finding_id"])
+    corrupt = {
+        "gap": [{**rev1, "revision": 2}],
+        "self_accepted": [rev1, {**accepted, "actor": "claude_absorber"}],
+        "unknown_report": [{**rev1, "report": {**_LOOP_REPORT, "round_n": 7}}],
+        "not_json": None,
+    }
+    for name, entries in corrupt.items():
+        g("checkout", "-qb", name, "topic")
+        if entries is None:
+            (repo / _COMPANION).write_text("{not json\n")
+        else:
+            _write_lineage(repo / _COMPANION, entries)
+        g("add", "-A")
+        g("commit", "-qm", name)
+        with pytest.raises(rlg.TrialInputError) as err:
+            _trial_decision(repo)
+        assert err.value.code == "invalid_input", name
+
+
+def test_post_review_correction_append_does_not_transfer_approval(tmp_path: Path):
+    """WO-U07 G1 (T1): the companion is not a verdict/receipt row, so a correction appended
+    after the review leaves the approval behind as binding_stale instead of transferring."""
+    repo, g, reviewed, _ = _landing_repo(tmp_path)
+    jl = repo / ".harness" / "merge-gate-log.jsonl"
+    recorded = mgl.landing_proof(reviewed, reviewed, base="main", repo=repo).reviewed
+    cycle = _trial_cycle(jl, *recorded, finding="P3")
+    p3 = next(r for r in cycle if r["record_kind"] == "finding")
+    _adjudicate(jl, p3, "accepted", "2026-01-02T00:00:00Z")
+    g("commit", "-qam", "verdicts")
+    assert _trial_decision(repo).state == "approved"
+    _write_lineage(repo / _COMPANION, _lineage(p3["finding_id"]))
+    g("add", "-A")
+    g("commit", "-qm", "correction")
+    d = _trial_decision(repo)
+    assert d.state == "binding_stale" and "binding_stale" in d.reasons
+    assert _COMPANION in mgl.landing_proof(reviewed, "HEAD", base="main", repo=repo).changed
+
+
+def test_trial_decision_supplies_accepted_correction_to_reducer_without_rewriting_original(
+    tmp_path: Path, monkeypatch
+):
+    """WO-U07 G1 (PR1683 witness F1): the Git-backed boundary hands the reducer the committed
+    gate rows as their independently accepted companion corrects them; the committed log keeps
+    its original bytes, and the judgment is exactly the one the original rows earn."""
+    repo, g, reviewed, _ = _landing_repo(tmp_path)
+    jl = repo / ".harness" / "merge-gate-log.jsonl"
+    recorded = mgl.landing_proof(reviewed, reviewed, base="main", repo=repo).reviewed
+    cycle = _trial_cycle(jl, *recorded, finding="P3")
+    p3 = next(r for r in cycle if r["record_kind"] == "finding")
+    _write_lineage(repo / _COMPANION, _lineage(p3["finding_id"]))
+    g("add", "-A")
+    g("commit", "-qm", "verdicts and accepted correction")
+    original = jl.read_bytes()
+    reducer, received = rlg.trial_review_decision, []
+
+    # [LAW:behavior-not-structure] no judgment reads a correctable field, so the decision
+    # cannot witness the overlay; the rows crossing into the pure reducer are the contract
+    def observed(rows: list[dict], **kwargs):
+        received.append((rows, kwargs))
+        return reducer(rows, **kwargs)
+
+    monkeypatch.setattr(rlg, "trial_review_decision", observed)
+    decision = _trial_decision(repo)
+    ((rows, kwargs),) = received
+    originals = mgl._parse_rows(original.decode("utf-8"))
+    assert p3["cause_attribution"] != "spec-gap"
+    assert rows == [
+        {**r, "cause_attribution": "spec-gap"} if r.get("finding_id") == p3["finding_id"] else r
+        for r in originals
+    ]
+    assert mgl._blob(repo, "HEAD", ".harness/merge-gate-log.jsonl") == original == jl.read_bytes()
+    assert decision == reducer(originals, **kwargs)
+
+
+def test_append_report_correction_enforces_the_lineage_under_the_log_lock(tmp_path: Path):
+    """WO-U07 G1: the writer validates every prior entry plus the new one with the same parser,
+    inside the companion's locked append, and a refused entry leaves the companion unchanged."""
+    jl, companion = tmp_path / "merge-gate-log.jsonl", tmp_path / "review-corrections.jsonl"
+    finding = _observe(jl, H, D, "codex_review_wrapper", cycle_pass="1", severity="P2")
+    rev1, accepted = _lineage(finding["finding_id"])
+    mgl.append_report_correction(rev1, companion, gate_log=jl)
+    after_rev1 = companion.read_bytes()
+    for refused in (
+        {**accepted, "actor": "codex_review_wrapper"},  # the report's own producer
+        {**rev1, "revision": 3, "ts": "2026-01-06T00:00:00Z"},  # a gap
+        {**rev1, "ts": "2026-01-06T00:00:00Z"},  # a second revision 1
+    ):
+        with pytest.raises(rlg.TrialInputError):
+            mgl.append_report_correction(refused, companion, gate_log=jl)
+        assert companion.read_bytes() == after_rev1
+    mgl.append_report_correction(accepted, companion, gate_log=jl)
+    entries = [json.loads(line) for line in companion.read_text().splitlines()]
+    assert entries == [rev1, accepted]
+    current = rlg.parse_report_corrections(companion.read_text(), fr.read_rows(jl)).current(
+        rlg.ReportKey(**_LOOP_REPORT)
+    )
+    assert current.revision == 1
+    # the locked open's containment: a symlinked companion is refused, never followed
+    link = tmp_path / "linked-corrections.jsonl"
+    link.symlink_to(companion)
+    with pytest.raises(OSError):
+        mgl.append_report_correction(rev1, link, gate_log=jl)
+    assert (
+        companion.read_bytes()
+        == after_rev1 + (json.dumps(accepted, sort_keys=True) + "\n").encode()
+    )
+
+
+@pytest.mark.parametrize(
+    "prior",
+    [
+        pytest.param(lambda line: line + b"\n", id="blank-line"),
+        pytest.param(lambda line: line.rstrip(b"\n"), id="no-terminal-newline"),
+    ],
+)
+def test_append_report_correction_judges_the_exact_bytes_the_reader_parses(tmp_path: Path, prior):
+    """WO-U07 G1 (pass-5 F1): the writer parses the companion's exact post-append bytes, so a
+    prior document the approval reader refuses is refused here too and never mutated."""
+    jl, companion = tmp_path / "merge-gate-log.jsonl", tmp_path / "review-corrections.jsonl"
+    finding = _observe(jl, H, D, "codex_review_wrapper", cycle_pass="1", severity="P2")
+    rev1, accepted = _lineage(finding["finding_id"])
+    companion.write_bytes(prior((json.dumps(rev1, sort_keys=True) + "\n").encode()))
+    before = companion.read_bytes()
+    with pytest.raises(rlg.TrialInputError):
+        mgl.append_report_correction(accepted, companion, gate_log=jl)
+    assert companion.read_bytes() == before
+
+
 def test_one_lens_sibling_never_vouches_for_another_lens(tmp_path: Path):
     md, jl = tmp_path / "log.md", tmp_path / "log.jsonl"
     _emit(tmp_path, pr=5, lens="merge-gate-a")
