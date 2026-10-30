@@ -15,6 +15,7 @@ import os
 import re
 import subprocess
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -505,18 +506,26 @@ def _blob(root: Path, ref: str, path: str) -> bytes | None:
     return proc.stdout if proc.returncode == 0 else None
 
 
-def _appended_review_arcs(before: bytes, after: bytes) -> frozenset[str]:
+def _appended_review_arcs(
+    before: bytes, after: bytes, tracked: Callable[[str], bytes | None]
+) -> frozenset[str]:
     """[LAW:single-enforcer] The arcs an append-only extension of the canonical review log
     binds, when the writers' own contract (`finding_record.admit_appended`) admits every
-    appended row and at least one is a review verdict. Empty for a rewritten log, an
-    unparseable line, a row a writer would refuse, or an append with no verdict.
+    appended row and at least one is a review verdict. `tracked` reads a path at the landing's
+    own revision: the running contract judges its rows only where that revision tracks the
+    same contract files, so a landing without them, or with a different schema or writer, is
+    never admitted under today's rules. Empty for that, a rewritten log, an unparseable line,
+    a row a writer would refuse, or an append with no verdict.
 
     The contract needs jsonschema, so it loads only here: a `--allow-roadmap-drift` run whose
     policy enrolls an arc, which CI runs in the workspace environment. Every other caller
     stays stdlib-only."""
     import finding_record
 
-    if not after.startswith(before):
+    own_contract = all(
+        tracked(path) == running for path, running in finding_record.contract_files().items()
+    )
+    if not (own_contract and after.startswith(before)):
         return frozenset()
     try:
         prior, rows = (
@@ -532,8 +541,8 @@ def _appended_review_arcs(before: bytes, after: bytes) -> frozenset[str]:
 
 def _is_tracked_trial_landing(root: Path, ref: str, parent: str) -> bool:
     """[LAW:effects-at-boundaries] the Git facts for `workflow_policy.tracked_trial_landing`:
-    the squash landing's appended review rows and the policy at its own revision. A policy
-    that enrolls no arc decides alone, before the review-record contract loads."""
+    the squash landing's appended review rows, and the policy and review-record contract at
+    its own revision. A policy that enrolls no arc decides alone, before the contract loads."""
     _tools_package()
     from tools import workflow_policy
 
@@ -547,7 +556,10 @@ def _is_tracked_trial_landing(root: Path, ref: str, parent: str) -> bool:
         or after is None
         or ".harness/roadmap_status.md" in _changed_files(root, base_ref=parent, head_ref=ref)
     ) and workflow_policy.tracked_trial_landing(
-        policy, _appended_review_arcs(_blob(root, parent, _GATE_LOG_ROWS) or b"", after)
+        policy,
+        _appended_review_arcs(
+            _blob(root, parent, _GATE_LOG_ROWS) or b"", after, lambda path: _blob(root, ref, path)
+        ),
     )
 
 

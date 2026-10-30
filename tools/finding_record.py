@@ -356,6 +356,17 @@ def _under_log_lock(path: Path, body) -> None:
         os.close(fd)
 
 
+def contract_files() -> dict[str, bytes]:
+    """The tracked files that define this append contract, by repository-relative path, with
+    the bytes this process runs. [LAW:one-source-of-truth] a reader judging rows appended at
+    another revision proves them canonical under that revision's own contract only where the
+    revision tracks these same bytes."""
+    return {
+        path.relative_to(REPO).as_posix(): path.read_bytes()
+        for path in (Path(__file__).resolve(), SCHEMA_PATH)
+    }
+
+
 def admit_appended(prior: list[dict[str, Any]], appended: list[dict[str, Any]]) -> None:
     """The writers' append contract, for a reader judging rows already appended after `prior`:
     each row in order passes `validate` and the prior-row invariants against everything before

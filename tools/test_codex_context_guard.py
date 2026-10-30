@@ -2943,10 +2943,23 @@ def _review_row(arc: str, n: int = 1, **overrides: object) -> dict[str, object]:
     } | overrides
 
 
+def _track_record_contract(repo: Path, contract: dict[str, bytes | None]) -> None:
+    """Write `contract`'s files into the worktree; a None entry removes that file."""
+    for path, contents in contract.items():
+        target = repo / path
+        if contents is None:
+            target.unlink()
+        else:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(contents)
+
+
 def _trial_repo(tmp_path: Path, *units: dict[str, str]) -> Path:
-    """A main whose tracked policy enrolls `units` (default: arc `wo-fx`), whose review log
-    holds one earlier arc's canonical row, and whose tip is a verified refresh."""
+    """A main whose tracked policy enrolls `units` (default: arc `wo-fx`), which tracks the
+    running review-record contract, whose review log holds one earlier arc's canonical row,
+    and whose tip is a verified refresh."""
     repo = _init_repo(tmp_path)
+    _track_record_contract(repo, dict(fr.contract_files()))
     policy = json.loads(
         (Path(__file__).resolve().parents[1] / ".harness" / "workflow-policy.json").read_text()
     )
@@ -3109,3 +3122,74 @@ def test_non_canonical_review_rows_are_not_a_tracked_trial_landing(
     _land(repo, "head", "wo-fx")
 
     assert not cg._owed_lag(repo, trial_membership=True)
+
+
+_SCHEMA_FILE = "tools/review_schemas/finding_record.schema.json"
+_WRITER_FILE = "tools/finding_record.py"
+
+
+def _widened_schema() -> bytes:
+    """The running schema without its closed-world rule: a contract that would admit more."""
+    schema = json.loads(fr.contract_files()[_SCHEMA_FILE])
+    schema.pop("additionalProperties")
+    return json.dumps(schema).encode()
+
+
+@pytest.mark.parametrize(
+    "landing_contract",
+    [
+        {_SCHEMA_FILE: None},
+        {_WRITER_FILE: None},
+        {_SCHEMA_FILE: None, _WRITER_FILE: None},
+        {_SCHEMA_FILE: b"{}"},
+        {_SCHEMA_FILE: _widened_schema()},
+        {_WRITER_FILE: fr.contract_files()[_WRITER_FILE] + b"# another writer revision\n"},
+    ],
+    ids=[
+        "no-schema",
+        "no-writer",
+        "no-contract",
+        "empty-schema",
+        "widened-schema",
+        "changed-writer",
+    ],
+)
+def test_landing_without_the_running_contract_is_not_a_tracked_trial_landing(
+    tmp_path: Path, landing_contract: dict[str, bytes | None]
+) -> None:
+    # WO-U23 pass-5 F1 (U24): the running contract may judge a historical landing's rows only
+    # where that landing tracks the same contract. A landing missing the schema or writer, or
+    # tracking a different one, owes the legacy refresh even though today's validator would
+    # admit its canonical row.
+    repo = _trial_repo(tmp_path)
+    _track_record_contract(repo, landing_contract)
+    _land(repo, "middle", "wo-fx")
+    _track_record_contract(repo, dict(fr.contract_files()))
+    _land(repo, "head", "wo-fx")
+
+    assert not cg._owed_lag(repo, trial_membership=True)
+
+
+def test_restored_contract_proves_later_trial_landings(tmp_path: Path) -> None:
+    # The refusal belongs to the landing that lacked the contract, not to its successors:
+    # once a refresh terminates that drift, landings tracking the running contract count again.
+    repo = _trial_repo(tmp_path)
+    _track_record_contract(repo, {_SCHEMA_FILE: None})
+    _land(repo, "unproved", "wo-fx")
+    _write_roadmap_status(repo, git_head=_git(repo, "rev-parse", "--short=8", "HEAD"))
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "ops: roadmap status refresh post-unproved")
+    _track_record_contract(repo, dict(fr.contract_files()))
+    _land(repo, "first", "wo-fx")
+    _land(repo, "second", "wo-fx")
+
+    assert cg._owed_lag(repo, trial_membership=True)
+
+
+def test_contract_files_are_the_tracked_schema_and_writer() -> None:
+    # the guard compares exactly these repository paths at each historical landing
+    contract = fr.contract_files()
+
+    assert contract.keys() == {_SCHEMA_FILE, _WRITER_FILE}
+    assert contract[_SCHEMA_FILE] == (_ROOT / _SCHEMA_FILE).read_bytes()
+    assert contract[_WRITER_FILE] == (_ROOT / _WRITER_FILE).read_bytes()
