@@ -2913,6 +2913,9 @@ def _trial_repo(tmp_path: Path) -> Path:
     )
     policy["eligible_units"] = [{"unit": _TRIAL_UNIT, "arc": "wo-fx"}]
     (repo / ".harness" / "workflow-policy.json").write_text(json.dumps(policy))
+    schema = repo / cg._REVIEW_SCHEMA
+    schema.parent.mkdir(parents=True)
+    schema.write_bytes((Path(__file__).resolve().parents[1] / cg._REVIEW_SCHEMA).read_bytes())
     (repo / ".harness" / "merge-gate-log.jsonl").write_text('{"arc_id": "wo-old"}\n')
     _git(repo, "add", ".")
     _git(repo, "commit", "-m", "feat: enroll the fixture arc")
@@ -2922,11 +2925,42 @@ def _trial_repo(tmp_path: Path) -> Path:
     return repo
 
 
-def _land(repo: Path, name: str, *arcs: str) -> None:
-    """One squash landing: a content change plus the review rows its arc(s) appended."""
+def _review_row(arc: str, **overrides: object) -> dict[str, object]:
+    """A canonical clean-approve verdict row, as the merge-gate wrapper appends it."""
+    head = "6e072e8422945df71fa5fb9345feccfff97c8724"
+    return {
+        "arc_id": arc,
+        "base_sha": "1405ccbf4d8f0d41e29490fca172d2115be693f4",
+        "cause_attribution": "clean_approve",
+        "cycle_pass": "3",
+        "diff_digest": "e2930d4bb5f27ef951ce6a86e2e1cd6c971c09e21f201c0bdd3d358dff8121b0",
+        "disposition": None,
+        "disposition_actor": None,
+        "expected_contract": "C-HE-15 §1 positive schema parse",
+        "finding_id": f"merge-gate-witness-adequacy:{head}:645dfba2a5c3:1",
+        "finding_type": "clean-approve",
+        "head_sha": head,
+        "lane_id": "host-fixture-lane",
+        "lineage_claim": "wrapper",
+        "location": "merge-gate",
+        "observed_evidence": "APPROVE from stdout: 0 findings",
+        "producer": "merge-gate-witness-adequacy",
+        "record_kind": "no_finding",
+        "round_n": 3,
+        "severity": "info",
+        "ts": "2026-10-30T09:44:24Z",
+        "unique_catch": False,
+    } | overrides
+
+
+def _land(repo: Path, name: str, *rows: dict[str, object] | str) -> None:
+    """One squash landing: a content change plus the review rows it appended; a bare arc
+    stands for that arc's canonical verdict row."""
     (repo / f"{name}.py").write_text(f"# {name}\n", encoding="utf-8")
     with (repo / ".harness" / "merge-gate-log.jsonl").open("a", encoding="utf-8") as log:
-        log.writelines(json.dumps({"arc_id": arc, "record_kind": "verdict"}) + "\n" for arc in arcs)
+        log.writelines(
+            json.dumps(_review_row(row) if isinstance(row, str) else row) + "\n" for row in rows
+        )
     _git(repo, "add", ".")
     _git(repo, "commit", "-m", f"feat: land {name}")
 
@@ -2990,3 +3024,47 @@ def test_tracked_trial_landing_needs_the_policy_at_its_own_revision(tmp_path: Pa
     _land(repo, "head", "wo-fx")
 
     assert not cg._owed_lag(repo)
+
+
+@pytest.mark.parametrize(
+    "row",
+    [
+        {"arc_id": "wo-fx", "record_kind": "bogus"},
+        _review_row("wo-fx", record_kind="bogus"),
+        _review_row("wo-fx", record_kind="reviewer_unavailable"),
+        _review_row("wo-fx", unexpected="field"),
+        _review_row("wo-fx", ts="yesterday"),
+        _review_row("wo-fx", round_n=True),
+    ],
+    ids=["bare", "unknown-kind", "no-verdict", "extra-key", "bad-ts", "bool-round"],
+)
+def test_non_canonical_review_rows_are_not_a_tracked_trial_landing(
+    tmp_path: Path, row: dict[str, object]
+) -> None:
+    # WO-U23 pass-3 F1: an enrolled arc_id on an invalid or verdict-less append must not
+    # waive the legacy refresh; only canonical review verdicts carry CI trial membership.
+    repo = _trial_repo(tmp_path)
+    _land(repo, "middle", row)
+    _land(repo, "head", "wo-fx")
+
+    assert not cg._owed_lag(repo)
+
+
+def test_tracked_trial_landing_needs_the_record_schema_at_its_own_revision(
+    tmp_path: Path,
+) -> None:
+    repo = _trial_repo(tmp_path)
+    (repo / cg._REVIEW_SCHEMA).unlink()
+    _land(repo, "middle", "wo-fx")
+    _land(repo, "head", "wo-fx")
+
+    assert not cg._owed_lag(repo)
+
+
+def test_review_row_schema_keywords_fail_closed() -> None:
+    row = _review_row("wo-fx")
+    schema = json.loads((Path(__file__).resolve().parents[1] / cg._REVIEW_SCHEMA).read_text())
+
+    assert cg._conforms(row, schema)
+    assert not cg._conforms(row, schema | {"maxProperties": 100})
+    assert not cg._conforms(row, schema | {"additionalProperties": {"type": "string"}})

@@ -492,6 +492,9 @@ def _owes_no_refresh(root: Path, ref: str) -> bool:
 
 _GATE_LOG_ROWS = ".harness/merge-gate-log.jsonl"
 _WORKFLOW_POLICY = ".harness/workflow-policy.json"
+_REVIEW_SCHEMA = "tools/review_schemas/finding_record.schema.json"
+_REVIEW_VERDICTS = ("finding", "no_finding")
+_SCHEMA_ANNOTATIONS = frozenset({"$schema", "title", "description"})
 
 
 def _blob(root: Path, ref: str, path: str) -> bytes | None:
@@ -499,22 +502,74 @@ def _blob(root: Path, ref: str, path: str) -> bytes | None:
     return proc.stdout if proc.returncode == 0 else None
 
 
-def _appended_arcs(before: bytes, after: bytes) -> frozenset[str]:
-    """The arcs every row appended to the canonical review log names; empty when the log
-    was rewritten rather than appended to, or a row is not an arc-bound JSON object."""
-    if not after.startswith(before):
+def _appended_review_arcs(before: bytes, after: bytes, schema: bytes | None) -> frozenset[str]:
+    """[LAW:parse-dont-validate] The arcs an append-only extension of the canonical review log
+    binds, when every appended row is a canonical finding record and at least one is a review
+    verdict. Empty for a rewritten log, a malformed or non-canonical row, rows with no verdict,
+    or a revision without the tracked record schema: none of those is review evidence."""
+    if schema is None or not after.startswith(before):
         return frozenset()
     try:
+        contract = json.loads(schema)
         rows = [json.loads(line) for line in after[len(before) :].splitlines() if line.strip()]
     except ValueError:
         return frozenset()
-    arcs = [row.get("arc_id") if isinstance(row, dict) else None for row in rows]
-    return frozenset(arcs) if all(isinstance(arc, str) for arc in arcs) else frozenset()
+    canonical = all(_conforms(row, contract) for row in rows)
+    reviewed = canonical and any(row["record_kind"] in _REVIEW_VERDICTS for row in rows)
+    return frozenset(row["arc_id"] for row in rows) if reviewed else frozenset()
+
+
+def _conforms(value: Any, schema: dict[str, Any]) -> bool:
+    """[LAW:single-enforcer] exception: `finding_record.validate` owns row validity, but it
+    needs jsonschema and CI runs this guard on the system interpreter. This evaluates the
+    tracked schema itself for exactly the keywords it uses and rejects any other keyword,
+    so a schema change fails closed instead of silently widening CI trial membership."""
+    return all(
+        key in _SCHEMA_ANNOTATIONS or _keyword(key, rule, value, schema)
+        for key, rule in schema.items()
+    )
+
+
+def _keyword(key: str, rule: Any, value: Any, schema: dict[str, Any]) -> bool:
+    # an applicator for one JSON type holds vacuously for the others, as in JSON Schema
+    match key, value:
+        case "type", _:
+            names = [rule] if isinstance(rule, str) else rule
+            return any(_is_json_type(value, name) for name in names)
+        case "enum", _:
+            return any(type(value) is type(option) and value == option for option in rule)
+        case "required", dict():
+            return all(name in value for name in rule)
+        case "properties", dict():
+            return all(_conforms(value[name], sub) for name, sub in rule.items() if name in value)
+        case "additionalProperties", dict():
+            return rule is False and value.keys() <= schema.get("properties", {}).keys()
+        case "minLength", str():
+            return len(value) >= rule
+        case "pattern", str():
+            return re.search(rule, value) is not None
+        case "minimum", int() | float():
+            return value >= rule
+        case _:
+            vacuous = ("required", "properties", "minLength", "pattern", "minimum")
+            return key in vacuous or (key == "additionalProperties" and rule is False)
+
+
+def _is_json_type(value: Any, name: str) -> bool:
+    match name:
+        case "integer":
+            return isinstance(value, int) and not isinstance(value, bool)
+        case "null":
+            return value is None
+        case _:
+            kind = {"object": dict, "string": str, "boolean": bool}.get(name)
+            return kind is not None and isinstance(value, kind)
 
 
 def _is_tracked_trial_landing(root: Path, ref: str, parent: str) -> bool:
     """[LAW:effects-at-boundaries] the Git facts for `workflow_policy.tracked_trial_landing`:
-    the squash landing's appended review rows and the policy at its own revision."""
+    the squash landing's appended review rows, and the record schema and policy at its own
+    revision."""
     _tools_package()
     from tools import workflow_policy
 
@@ -526,7 +581,9 @@ def _is_tracked_trial_landing(root: Path, ref: str, parent: str) -> bool:
         or ".harness/roadmap_status.md" in _changed_files(root, base_ref=parent, head_ref=ref)
     ) and workflow_policy.tracked_trial_landing(
         workflow_policy.load_policy(_blob(root, ref, _WORKFLOW_POLICY)),
-        _appended_arcs(_blob(root, parent, _GATE_LOG_ROWS) or b"", after),
+        _appended_review_arcs(
+            _blob(root, parent, _GATE_LOG_ROWS) or b"", after, _blob(root, ref, _REVIEW_SCHEMA)
+        ),
     )
 
 
