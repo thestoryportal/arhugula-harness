@@ -926,17 +926,24 @@ def append_report_correction(
     entry: dict, path: Path | None = None, *, gate_log: Path | None = None
 ) -> None:
     """Append one entry to a report's companion correction lineage. Under the companion's own
-    lock, every prior entry plus this one is parsed against the gate log's rows by the one
-    lineage parser; a refused entry raises `TrialInputError` and writes nothing. Both paths
-    resolve at call time, the companion beside the gate log it corrects."""
+    lock, the exact bytes the companion will hold afterwards are parsed against the gate log's
+    rows by the one lineage parser; a refused document raises `TrialInputError` and writes
+    nothing. Both paths resolve at call time, the companion beside the gate log it corrects."""
     gate_log = gate_log or fr.GATE_LOG_JSONL
     path = path or gate_log.with_name(Path(_REPORT_CORRECTIONS).name)
     rows = fr.read_rows(gate_log)
+    line = fr._encode(entry)
 
     def body(fd: int) -> None:
-        lineage = [*fr._read_rows_fd(fd, path), entry]
-        rlg.parse_report_corrections(b"".join(map(fr._encode, lineage)).decode("utf-8"), rows)
-        fr._append_line(fd, fr._encode(entry), path)
+        # [LAW:single-enforcer] judge the very document the approval boundary will read: the
+        # locked fd's prior bytes as they are, plus this line. Re-encoding parsed rows would
+        # drop a blank line or supply a missing newline the reader never sees repaired.
+        size = os.fstat(fd).st_size
+        prior = os.pread(fd, size, 0)
+        if len(prior) != size:
+            raise fr.RecordError(f"short read of {path}: {len(prior)} of {size} bytes")
+        rlg.parse_report_corrections((prior + line).decode("utf-8"), rows)
+        fr._append_line(fd, line, path)
 
     fr._under_log_lock(path, body)
 

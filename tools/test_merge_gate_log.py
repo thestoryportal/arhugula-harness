@@ -811,6 +811,26 @@ def test_append_report_correction_enforces_the_lineage_under_the_log_lock(tmp_pa
     )
 
 
+@pytest.mark.parametrize(
+    "prior",
+    [
+        pytest.param(lambda line: line + b"\n", id="blank-line"),
+        pytest.param(lambda line: line.rstrip(b"\n"), id="no-terminal-newline"),
+    ],
+)
+def test_append_report_correction_judges_the_exact_bytes_the_reader_parses(tmp_path: Path, prior):
+    """WO-U07 G1 (pass-5 F1): the writer parses the companion's exact post-append bytes, so a
+    prior document the approval reader refuses is refused here too and never mutated."""
+    jl, companion = tmp_path / "merge-gate-log.jsonl", tmp_path / "review-corrections.jsonl"
+    finding = _observe(jl, H, D, "codex_review_wrapper", cycle_pass="1", severity="P2")
+    rev1, accepted = _lineage(finding["finding_id"])
+    companion.write_bytes(prior((json.dumps(rev1, sort_keys=True) + "\n").encode()))
+    before = companion.read_bytes()
+    with pytest.raises(rlg.TrialInputError):
+        mgl.append_report_correction(accepted, companion, gate_log=jl)
+    assert companion.read_bytes() == before
+
+
 def test_one_lens_sibling_never_vouches_for_another_lens(tmp_path: Path):
     md, jl = tmp_path / "log.md", tmp_path / "log.jsonl"
     _emit(tmp_path, pr=5, lens="merge-gate-a")
