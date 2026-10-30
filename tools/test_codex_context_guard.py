@@ -2900,3 +2900,93 @@ def test_ci_recipe_is_not_a_codex_loop_step(
         "pre-closeout gates to the pre-commit HEAD, so `check` reports "
         "`CODEX_LOOP_INCOMPLETE` from the commit until every ship gate is recorded"
     ) in codex_carrier
+
+
+_TRIAL_UNIT = "arhugula-harness-trial-193.fx1"
+
+
+def _trial_repo(tmp_path: Path) -> Path:
+    """A main whose tracked policy enrolls arc `wo-fx` and whose tip is a verified refresh."""
+    repo = _init_repo(tmp_path)
+    policy = json.loads(
+        (Path(__file__).resolve().parents[1] / ".harness" / "workflow-policy.json").read_text()
+    )
+    policy["eligible_units"] = [{"unit": _TRIAL_UNIT, "arc": "wo-fx"}]
+    (repo / ".harness" / "workflow-policy.json").write_text(json.dumps(policy))
+    (repo / ".harness" / "merge-gate-log.jsonl").write_text('{"arc_id": "wo-old"}\n')
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "feat: enroll the fixture arc")
+    _write_roadmap_status(repo, git_head=_git(repo, "rev-parse", "--short=8", "HEAD"))
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "ops: roadmap status refresh post-test")
+    return repo
+
+
+def _land(repo: Path, name: str, *arcs: str) -> None:
+    """One squash landing: a content change plus the review rows its arc(s) appended."""
+    (repo / f"{name}.py").write_text(f"# {name}\n", encoding="utf-8")
+    with (repo / ".harness" / "merge-gate-log.jsonl").open("a", encoding="utf-8") as log:
+        log.writelines(json.dumps({"arc_id": arc, "record_kind": "verdict"}) + "\n" for arc in arcs)
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", f"feat: land {name}")
+
+
+def test_consecutive_trial_landings_owe_no_refresh_in_ci(tmp_path: Path) -> None:
+    # WO-U23 F1: a trial landing has no terminating refresh, so the second consecutive one
+    # sits two commits past the last refresh; tracked membership must still clear it in CI.
+    repo = _trial_repo(tmp_path)
+    _land(repo, "first", "wo-fx")
+    _land(repo, "second", "wo-fx")
+
+    assert cg._owed_lag(repo)
+    # local callers stay on the receipt-bound rule: nothing here is a refresh point
+    assert not cg._lag_expected(repo)
+
+
+def test_legacy_landing_after_trial_landings_is_the_one_owed_refresh(tmp_path: Path) -> None:
+    repo = _trial_repo(tmp_path)
+    _land(repo, "trial", "wo-fx")
+    _land(repo, "legacy", "wo-unenrolled")
+
+    assert cg._owed_lag(repo)
+
+
+def test_trial_landing_after_an_unrefreshed_legacy_landing_still_drifts(tmp_path: Path) -> None:
+    # the legacy landing's own refresh was never made; a trial landing cannot excuse it
+    repo = _trial_repo(tmp_path)
+    _land(repo, "legacy", "wo-unenrolled")
+    _land(repo, "trial", "wo-fx")
+
+    assert not cg._owed_lag(repo)
+
+
+@pytest.mark.parametrize(
+    "arcs", [("wo-fx", "wo-unenrolled"), ("wo-unenrolled",), ()], ids=["two-arcs", "other", "none"]
+)
+def test_unbound_landing_is_not_a_tracked_trial_landing(
+    tmp_path: Path, arcs: tuple[str, ...]
+) -> None:
+    repo = _trial_repo(tmp_path)
+    _land(repo, "middle", *arcs)
+    _land(repo, "head", "wo-fx")
+
+    assert not cg._owed_lag(repo)
+
+
+def test_rewritten_review_log_is_not_a_tracked_trial_landing(tmp_path: Path) -> None:
+    repo = _trial_repo(tmp_path)
+    (repo / ".harness" / "merge-gate-log.jsonl").write_text('{"arc_id": "wo-fx"}\n')
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "feat: replace the review log")
+    _land(repo, "head", "wo-fx")
+
+    assert not cg._owed_lag(repo)
+
+
+def test_tracked_trial_landing_needs_the_policy_at_its_own_revision(tmp_path: Path) -> None:
+    repo = _trial_repo(tmp_path)
+    (repo / ".harness" / "workflow-policy.json").write_text("{}")
+    _land(repo, "middle", "wo-fx")
+    _land(repo, "head", "wo-fx")
+
+    assert not cg._owed_lag(repo)

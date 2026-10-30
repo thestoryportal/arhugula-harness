@@ -470,7 +470,64 @@ def _owed_lag(root: Path) -> bool:
         return False
     if ".harness/roadmap_status.md" in _changed_files(root, base_ref=parents[1], head_ref="HEAD"):
         return False
-    return _is_verified_refresh_point(root, parents[1])
+    return _owes_no_refresh(root, parents[1])
+
+
+def _owes_no_refresh(root: Path, ref: str) -> bool:
+    """True when the roadmap status at `ref` owes no refresh: `ref` is a verified refresh
+    point, or a tracked trial landing over one, through any number of such landings.
+
+    A trial landing has no terminating refresh (WS-11), so a second consecutive one would
+    otherwise sit two commits past the last refresh and fail its own-main run. Only the
+    caller-gated `_owed_lag` walks this chain: CI cannot read the private activation
+    receipt, so it trusts tracked membership (WS-01 §3.1), while local callers keep the
+    receipt-bound `refresh_rule` and still force a refresh the legacy rule owes."""
+    while not _is_verified_refresh_point(root, ref):
+        parent = _out(["git", "rev-parse", "--verify", "--quiet", f"{ref}^"], cwd=root)
+        if not (parent and _is_tracked_trial_landing(root, ref, parent)):
+            return False
+        ref = parent
+    return True
+
+
+_GATE_LOG_ROWS = ".harness/merge-gate-log.jsonl"
+_WORKFLOW_POLICY = ".harness/workflow-policy.json"
+
+
+def _blob(root: Path, ref: str, path: str) -> bytes | None:
+    proc = _run_bytes(["git", "show", f"{ref}:{path}"], cwd=root)
+    return proc.stdout if proc.returncode == 0 else None
+
+
+def _appended_arcs(before: bytes, after: bytes) -> frozenset[str]:
+    """The arcs every row appended to the canonical review log names; empty when the log
+    was rewritten rather than appended to, or a row is not an arc-bound JSON object."""
+    if not after.startswith(before):
+        return frozenset()
+    try:
+        rows = [json.loads(line) for line in after[len(before) :].splitlines() if line.strip()]
+    except ValueError:
+        return frozenset()
+    arcs = [row.get("arc_id") if isinstance(row, dict) else None for row in rows]
+    return frozenset(arcs) if all(isinstance(arc, str) for arc in arcs) else frozenset()
+
+
+def _is_tracked_trial_landing(root: Path, ref: str, parent: str) -> bool:
+    """[LAW:effects-at-boundaries] the Git facts for `workflow_policy.tracked_trial_landing`:
+    the squash landing's appended review rows and the policy at its own revision."""
+    _tools_package()
+    from tools import workflow_policy
+
+    merges = len(_out(["git", "rev-list", "--parents", "-n", "1", ref], cwd=root).split()) != 2
+    after = _blob(root, ref, _GATE_LOG_ROWS)
+    return not (
+        merges
+        or after is None
+        or ".harness/roadmap_status.md" in _changed_files(root, base_ref=parent, head_ref=ref)
+    ) and workflow_policy.tracked_trial_landing(
+        workflow_policy.load_policy(_blob(root, ref, _WORKFLOW_POLICY)),
+        _appended_arcs(_blob(root, parent, _GATE_LOG_ROWS) or b"", after),
+    )
 
 
 def _is_verified_refresh_point(root: Path, ref: str) -> bool:
@@ -1541,8 +1598,9 @@ def validate(
                     "ROADMAP_STATUS_LAG_EXPECTED",
                     "roadmap_status.md hash differs because HEAD is a verified terminating "
                     "roadmap refresh (tolerated for every caller), or HEAD is one commit past "
-                    "one and the caller explicitly allowed roadmap drift (CI post-merge push "
-                    "only) — a commit can never record its own not-yet-computed SHA; the next "
+                    "one, or past tracked trial landings over one, and the caller explicitly "
+                    "allowed roadmap drift (CI post-merge push only) — a commit can never "
+                    "record its own not-yet-computed SHA and a trial landing owes none; the next "
                     "terminating refresh should reconcile the lag.",
                 )
             )

@@ -199,6 +199,11 @@ def _matching(value: object, pattern: re.Pattern[str], field: str) -> str:
     return value
 
 
+def sha256_digest(value: object, field: str) -> str:
+    """A SHA-256 hex identity (policy, carrier inventory) or `PolicyError` naming `field`."""
+    return _matching(value, _SHA256, field)
+
+
 def _decode(raw: bytes, field: str) -> object:
     try:
         return json.loads(raw)
@@ -327,6 +332,18 @@ def refresh_rule(policy: WorkflowPolicy | PolicyDefect, activation: ActivationSt
     status enforcers stop demanding a refresh the door has already ruled on."""
     bound = isinstance(policy, WorkflowPolicy) and activation_binds(policy, activation)
     return "trial" if bound else "legacy"
+
+
+def tracked_trial_landing(policy: WorkflowPolicy | PolicyDefect, arcs: frozenset[str]) -> bool:
+    """[LAW:single-enforcer] WS-01 §3.1 membership as CI sees it: a landing is a trial landing
+    when its appended canonical review rows bind exactly one arc that the policy at the same
+    revision enrolls. CI reads neither live LIT nor the private activation receipt, so these
+    tracked facts alone decide, and only for the drift a trial landing leaves behind."""
+    return (
+        isinstance(policy, WorkflowPolicy)
+        and len(arcs) == 1
+        and any(entry.arc in arcs for entry in policy.eligible_units)
+    )
 
 
 def _enrolled_selection(

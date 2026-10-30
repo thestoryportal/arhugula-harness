@@ -8,11 +8,12 @@ this module only says whether that act would be admissible. The set it judges is
 inventory's required consumers, bound to the inventory digest and the parsed policy: a
 caller cannot narrow it by observing fewer consumers.
 
-`plan_rollback` (§19.3) only plans: it binds the prior coherent carrier versions to
-restore and a by-value snapshot of the adopted version's history, and stays
-`rollback_required`. `verify_rollback` alone can return `rolled_back`, and only when the
-restored carriers are observed at those versions, every uncertain intent has been
-reconciled and the history after the transition still holds everything the snapshot did.
+`plan_rollback` (§19.3) only plans: it binds the prior coherent controls (policy and
+versioned activation binding), the carrier versions to restore and a by-value snapshot of
+the adopted version's history, and stays `rollback_required`. `verify_rollback` alone can
+return `rolled_back`, and only when those controls and carriers are observed restored,
+every uncertain intent has been reconciled and the history after the transition still
+holds everything the snapshot did.
 Neither input has a field for prior counters or a replay list, so rollback cannot reset a
 budget, delete a record or re-send an uncertain merge or prompt. Holds the current user
 authority superseded are not restored.
@@ -42,6 +43,11 @@ class Inventory:
 
     digest: str
     required: frozenset[str]
+
+    def __post_init__(self) -> None:
+        # [LAW:parse-dont-validate] no inventory exists without a SHA-256 identity, so a blank
+        # or malformed digest cannot bind consumers that carry the same blank value
+        wp.sha256_digest(self.digest, "inventory.digest")
 
 
 @dataclass(frozen=True)
@@ -167,9 +173,24 @@ class CarrierVersion:
 
 
 @dataclass(frozen=True)
+class PolicyBinding:
+    """The controls a coherent set runs under: its policy identity and the versioned
+    activation binding that selects it (for example no receipt, or a receipt's digest)."""
+
+    policy: str
+    activation: str
+
+    def __post_init__(self) -> None:
+        # [LAW:parse-dont-validate] a blank identity cannot match a blank observation
+        for field, value in (("policy", self.policy), ("activation", self.activation)):
+            if not value.strip():
+                raise wp.PolicyError(f"rollback.{field}", "blank identity")
+
+
+@dataclass(frozen=True)
 class RollbackPlan:
     state: AdoptionState  # always `rollback_required`: a plan restores nothing by itself
-    restore_policy: str
+    restore_policy: PolicyBinding
     restore_carriers: tuple[CarrierVersion, ...]
     restore_holds: tuple[str, ...]
     retained: Ledger  # a by-value snapshot; later edits to the adopted ledger do not reach it
@@ -191,7 +212,7 @@ def _snapshot(ledger: Ledger) -> Ledger:
 
 
 def plan_rollback(
-    prior_policy: str,
+    prior_policy: PolicyBinding,
     prior_carriers: tuple[CarrierVersion, ...],
     prior_holds: tuple[Hold, ...],
     ledger: Ledger,
@@ -210,14 +231,18 @@ def plan_rollback(
 
 def verify_rollback(
     plan: RollbackPlan,
+    observed_policy: PolicyBinding | None,
     observed_carriers: Mapping[str, str],
     reconciled: Mapping[str, IntentOutcome],
     ledger_after: Ledger,
 ) -> RollbackVerification:
     """[LAW:single-enforcer] the one place a rollback can be attested complete."""
     kept = plan.retained
+    want = plan.restore_policy
     detail = (
-        tuple(
+        (f"controls not restored: want {want}, observed {observed_policy}",)
+        * (observed_policy != want)
+        + tuple(
             f"carrier not restored: {c.name} (want {c.version}, "
             f"observed {observed_carriers.get(c.name, 'nothing')})"
             for c in plan.restore_carriers

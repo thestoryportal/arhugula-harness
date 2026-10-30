@@ -165,16 +165,17 @@ PRIOR = (
     wa.CarrierVersion("CLAUDE.md", "42cd1892"),
 )
 RESTORED = {"merge_door": "cfe756e94831", "CLAUDE.md": "42cd1892"}
+PRIOR_POLICY = wa.PolicyBinding("arhugula-legacy-v0", "no-receipt")
 
 
 def _plan(intents=(), holds=(), ledger=LEDGER):
-    return wa.plan_rollback("arhugula-legacy-v0", PRIOR, holds, ledger, intents)
+    return wa.plan_rollback(PRIOR_POLICY, PRIOR, holds, ledger, intents)
 
 
 def test_a_rollback_plan_never_attests_completion():
     plan = _plan(intents=(wa.Intent("p", "failed"),))
     assert plan.state == "rollback_required"
-    assert (plan.restore_policy, plan.restore_carriers) == ("arhugula-legacy-v0", PRIOR)
+    assert (plan.restore_policy, plan.restore_carriers) == (PRIOR_POLICY, PRIOR)
 
 
 def test_rollback_reconciles_uncertain_intents_and_never_replays_them():
@@ -183,26 +184,28 @@ def test_rollback_reconciles_uncertain_intents_and_never_replays_them():
     )
     assert plan.reconcile == ("merge-pr-1700",)
     assert not hasattr(plan, "replay")
-    unreconciled = wa.verify_rollback(plan, RESTORED, {}, LEDGER)
+    unreconciled = wa.verify_rollback(plan, PRIOR_POLICY, RESTORED, {}, LEDGER)
     assert unreconciled == wa.RollbackVerification(
         "rollback_required", ("intent not reconciled: merge-pr-1700",)
     )
-    assert wa.verify_rollback(plan, RESTORED, {"merge-pr-1700": "confirmed"}, LEDGER).state == (
-        "rolled_back"
-    )
+    assert wa.verify_rollback(
+        plan, PRIOR_POLICY, RESTORED, {"merge-pr-1700": "confirmed"}, LEDGER
+    ).state == ("rolled_back")
 
 
 def test_only_a_verified_restoration_of_the_prior_set_is_rolled_back():
     plan = _plan()
-    assert wa.verify_rollback(plan, RESTORED, {}, LEDGER) == wa.RollbackVerification(
+    assert wa.verify_rollback(plan, PRIOR_POLICY, RESTORED, {}, LEDGER) == wa.RollbackVerification(
         "rolled_back", ()
     )
-    half = wa.verify_rollback(plan, {"merge_door": "cfe756e94831"}, {}, LEDGER)
+    half = wa.verify_rollback(plan, PRIOR_POLICY, {"merge_door": "cfe756e94831"}, {}, LEDGER)
     assert half.detail == ("carrier not restored: CLAUDE.md (want 42cd1892, observed nothing)",)
-    wrong = wa.verify_rollback(plan, {**RESTORED, "merge_door": "a1b2c3"}, {}, LEDGER)
+    wrong = wa.verify_rollback(plan, PRIOR_POLICY, {**RESTORED, "merge_door": "a1b2c3"}, {}, LEDGER)
     assert wrong.state == "rollback_required"
-    unbound = wa.plan_rollback("arhugula-legacy-v0", (), (), LEDGER, ())
-    assert wa.verify_rollback(unbound, {}, {}, LEDGER).detail == ("no prior carrier set bound",)
+    unbound = wa.plan_rollback(PRIOR_POLICY, (), (), LEDGER, ())
+    assert wa.verify_rollback(unbound, PRIOR_POLICY, {}, {}, LEDGER).detail == (
+        "no prior carrier set bound",
+    )
 
 
 def test_rollback_retains_history_counters_and_authority_by_value():
@@ -219,7 +222,7 @@ def test_rollback_retains_history_counters_and_authority_by_value():
         {**LEDGER.counters, "u23.passes": 3},
         LEDGER.current_authority,
     )
-    assert wa.verify_rollback(plan, RESTORED, {}, grown).state == "rolled_back"
+    assert wa.verify_rollback(plan, PRIOR_POLICY, RESTORED, {}, grown).state == "rolled_back"
 
 
 @pytest.mark.parametrize(
@@ -250,10 +253,38 @@ def test_rollback_retains_history_counters_and_authority_by_value():
     ],
 )
 def test_a_rollback_that_loses_history_or_authority_is_not_rolled_back(after, detail):
-    verification = wa.verify_rollback(_plan(), RESTORED, {}, after)
+    verification = wa.verify_rollback(_plan(), PRIOR_POLICY, RESTORED, {}, after)
     assert (verification.state, verification.detail) == ("rollback_required", (detail,))
 
 
 def test_rollback_does_not_revive_a_hold_the_user_superseded():
     holds = (wa.Hold("hil-publication", "c12/cmt-0c59889e"), wa.Hold("u14-acceptance", None))
     assert _plan(holds=holds).restore_holds == ("u14-acceptance",)
+
+
+@pytest.mark.parametrize(
+    "observed",
+    [None, wa.PolicyBinding("arhugula-legacy-v0", "receipt:" + "d" * 64)],
+    ids=["unobserved", "trial-activation-still-bound"],
+)
+def test_rollback_needs_the_prior_policy_and_activation_binding_observed(observed):
+    # WO-U23 F3: restored carriers and a retained ledger are not enough; WS-17 §19.3 restores
+    # the prior controls and their versioned activation binding before `rolled_back`
+    verification = wa.verify_rollback(_plan(), observed, RESTORED, {}, LEDGER)
+    assert verification == wa.RollbackVerification(
+        "rollback_required",
+        (f"controls not restored: want {PRIOR_POLICY}, observed {observed}",),
+    )
+
+
+@pytest.mark.parametrize(("policy", "activation"), [("", "no-receipt"), ("legacy", " ")])
+def test_a_rollback_cannot_bind_blank_controls(policy, activation):
+    with pytest.raises(wa.wp.PolicyError):
+        wa.PolicyBinding(policy, activation)
+
+
+@pytest.mark.parametrize("digest", ["", "c" * 63, "C" * 64, "placeholder"])
+def test_an_inventory_needs_a_sha256_identity(digest):
+    # WO-U23 F2: a blank digest matched consumers carrying the same blank value and validated
+    with pytest.raises(wa.wp.PolicyError, match=r"inventory\.digest"):
+        wa.Inventory(digest, frozenset({"only"}))
