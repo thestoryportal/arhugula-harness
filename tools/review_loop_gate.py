@@ -80,6 +80,9 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from types import MappingProxyType
+from typing import NamedTuple
+
+import jsonschema
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -936,6 +939,111 @@ def trial_review_decision(
         undisposed_findings=tuple(undisposed),
         next_action=_NEXT_ACTION[state],
     )
+
+
+# WS-09 §11.3: an original report is immutable. Its one companion lineage restates the
+# report's attribution/metadata; a judgment never reads a correctable field, so no correction
+# can manufacture an approval or release a blocker.
+
+#: [LAW:one-source-of-truth] the schema owns the closed correctable field set; their value
+#: types stay the gate row's own (`finding_record.validate` over the corrected row)
+REPORT_CORRECTION_SCHEMA = json.loads(
+    fr.SCHEMA_PATH.with_name("report_correction.schema.json").read_text()
+)
+
+
+class ReportKey(NamedTuple):
+    """An original report's identity: every row one emission wrote shares it."""
+
+    arc_id: str
+    producer: str
+    round_n: int
+
+
+@dataclass(frozen=True)
+class ReportRevision:
+    revision: int
+    actor: str
+    changes: Mapping[str, Mapping[str, object]]  # finding_id -> the whole current correction
+    disposition: str | None  # None while no independent actor has accepted or rejected it
+
+
+@dataclass(frozen=True)
+class ReportCorrections:
+    lineages: Mapping[ReportKey, tuple[ReportRevision, ...]]
+
+    def current(self, report: ReportKey) -> ReportRevision | None:
+        """The report's current companion: its highest-numbered accepted revision."""
+        accepted = [r for r in self.lineages.get(report, ()) if r.disposition == "accepted"]
+        return accepted[-1] if accepted else None
+
+    def corrected(self, rows: list[dict]) -> list[dict]:
+        """`rows` as currently corrected, as new rows; the originals are never modified."""
+        current = [c for c in map(self.current, self.lineages) if c is not None]
+        overlay = {fid: fields for c in current for fid, fields in c.changes.items()}
+        return [{**r, **overlay.get(r.get("finding_id"), {})} for r in rows]
+
+
+def parse_report_corrections(text: str, rows: list[dict]) -> ReportCorrections:
+    """The companion lineage (JSONL `text`) over the gate `rows` it corrects, parsed once.
+    Revisions are contiguous from 1 and name an existing report's own findings; each is
+    disposed at most once, by an actor independent of its proposer and of the report's
+    producer; each entry is later than its lineage's previous one; a corrected row still
+    satisfies the gate log's row contract. Any violation refuses: a corrupt lineage never
+    reads as no correction."""
+    # [LAW:single-enforcer] every lineage rule lives here; the writer and the approval
+    # boundary both parse through it. [LAW:parse-dont-validate] callers get ReportCorrections.
+    lineages: dict[ReportKey, list[ReportRevision]] = {}
+    last_ts: dict[ReportKey, str] = {}
+    for n, line in enumerate(text.splitlines(), start=1):
+        try:
+            _admit_correction(json.loads(line), rows, lineages, last_ts)
+        except ValueError as exc:
+            raise TrialInputError("invalid_input", f"report correction {n}: {exc}") from exc
+    return ReportCorrections(MappingProxyType({k: tuple(v) for k, v in lineages.items()}))
+
+
+def _admit_correction(
+    entry: object,
+    rows: list[dict],
+    lineages: dict[ReportKey, list[ReportRevision]],
+    last_ts: dict[ReportKey, str],
+) -> None:
+    """Add one lineage entry to `lineages`, or refuse it with a ValueError."""
+    try:
+        jsonschema.validate(entry, REPORT_CORRECTION_SCHEMA)
+    except jsonschema.ValidationError as exc:
+        raise ValueError(exc.message) from exc
+    datetime.strptime(entry["ts"], "%Y-%m-%dT%H:%M:%SZ")  # a real UTC instant, not a shape
+    key = ReportKey(**entry["report"])
+    report = [r for r in rows if (r.get("arc_id"), r.get("producer"), r.get("round_n")) == key]
+    if entry["ts"] <= last_ts.get(key, ""):
+        raise ValueError(f"ts {entry['ts']} is not later than its lineage's previous entry")
+    last_ts[key] = entry["ts"]
+    lineage = lineages.setdefault(key, [])
+    if entry["kind"] == "revision":
+        if entry["revision"] != len(lineage) + 1:
+            raise ValueError(f"revision {entry['revision']} does not follow {len(lineage)}")
+        for fid, fields in entry["changes"].items():
+            targets = [r for r in report if r.get("finding_id") == fid]
+            if not targets:
+                raise ValueError(f"{fid} is not a finding of report {key}")
+            for row in targets:
+                # [LAW:single-enforcer] the log's own row contract types the corrected values
+                fr.validate({**row, **fields})
+        changes = {fid: MappingProxyType(dict(f)) for fid, f in entry["changes"].items()}
+        lineage.append(
+            ReportRevision(entry["revision"], entry["actor"], MappingProxyType(changes), None)
+        )
+        return
+    if entry["revision"] > len(lineage):
+        raise ValueError(f"revision {entry['revision']} has not been proposed")
+    revision = lineage[entry["revision"] - 1]
+    if revision.disposition is not None:
+        raise ValueError(f"revision {revision.revision} is already {revision.disposition}")
+    if entry["actor"] in (revision.actor, key.producer):
+        raise ValueError(f"{entry['actor']} proposed the correction or produced the report")
+    lineage[revision.revision - 1] = dataclasses.replace(revision, disposition=entry["disposition"])
 
 
 @dataclass(frozen=True)
