@@ -41,6 +41,7 @@ tools/test_concurrency_surface.py \
   tools/test_ci_bookkeeping_filter.py \
   tools/test_ci_aggregate.py \
   tools/test_workflow_policy.py \
+  tools/test_workflow_adoption.py \
   tools/test_workflow_evidence.py \
   tools/test_workflow_boundaries.py \
   tools/test_workflow_commit.py \
