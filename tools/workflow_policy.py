@@ -224,9 +224,14 @@ def _eligible(value: object) -> tuple[EligibleUnit, ...]:
         entry = _object(item, prefix.rstrip("."))
         _exact_keys(entry, ("unit", "arc"), prefix)
         unit = _matching(entry["unit"], _UNIT_ID, prefix + "unit")
+        arc = _matching(entry["arc"], _ARC_ID, prefix + "arc")
+        # [LAW:types-are-the-program] enrollment is one-to-one: an arc or unit named twice
+        # would leave its readers choosing between two units' authority.
         if any(existing.unit == unit for existing in units):
             raise PolicyError(prefix + "unit", "duplicate enrollment")
-        units.append(EligibleUnit(unit, _matching(entry["arc"], _ARC_ID, prefix + "arc")))
+        if any(existing.arc == arc for existing in units):
+            raise PolicyError(prefix + "arc", "duplicate enrollment")
+        units.append(EligibleUnit(unit, arc))
     return tuple(units)
 
 

@@ -219,6 +219,15 @@ def test_branch_env_and_flag_spoofing_cannot_select_trial(
         (_policy_doc(eligible_units=[{"unit": UNIT, "arc": "TBD"}]), "eligible_units[0].arc"),
         (_policy_doc(eligible_units=[{"unit": UNIT, "arc": "<arc>"}]), "eligible_units[0].arc"),
         (_policy_doc(eligible_units=[{"unit": UNIT, "arc": ARC}] * 2), "eligible_units[1].unit"),
+        (
+            _policy_doc(
+                eligible_units=[
+                    {"unit": UNIT, "arc": ARC},
+                    {"unit": "arhugula-harness-trial-193.7x7.9tj", "arc": ARC},
+                ]
+            ),
+            "eligible_units[1].arc",
+        ),
         (_policy_doc(boundary_rules=[]), "boundary_rules"),
         (
             _policy_doc(compatibility={"phase_record_versions": [2]}),
