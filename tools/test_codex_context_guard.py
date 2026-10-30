@@ -13,6 +13,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import codex_context_guard as cg
@@ -42,6 +44,7 @@ def _state(**overrides) -> cg.GuardState:
         latest_retirement_batch=".harness/phase-7d-retirement-events-batch-51.md",
         lag_expected=False,
         owed_lag=False,
+        refresh_rule="legacy",
     )
     return cg.GuardState(**{**base.__dict__, **overrides})
 
@@ -330,6 +333,64 @@ def test_owed_lag_with_allow_roadmap_drift_downgrades_to_warn_on_default_branch(
 
     assert any(f.code == "ROADMAP_STATUS_LAG_EXPECTED" and f.severity == "warn" for f in findings)
     assert not any(f.code == "ROADMAP_STATUS_DRIFT" for f in findings)
+
+
+@pytest.mark.parametrize("mode", ["preflight", "closeout", "check"])
+@pytest.mark.parametrize("owed_lag", [False, True])
+def test_trial_refresh_rule_owes_no_refresh_for_any_caller(mode: str, owed_lag: bool) -> None:
+    # WO-U23: once a receipt activates the tracked policy the merge door rules on each
+    # landing's refresh, so accumulated status drift on main is not a refresh owed here.
+    state = _state(branch="main", computed_hash="newhash", owed_lag=owed_lag, refresh_rule="trial")
+
+    findings = cg.validate(state, mode=mode)
+
+    assert any(f.code == "ROADMAP_STATUS_TRIAL_UNPINNED" and f.severity == "warn" for f in findings)
+    assert not any(f.code.startswith("ROADMAP_STATUS_DRIFT") for f in findings)
+
+
+def test_legacy_refresh_rule_keeps_the_hard_drift_on_main() -> None:
+    state = _state(branch="main", computed_hash="newhash", refresh_rule="legacy")
+
+    findings = cg.validate(state, mode="preflight")
+
+    assert any(f.code == "ROADMAP_STATUS_DRIFT" and f.severity == "hard" for f in findings)
+    assert not any(f.code == "ROADMAP_STATUS_TRIAL_UNPINNED" for f in findings)
+
+
+@pytest.mark.parametrize("published", [False, True])
+def test_refresh_rule_cli_reads_the_tracked_policy_and_canonical_receipt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    published: bool,
+) -> None:
+    # the hooks' one reading (tools/hooks/lib.sh): legacy until a receipt activates the
+    # tracked policy, trial once one does
+    cg._tools_package()
+    from tools import workflow_boundaries, workflow_policy
+
+    policy = workflow_boundaries.observe_policy()
+    assert isinstance(policy, workflow_policy.WorkflowPolicy)
+    receipt = tmp_path / "workflow-activation.json"
+    if published:
+        receipt.write_text(
+            json.dumps(
+                {
+                    "policy_id": policy.policy_id,
+                    "policy_version": policy.policy_version,
+                    "policy_digest": policy.digest,
+                    "root_revision": "a" * 40,
+                    "product_revision": "b" * 40,
+                    "carrier_inventory_digest": "c" * 64,
+                    "adoption_evidence": "fixture",
+                    "prior_policy": "legacy",
+                }
+            )
+        )
+    monkeypatch.setattr(workflow_policy, "ACTIVATION_PATH", receipt)
+
+    assert cg.main(["refresh-rule"]) == 0
+    assert capsys.readouterr().out == ("trial\n" if published else "legacy\n")
 
 
 def test_status_refresh_alone_counts_as_expected_lag(tmp_path: Path) -> None:

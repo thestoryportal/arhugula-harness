@@ -111,6 +111,7 @@ class GuardState:
     latest_retirement_batch: str
     lag_expected: bool
     owed_lag: bool
+    refresh_rule: str  # workflow_policy.RefreshRule: `legacy` or `trial`
 
 
 @dataclass(frozen=True)
@@ -371,6 +372,7 @@ def write_checkpoint(state: GuardState, *, label: str, findings: list[Finding]) 
         "latest_retirement_batch": state.latest_retirement_batch,
         "lag_expected": state.lag_expected,
         "owed_lag": state.owed_lag,
+        "refresh_rule": state.refresh_rule,
         "findings": [f.__dict__ for f in findings],
     }
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -597,6 +599,7 @@ def derive(
         latest_retirement_batch=batch,
         lag_expected=_lag_expected(root),
         owed_lag=_owed_lag(root),
+        refresh_rule=observe_refresh_rule(),
     )
 
 
@@ -1510,7 +1513,19 @@ def validate(
         # context can distinguish "CI post-merge smoke, pass clean" from
         # "session-start/preflight, force the owed refresh first."
         ci_owed_lag = allow_roadmap_drift and state.owed_lag
-        if state.branch == state.default_branch and not state.lag_expected and not ci_owed_lag:
+        if state.refresh_rule == "trial":
+            # [LAW:single-enforcer] under an activation of the tracked policy the merge door
+            # rules on each landing's refresh (WS-11); the pinned hash no longer owes one.
+            findings.append(
+                Finding(
+                    "warn",
+                    "ROADMAP_STATUS_TRIAL_UNPINNED",
+                    "roadmap_status.md hash differs, and the trial profile is active: the merge "
+                    "door gives each legacy landing its terminating refresh and a trial landing "
+                    "none, so no refresh is owed here.",
+                )
+            )
+        elif state.branch == state.default_branch and not state.lag_expected and not ci_owed_lag:
             findings.append(
                 Finding(
                     "hard",
@@ -1691,16 +1706,31 @@ def _json_report(state: GuardState, findings: list[Finding]) -> str:
     )
 
 
-def _workflow(argv: list[str]) -> int:
-    """WO-U05 `workflow status|check` (spec WS-06); its own JSON and 0/2/3/4/5 exits."""
+def _tools_package() -> None:
     # Run as a script, only tools/ is on sys.path; the WO modules import as the `tools`
     # namespace package from the repository root, as the test suite does.
     root = str(Path(__file__).resolve().parent.parent)
     if root not in sys.path:
         sys.path.insert(0, root)
+
+
+def _workflow(argv: list[str]) -> int:
+    """WO-U05 `workflow status|check` (spec WS-06); its own JSON and 0/2/3/4/5 exits."""
+    _tools_package()
     from tools import workflow_boundaries
 
     return workflow_boundaries.main(argv)
+
+
+def observe_refresh_rule() -> str:
+    """[LAW:effects-at-boundaries] the tracked policy and canonical activation receipt,
+    judged by `workflow_policy.refresh_rule` alone (WO-U23)."""
+    _tools_package()
+    from tools import workflow_boundaries, workflow_policy
+
+    return workflow_policy.refresh_rule(
+        workflow_boundaries.observe_policy(), workflow_policy.read_activation()
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1709,6 +1739,10 @@ def main(argv: list[str] | None = None) -> int:
     # the existing modes keep their choices, flags and exits unchanged.
     if args[:1] == ["workflow"]:
         return _workflow(args[1:])
+    if args == ["refresh-rule"]:
+        # the shell hooks' one reading of the refresh rule (tools/hooks/lib.sh)
+        print(observe_refresh_rule())
+        return 0
     parser = argparse.ArgumentParser(description="Codex deterministic context guard.")
     parser.add_argument(
         "mode",

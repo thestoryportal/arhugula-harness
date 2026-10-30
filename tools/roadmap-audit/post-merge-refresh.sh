@@ -88,6 +88,14 @@ if printf '%s' "$ORIGIN_TITLE" | grep -qE '^ops: roadmap status refresh '; then
   fi
 fi
 
+# WO-U23: under an activation of the tracked workflow policy the merge door rules on each
+# landing's refresh (WS-11) -- a legacy landing's refresh PR before it releases, a trial
+# landing none -- so this session owes no follow-on refresh.
+if RULE=$(hook_refresh_rule); then RULE_NOTE=""; else RULE_NOTE=" (refresh rule unreadable; legacy kept)"; fi
+if [ "$RULE" = trial ]; then
+  emit "[ROADMAP] substantive merge detected (origin/${DEFAULT_BRANCH} @ ${ORIGIN_HEAD}: \"${ORIGIN_TITLE}\"). The trial profile is active: the merge door rules on this landing's refresh, so no terminating refresh is owed by this session."
+fi
+
 # --- Substantive merge confirmed: pre-compute the new anchor + remind. ---------
 # Hash recipe per CLAUDE.md §12.1 step 2, computed against origin/<default> so the
 # value is correct before the local checkout is fast-forwarded.
@@ -104,4 +112,4 @@ FORKS=$(git ls-tree --name-only "$COMPARE_REF" .harness/ 2>/dev/null | grep -cE 
 BATCH=$(git ls-tree --name-only "$COMPARE_REF" .harness/ 2>/dev/null | grep -E '/phase-7d-retirement-events-batch-.*\.md$' | sort -V | tail -1)
 COMPUTED=$(hook_state_hash "$ORIGIN_HEAD" "$PRS" "$FORKS" "$BATCH")
 
-emit "[ROADMAP] substantive merge detected (origin/${DEFAULT_BRANCH} @ ${ORIGIN_HEAD}: \"${ORIGIN_TITLE}\"). A terminating refresh is owed per §12.2 (Hook A will NOT catch its own merge). Steps: (1) git -C \"$PROJECT_DIR\" fetch && git merge --ff-only origin/${DEFAULT_BRANCH}; (2) update ${ROADMAP_STATUS}: workspace_state_hash=${COMPUTED}, git_head=${ORIGIN_HEAD}, last_refreshed=now, prepend recently_completed, re-derive next_action; (3) commit title prefix 'ops: roadmap status refresh ' (roadmap-status-only → §12.2.1 fixed point, no recursion)."
+emit "[ROADMAP] substantive merge detected (origin/${DEFAULT_BRANCH} @ ${ORIGIN_HEAD}: \"${ORIGIN_TITLE}\"). A terminating refresh is owed per §12.2 (Hook A will NOT catch its own merge). Steps: (1) git -C \"$PROJECT_DIR\" fetch && git merge --ff-only origin/${DEFAULT_BRANCH}; (2) update ${ROADMAP_STATUS}: workspace_state_hash=${COMPUTED}, git_head=${ORIGIN_HEAD}, last_refreshed=now, prepend recently_completed, re-derive next_action; (3) commit title prefix 'ops: roadmap status refresh ' (roadmap-status-only → §12.2.1 fixed point, no recursion).${RULE_NOTE}"

@@ -14,6 +14,18 @@ HOOK="$SCRIPT_DIR/session-start.sh"
 REPO="$(mktemp -d)"
 { [ -n "$REPO" ] && [ -d "$REPO" ]; } || { echo "FATAL: mktemp -d failed"; exit 1; }
 trap 'rm -rf "$REPO"' EXIT
+
+# WO-U23: the hook reads the refresh rule through the guard beside it, so the trial and
+# unreadable cases run a copy of the hook whose sibling guard is a stub.
+STUB="$(mktemp -d)"
+trap 'rm -rf "$REPO" "$STUB"' EXIT
+stub_hook() { # $1=stub guard body; echoes the copied hook path
+  rm -rf "$STUB/tools"; mkdir -p "$STUB/tools/hooks" "$STUB/tools/roadmap-audit"
+  cp "$SCRIPT_DIR/../hooks/lib.sh" "$SCRIPT_DIR/../hooks/loop_lib.sh" "$STUB/tools/hooks/"
+  cp "$HOOK" "$STUB/tools/roadmap-audit/"
+  printf '%s\n' "$1" > "$STUB/tools/codex_context_guard.py"
+  printf '%s' "$STUB/tools/roadmap-audit/$(basename "$HOOK")"
+}
 git -C "$REPO" init -q -b main; git -C "$REPO" config user.email t@t.t; git -C "$REPO" config user.name t
 mkdir -p "$REPO/.harness"
 # C-HE-09 §2 (U-HE-29): the loop ledger is a SHARED venue outside every worktree, so it is
@@ -57,6 +69,17 @@ printf '%s' "$OUT" | grep -q "hash=ok" && printf '%s' "$OUT" | grep -q "next=R-T
 write_dashboard "000000000000"
 OUT=$(run)
 printf '%s' "$OUT" | grep -q "ROADMAP DRIFT" && ok "drift branch ($OUT)" || bad "expected DRIFT, got: $OUT"
+
+# 2b) WO-U23 trial — the same drift under an activation of the tracked policy owes no
+#     refresh; an unreadable rule keeps the legacy halt and says so.
+TRIAL_HOOK=$(stub_hook 'print("trial")')
+OUT=$(CLAUDE_PROJECT_DIR="$REPO" bash "$TRIAL_HOOK" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null)
+printf '%s' "$OUT" | grep -q "hash=trial-unpinned" && ! printf '%s' "$OUT" | grep -q "ROADMAP DRIFT" \
+  && ok "trial rule owes no refresh ($OUT)" || bad "expected trial-unpinned, got: $OUT"
+FAIL_HOOK=$(stub_hook 'raise SystemExit("unreadable")')
+OUT=$(CLAUDE_PROJECT_DIR="$REPO" bash "$FAIL_HOOK" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null)
+printf '%s' "$OUT" | grep -q "ROADMAP DRIFT.*refresh rule unreadable; legacy kept" \
+  && ok "unreadable rule keeps the legacy halt ($OUT)" || bad "expected DRIFT naming the unreadable rule, got: $OUT"
 
 # 3) lag-expected — wrong hash, last commit is a GENUINE terminating refresh: the
 #    reserved title prefix AND the only changed file is roadmap_status.md (§12.2.1

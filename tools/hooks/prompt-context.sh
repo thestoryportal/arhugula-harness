@@ -50,6 +50,11 @@ if [ "$CUR_BRANCH" = "$DEF_BRANCH" ] && [ -n "$STORED_HEAD" ] && [ -n "$LHEAD" ]
     CHANGED_FILES=$(git show --name-only --pretty=format: HEAD 2>/dev/null | grep -v '^$' | sort -u)
     hook_is_roadmap_status_only_set "$CHANGED_FILES" && EXEMPT="1"
   fi
+  # WO-U23: under an activation of the tracked policy the merge door rules on each
+  # landing's refresh (WS-11); a moved HEAD is then not a refresh owed.
+  if [ -z "$EXEMPT" ] && RULE=$(hook_refresh_rule) && [ "$RULE" = trial ]; then
+    EXEMPT="1"
+  fi
   [ -z "$EXEMPT" ] \
     && DFLAG=" [possible drift: local HEAD ${LHEAD} != roadmap ${STORED_HEAD}; run the §12.1 audit]"
 fi

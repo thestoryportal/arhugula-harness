@@ -79,6 +79,7 @@ _ACTIVATION_PROFILE = re.compile(re.escape(PROFILE_ID))
 
 Observation = Literal["confirmed", "contradicted", "unknown"]
 SelectionKind = Literal["trial", "legacy", "held"]
+RefreshRule = Literal["legacy", "trial"]
 
 
 class PolicyError(ValueError):
@@ -307,16 +308,32 @@ _OBSERVATION_REASON: Mapping[Observation, tuple[str, ...]] = MappingProxyType(
 )
 
 
+def activation_binds(policy: WorkflowPolicy, activation: ActivationState) -> bool:
+    """[LAW:single-enforcer] the one test that a published receipt activates this policy."""
+    return isinstance(activation, Activation) and (
+        activation.policy_id,
+        activation.policy_version,
+        activation.policy_digest,
+    ) == (policy.policy_id, policy.policy_version, policy.digest)
+
+
+def refresh_rule(policy: WorkflowPolicy | PolicyDefect, activation: ActivationState) -> RefreshRule:
+    """Which rule governs the post-merge terminating refresh (WS-11, WS-17 §19.1).
+
+    `legacy` until a receipt activates the tracked policy: every substantive merge owes a
+    terminating refresh and the roadmap-status enforcers keep requiring it. `trial` once
+    one does: the merge door applies `select_profile` to each landing, driving a legacy
+    landing's refresh PR before it releases and giving a trial landing none, so the
+    status enforcers stop demanding a refresh the door has already ruled on."""
+    bound = isinstance(policy, WorkflowPolicy) and activation_binds(policy, activation)
+    return "trial" if bound else "legacy"
+
+
 def _enrolled_selection(
     policy: WorkflowPolicy, entry: EligibleUnit, facts: SelectionFacts
 ) -> ProfileSelection:
-    activation = facts.activation
     reasons: list[str] = []
-    if not (
-        isinstance(activation, Activation)
-        and (activation.policy_id, activation.policy_version, activation.policy_digest)
-        == (policy.policy_id, policy.policy_version, policy.digest)
-    ):
+    if not activation_binds(policy, facts.activation):
         reasons.append("policy_mismatch")
     if facts.repository != REPOSITORY or (facts.arc is not None and facts.arc != entry.arc):
         reasons.append("identity_mismatch")

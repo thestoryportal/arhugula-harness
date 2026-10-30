@@ -224,7 +224,14 @@ if [ "$#" -ge 3 ]; then
   fi
 fi
 
+# WO-U23: under an activation of the tracked workflow policy the merge door rules on each
+# landing's refresh (WS-11), so a hash mismatch is not a refresh this session owes.
+if RULE=$(hook_refresh_rule); then RULE_NOTE=""; else RULE_NOTE=" (refresh rule unreadable; legacy kept)"; fi
+if [ "$RULE" = trial ]; then
+  emit "[ROADMAP] hash=trial-unpinned next=${NEXT:-?} (trial profile active: the merge door rules on each landing's refresh; none is owed here)"
+fi
+
 # Genuine drift — surface for §12.3 halt-and-reconcile. Reached when the hash mismatches
 # AND the tip is not a roadmap-status-only terminating refresh (incl. a mis-titled
 # substantive commit — which now correctly halts here rather than passing as lag-expected).
-emit "[ROADMAP DRIFT] stored=${STORED_HASH:-none} computed=${COMPUTED} next=${NEXT:-?} action=§12.3"
+emit "[ROADMAP DRIFT] stored=${STORED_HASH:-none} computed=${COMPUTED} next=${NEXT:-?} action=§12.3${RULE_NOTE}"
