@@ -345,11 +345,13 @@ Don't infer silently. Posture confusion at session start contaminates downstream
 
 ### 12.1 Mandatory session-start audit
 
-Fires automatically via the `SessionStart` hook (`tools/roadmap-audit/session-start.sh`). Read `.harness/roadmap_status.md` (live head only — **query** `.harness/roadmap-next-action-archive.md`, do not read it wholesale), recompute `workspace_state_hash` per `Project_Roadmap_v1.md` §7.1 step 2, compare. **Mismatch → HALT** and surface reconciliation options; match → derive next action per `Project_Roadmap_v1.md` §4. The step-6 fixed-point carve-out is at §12.2.1. Full procedure at `docs/governance/roadmap-protocol.md` §12.1. **This audit is the load-bearing discipline — skipping it is the silent drift the roadmap exists to prevent.**
+Fires automatically via the `SessionStart` hook (`tools/roadmap-audit/session-start.sh`). Read `.harness/roadmap_status.md` (live head only — **query** `.harness/roadmap-next-action-archive.md`, do not read it wholesale), recompute `workspace_state_hash` per `Project_Roadmap_v1.md` §7.1 step 2, compare. **Mismatch → HALT** (legacy rule; see the §12.2 trial scope) and surface reconciliation options; match → derive next action per `Project_Roadmap_v1.md` §4. The step-6 fixed-point carve-out is at §12.2.1. Full procedure at `docs/governance/roadmap-protocol.md` §12.1. **This audit is the load-bearing discipline — skipping it is the silent drift the roadmap exists to prevent.**
 
 ### 12.2 Mandatory post-PR-merge audit
 
 After any PR merges to main: recompute `workspace_state_hash`, update `.harness/roadmap_status.md` (hash, `last_refreshed`, `recently_completed`, `in_flight`, re-derived `next_action` with the superseded paragraph moved to `.harness/roadmap-next-action-archive.md`), edit `.harness/arc-ledger.yaml` **and** bump its `snapshot:` in the same commit if an R-FS-1 arc transited, mark any closed R-NNN `RESOLVED`, then commit with a title beginning `ops: roadmap status refresh `. Full checklist at `docs/governance/roadmap-protocol.md` §12.2.
+
+**Trial scope (WS-11).** This audit and §12.2.1 govern every legacy landing. Once a published receipt activates `.harness/workflow-policy.json` (`workflow_policy.refresh_rule` reads `trial`), `tools/merge_door.py` rules on each landing instead: a legacy arc still lands with its terminating refresh before the door releases, and an arc it selects `trial` has none. The context guard and the roadmap hooks then report the status as unpinned rather than a refresh owed.
 
 #### 12.2.1 Refresh PR termination clause (recursion-stopping fixed point)
 
