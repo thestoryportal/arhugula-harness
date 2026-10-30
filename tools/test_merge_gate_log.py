@@ -509,9 +509,9 @@ def _adjudicate(jl: Path, finding: dict, disposition: str, ts: str) -> None:
     )
 
 
-def _landing_repo(tmp_path: Path):
-    """A topic branch off `main`: a reviewed commit changing code.py, then one appended verdict
-    row and its structured md line."""
+def _landing_repo(tmp_path: Path, subject: str = "code.py"):
+    """A topic branch off `main`: a reviewed commit changing `subject`, then one appended
+    verdict row and its structured md line."""
     repo = tmp_path / "r"
     repo.mkdir()
     g = lambda *a: subprocess.run(  # noqa: E731
@@ -531,7 +531,7 @@ def _landing_repo(tmp_path: Path):
     g("add", "-A")
     g("commit", "-qm", "base")
     g("checkout", "-qb", "topic")
-    (repo / "code.py").write_text("x = 1\n")
+    (repo / subject).write_text("x = 1\n")
     g("add", "-A")
     g("commit", "-qm", "reviewed")
     reviewed = g("rev-parse", "HEAD")
@@ -619,7 +619,6 @@ def _trial_decision(repo: Path, final_head: str = "HEAD") -> rlg.TrialReviewDeci
         unit="u07",
         arc=_TRIAL_ARC,
         authors=frozenset({"claude"}),
-        doc_only=False,
         final_head=final_head,
         base="main",
         repo=repo,
@@ -811,6 +810,24 @@ def test_trial_decision_supplies_accepted_correction_to_reducer_without_rewritin
     ]
     assert mgl._blob(repo, "HEAD", ".harness/merge-gate-log.jsonl") == original == jl.read_bytes()
     assert decision == reducer(originals, **kwargs)
+
+
+@pytest.mark.parametrize(("subject", "doc_only"), [("code.py", False), ("notes.md", True)])
+def test_trial_decision_derives_doc_only_from_the_git_subject(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, subject: str, doc_only: bool
+):
+    """WO-U23 O1: the activating boundary takes no doc-only label; Git classifies the subject,
+    and the appended `.jsonl` gate rows cannot turn a Markdown-only subject into code."""
+    repo, *_ = _landing_repo(tmp_path, subject)
+    reducer, received = rlg.trial_review_decision, []
+
+    def observed(rows: list[dict], **kwargs):
+        received.append(kwargs["binding"])
+        return reducer(rows, **kwargs)
+
+    monkeypatch.setattr(rlg, "trial_review_decision", observed)
+    _trial_decision(repo)
+    assert [binding.doc_only for binding in received] == [doc_only]
 
 
 def test_append_report_correction_enforces_the_lineage_under_the_log_lock(tmp_path: Path):
