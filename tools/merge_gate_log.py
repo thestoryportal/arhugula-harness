@@ -801,6 +801,7 @@ GATE_ROW_FILES = frozenset(_GATE_ROW_CHECKS)
 #: WS-09 §11.3's companion correction lineage. Deliberately not a gate-row file: a correction
 #: is not a verdict or receipt row, so one appended after a review leaves its approval stale.
 _REPORT_CORRECTIONS = ".harness/review-corrections.jsonl"
+_GATE_ROW_PATHS = frozenset(path.encode() for path in _GATE_ROW_CHECKS)
 
 
 def _blob(repo: Path, ref: str, path: str) -> bytes:
@@ -890,18 +891,22 @@ def trial_review_decision(
     unit: str,
     arc: str,
     authors: frozenset[str],
-    doc_only: bool,
     final_head: str = "HEAD",
     base: str = rlg.FULL_DIFF_REF,
     repo: Path | None = None,
 ) -> rlg.TrialReviewDecision:
     """The trial approval boundary over Git: the gate log committed at `final_head`, its
     binding, and whether the recorded reviewed binding's approval transfers onto it are all
-    computed here and never supplied."""
+    computed here and never supplied, as is whether the subject is doc-only (WO-U23 O1)."""
     repo = repo or REPO
     # [LAW:no-ambient-temporal-coupling] one resolved commit supplies both the rows and the
     # proof's final binding, so a moving ref cannot pair one head's log with another's diff
     final = _commit(repo, final_head)
+    # [LAW:single-enforcer] the reducer's one doc-only predicate over the Git diff, never a
+    # caller label; the permitted gate-row appends are bookkeeping that land after review, so
+    # they cannot turn a reviewed Markdown-only subject into a code subject
+    names = rlg.diff_names(repo, rw._git(repo, "merge-base", _commit(repo, base), final), final)
+    doc_only = rlg.is_doc_only([n for n in names if n not in _GATE_ROW_PATHS])
     rows = _parse_rows(_blob(repo, final, _GATE_LOG_ROWS).decode("utf-8"))
     # the companion at the same commit, over the same rows: a corrupt lineage refuses here
     corrections = rlg.parse_report_corrections(

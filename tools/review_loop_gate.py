@@ -1434,29 +1434,25 @@ def _cycle_request(
     )
 
 
-def _doc_only(repo: Path, binding: Mapping[str, str]) -> bool:
-    """A diff is doc-only when every path it touches is Markdown (X9a: pass 3 alone).
-
-    Rename detection is off, so a rename lists its source path as well as its
-    destination (a code file renamed to `.md` is not doc-only), and the names are read
-    as bytes, since git admits paths the process locale cannot decode."""
+def diff_names(repo: Path, base_sha: str, head_sha: str) -> list[bytes]:
+    """Every path the diff touches. Rename detection is off, so a rename lists its source
+    path as well as its destination (a code file renamed to `.md` is not doc-only), and the
+    names are read as bytes, since git admits paths the process locale cannot decode."""
     out = subprocess.run(
-        [
-            "git",
-            "-C",
-            str(repo),
-            "diff",
-            "--no-renames",
-            "-z",
-            "--name-only",
-            binding["base_sha"],
-            binding["head_sha"],
-        ],
+        ["git", "-C", str(repo), "diff", "--no-renames", "-z", "--name-only", base_sha, head_sha],
         check=True,
         capture_output=True,
     ).stdout
-    names = [n for n in out.split(b"\0") if n]
+    return [n for n in out.split(b"\0") if n]
+
+
+def is_doc_only(names: list[bytes]) -> bool:
+    """X9a: a diff is doc-only (pass 3 alone) when it touches a path and every path is Markdown."""
     return bool(names) and all(n.endswith(b".md") for n in names)
+
+
+def _doc_only(repo: Path, binding: Mapping[str, str]) -> bool:
+    return is_doc_only(diff_names(repo, binding["base_sha"], binding["head_sha"]))
 
 
 # ── edge: launch (U-HE-49; C-HE-21 §1 X6b) ───────────────────────────────────

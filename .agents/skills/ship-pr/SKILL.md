@@ -177,7 +177,10 @@ and the requested PR/head SHA. Do not interpolate an empty PR number, SHA, branc
    `main` that touches it without being a *verified* terminating refresh satisfies
    neither guard exception (`_lag_expected` wants the refresh shape; `_owed_lag` requires
    HEAD *not* to touch the file), so main CI hard-fails `ROADMAP_STATUS_DRIFT`.
-4. Archive the SUPERSEDED round (N-1) inside the substantive content PR:
+4. Steps 4–6 govern a legacy landing. `tools/merge_door.py` selects the `trial` profile
+   for an arc only under a published activation of the tracked policy (WS-11). A trial
+   landing has no terminating refresh and skips steps 4–6. For a legacy landing, archive
+   the SUPERSEDED round (N-1) inside the substantive content PR:
    `python3 tools/roadmap_status_refresh.py --archive-superseded`. It reads the
    most recent no-longer-live round from the head's git history and appends it to
    `.harness/roadmap-next-action-archive.md` as `Prior`. Archive-only write, so
@@ -197,7 +200,8 @@ and the requested PR/head SHA. Do not interpolate an empty PR number, SHA, branc
 6. Land the terminating refresh as the immediate next commit/PR. Its title starts exactly
    `ops: roadmap status refresh ` and its closed changed-file set is only
    `.harness/roadmap_status.md`. Do not recurse on a terminating refresh.
-7. Wait for the refresh merge's own main CI to be green and fast-forward local `main`.
+7. For a legacy landing, wait for the refresh merge's own main CI to be green. For either
+   profile, fast-forward local `main`.
    Order the arc exit report before removing the arc worktree and pruning the topic branch.
    The ledger itself is no longer at risk from disposition — since U-HE-29 it is the SHARED
    venue (`$(loop_status_path)`; default `~/.gstack/projects/arhugula-v2/loop_status.md`),

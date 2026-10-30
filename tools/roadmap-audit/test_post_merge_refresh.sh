@@ -18,6 +18,18 @@ REPO="$(mktemp -d)"
 { [ -n "$REPO" ] && [ -d "$REPO" ]; } || { echo "FATAL: mktemp -d failed"; exit 1; }
 trap 'rm -rf "$REPO"' EXIT
 
+# WO-U23: the hook reads the refresh rule through the guard beside it, so the trial and
+# unreadable cases run a copy of the hook whose sibling guard is a stub.
+STUB="$(mktemp -d)"
+trap 'rm -rf "$REPO" "$STUB"' EXIT
+stub_hook() { # $1=stub guard body; echoes the copied hook path
+  rm -rf "$STUB/tools"; mkdir -p "$STUB/tools/hooks" "$STUB/tools/roadmap-audit"
+  cp "$SCRIPT_DIR/../hooks/lib.sh" "$STUB/tools/hooks/"
+  cp "$HOOK" "$STUB/tools/roadmap-audit/"
+  printf '%s\n' "$1" > "$STUB/tools/codex_context_guard.py"
+  printf '%s' "$STUB/tools/roadmap-audit/$(basename "$HOOK")"
+}
+
 git -C "$REPO" init -q -b main
 git -C "$REPO" config user.email t@t.t
 git -C "$REPO" config user.name t
@@ -85,6 +97,23 @@ if printf '%s' "$OUT" | grep -q "substantive merge detected" \
   ok "substantive advance emits reminder with computed hash"
 else
   bad "substantive advance did not emit expected reminder: $OUT"
+fi
+
+# 4b) WO-U23 trial — under an activation of the tracked policy the door rules on the
+#     landing's refresh, so no refresh is owed; an unreadable rule keeps the reminder.
+TRIAL_HOOK=$(stub_hook 'print("trial")')
+OUT=$(printf '%s' "$MERGE_CMD" | CLAUDE_PROJECT_DIR="$REPO" POST_MERGE_REFRESH_REF="$C2" bash "$TRIAL_HOOK")
+if printf '%s' "$OUT" | grep -q "trial profile is active" && ! printf '%s' "$OUT" | grep -q "refresh is owed per"; then
+  ok "trial rule: substantive merge owes no refresh"
+else
+  bad "trial rule still owed a refresh: $OUT"
+fi
+FAIL_HOOK=$(stub_hook 'raise SystemExit("unreadable")')
+OUT=$(printf '%s' "$MERGE_CMD" | CLAUDE_PROJECT_DIR="$REPO" POST_MERGE_REFRESH_REF="$C2" bash "$FAIL_HOOK")
+if printf '%s' "$OUT" | grep -q "refresh is owed per.*refresh rule unreadable; legacy kept"; then
+  ok "unreadable rule keeps the legacy reminder and names the failure"
+else
+  bad "unreadable rule did not keep the legacy reminder: $OUT"
 fi
 
 # 5) [P1 regression — Codex finding] hash inputs (FORKS/BATCH) must come from the

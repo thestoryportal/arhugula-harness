@@ -111,6 +111,7 @@ class GuardState:
     latest_retirement_batch: str
     lag_expected: bool
     owed_lag: bool
+    refresh_rule: str  # workflow_policy.RefreshRule: `legacy` or `trial`
 
 
 @dataclass(frozen=True)
@@ -371,6 +372,7 @@ def write_checkpoint(state: GuardState, *, label: str, findings: list[Finding]) 
         "latest_retirement_batch": state.latest_retirement_batch,
         "lag_expected": state.lag_expected,
         "owed_lag": state.owed_lag,
+        "refresh_rule": state.refresh_rule,
         "findings": [f.__dict__ for f in findings],
     }
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -442,7 +444,7 @@ def _lag_expected(root: Path) -> bool:
     return _is_verified_refresh_point(root, "HEAD")
 
 
-def _owed_lag(root: Path) -> bool:
+def _owed_lag(root: Path, *, trial_membership: bool) -> bool:
     """True when HEAD does NOT touch roadmap_status.md and HEAD's parent is a
     verified terminating-refresh point. This is the "refresh owed" case: the
     very next content commit after a refresh still (correctly, unavoidably)
@@ -462,13 +464,91 @@ def _owed_lag(root: Path) -> bool:
     unrelated content — it must qualify as a refresh entirely on its own merits
     via `_lag_expected`/`_is_verified_refresh_point`, never by riding its
     parent's owed-lag allowance.
+
+    `trial_membership` is the same caller gate: only a `--allow-roadmap-drift` run walks back
+    through tracked trial landings (`_owes_no_refresh`); every other caller keeps the one-step
+    legacy reading and never loads the canonical review-record contract.
     """
     parents = _out(["git", "rev-list", "--parents", "-n", "1", "HEAD"], cwd=root).split()
     if len(parents) < 2:
         return False
     if ".harness/roadmap_status.md" in _changed_files(root, base_ref=parents[1], head_ref="HEAD"):
         return False
-    return _is_verified_refresh_point(root, parents[1])
+    return _owes_no_refresh(root, parents[1], trial_membership=trial_membership)
+
+
+def _owes_no_refresh(root: Path, ref: str, *, trial_membership: bool) -> bool:
+    """True when the roadmap status at `ref` owes no refresh: `ref` is a verified refresh
+    point or, for a trial-membership caller, a tracked trial landing over one, through any
+    number of such landings.
+
+    A trial landing has no terminating refresh (WS-11), so a second consecutive one would
+    otherwise sit two commits past the last refresh and fail its own-main run. CI cannot read
+    the private activation receipt, so it trusts tracked membership (WS-01 §3.1), while local
+    callers keep the receipt-bound `refresh_rule` and still force a refresh the legacy rule
+    owes."""
+    while not _is_verified_refresh_point(root, ref):
+        parent = _out(["git", "rev-parse", "--verify", "--quiet", f"{ref}^"], cwd=root)
+        if not (trial_membership and parent and _is_tracked_trial_landing(root, ref, parent)):
+            return False
+        ref = parent
+    return True
+
+
+_GATE_LOG_ROWS = ".harness/merge-gate-log.jsonl"
+_WORKFLOW_POLICY = ".harness/workflow-policy.json"
+_REVIEW_VERDICTS = ("finding", "no_finding")
+
+
+def _blob(root: Path, ref: str, path: str) -> bytes | None:
+    proc = _run_bytes(["git", "show", f"{ref}:{path}"], cwd=root)
+    return proc.stdout if proc.returncode == 0 else None
+
+
+def _appended_review_arcs(before: bytes, after: bytes) -> frozenset[str]:
+    """[LAW:single-enforcer] The arcs an append-only extension of the canonical review log
+    binds, when the writers' own contract (`finding_record.admit_appended`) admits every
+    appended row and at least one is a review verdict. Empty for a rewritten log, an
+    unparseable line, a row a writer would refuse, or an append with no verdict.
+
+    The contract needs jsonschema, so it loads only here: a `--allow-roadmap-drift` run whose
+    policy enrolls an arc, which CI runs in the workspace environment. Every other caller
+    stays stdlib-only."""
+    import finding_record
+
+    if not after.startswith(before):
+        return frozenset()
+    try:
+        prior, rows = (
+            [json.loads(line) for line in blob.splitlines() if line.strip()]
+            for blob in (before, after[len(before) :])
+        )
+        finding_record.admit_appended(prior, rows)
+    except ValueError:  # a JSON decode error or the contract's RecordError
+        return frozenset()
+    reviewed = any(row["record_kind"] in _REVIEW_VERDICTS for row in rows)
+    return frozenset(row["arc_id"] for row in rows) if reviewed else frozenset()
+
+
+def _is_tracked_trial_landing(root: Path, ref: str, parent: str) -> bool:
+    """[LAW:effects-at-boundaries] the Git facts for `workflow_policy.tracked_trial_landing`:
+    the squash landing's appended review rows and the policy at its own revision. A policy
+    that enrolls no arc decides alone, before the review-record contract loads."""
+    _tools_package()
+    from tools import workflow_policy
+
+    policy = workflow_policy.load_policy(_blob(root, ref, _WORKFLOW_POLICY))
+    enrolls = isinstance(policy, workflow_policy.WorkflowPolicy) and bool(policy.eligible_units)
+    merges = len(_out(["git", "rev-list", "--parents", "-n", "1", ref], cwd=root).split()) != 2
+    after = _blob(root, ref, _GATE_LOG_ROWS)
+    return not (
+        not enrolls
+        or merges
+        or after is None
+        or ".harness/roadmap_status.md" in _changed_files(root, base_ref=parent, head_ref=ref)
+    ) and workflow_policy.tracked_trial_landing(
+        policy, _appended_review_arcs(_blob(root, parent, _GATE_LOG_ROWS) or b"", after)
+    )
 
 
 def _is_verified_refresh_point(root: Path, ref: str) -> bool:
@@ -563,6 +643,7 @@ def derive(
     base_ref: str = "",
     head_ref: str = "",
     include_branch_diff: bool = False,
+    trial_membership: bool = False,
 ) -> GuardState:
     root = repo_root(root or Path.cwd())
     head8 = _out(["git", "rev-parse", "--short=8", "HEAD"], cwd=root)
@@ -596,7 +677,8 @@ def derive(
         fork_doc_count=forks,
         latest_retirement_batch=batch,
         lag_expected=_lag_expected(root),
-        owed_lag=_owed_lag(root),
+        owed_lag=_owed_lag(root, trial_membership=trial_membership),
+        refresh_rule=observe_refresh_rule(),
     )
 
 
@@ -1510,7 +1592,19 @@ def validate(
         # context can distinguish "CI post-merge smoke, pass clean" from
         # "session-start/preflight, force the owed refresh first."
         ci_owed_lag = allow_roadmap_drift and state.owed_lag
-        if state.branch == state.default_branch and not state.lag_expected and not ci_owed_lag:
+        if state.refresh_rule == "trial":
+            # [LAW:single-enforcer] under an activation of the tracked policy the merge door
+            # rules on each landing's refresh (WS-11); the pinned hash no longer owes one.
+            findings.append(
+                Finding(
+                    "warn",
+                    "ROADMAP_STATUS_TRIAL_UNPINNED",
+                    "roadmap_status.md hash differs, and the trial profile is active: the merge "
+                    "door gives each legacy landing its terminating refresh and a trial landing "
+                    "none, so no refresh is owed here.",
+                )
+            )
+        elif state.branch == state.default_branch and not state.lag_expected and not ci_owed_lag:
             findings.append(
                 Finding(
                     "hard",
@@ -1526,8 +1620,9 @@ def validate(
                     "ROADMAP_STATUS_LAG_EXPECTED",
                     "roadmap_status.md hash differs because HEAD is a verified terminating "
                     "roadmap refresh (tolerated for every caller), or HEAD is one commit past "
-                    "one and the caller explicitly allowed roadmap drift (CI post-merge push "
-                    "only) — a commit can never record its own not-yet-computed SHA; the next "
+                    "one, or past tracked trial landings over one, and the caller explicitly "
+                    "allowed roadmap drift (CI post-merge push only) — a commit can never "
+                    "record its own not-yet-computed SHA and a trial landing owes none; the next "
                     "terminating refresh should reconcile the lag.",
                 )
             )
@@ -1691,16 +1786,31 @@ def _json_report(state: GuardState, findings: list[Finding]) -> str:
     )
 
 
-def _workflow(argv: list[str]) -> int:
-    """WO-U05 `workflow status|check` (spec WS-06); its own JSON and 0/2/3/4/5 exits."""
+def _tools_package() -> None:
     # Run as a script, only tools/ is on sys.path; the WO modules import as the `tools`
     # namespace package from the repository root, as the test suite does.
     root = str(Path(__file__).resolve().parent.parent)
     if root not in sys.path:
         sys.path.insert(0, root)
+
+
+def _workflow(argv: list[str]) -> int:
+    """WO-U05 `workflow status|check` (spec WS-06); its own JSON and 0/2/3/4/5 exits."""
+    _tools_package()
     from tools import workflow_boundaries
 
     return workflow_boundaries.main(argv)
+
+
+def observe_refresh_rule() -> str:
+    """[LAW:effects-at-boundaries] the tracked policy and canonical activation receipt,
+    judged by `workflow_policy.refresh_rule` alone (WO-U23)."""
+    _tools_package()
+    from tools import workflow_boundaries, workflow_policy
+
+    return workflow_policy.refresh_rule(
+        workflow_boundaries.observe_policy(), workflow_policy.read_activation()
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1709,6 +1819,10 @@ def main(argv: list[str] | None = None) -> int:
     # the existing modes keep their choices, flags and exits unchanged.
     if args[:1] == ["workflow"]:
         return _workflow(args[1:])
+    if args == ["refresh-rule"]:
+        # the shell hooks' one reading of the refresh rule (tools/hooks/lib.sh)
+        print(observe_refresh_rule())
+        return 0
     parser = argparse.ArgumentParser(description="Codex deterministic context guard.")
     parser.add_argument(
         "mode",
@@ -1775,6 +1889,8 @@ def main(argv: list[str] | None = None) -> int:
         base_ref=args.base_ref,
         head_ref=args.head_ref,
         include_branch_diff=args.include_branch_diff,
+        # [LAW:single-enforcer] one caller gate: the drift allowance owns trial membership too
+        trial_membership=args.allow_roadmap_drift,
     )
     if args.mode == "credential-gate":
         try:

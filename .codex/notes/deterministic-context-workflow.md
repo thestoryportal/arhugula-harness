@@ -217,9 +217,9 @@ and context-check recipes pass `--include-branch-diff`, so a clean feature
 worktree is still checked against committed changes since the merge-base with
 the default branch.
 
-`codex-context-check-ci` runs the guard the way CI does: `check` with explicit
-`--base-ref` / `--head-ref` set to the SHAs of `origin/main` and `HEAD`, each read
-once, and `--allow-roadmap-drift`, no checkpoint. It refuses a branch that does not contain `origin/main`, because CI's
+`codex-context-check-ci` runs the guard the way CI does: under `uv run python`, `check`
+with explicit `--base-ref` / `--head-ref` set to the SHAs of `origin/main` and `HEAD`,
+each read once, and `--allow-roadmap-drift`, no checkpoint. It refuses a branch that does not contain `origin/main`, because CI's
 two-endpoint diff would then include main's newer commits; fetch and rebase first.
 It is the Claude lane's pre-push step (C-HE-33). The Codex ship flow does not run it:
 inside an active Codex autonomous loop the pre-closeout gates are bound to the
@@ -237,7 +237,8 @@ and on the default branch it downgrades ONLY the one-commit "owed lag" case
 (HEAD's parent, not HEAD itself, is a verified terminating refresh — the
 post-merge CI push scenario). It cannot mask arbitrary default-branch
 roadmap_status.md drift (two-or-more-commit accumulated drift still hard-fails
-even with the flag). HEAD itself being the verified refresh is tolerated
+even with the flag, unless every commit past the refresh is a tracked trial landing
+whose review rows `finding_record.admit_appended` admits — WO-U23, CLAUDE.md §12.2). HEAD itself being the verified refresh is tolerated
 unconditionally, for every caller, flag or no flag — see `_lag_expected()` vs
 `_owed_lag()` in `tools/codex_context_guard.py`. When `gh pr list` is
 unavailable, the guard emits `OPEN_PRS_UNAVAILABLE` instead of silently

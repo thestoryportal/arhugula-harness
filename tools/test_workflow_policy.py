@@ -27,6 +27,7 @@ from tools.workflow_policy import (
     parse_activation,
     parse_policy,
     read_activation,
+    refresh_rule,
     select_profile,
 )
 
@@ -269,3 +270,22 @@ def test_tracked_policy_is_the_exact_inactive_trial_profile() -> None:
 
 def test_a_policy_edit_never_takes_the_bookkeeping_fast_path() -> None:
     assert ci_bookkeeping_diff.classify([".harness/workflow-policy.json"]) is False
+
+
+@pytest.mark.parametrize(
+    ("policy", "activation", "rule"),
+    [
+        # WO-U23: only a receipt that activates this exact policy hands the refresh to the
+        # door's per-landing selection; everything else keeps every enforcer on legacy
+        (POLICY, ACTIVE, "trial"),
+        (POLICY, ActivationAbsent(), "legacy"),
+        (POLICY, ActivationDefect("activation: not JSON"), "legacy"),
+        (POLICY, parse_activation(_raw(_activation(policy_digest="d" * 64))), "legacy"),
+        (POLICY, parse_activation(_raw(_activation(policy_version=2))), "legacy"),
+        (PolicyDefect("policy: missing"), ACTIVE, "legacy"),
+    ],
+)
+def test_refresh_rule_is_trial_only_under_an_activation_of_this_policy(
+    policy, activation, rule
+) -> None:
+    assert refresh_rule(policy, activation) == rule

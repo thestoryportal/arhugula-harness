@@ -29,6 +29,23 @@ hook_review_isolated() {
   [ "${HARNESS_CODEX_REVIEW_ISOLATED:-}" = "1" ]
 }
 
+# The post-merge terminating-refresh rule (WO-U23, WS-11): `legacy` until a published
+# receipt activates the tracked workflow policy, then `trial`, under which the merge door
+# rules on each landing's refresh. The guard's `refresh-rule` is the one reading
+# (workflow_policy.refresh_rule). Echoes the rule; when it cannot be read, echoes the
+# stricter `legacy` and returns 1 so the caller names the failure in its context.
+# Usage: if RULE=$(hook_refresh_rule); then NOTE=""; else NOTE=" (...)"; fi
+hook_refresh_rule() {
+  local guard rule
+  guard="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/codex_context_guard.py"
+  if rule=$(python3 "$guard" refresh-rule 2>&1) && { [ "$rule" = legacy ] || [ "$rule" = trial ]; }; then
+    printf '%s' "$rule"
+    return 0
+  fi
+  printf 'legacy'
+  return 1
+}
+
 # Emit additionalContext JSON for a hook event and exit 0. Mirrors the original
 # hooks' shape. Usage: hook_emit <hookEventName> <context-string>
 hook_emit() {

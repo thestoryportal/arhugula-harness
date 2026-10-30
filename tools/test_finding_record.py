@@ -697,6 +697,7 @@ def _guard_state() -> cg.GuardState:
         latest_retirement_batch=".harness/phase-7d-retirement-events-batch-51.md",
         lag_expected=False,
         owed_lag=False,
+        refresh_rule="legacy",
     )
 
 

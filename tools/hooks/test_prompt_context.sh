@@ -13,6 +13,18 @@ bad() { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
 REPO="$(mktemp -d)"
 { [ -n "$REPO" ] && [ -d "$REPO" ]; } || { echo "FATAL: mktemp -d failed"; exit 1; }
 trap 'rm -rf "$REPO"' EXIT
+
+# WO-U23: the hook reads the refresh rule through the guard beside it, so the trial and
+# unreadable cases run a copy of the hook whose sibling guard is a stub.
+STUB="$(mktemp -d)"
+trap 'rm -rf "$REPO" "$STUB"' EXIT
+stub_hook() { # $1=stub guard body; echoes the copied hook path
+  rm -rf "$STUB/tools"; mkdir -p "$STUB/tools/hooks" "$STUB/tools/hooks"
+  cp "$SCRIPT_DIR/lib.sh" "$STUB/tools/hooks/"
+  cp "$HOOK" "$STUB/tools/hooks/"
+  printf '%s\n' "$1" > "$STUB/tools/codex_context_guard.py"
+  printf '%s' "$STUB/tools/hooks/$(basename "$HOOK")"
+}
 git -C "$REPO" init -q -b main; git -C "$REPO" config user.email t@t.t; git -C "$REPO" config user.name t
 mkdir -p "$REPO/.harness"
 git -C "$REPO" commit -q --allow-empty -m base
@@ -38,6 +50,13 @@ printf '%s' "$OUT" | grep -q "drift" && bad "false drift when HEAD matches" || o
 dash "deadbeef"
 OUT=$(run)
 printf '%s' "$OUT" | grep -q "possible drift" && ok "flags drift on HEAD mismatch" || bad "no drift flag: $OUT"
+
+# 2b) WO-U23 trial — the same mismatch under an activation of the tracked policy is not a
+#     refresh owed; an unreadable rule keeps the legacy flag.
+OUT=$(printf '%s' '{"hook_event_name":"UserPromptSubmit","prompt":"hi"}' | CLAUDE_PROJECT_DIR="$REPO" bash "$(stub_hook 'print("trial")')" | jq -r '.hookSpecificOutput.additionalContext // empty')
+printf '%s' "$OUT" | grep -q "drift" && bad "trial rule still flags drift: $OUT" || ok "trial rule: no drift flag ($OUT)"
+OUT=$(printf '%s' '{"hook_event_name":"UserPromptSubmit","prompt":"hi"}' | CLAUDE_PROJECT_DIR="$REPO" bash "$(stub_hook 'raise SystemExit("unreadable")')" | jq -r '.hookSpecificOutput.additionalContext // empty')
+printf '%s' "$OUT" | grep -q "possible drift" && ok "unreadable rule keeps the legacy flag" || bad "unreadable rule dropped the flag: $OUT"
 
 # 3) HEAD mismatch but last commit is a GENUINE terminating refresh (refresh title
 #    AND roadmap-status-only changed file) → no drift (§12.2.1 both-conditions).

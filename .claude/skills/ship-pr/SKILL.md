@@ -366,6 +366,9 @@ carries no block and is refused.
 
 ## Post-merge fixed-point refresh — CLAUDE.md §12.2 + §12.2.1
 
+This section governs a legacy landing. An arc that `tools/merge_door.py` selects `trial`
+(published activation only, CLAUDE.md §12.2 trial scope, WS-11) has no terminating refresh.
+
 **The mechanical half now rides the merge door.** The door's §4(viii) continuation above
 already ran `just roadmap-status`'s refresh, opened the terminating refresh PR, and merged
 it under the held lease — do NOT open a second refresh PR for the same landing (§12.2.1:

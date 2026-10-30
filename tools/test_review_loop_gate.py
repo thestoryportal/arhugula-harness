@@ -4457,3 +4457,14 @@ def test_metadata_correction_leaves_trial_decision_unchanged():
     original = _trial(rows)
     assert original.state == "changes_required" and original.blocking_findings == (fid,)
     assert _trial(corrected) == original
+
+
+def test_one_lens_closing_pass_completes_a_concern_complete_cycle_under_trial():
+    """WO-U23 O2: WS-09 retains the X9a lens obligations, and pass 3 is one lens. After passes
+    1 and 2 covered the whole concern map, a one-lens pass 3 closes the cycle; an incomplete
+    pass 1 still leaves its concerns missing, so the closing lens cannot stand in for them."""
+    one_lens = _trial_rows("3", producers=_LENSES3[:1])
+    assert _trial(_trial_rows("1") + _trial_rows("2") + one_lens).state == "approved"
+    partial_first = _trial_rows("1", producers=[LOOP_PRODUCER, *_LENSES3[:2]])
+    d = _trial(partial_first + _trial_rows("2") + one_lens)
+    assert d.state != "approved" and rlg._WITNESS_LENS in d.missing_concerns
