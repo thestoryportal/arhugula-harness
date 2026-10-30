@@ -31,6 +31,14 @@ TRIAL = wp.ProfileSelection("trial", (), ())
 HELD = wp.ProfileSelection("held", ("authority_unavailable",), ("admission",))
 
 
+@pytest.fixture(autouse=True)
+def _unread_lit(monkeypatch):
+    """No in-process test reads the live canonical LIT or native admission: both stay unread
+    unless one observes them."""
+    monkeypatch.setattr(md.wf, "observe_trial_relation", lambda *_: "unknown")
+    monkeypatch.setattr(md.wf, "observe_admission", lambda *_: "unknown")
+
+
 @pytest.fixture
 def door(tmp_path, monkeypatch):
     q = tmp_path / "queue"
@@ -3624,12 +3632,66 @@ def test_profile_verb_prints_the_selection_or_holds(selected, capsys):
     assert md.main(["profile", "--arc-id", "pr-3"]) == 6
 
 
+def test_landing_reads_the_landed_units_canonical_facts(monkeypatch):
+    """WO-U24: the door observes the unit an arc lands in the canonical LIT and its native
+    admission for integration; an enrolled unit with a confirmed relation holds until its
+    integration is admitted. Pass-2 F1: after activation an ordinary arc the policy does not
+    enroll (`pr-7`, which names no LIT issue) lands legacy without either read."""
+    unit = "arhugula-harness-trial-193.7x7.5tr"
+    policy = md.observe_policy()
+    assert isinstance(policy, wp.WorkflowPolicy)
+    enrolled = wp.parse_policy(
+        md.POLICY_PATH.read_bytes().replace(
+            b'"eligible_units": []',
+            b'"eligible_units": [{"unit": "%s", "arc": "pr-1"}]' % unit.encode(),
+        )
+    )
+    active = wp.Activation(
+        enrolled.policy_id, enrolled.policy_version, enrolled.digest, "1" * 40, "2" * 40,
+        "3" * 64, "cmt-x", "legacy",
+    )  # fmt: skip
+    relations = {unit: "confirmed"}
+    admissions = ["unknown", "confirmed"]
+    observed, admitted = [], []
+    monkeypatch.setattr(md, "observe_policy", lambda: enrolled)
+    monkeypatch.setattr(md.wp, "read_activation", lambda: active)
+    monkeypatch.setattr(
+        md.wf,
+        "observe_trial_relation",
+        lambda store, landed, root: observed.append((store, landed, root)) or relations[landed],
+    )
+    monkeypatch.setattr(
+        md.wf,
+        "observe_admission",
+        lambda root, landed, operation: (
+            admitted.append((root, landed, operation)) or admissions.pop(0)
+        ),
+    )
+
+    assert md.observe_landing_profile("pr-1") == HELD
+    assert md.observe_landing_profile("pr-1") == TRIAL
+    assert md.observe_landing_profile("pr-7") == LEGACY
+    assert observed == [
+        (wp.CANONICAL_ROOT, unit, wp.TRIAL_ROOT),
+        (wp.CANONICAL_ROOT, unit, wp.TRIAL_ROOT),
+    ]
+    assert admitted == [
+        (wp.CANONICAL_ROOT, unit, "integration"),
+        (wp.CANONICAL_ROOT, unit, "integration"),
+    ]
+
+
 def test_no_refresh_flag_cannot_grant_eligibility(door, monkeypatch):
     """Eligibility is the WO-U03 selection over the tracked policy and the canonical
     activation; `--no-refresh` (with or without its env gate) never selects `trial`."""
     policy = md.observe_policy()
     assert isinstance(policy, wp.WorkflowPolicy)
-    assert md.landing_profile(policy, wp.ActivationAbsent(), "pr-1").kind == "legacy"
+    assert (
+        md.landing_profile(
+            policy, wp.ActivationAbsent(), "pr-1", lambda _: ("confirmed", "confirmed")
+        ).kind
+        == "legacy"
+    )
     enrolled = wp.parse_policy(
         md.POLICY_PATH.read_bytes().replace(
             b'"eligible_units": []',
@@ -3646,10 +3708,20 @@ def test_no_refresh_flag_cannot_grant_eligibility(door, monkeypatch):
         "cmt-x",
         "legacy",
     )
-    # unread LIT relation/admission hold enrolled work rather than passing it as trial
-    held = md.landing_profile(enrolled, active, "pr-1")
-    assert held.kind == "held" and "authority_unavailable" in held.reasons
-    assert md.landing_profile(enrolled, active, "pr-9").kind == "held"
+    # an unread admission holds enrolled work even under a confirmed LIT relation
+    held = md.landing_profile(enrolled, active, "pr-1", lambda _: ("confirmed", "unknown"))
+    assert held.kind == "held" and held.unknown == ("admission",)
+    # an arc the readable policy does not enroll is not trial work, whatever LIT would say
+    assert md.landing_profile(enrolled, active, "pr-9", lambda _: ("confirmed", "confirmed")) == (
+        LEGACY
+    )
+    # an unreadable policy cannot tell, so the arc holds under its own name
+    assert (
+        md.landing_profile(
+            wp.PolicyDefect("unreadable"), active, "pr-9", lambda _: ("unknown", "unknown")
+        ).kind
+        == "held"
+    )
 
     observed = []
     monkeypatch.setattr(md, "observe_landing_profile", lambda arc: observed.append(arc) or LEGACY)

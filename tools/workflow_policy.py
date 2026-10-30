@@ -224,9 +224,14 @@ def _eligible(value: object) -> tuple[EligibleUnit, ...]:
         entry = _object(item, prefix.rstrip("."))
         _exact_keys(entry, ("unit", "arc"), prefix)
         unit = _matching(entry["unit"], _UNIT_ID, prefix + "unit")
+        arc = _matching(entry["arc"], _ARC_ID, prefix + "arc")
+        # [LAW:types-are-the-program] enrollment is one-to-one: an arc or unit named twice
+        # would leave its readers choosing between two units' authority.
         if any(existing.unit == unit for existing in units):
             raise PolicyError(prefix + "unit", "duplicate enrollment")
-        units.append(EligibleUnit(unit, _matching(entry["arc"], _ARC_ID, prefix + "arc")))
+        if any(existing.arc == arc for existing in units):
+            raise PolicyError(prefix + "arc", "duplicate enrollment")
+        units.append(EligibleUnit(unit, arc))
     return tuple(units)
 
 
@@ -344,6 +349,17 @@ def tracked_trial_landing(policy: WorkflowPolicy | PolicyDefect, arcs: frozenset
         and len(arcs) == 1
         and any(entry.arc in arcs for entry in policy.eligible_units)
     )
+
+
+def arc_unit(policy: WorkflowPolicy | PolicyDefect, arc: str) -> str | None:
+    """[LAW:one-source-of-truth] The LIT unit work on `arc` is selected as. The tracked policy
+    is the only record binding an arc to a unit: an enrolled arc names its unit, and an arc a
+    readable policy does not enroll is not trial work, so it has none and keeps the legacy
+    workflow (WS-01 §3.2 missing membership). An unreadable policy cannot say, so the arc
+    stands for itself, which `select_profile` holds."""
+    if isinstance(policy, PolicyDefect):
+        return arc
+    return next((entry.unit for entry in policy.eligible_units if entry.arc == arc), None)
 
 
 def _enrolled_selection(

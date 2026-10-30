@@ -11,6 +11,7 @@ guard modes keep their contract.
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 import subprocess
@@ -38,7 +39,16 @@ from tools.workflow_boundaries import (
     requirements,
 )
 from tools.workflow_evidence import Checker, InputManifest, check_receipt
-from tools.workflow_policy import ActivationAbsent, ProfileSelection, WorkflowPolicy, load_policy
+from tools.workflow_policy import (
+    TRIAL_ROOT,
+    Activation,
+    ActivationAbsent,
+    EligibleUnit,
+    PolicyDefect,
+    ProfileSelection,
+    WorkflowPolicy,
+    load_policy,
+)
 
 UNIT = "arhugula-harness-trial-193.7x7.fra"
 REPO = "thestoryportal/arhugula-harness"
@@ -236,6 +246,116 @@ def test_only_the_trial_profile_can_pass_a_boundary(selection, reasons):
     request = parse_request(UNIT, "develop", None)
     decision = evaluate_boundary(request, facts(request, selection=selection))
     assert (decision.result, decision.reasons, decision.record_type) == ("held", reasons, None)
+
+
+@pytest.fixture(autouse=True)
+def _unread_lit(monkeypatch, tmp_path):
+    """No test reads the live canonical LIT, native admission or this checkout's loop ledger:
+    all stay unread unless one observes them."""
+    monkeypatch.setattr(wb, "observe_trial_relation", lambda *_: "unknown")
+    monkeypatch.setattr(wb, "observe_admission", lambda *_: "unknown")
+    monkeypatch.setattr(wb, "CHECKOUT", tmp_path)
+
+
+def _ledger(raw: bytes) -> None:
+    """Write the loop ledger of the (isolated) checkout the boundary check runs from."""
+    path = wb.CHECKOUT / wb.LOOP_STATE
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(raw)
+
+
+def _enrolled_and_active(monkeypatch) -> WorkflowPolicy:
+    parsed = load_policy(TEST_POLICY)
+    assert isinstance(parsed, WorkflowPolicy)
+    policy = dataclasses.replace(parsed, eligible_units=(EligibleUnit(UNIT, "wo-fra"),))
+    active = Activation(
+        policy.policy_id, policy.policy_version, policy.digest, "1" * 40, "2" * 40, "3" * 64,
+        "cmt-x", "legacy",
+    )  # fmt: skip
+    monkeypatch.setattr(wb, "read_activation", lambda: active)
+    return policy
+
+
+@pytest.mark.parametrize(
+    ("relation", "selection"),
+    [
+        ("contradicted", ProfileSelection("legacy", (), ())),
+        ("confirmed", ProfileSelection("held", ("policy_mismatch",), ())),
+        (
+            "unknown",
+            ProfileSelection(
+                "held", ("policy_mismatch", "authority_unavailable"), ("trial_relation",)
+            ),
+        ),
+    ],
+)
+def test_boundary_selection_reads_the_canonical_lit_relation(monkeypatch, relation, selection):
+    # WO-U24: outside a readable policy only LIT's verified unrelatedness keeps legacy
+    observed = []
+    monkeypatch.setattr(
+        wb,
+        "observe_trial_relation",
+        lambda store, unit, root: observed.append((store, unit, root)) or relation,
+    )
+    assert wb.observe_selection(PolicyDefect("unreadable"), UNIT, REPO, "develop") == selection
+    assert observed == [(wb.CANONICAL_ROOT, UNIT, TRIAL_ROOT)]
+
+
+@pytest.mark.parametrize(
+    ("boundary", "operation"),
+    [
+        ("prepare", "implementation"),
+        ("develop", "implementation"),
+        ("publish", "integration"),
+        ("integrate", "integration"),
+    ],
+)
+@pytest.mark.parametrize(
+    ("admission", "selection"),
+    [
+        ("unknown", ProfileSelection("held", ("authority_unavailable",), ("admission",))),
+        ("contradicted", ProfileSelection("held", ("authority_changed",), ())),
+        ("confirmed", ProfileSelection("trial", (), ())),
+    ],
+)
+def test_boundary_selection_reads_the_admission_of_the_boundarys_operation(
+    monkeypatch, boundary, operation, admission, selection
+):
+    # WO-U24: the author is admitted to prepare/develop, Buford to publish/integrate; with the
+    # enrolled arc in the checkout's ledger and a confirmed relation, admission decides.
+    policy = _enrolled_and_active(monkeypatch)
+    _ledger(b'{"arc_id": "wo-fra"}')
+    monkeypatch.setattr(wb, "observe_trial_relation", lambda *_: "confirmed")
+    admitted = []
+    monkeypatch.setattr(
+        wb,
+        "observe_admission",
+        lambda root, unit, op: admitted.append((root, unit, op)) or admission,
+    )
+    assert wb.observe_selection(policy, UNIT, REPO, boundary) == selection
+    assert admitted == [(wb.CANONICAL_ROOT, UNIT, operation)]
+
+
+@pytest.mark.parametrize(
+    ("ledger", "selection"),
+    [
+        (None, ProfileSelection("held", ("authority_unavailable",), ("arc",))),
+        (b"not json", ProfileSelection("held", ("authority_unavailable",), ("arc",))),
+        (b"[]", ProfileSelection("held", ("authority_unavailable",), ("arc",))),
+        (b'{"arc_id": ""}', ProfileSelection("held", ("authority_unavailable",), ("arc",))),
+        (b'{"arc_id": "wo-other"}', ProfileSelection("held", ("identity_mismatch",), ())),
+        (b'{"arc_id": "wo-fra"}', ProfileSelection("trial", (), ())),
+    ],
+)
+def test_boundary_selection_binds_the_checkouts_loop_arc(monkeypatch, ledger, selection):
+    # WO-U24 pass-2 F3: the arc is the checkout's loop ledger, checked against the arc the
+    # policy enrolls for the unit; no readable ledger leaves the arc unknown and holds.
+    policy = _enrolled_and_active(monkeypatch)
+    if ledger is not None:
+        _ledger(ledger)
+    monkeypatch.setattr(wb, "observe_trial_relation", lambda *_: "confirmed")
+    monkeypatch.setattr(wb, "observe_admission", lambda *_: "confirmed")
+    assert wb.observe_selection(policy, UNIT, REPO, "develop") == selection
 
 
 # --- CLI fixtures -----------------------------------------------------------------------

@@ -40,10 +40,18 @@ from types import MappingProxyType
 from typing import Literal, NoReturn, cast
 
 from tools.workflow_evidence import ReceiptDefect, load_receipt
+from tools.workflow_facts import (
+    LOOP_STATE,
+    Operation,
+    loop_arc,
+    observe_admission,
+    observe_trial_relation,
+)
 from tools.workflow_policy import (
     CANONICAL_ROOT,
     POLICY_VERSION,
     PROFILE_ID,
+    TRIAL_ROOT,
     PolicyDefect,
     ProfileSelection,
     SelectionFacts,
@@ -55,7 +63,9 @@ from tools.workflow_policy import (
 )
 
 SCHEMA_VERSION = 1
-POLICY_PATH = Path(__file__).resolve().parent.parent / ".harness" / "workflow-policy.json"
+# The checkout this module runs from: its tracked policy and its loop ledger decide here.
+CHECKOUT = Path(__file__).resolve().parent.parent
+POLICY_PATH = CHECKOUT / ".harness" / "workflow-policy.json"
 RECEIPT_ROOT = CANONICAL_ROOT / ".local" / "buford-loop" / "workflow-receipts"
 
 Boundary = Literal["prepare", "develop", "publish", "integrate"]
@@ -83,6 +93,12 @@ ReasonCode = Literal[
 ]
 
 BOUNDARIES: tuple[Boundary, ...] = ("prepare", "develop", "publish", "integrate")
+# The author implements through prepare/develop; Buford, the sole integrator, publishes and
+# integrates. Each boundary is admitted for the session that acts there.
+OPERATION: Mapping[Boundary, Operation] = MappingProxyType(
+    {"prepare": "implementation", "develop": "implementation",
+     "publish": "integration", "integrate": "integration"}
+)  # fmt: skip
 _UNIT = re.compile(r"[a-z0-9][a-z0-9._-]*")
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 _GIT_OID = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
@@ -582,18 +598,28 @@ def observe_policy() -> WorkflowPolicy | PolicyDefect:
     return load_policy(raw)
 
 
+def observe_arc() -> str | None:
+    """[LAW:effects-at-boundaries] the arc this checkout's loop ledger names. `select_profile`
+    compares it with the arc the policy enrolls for the unit; a missing or malformed ledger
+    leaves it unknown, which holds enrolled work."""
+    try:
+        return loop_arc((CHECKOUT / LOOP_STATE).read_bytes())
+    except (OSError, ValueError):
+        return None
+
+
 def observe_selection(
-    policy: WorkflowPolicy | PolicyDefect, unit: str, repository: str
+    policy: WorkflowPolicy | PolicyDefect, unit: str, repository: str, boundary: Boundary
 ) -> ProfileSelection:
-    """[LAW:effects-at-boundaries] the WP-02 selection from the policy and canonical
-    activation. LIT trial relation and native admission have no adapter yet, so they stay
-    unknown and enrolled work holds rather than passing on an unread authority."""
+    """[LAW:effects-at-boundaries] the WP-02 selection from the policy, the arc this
+    checkout's loop ledger names, the unit's canonical LIT trial relation, its native
+    admission for the operation the boundary belongs to and the canonical activation."""
     facts = SelectionFacts(
         repository=repository,
         unit=unit,
-        arc=None,
-        trial_relation="unknown",
-        admission="unknown",
+        arc=observe_arc(),
+        trial_relation=observe_trial_relation(CANONICAL_ROOT, unit, TRIAL_ROOT),
+        admission=observe_admission(CANONICAL_ROOT, unit, OPERATION[boundary]),
         activation=read_activation(),
     )
     return select_profile(policy, facts)
@@ -609,7 +635,7 @@ def observe_facts(
     new check and for re-deciding a stored receipt alike."""
     rules = parse_check_rules(policy)
     return BoundaryFacts(
-        selection=observe_selection(policy, request.unit, subject.repository),
+        selection=observe_selection(policy, request.unit, subject.repository, request.boundary),
         subject=subject,
         observations={
             claim.requirement.name: observe(claim, request, subject, rules) for claim in claims
