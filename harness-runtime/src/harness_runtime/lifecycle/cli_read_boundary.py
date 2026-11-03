@@ -113,12 +113,11 @@ def handled_access_fs(abi: int) -> int:
     return mask
 
 
-def require_supported_abi(query: Callable[[], int]) -> int:
+def require_supported_abi(machine: str, query: Callable[[], int]) -> int:
     """Return the Landlock ABI, or refuse an unsupported architecture, kernel or ABI.
 
     ``query`` returns the ABI version, or ``-errno`` when the kernel refuses the query.
     """
-    machine = platform.machine()
     if machine not in _SUPPORTED_MACHINES:
         raise LauncherRefusalError(f"Landlock syscalls unverified on architecture {machine!r}")
     abi = query()
@@ -356,10 +355,10 @@ def _add_rule(libc: ctypes.CDLL, ruleset: int, fd: int, rights: int) -> None:
 
 
 def _restrict(
-    libc: ctypes.CDLL, spec: RulesetSpec, policy: _GrantPolicy, exe_fd: int, abi: int
+    libc: ctypes.CDLL, spec: RulesetSpec, policy: _GrantPolicy, exe_fd: int, handled_fs: int
 ) -> None:
     attr = _RulesetAttr(
-        handled_access_fs=handled_access_fs(abi),
+        handled_access_fs=handled_fs,
         handled_access_net=0,  # network is deliberately NOT handled (HTTPS stays reachable)
         scoped=_SCOPE_ABSTRACT_UNIX_SOCKET | _SCOPE_SIGNAL,
     )
@@ -401,17 +400,25 @@ def _refuse(reason: str) -> NoReturn:
     os._exit(REFUSAL_EXIT)
 
 
-def main(argv: Sequence[str]) -> NoReturn:
+def main(
+    argv: Sequence[str],
+    *,
+    machine: Callable[[], str] = platform.machine,
+    query_abi: Callable[[], int] = _query_abi,
+    handled: Callable[[int], int] = handled_access_fs,
+) -> NoReturn:
+    """The launcher entry point. ``__main__`` passes only ``argv``; the keyword seams let a
+    source canary run this same path with an injected host report or control ruleset."""
     try:
         if len(argv) < 3 or argv[1] != "--":
             raise LauncherRefusalError("usage: <spec json> -- <target argv>")
         libc = _libc()
         _close_inherited_descriptors(libc)  # before any rule or executable descriptor exists
         spec = RulesetSpec.from_json(argv[0])
-        abi = require_supported_abi(_query_abi)
+        abi = require_supported_abi(machine(), query_abi)
         policy = _GrantPolicy.of(spec)
         exe_fd = _open_verified_executable(spec, policy)
-        _restrict(libc, spec, policy, exe_fd, abi)
+        _restrict(libc, spec, policy, exe_fd, handled(abi))
         os.execve(exe_fd, list(argv[2:]), dict(os.environ))  # fexecve: no check/exec gap
     except LauncherRefusalError as refusal:
         _refuse(str(refusal))

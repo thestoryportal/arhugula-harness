@@ -391,15 +391,38 @@ def _scrubbed_child_env() -> dict[str, str]:
 
 
 _CLEANUP_WAIT_SECONDS = 5.0
+_GROUP_POLL_SECONDS = 0.005
 _CLEANUP_UNCERTAIN = "External CLI process-group cleanup could not be confirmed"
 _SCRATCH_UNCERTAIN = "Claude scratch directory removal failed"
 _LOG = logging.getLogger(__name__)
 
 
+async def _group_settled(pgid: int, deadline: float) -> bool:
+    """True once no process (zombies included) remains in ``pgid``; False past ``deadline``."""
+    # [LAW:no-ambient-temporal-coupling] The kernel announces no group exit, so the owner
+    # polls the group's own existence (never a guessed delay) up to the cleanup deadline.
+    # Signal 0 probes without signalling; a live group keeps its pgid from being reused.
+    loop = asyncio.get_running_loop()
+    while True:
+        try:
+            os.kill(-pgid, 0)
+        except ProcessLookupError:
+            return True
+        if loop.time() >= deadline:
+            return False
+        await asyncio.sleep(_GROUP_POLL_SECONDS)
+
+
 async def _terminate_group(process: asyncio.subprocess.Process) -> str | None:
-    """Signal the isolated process group, then bound direct-child reaping."""
+    """Kill the isolated process group, reap its leader, then await the whole group's end.
+
+    A member that outlives the leader still holds the group, so callers that remove the
+    child's scratch after this returns never remove it under a running member.
+    """
+    deadline = asyncio.get_running_loop().time() + _CLEANUP_WAIT_SECONDS
     uncertain = False
-    if os.name == "posix" and process.pid != os.getpgrp():
+    owns_group = os.name == "posix" and process.pid != os.getpgrp()
+    if owns_group:
         try:
             # [LAW:single-enforcer] The runner owns the lifetime of every child in this group.
             os.killpg(process.pid, signal.SIGKILL)
@@ -421,6 +444,8 @@ async def _terminate_group(process: asyncio.subprocess.Process) -> str | None:
     try:
         await asyncio.wait_for(process.wait(), timeout=_CLEANUP_WAIT_SECONDS)
     except (OSError, TimeoutError):
+        uncertain = True
+    if owns_group and not await _group_settled(process.pid, deadline):
         uncertain = True
     return _CLEANUP_UNCERTAIN if uncertain else None
 

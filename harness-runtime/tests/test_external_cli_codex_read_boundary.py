@@ -324,6 +324,98 @@ async def test_cancellation_settles_the_confined_process_group(tmp_path: Path) -
         os.kill(pid, 0)
 
 
+# The confined leader forks a member that leaves the output pipes, records its pid and
+# group in CODEX_HOME and keeps writing into its scratch HOME. The leader exits (success
+# or the refusal exit) or blocks (cancellation) only once that member exists, so the
+# member outlives the leader.
+OUTLIVING_MEMBER = r"""
+import os, sys, time
+home = os.environ["CODEX_HOME"]
+if os.fork() == 0:
+    null = os.open("/dev/null", os.O_RDWR)
+    for fd in (0, 1, 2):
+        os.dup2(null, fd)
+    with open(os.environ["HOME"] + "/beat", "w") as fh:
+        fh.write("x")
+    with open(home + "/member.tmp", "w") as fh:
+        fh.write(f"{os.getpid()} {os.getpgrp()}")
+    os.rename(home + "/member.tmp", home + "/member")
+    while True:
+        try:
+            with open(os.environ["HOME"] + "/beat", "w") as fh:
+                fh.write("x")
+        except OSError:
+            pass
+        time.sleep(0.01)
+while not os.path.exists(home + "/member"):
+    time.sleep(0.01)
+outcome = sys.argv[1]
+if outcome == "error":
+    sys.stderr.write("arhugula-read-boundary-refused: fixture refusal\n")
+    sys.stderr.flush()
+    os._exit(125)
+if outcome == "cancel":
+    time.sleep(60)
+"""
+
+
+@pytest.mark.parametrize("outcome", ["success", "error", "cancel"])
+async def test_scratch_is_removed_only_after_an_outliving_group_member_settles(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, outcome: str
+) -> None:
+    """Items 4 and 8: removal waits for the whole group, not only the reaped leader."""
+    home, scratch = _homes(tmp_path)
+    member_file = home / "member"
+    removals: list[dict[str, Any]] = []
+    real_rmtree = provider.shutil.rmtree
+
+    def observed_rmtree(path: str) -> None:
+        member, group = (int(n) for n in member_file.read_text().split())
+        removals.append(
+            {
+                "scratch": Path(path).parent == scratch and (Path(path) / "beat").exists(),
+                "member_alive": _exists(lambda: os.kill(member, 0)),
+                "group_alive": _exists(lambda: os.kill(-group, 0)),
+                "leader_group": group != os.getpgrp(),
+            }
+        )
+        real_rmtree(path)
+
+    monkeypatch.setattr(provider.shutil, "rmtree", observed_rmtree)
+    runner = provider._CodexReadBoundaryRunner(_boundary(home, scratch))
+    run = runner.run(
+        ("codex", "-I", "-S", "-c", OUTLIVING_MEMBER, outcome), stdin="", timeout_seconds=30
+    )
+
+    async with asyncio.timeout(20):
+        if outcome == "success":
+            result = await run
+            assert result.exit_code == 0, result.stderr
+        elif outcome == "error":
+            with pytest.raises(ExternalCLIReadBoundaryError, match="fixture refusal"):
+                await run
+        else:
+            task = asyncio.create_task(run)
+            while not member_file.exists():
+                await asyncio.sleep(0.01)
+            task.cancel("caller cancelled")
+            with pytest.raises(asyncio.CancelledError, match="caller cancelled"):
+                await task
+
+    assert removals == [
+        {"scratch": True, "member_alive": False, "group_alive": False, "leader_group": True}
+    ]
+    assert list(scratch.iterdir()) == []
+
+
+def _exists(probe: Any) -> bool:
+    try:
+        probe()
+    except ProcessLookupError:
+        return False
+    return True
+
+
 OPERATOR_TOML = """
 [[runtime.external_cli_providers]]
 provider = "codex"

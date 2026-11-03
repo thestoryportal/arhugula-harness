@@ -255,19 +255,277 @@ def test_a_directory_executable_allowance_is_refused_at_launch(tmp_path: Path) -
     assert "executable allowance is not a regular file" in _refusal(_launch(spec, {}))
 
 
+# Runs the launcher's real `main` in a disposable child with source-level injections:
+# "machine" or "abi" replace the host report, "unhandled" removes rights from the
+# handled mask (a control ruleset). `__main__` itself takes no such input.
+ENTRY_DRIVER = r"""
+import importlib.util, json, sys
+spec = importlib.util.spec_from_file_location("read_boundary_launcher", sys.argv[1])
+launcher = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = launcher
+spec.loader.exec_module(launcher)
+inject = json.loads(sys.argv[2])
+kw = {}
+if "machine" in inject:
+    kw["machine"] = lambda: inject["machine"]
+if "abi" in inject:
+    kw["query_abi"] = lambda: inject["abi"]
+if "unhandled" in inject:
+    kw["handled"] = lambda abi: launcher.handled_access_fs(abi) & ~inject["unhandled"]
+launcher.main(sys.argv[3:], **kw)
+"""
+
+
+def _launch_entry(
+    spec: boundary.RulesetSpec, inject: dict[str, Any], probe: str, targets: Any
+) -> subprocess.CompletedProcess[str]:
+    real = boundary.launcher_argv(
+        spec, (str(INTERPRETER), "-I", "-S", "-c", probe, json.dumps(targets))
+    )
+    at = real.index(str(boundary.LAUNCHER_PATH))  # the driver takes the launcher's place
+    argv = (*real[:at], "-c", ENTRY_DRIVER, real[at], json.dumps(inject), *real[at + 1 :])
+    return subprocess.run(
+        argv,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env={"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8"},
+        check=False,
+    )
+
+
 @pytest.mark.parametrize(
-    "outcome",
-    [-errno.ENOSYS, -errno.EOPNOTSUPP, -errno.EINVAL, 0, 5, 8],
-    ids=["ENOSYS", "EOPNOTSUPP", "EINVAL", "abi0", "abi5", "abi8"],
+    ("inject", "reason"),
+    [
+        ({"machine": "riscv64"}, "unverified on architecture 'riscv64'"),
+        ({"abi": -errno.ENOSYS}, "Landlock unavailable: ENOSYS"),
+        ({"abi": -errno.EOPNOTSUPP}, f"Landlock unavailable: {errno.errorcode[errno.EOPNOTSUPP]}"),
+        ({"abi": -errno.EINVAL}, "Landlock unavailable: EINVAL"),
+        ({"abi": 8}, "Landlock ABI 8 < required 9"),
+    ],
+    ids=["architecture", "ENOSYS", "EOPNOTSUPP", "EINVAL", "abi8"],
 )
-def test_an_unsupported_host_is_refused(outcome: int) -> None:
-    with pytest.raises(boundary.LauncherRefusalError, match="Landlock"):
-        boundary.require_supported_abi(lambda: outcome)
+def test_an_unsupported_host_is_refused_by_the_launcher_entry_point(
+    tmp_path: Path, inject: dict[str, Any], reason: str
+) -> None:
+    """Spec item 6.2 on the real entry path: exit 125, the marker, and no target run."""
+    paths = _layout(tmp_path)
+    assert reason in _refusal(_launch_entry(_spec(paths), inject, PROBE, {}))
+
+
+def test_the_entry_driver_runs_the_target_on_a_supported_report(tmp_path: Path) -> None:
+    """Control for the refusals above: the same driver with a supported report runs."""
+    paths = _layout(tmp_path)
+    result = _launch_entry(_spec(paths), {"machine": "x86_64", "abi": 9}, PROBE, {})
+    assert result.returncode == 0, result.stderr[-2000:]
+    assert json.loads(result.stdout) == {}
 
 
 def test_the_supported_host_handles_the_full_filesystem_mask() -> None:
-    assert boundary.require_supported_abi(lambda: 10) == 10
     assert boundary.handled_access_fs(10) == (1 << 17) - 1
+
+
+# Each operation below is one Landlock right's witness: [name, op, *args].
+RIGHTS_PROBE = r"""
+import errno, json, os, signal, stat, subprocess, sys, time
+def signal_descendant():
+    pid = os.fork()
+    if pid == 0:
+        time.sleep(60)
+        os._exit(0)
+    try:
+        os.kill(pid, signal.SIGCONT)
+    finally:
+        os.kill(pid, signal.SIGKILL)
+        os.waitpid(pid, 0)
+def run(*argv):
+    subprocess.run(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                   stderr=subprocess.DEVNULL, check=False)
+OPS = {
+    "read": lambda p: os.close(os.open(p, os.O_RDONLY)),
+    "write": lambda p: os.close(os.open(p, os.O_WRONLY)),
+    "list": os.listdir,
+    "rmdir": os.rmdir,
+    "unlink": os.unlink,
+    "mkdir": os.mkdir,
+    "mkreg": lambda p: os.mknod(p, stat.S_IFREG | 0o600),
+    "mkfifo": os.mkfifo,
+    "symlink": lambda p: os.symlink("/dev/null", p),
+    "link": os.link,
+    "rename": os.rename,
+    "truncate": lambda p: os.truncate(p, 0),
+    "exec": run,
+    "mkchr": lambda p: os.mknod(p, stat.S_IFCHR | 0o600, os.makedev(1, 3)),
+    "mkblk": lambda p: os.mknod(p, stat.S_IFBLK | 0o600, os.makedev(7, 0)),
+    "signal": lambda pid: os.kill(pid, signal.SIGCONT),
+    "signal_descendant": signal_descendant,
+}
+out = {}
+for name, op, *args in json.loads(sys.argv[1]):
+    try:
+        OPS[op](*args)
+        out[name] = "ok"
+    except OSError as exc:
+        out[name] = errno.errorcode.get(exc.errno, str(exc.errno))
+print(json.dumps(out))
+"""
+
+
+def _rights_probe(
+    spec: boundary.RulesetSpec, ops: list[list[Any]], inject: dict[str, Any] | None = None
+) -> dict[str, str]:
+    if inject is None:
+        argv = boundary.launcher_argv(
+            spec, (str(INTERPRETER), "-I", "-S", "-c", RIGHTS_PROBE, json.dumps(ops))
+        )
+        result = subprocess.run(
+            argv,
+            capture_output=True,
+            text=True,
+            timeout=60,
+            env={"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8"},
+            check=False,
+        )
+    else:
+        result = _launch_entry(spec, inject, RIGHTS_PROBE, ops)
+    assert result.returncode == 0, (result.returncode, result.stderr[-2000:])
+    return json.loads(result.stdout.strip().splitlines()[-1])
+
+
+def test_a_confined_child_cannot_signal_outside_its_domain(tmp_path: Path) -> None:
+    """Item 6.4, the SIGNAL scope: an unconfined same-user sibling is out of reach (EPERM)
+    while the child's own confined descendant is not."""
+    paths = _layout(tmp_path)
+    sibling = subprocess.Popen((str(INTERPRETER), "-I", "-S", "-c", "import time; time.sleep(60)"))
+    try:
+        seen = _rights_probe(
+            _spec(paths),
+            [["sibling", "signal", sibling.pid], ["descendant", "signal_descendant"]],
+        )
+    finally:
+        sibling.kill()
+        sibling.wait()
+    assert seen == {"sibling": "EPERM", "descendant": "ok"}
+
+
+def _rights_layout(tmp_path: Path) -> tuple[dict[str, Path], Path]:
+    paths = _layout(tmp_path)
+    public = tmp_path / "public"  # a read-only grant on the same filesystem as scratch
+    public.mkdir()
+    (public / "shared.txt").write_text("public")
+    home, scratch, codex_home = paths["home"], paths["scratch"], paths["codex_home"]
+    for root in (home, scratch, codex_home):
+        for name in ("file.txt", "doomed.txt", "trunc.txt", "moved.txt"):
+            (root / name).write_text("fixture")
+        (root / "emptydir").mkdir()
+    # Exec opens for read too, so the EXECUTE witness sits in the read-only grant: readable,
+    # never executable.
+    tool = public / "tool"
+    tool.write_text(f"#!{INTERPRETER}\n")
+    tool.chmod(0o755)
+    return paths, public
+
+
+def test_each_exercisable_right_is_denied_outside_the_grants_and_allowed_inside(
+    tmp_path: Path,
+) -> None:
+    """Item 6.4: the applied ruleset handles every right; one witness per right.
+
+    MAKE_FIFO and MAKE_SYM are granted nowhere (the read-write grant creates regular
+    files and directories only), so their control is the unconfined call below. REFER
+    reports EXDEV, and its discriminating case is the allowed cross-grant rename.
+    MAKE_SOCK, IOCTL_DEV and RESOLVE_UNIX stay HELD (plan v2.66, Held elements).
+    """
+    paths, public = _rights_layout(tmp_path)
+    home, scratch, codex_home = paths["home"], paths["scratch"], paths["codex_home"]
+    ops: list[list[Any]] = [
+        ["EXECUTE denied", "exec", str(public / "tool")],
+        ["EXECUTE allowed", "exec", str(INTERPRETER), "-I", "-S", "-c", "pass"],
+        ["READ_FILE denied", "read", str(home / "file.txt")],
+        ["READ_DIR denied", "list", str(home)],
+        ["WRITE_FILE denied", "write", str(home / "file.txt")],
+        ["TRUNCATE denied", "truncate", str(home / "trunc.txt")],
+        ["REMOVE_FILE denied", "unlink", str(home / "doomed.txt")],
+        ["REMOVE_DIR denied", "rmdir", str(home / "emptydir")],
+        ["MAKE_DIR denied", "mkdir", str(home / "newdir")],
+        ["MAKE_REG denied", "mkreg", str(home / "new.txt")],
+        ["MAKE_FIFO denied", "mkfifo", str(home / "fifo")],
+        ["MAKE_SYM denied", "symlink", str(home / "link")],
+        ["MAKE_FIFO ungranted", "mkfifo", str(scratch / "fifo")],
+        ["MAKE_SYM ungranted", "symlink", str(scratch / "link")],
+        ["REFER denied", "link", str(public / "shared.txt"), str(scratch / "shared.txt")],
+        ["REFER allowed", "rename", str(scratch / "moved.txt"), str(codex_home / "arrived.txt")],
+    ]
+    for label, root in (("scratch", scratch), ("codex_home", codex_home)):
+        ops += [
+            [f"READ_FILE allowed {label}", "read", str(root / "file.txt")],
+            [f"READ_DIR allowed {label}", "list", str(root)],
+            [f"WRITE_FILE allowed {label}", "write", str(root / "file.txt")],
+            [f"TRUNCATE allowed {label}", "truncate", str(root / "trunc.txt")],
+            [f"REMOVE_FILE allowed {label}", "unlink", str(root / "doomed.txt")],
+            [f"REMOVE_DIR allowed {label}", "rmdir", str(root / "emptydir")],
+            [f"MAKE_DIR allowed {label}", "mkdir", str(root / "newdir")],
+            [f"MAKE_REG allowed {label}", "mkreg", str(root / "new.txt")],
+        ]
+    seen = _rights_probe(_spec(paths, extra=(str(public),)), ops)
+
+    expected = {name: "ok" if " allowed" in name else "EACCES" for name, *_ in ops}
+    expected["REFER denied"] = "EXDEV"
+    assert seen == expected
+    assert (home / "file.txt").read_text() == "fixture"
+    assert (home / "trunc.txt").read_text() == "fixture"
+    assert {p.name for p in home.iterdir()} == {
+        ".codex",
+        "secret-notes.txt",
+        "file.txt",
+        "doomed.txt",
+        "trunc.txt",
+        "moved.txt",
+        "emptydir",
+    }
+    # The FIFO and symlink denials come from Landlock: unconfined, the same calls succeed.
+    os.mkfifo(scratch / "fifo")
+    os.symlink("/dev/null", scratch / "link")
+
+
+_MAKE_CHAR, _MAKE_BLOCK = 1 << 6, 1 << 11
+
+
+def _device_node_prerequisites(tmp_path: Path) -> str | None:
+    """Why the device-node discriminator is HELD on this host, or None when it can run."""
+    cap_eff = next(
+        int(line.split()[1], 16)
+        for line in Path("/proc/self/status").read_text().splitlines()
+        if line.startswith("CapEff:")
+    )
+    if cap_eff & (1 << 27):
+        return "HELD: the fixture holds CAP_MKNOD"
+    try:
+        os.mknod(tmp_path / "prereq-fifo", 0o600 | 0o010000)  # S_IFIFO
+    except OSError as exc:
+        return f"HELD: a sandbox refuses mknod before Landlock ({errno.errorcode[exc.errno or 0]})"
+    os.unlink(tmp_path / "prereq-fifo")
+    return None
+
+
+def test_device_node_creation_is_denied_by_landlock_not_by_the_missing_capability(
+    tmp_path: Path,
+) -> None:
+    """Item 6.4 bits 6 and 11: Landlock's EACCES precedes the CAP_MKNOD check, so the
+    control ruleset that leaves both rights unhandled gets EPERM instead."""
+    held = _device_node_prerequisites(tmp_path)
+    if held is not None:
+        pytest.skip(held)
+    paths = _layout(tmp_path)
+    home = paths["home"]
+    ops = [["MAKE_CHAR", "mkchr", str(home / "cdev")], ["MAKE_BLOCK", "mkblk", str(home / "bdev")]]
+
+    applied = _rights_probe(_spec(paths), ops)
+    control = _rights_probe(_spec(paths), ops, inject={"unhandled": _MAKE_CHAR | _MAKE_BLOCK})
+
+    assert applied == {"MAKE_CHAR": "EACCES", "MAKE_BLOCK": "EACCES"}
+    assert control == {"MAKE_CHAR": "EPERM", "MAKE_BLOCK": "EPERM"}
+    assert not (home / "cdev").exists() and not (home / "bdev").exists()
 
 
 @pytest.mark.parametrize("broad", ["/", "/usr", "/home", "HOME", "HOME_PARENT"])

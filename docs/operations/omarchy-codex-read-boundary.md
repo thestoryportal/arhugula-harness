@@ -29,10 +29,12 @@ Before Codex starts, a small harness launcher restricts itself with Linux Landlo
 - the machine is not `aarch64` or `x86_64`, or the kernel's Landlock ABI is below 9 or unavailable;
 - the binary's SHA-256 differs from the pin, or the binary path contains a symlink;
 - an `executable_paths` entry is not a regular file (for example, a directory);
-- an allowed path is missing, reaches its target through a symlink, or is (or contains) your home directory or a system directory such as `/usr`, `/etc` or `/tmp`;
+- an allowed path is missing, or its real target is (or contains) your home directory or a system directory such as `/usr`, `/etc` or `/tmp`;
 - `codex_home` is your own `~/.codex`, a directory inside it, or the directory your harness process's `CODEX_HOME` names;
-- `codex_home` or `scratch_root` is not a 0700 directory owned by you;
+- `codex_home` or `scratch_root` is a symlink, or is not a 0700 directory owned by you;
 - `codex_home/auth.json` is missing.
+
+The harness resolves symlinks in `read_only_paths` and `executable_paths` and judges the real target: a symlink to an ordinary file is granted as that file, and a symlink to your home is refused as your home. Symlinks themselves are refused only in the pinned binary's path and as `codex_home` or `scratch_root`. If a resolved path is replaced by a symlink before Codex starts, the launch refuses.
 
 ## Activating the bounded route
 
@@ -64,6 +66,8 @@ scratch_root = "/home/<user>/.local/state/arhugula/codex-scratch"
 ```
 
 `read_only_paths` defaults to the DNS/TLS list above. Override it only with paths that hold no personal data. The harness refuses `/`, `/usr`, `/etc`, your home and anything containing them, including through a symlink. It does not refuse a folder inside your home such as `~/Documents`, so never list one.
+
+`executable_paths` is optional and empty by default, which suits the static Codex binary. List there only absolute paths to regular files Codex must execute, such as the dynamic loader of a linked binary. The harness refuses a directory, and it hash-checks only the pinned binary, not these files.
 
 ## Steps that need your consent (not run yet)
 
