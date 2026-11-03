@@ -394,7 +394,17 @@ _CLEANUP_WAIT_SECONDS = 5.0
 _GROUP_POLL_SECONDS = 0.005
 _CLEANUP_UNCERTAIN = "External CLI process-group cleanup could not be confirmed"
 _SCRATCH_UNCERTAIN = "Claude scratch directory removal failed"
+_SCRATCH_RETAINED = "External CLI scratch directory retained: its process group did not settle"
 _LOG = logging.getLogger(__name__)
+
+
+@dataclass(slots=True)
+class _ChildGroup:
+    """Whether a spawned child's process group may still be using its cwd."""
+
+    # [LAW:no-ambient-temporal-coupling] Spawn sets it; only confirmed group settlement
+    # clears it. The cwd owner reads it, so no unconfirmed path can remove a cwd in use.
+    unsettled: bool = False
 
 
 async def _group_settled(pgid: int, deadline: float) -> bool:
@@ -416,8 +426,8 @@ async def _group_settled(pgid: int, deadline: float) -> bool:
 async def _terminate_group(process: asyncio.subprocess.Process) -> str | None:
     """Kill the isolated process group, reap its leader, then await the whole group's end.
 
-    A member that outlives the leader still holds the group, so callers that remove the
-    child's scratch after this returns never remove it under a running member.
+    A member that outlives the leader still holds the group. Past the bounded wait the
+    result is the uncertainty note, which keeps the child's scratch in place.
     """
     deadline = asyncio.get_running_loop().time() + _CLEANUP_WAIT_SECONDS
     uncertain = False
@@ -451,7 +461,9 @@ async def _terminate_group(process: asyncio.subprocess.Process) -> str | None:
 
 
 async def _settle_process(
-    process: asyncio.subprocess.Process, original: BaseException | None = None
+    process: asyncio.subprocess.Process,
+    group: _ChildGroup,
+    original: BaseException | None = None,
 ) -> None:
     """Finish cleanup despite repeated caller cancellation; preserve the first outcome."""
     # [LAW:no-ambient-temporal-coupling] The cleanup task owns the exit boundary.
@@ -466,6 +478,7 @@ async def _settle_process(
         note = task.result()
     except Exception:
         note = _CLEANUP_UNCERTAIN
+    group.unsettled = note is not None
     if note is not None:
         _LOG.warning("%s", note)
         if original is not None:
@@ -492,6 +505,7 @@ class AsyncioSubprocessRunner:
             on_wire=on_wire,
             env=_scrubbed_child_env(),
             cwd=None,
+            group=_ChildGroup(),
         )
 
     async def _run_process(
@@ -503,6 +517,7 @@ class AsyncioSubprocessRunner:
         on_wire: Callable[[], None] | None,
         env: Mapping[str, str],
         cwd: str | None,
+        group: _ChildGroup,
     ) -> CLIProcessResult:
         if not argv:
             raise ExternalCLICommandError("", 127, "empty argv")
@@ -518,13 +533,14 @@ class AsyncioSubprocessRunner:
             )
         except FileNotFoundError as exc:
             raise ExternalCLICommandError(argv[0], 127, str(exc)) from exc
+        group.unsettled = True
 
         # The child exists before the wire notification. Every post-spawn outcome
         # settles its group before the caller can observe completion.
         try:
             _notify_wire(on_wire)
         except BaseException as exc:
-            await _settle_process(process, exc)
+            await _settle_process(process, group, exc)
             raise
 
         try:
@@ -533,13 +549,13 @@ class AsyncioSubprocessRunner:
             )
         except TimeoutError as exc:
             outcome = ExternalCLIProcessTimeout(argv[0], timeout_seconds)
-            await _settle_process(process, outcome)
+            await _settle_process(process, group, outcome)
             raise outcome from exc
         except BaseException as exc:
-            await _settle_process(process, exc)
+            await _settle_process(process, group, exc)
             raise
 
-        await _settle_process(process)
+        await _settle_process(process, group)
         return CLIProcessResult(
             exit_code=process.returncode or 0,
             stdout=stdout_bytes.decode("utf-8", errors="replace"),
@@ -576,7 +592,7 @@ class _PrivateCwdSubprocessRunner(AsyncioSubprocessRunner):
         on_wire: Callable[[], None] | None = None,
     ) -> CLIProcessResult:
         self._preflight()
-        # [LAW:no-ambient-temporal-coupling] The process group settles before cwd removal.
+        group = _ChildGroup()
         cwd = tempfile.mkdtemp(prefix=self._cwd_prefix, dir=self._scratch_root())
         try:
             child_argv, env = self._prepare(argv, cwd)
@@ -588,17 +604,29 @@ class _PrivateCwdSubprocessRunner(AsyncioSubprocessRunner):
                     on_wire=on_wire,
                     env=env,
                     cwd=cwd,
+                    group=group,
                 )
             )
         finally:
             outcome = sys.exc_info()[1]
-            try:
-                shutil.rmtree(cwd)
-            except Exception:
-                # [LAW:no-silent-failure] Removal cannot replace the call outcome.
-                _LOG.warning("%s", self._scratch_uncertain)
+            note = self._release_scratch(cwd, group)
+            if note is not None:
+                # [LAW:no-silent-failure] A kept or failed cwd cannot replace the call outcome.
+                _LOG.warning("%s", note)
                 if outcome is not None:
-                    outcome.add_note(self._scratch_uncertain)
+                    outcome.add_note(note)
+
+    def _release_scratch(self, cwd: str, group: _ChildGroup) -> str | None:
+        """Remove ``cwd`` once its group has settled; otherwise keep it and say where."""
+        # [LAW:no-ambient-temporal-coupling] Removal follows the whole group's end; past the
+        # bounded wait the cwd is reported, never deleted under a possibly running member.
+        if group.unsettled:
+            return f"{_SCRATCH_RETAINED}: {cwd}"
+        try:
+            shutil.rmtree(cwd)
+        except Exception:
+            return self._scratch_uncertain
+        return None
 
 
 class _ClaudeCodeSubprocessRunner(_PrivateCwdSubprocessRunner):

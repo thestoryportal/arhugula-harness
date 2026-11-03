@@ -1511,6 +1511,36 @@ async def test_scratch_removal_failure_preserves_outcome(
 
 
 @pytest.mark.asyncio
+async def test_scratch_is_kept_when_group_cleanup_never_reports(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    import harness_runtime.lifecycle.external_cli_provider as provider
+
+    async def interrupted_terminate(process: asyncio.subprocess.Process) -> str | None:
+        raise asyncio.CancelledError("cleanup interrupted")
+
+    monkeypatch.setattr(provider, "_terminate_group", interrupted_terminate)
+    real_mkdtemp = provider.tempfile.mkdtemp
+    dirs: list[str] = []
+
+    def recorded_mkdtemp(*args: Any, **kwargs: Any) -> str:
+        cwd = real_mkdtemp(*args, **kwargs)
+        dirs.append(cwd)
+        return cwd
+
+    monkeypatch.setattr(provider.tempfile, "mkdtemp", recorded_mkdtemp)
+    with pytest.raises(asyncio.CancelledError, match="cleanup interrupted") as caught:
+        await _ClaudeCodeSubprocessRunner().run(
+            (sys.executable, "-c", ""), stdin="", timeout_seconds=5
+        )
+    (cwd,) = dirs
+    retained = f"{provider._SCRATCH_RETAINED}: {cwd}"
+    assert Path(cwd).is_dir()
+    assert retained in caught.value.__notes__ and retained in caplog.text
+    Path(cwd).rmdir()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("exit_kind", ["timeout", "cancel"])
 async def test_refused_group_signal_keeps_outcome_and_reports_uncertainty(
     tmp_path: Path,

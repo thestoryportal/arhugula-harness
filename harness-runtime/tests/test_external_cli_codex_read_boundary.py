@@ -13,10 +13,14 @@ no real Codex, login, credential or model is touched.
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import ctypes
 import hashlib
 import json
 import os
+import signal
 import sys
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -414,6 +418,127 @@ def _exists(probe: Any) -> bool:
     except ProcessLookupError:
         return False
     return True
+
+
+_PR_SET_CHILD_SUBREAPER = 36
+
+
+@pytest.fixture
+def held_orphans() -> Iterator[list[int]]:
+    """Make this test process the child subreaper. A group member killed with or after its
+    leader then stays a zombie inside the group until the test reaps it, so the member
+    outlives the leader on every exit path. Listed pids are killed and reaped on exit."""
+    libc = ctypes.CDLL(None, use_errno=True)
+    assert libc.prctl(_PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) == 0
+    held: list[int] = []
+    try:
+        yield held
+    finally:
+        for pid in held:
+            with contextlib.suppress(ProcessLookupError):
+                os.kill(pid, signal.SIGKILL)
+            with contextlib.suppress(ChildProcessError):
+                os.waitpid(pid, 0)
+        assert libc.prctl(_PR_SET_CHILD_SUBREAPER, 0, 0, 0, 0) == 0
+
+
+def _zombie(pid: int) -> bool:
+    return Path(f"/proc/{pid}/stat").read_text().rpartition(")")[2].split()[0] == "Z"
+
+
+def _reap_zombie(pid: int) -> bool:
+    """Reap ``pid`` without blocking; True only if it had already exited."""
+    return os.waitpid(pid, os.WNOHANG)[0] == pid
+
+
+@pytest.mark.parametrize("outcome", ["success", "error", "cancel"])
+async def test_scratch_is_kept_and_reported_when_the_group_does_not_settle(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    held_orphans: list[int],
+    outcome: str,
+) -> None:
+    """Items 4 and 8 past the bounded wait: a group still present keeps its scratch, and
+    the outcome and log say which directory was kept."""
+    home, scratch = _homes(tmp_path)
+    member_file = home / "member"
+    monkeypatch.setattr(provider, "_CLEANUP_WAIT_SECONDS", 0.3)
+    removed: list[str] = []
+    monkeypatch.setattr(provider.shutil, "rmtree", removed.append)
+    runner = provider._CodexReadBoundaryRunner(_boundary(home, scratch))
+    run = runner.run(
+        ("codex", "-I", "-S", "-c", OUTLIVING_MEMBER, outcome), stdin="", timeout_seconds=30
+    )
+
+    caught: BaseException | None = None
+    async with asyncio.timeout(20):
+        if outcome == "success":
+            assert (await run).exit_code == 0
+        elif outcome == "error":
+            with pytest.raises(ExternalCLIReadBoundaryError, match="fixture refusal") as error:
+                await run
+            caught = error.value
+        else:
+            task = asyncio.create_task(run)
+            while not member_file.exists():
+                await asyncio.sleep(0.01)
+            task.cancel("caller cancelled")
+            with pytest.raises(asyncio.CancelledError, match="caller cancelled") as cancel:
+                await task
+            caught = cancel.value
+
+    member, group = (int(n) for n in member_file.read_text().split())
+    held_orphans.append(member)
+    # The leader is reaped; its killed member still holds the group past the deadline.
+    assert not _exists(lambda: os.kill(group, 0))
+    assert _zombie(member) and _exists(lambda: os.kill(-group, 0))
+    (cwd,) = scratch.iterdir()
+    assert removed == [] and (cwd / "beat").exists()
+    retained = f"{provider._SCRATCH_RETAINED}: {cwd}"
+    assert retained in caplog.text and provider._CLEANUP_UNCERTAIN in caplog.text
+    if caught is not None:
+        assert retained in caught.__notes__
+
+
+async def test_cancellation_removes_scratch_only_after_an_outliving_member_settles(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, held_orphans: list[int]
+) -> None:
+    """Item 4 on cancellation: the leader is reaped while its member still holds the group,
+    and the scratch goes only once that member is gone."""
+    home, scratch = _homes(tmp_path)
+    member_file = home / "member"
+    events: list[str] = []
+    real_rmtree = provider.shutil.rmtree
+
+    def observed_rmtree(path: str) -> None:
+        events.append("removed-under-group" if _exists(lambda: os.kill(-group, 0)) else "removed")
+        real_rmtree(path)
+
+    monkeypatch.setattr(provider.shutil, "rmtree", observed_rmtree)
+    runner = provider._CodexReadBoundaryRunner(_boundary(home, scratch))
+    task = asyncio.create_task(
+        runner.run(
+            ("codex", "-I", "-S", "-c", OUTLIVING_MEMBER, "cancel"), stdin="", timeout_seconds=30
+        )
+    )
+    async with asyncio.timeout(20):
+        while not member_file.exists():
+            await asyncio.sleep(0.01)
+        member, group = (int(n) for n in member_file.read_text().split())
+        held_orphans.append(member)
+        task.cancel("caller cancelled")
+        while _exists(lambda: os.kill(group, 0)) or not _zombie(member):
+            await asyncio.sleep(0.01)
+        events.append("leader-reaped")
+        assert not task.done()
+        assert _reap_zombie(member)
+        events.append("member-reaped")
+        with pytest.raises(asyncio.CancelledError, match="caller cancelled"):
+            await task
+
+    assert events == ["leader-reaped", "member-reaped", "removed"]
+    assert list(scratch.iterdir()) == []
 
 
 OPERATOR_TOML = """

@@ -15,7 +15,7 @@ Before Codex starts, a small harness launcher restricts itself with Linux Landlo
 |---|---|
 | execute the Codex binary you pinned by path and SHA-256, and any regular file you list in `executable_paths` (only the pinned binary is hash-checked); whatever they run stays under the same boundary | read your home directory, including `~/.codex` |
 | read and write its dedicated home (`codex_home`) | read other processes' `/proc` entries, or reach your files through `/proc/self/root` |
-| read and write a fresh scratch directory per call, removed afterwards | connect to local UNIX sockets: agents, keyrings, D-Bus |
+| read and write a fresh scratch directory per call, removed once every process from that call has exited; if any is still present after five seconds, the directory is kept and its path logged | connect to local UNIX sockets: agents, keyrings, D-Bus |
 | read public DNS and TLS configuration (`/etc/hosts`, `/etc/nsswitch.conf`, `/etc/resolv.conf`, `/etc/ssl/certs`, `/etc/ca-certificates`) | signal processes outside its own boundary |
 | use the network (HTTPS to the subscription service) | receive environment variables other than `HOME`, `TMPDIR`, `CODEX_HOME`, `PATH` and `LANG` |
 
