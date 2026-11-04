@@ -82,6 +82,7 @@ a running harness process to drain and exit through the admin shutdown path.
 | `2` | CLI option usage, workflow manifest load, or admissibility error. |
 | `3` | Runtime config load error. |
 | `4` | Bootstrap, daemon connection/startup, or daemon MCP result error. |
+| `5` | Workflow paused: the one-shot run result or daemon workflow status is `paused`. |
 
 ## Config Practices
 
