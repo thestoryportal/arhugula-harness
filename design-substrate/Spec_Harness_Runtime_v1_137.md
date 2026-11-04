@@ -12,6 +12,9 @@ earlier term remains in force. Cleared predecessor files are not edited.*
 **Status: PROPOSED — not cleared.** No clearance marker, artifact-head row or pointer is filed.
 Corrected after the first independent review of the combined candidate (HOLD, LIT `cmt-bcef30fd`):
 F1 in Rules B2, B3, B5, B6 and C2 and witnesses I.2 and I.14; F2 in Rules A3 and A4 and witness I.13.
+Second correction (HOLD `cmt-bd5730ba`, disposition `cmt-1ba063e7`): the Rule B6 bound is replaced by
+Rule B7 and witness I.2 case (d); the Rule A4 companion OD amendment is authored at
+`Spec_Operational_Discipline_v1_43.md` and OD plan v2.37 unit U-OD-62.
 
 **Lineage (pending fold):** grounded on cleared v1.134 at H `14b785d84e4d80f15c4e8c0ac1dbf7a69e1afed9`.
 Fold order A3 → A5 (v1.135) → A4 (v1.136) → this delta. It combines three decided inputs into one
@@ -76,13 +79,14 @@ witness covers the sixth value. Today `PauseStateCauseAttribution(cause.value)` 
 would raise `ValueError` for a sixth value; this rule replaces that failure with the typed result and
 the audit event above.
 
-**Companion OD amendment (required before implementation ratification; not authored here).** OD
+**Companion OD amendment (required before implementation ratification; authored at
+`Spec_Operational_Discipline_v1_43.md` and OD plan v2.37 unit U-OD-62).** OD
 C-OD-30.5.1, cause-attribution row (`Spec_Operational_Discipline_v1_36.md:62`, unchanged through head
 v1.42): "one of the five stable identifiers Runtime v1.107 §30 declares" becomes "one of six
 identifiers: the five Runtime v1.107 §30 declares, plus `superseded` (Runtime v1.137 Rule A4)", and
 `PauseStateCauseAttribution` gains `SUPERSEDED = "superseded"`. Nothing else in §30.5 changes. A failed
-read still carries no token, so the §30.5.3 pairing rule is unaffected. The OD spec delta and its OD
-plan unit are outside this candidate's owned paths and need a named owner.
+read still carries no token, so the §30.5.3 pairing rule is unaffected. Its owner is profile-coder under
+disposition `cmt-1ba063e7`.
 
 ## B. C-RT-35 §30 — fresh-run supersession write (NEW)
 
@@ -130,7 +134,7 @@ covers every later outcome with one write per journal file: engine-native pause,
 drain and a crash after the writes. A crash between two appends leaves the later files unsuperseded;
 the run has had no step, so those records are not stale relative to it.
 
-**Rule B6 — guarantee, and the one bound needing a scope disposition.** A later fresh root run of W
+**Rule B6 — guarantee within the run's binding.** A later fresh root run of W
 under the same tenant supersedes W's earlier record whenever its path binding binds that record's
 directory as a STATE_LEDGER cell. This holds whatever workload class or deployment surface the later
 run uses, and whether it then pauses engine-natively, completes or fails. Example: W pauses under
@@ -140,13 +144,31 @@ record to A's journal, so a resume with the class-A manifest reads `superseded`.
 directory only with its own capture derivation, so it cannot detect a run in another cell. Rule B3's
 enumeration does.
 
-*Bound (scope disposition requested, not decided here).* A later run whose path binding does not bind
-the earlier record's directory, because its configuration's `path_bindings` differ, cannot see that
-journal and does not supersede it. No source the run holds names that directory; covering this case
-would need a new cross-binding store, which is outside this contract. The B-310 v4 definition says "any
-later run of the same workflow" and does not name this case. The integration lead decides either that
-this case needs its own refusal mechanism, or that a run under a binding that does not bind the
-record's directory is not a later run of the same workflow for this rule.
+**Rule B7 — a later run under a different binding: the missing shared authority.** Disposition
+`cmt-1ba063e7` keeps the B-310 v4 invariant with no binding exception: after any later fresh root run
+of W for the same tenant, W's earlier record is never claimed, including when the later run's
+configuration binds different STATE_LEDGER directories and when it runs in another process. Current
+bindings cannot carry this. C-IS-01 declares four path classes, each varying by workflow class and
+deployment surface (`harness_is/path_class_registry.py:31-37`, `:109-112`), and a run's own
+`config.path_bindings` is the resolver's only path source, with no default (Rule B3 citations). A run
+whose binding omits directory A holds no name for A, and a resume bound to A holds no name for the
+later run's directories. So neither a refusal nor an admission restriction can be enforced from state
+either process holds: the resume cannot see the later run, the later run cannot see the record, and
+per-run configuration is exactly what differs between them.
+
+The missing shared authority, exactly: one Runtime-owned pause-journal root per Runtime installation
+and tenant that (1) every process able to start or resume a root run of that installation (CLI, MCP
+server, daemon) resolves identically from installation state, not from per-run `path_bindings`,
+workload class or deployment surface; (2) holds the one journal file per (tenant, workflow_id), keyed
+as today, under that file's existing cross-process lock; (3) fails closed: a fresh root run that cannot
+resolve it fails before its first step, and a resume that cannot resolve it refuses before any claim or
+bootstrap. With it bound, Rule B3's directory set is that one directory, Rules B2, B5, C1 and C2 apply
+unchanged, and the journal stays the only ordering record: no second journal, read path or claim
+store. Its storage location is the retained runtime-state boundary release-campaign §4 lists as not yet
+selected, and C-IS-01 has no path class for it. Selecting that location and amending C-IS-01 are
+prerequisites outside this delta. Until both are ratified and bound, this contract does not satisfy
+the B-310 v4 invariant across bindings, and witness I.2 case (d) must pass before `harness resume` is
+accepted.
 
 ## C. C-RT-35 §30 — refusal battery (AMENDED)
 
@@ -258,7 +280,11 @@ Future tests, not run by this delta.
    model, tool or body effects; the old record stays unclaimed. Each case runs twice: with the later
    run in the same STATE_LEDGER cell, and as an A/B directory witness, where W pauses under workload
    class A, the later fresh run uses class B in a different directory of the same binding, and the
-   resume uses the class-A manifest and config.
+   resume uses the class-A manifest and config. Case (d), distinct bindings: W pauses under
+   configuration A; a later fresh run of W in another process uses configuration B, whose
+   `path_bindings` omit A's STATE_LEDGER directory, and pauses engine-natively, completes or fails;
+   `harness resume` with the old manifest and configuration A exits 6 `pause-record-superseded` with
+   the same assertions. It needs the Rule B7 authority and fails without it.
 3. Race: a supersession record appended between the handle read and the claim yields exit 7 `claim`,
    reason `claim-refused`; the record stays unclaimed; zero body effects. Cross-process.
 4. No prior file: a bare engine-native pause yields exit 6 `handle`/`absent`; no supersession record is

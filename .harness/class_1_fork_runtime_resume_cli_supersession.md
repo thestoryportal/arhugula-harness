@@ -40,10 +40,12 @@ pinned in `.harness/runtime-resume-contract-authority.md` (Proposed; not cleared
 - The original B-314 obligation, a safe resume path for engine-native pauses, stays OPEN.
 - B-311 (daemon resume and its MCP refusal reply) and B-315 (approval collection) are not defined.
 - The HITL probe (spec §I.11) decides whether a Runtime-side refusal is needed before acceptance.
-- Scope disposition requested (spec Rule B6 bound): a later run under a path binding that does not
-  bind the earlier record's directory does not supersede it. Runs in other cells of the same binding
-  do supersede it (Rule B3).
-- The companion OD C-OD-30.5.1 amendment and its OD plan unit (spec Rule A4) need an owner before
+- Cross-binding supersession (disposition `cmt-1ba063e7`): no binding exception. Spec Rule B7 records
+  that current bindings cannot carry the invariant and names the missing shared authority, an
+  installation-level per-tenant pause-journal root; its storage selection and C-IS-01 amendment are
+  prerequisites outside this delta, and witness I.2 case (d) gates acceptance.
+- The companion OD C-OD-30.5.1 amendment is authored at `Spec_Operational_Discipline_v1_43.md` and OD
+  plan v2.37 unit U-OD-62 (owner profile-coder, same claim); it needs ratification before Runtime
   implementation ratification.
 - Whether a child run can share its root's workflow_id is pinned by a witness, not assumed.
 

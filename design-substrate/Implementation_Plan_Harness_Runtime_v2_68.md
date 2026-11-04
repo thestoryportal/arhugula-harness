@@ -28,7 +28,7 @@ share it);
 raises `ResumeHandleUnknownError`, before depth; the pause-state accessor's `superseded` result and its
 failed-read audit event, spec Rule A4);
 `harness-od/src/harness_od/pause_resume_namespace.py` (`PauseStateCauseAttribution.SUPERSEDED`), only
-after the companion OD amendment named in spec Rule A4 is ratified under its own owner.
+after the companion OD amendment (OD spec v1.43, OD plan v2.37 unit U-OD-62) is ratified.
 
 **Source, portion 160b (CLI, spec v1.137 §D–§F):**
 one Runtime-owned module for the closed `harness.resume-refusal.v1` value (B-313 v2 plus the ninth
@@ -49,7 +49,8 @@ reuses this value's strict parser for its `isError` reply.
    model, tool or body effects; the old record stays unclaimed; never presented as success or PAUSED.
    Each case also runs as the A/B directory witness: W pauses under workload class A, the later fresh
    run uses class B in a different directory of the same binding, and the resume uses the class-A
-   manifest and config.
+   manifest and config. Case (d) (spec §I.2 (d)): the later run uses configuration B whose bindings
+   omit A's directory, in another process; it needs the spec Rule B7 shared journal root.
 3. Race (spec §I.3), cross-process: a supersession record appended between the handle read and the
    claim yields exit 7 `claim`, reason `claim-refused`; the record stays unclaimed; zero body effects.
 4. No prior file (spec §I.4): a bare engine-native pause yields exit 6 `handle`/`absent`, and the
@@ -94,15 +95,15 @@ reuses this value's strict parser for its `isError` reply.
 **Dependencies and gates.** Implementation starts only after spec v1.137 and this plan are ratified
 and applied. B-313 v2 proof 5 (a child-refusal `RunResult` stays a child refusal) binds the actual
 U-RT-159 interface before the affected 160b candidate is accepted. The accessor change in 160a and its
-criterion 14 need the companion OD C-OD-30.5.1 amendment (spec Rule A4) ratified first; that OD spec
-delta and OD plan unit have no owner yet. The spec Rule B6 bound needs the integration lead's scope
-disposition before ratification. Portion 160b's criteria 1–2 need
+criterion 14 need the companion OD C-OD-30.5.1 amendment (spec Rule A4) ratified first; its owner is
+profile-coder (OD spec v1.43, OD plan v2.37 unit U-OD-62). Criterion 2 case (d) needs the shared
+journal root spec Rule B7 names; 160b is not accepted until that case passes. Portion 160b's criteria 1–2 need
 160a; its value module, parser and criterion 10 can be prepared first.
 
 **Installed witness enabled.** Criterion 2 cases (a)–(c) against the installed CLI, with criterion 1
 as the positive control on the same installation (B-310 v4 witness 5 and 1).
 
 **Not delivered here.** Safe resume of engine-native pauses (original B-314 obligation, OPEN); daemon
-resume (B-311); HTTP operator surface (B-312, excluded); approval collection (B-315). A later run
-under a path binding that does not bind the earlier record's directory (spec Rule B6 bound) is not
-covered unless that disposition requires it.
+resume (B-311); HTTP operator surface (B-312, excluded); approval collection (B-315). The spec Rule B7
+shared journal root: its storage selection and C-IS-01 path-class amendment are prerequisites with
+their own owners; this plan consumes them.

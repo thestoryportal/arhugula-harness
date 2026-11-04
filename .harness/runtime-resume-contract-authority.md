@@ -23,11 +23,12 @@ compact JSON payload in its document, not of the Markdown document or of the sou
 | 4 | Combined-contract work record: one candidate covering items 1–3, author, reviewer, baseline | LIT entry `lit-cmt-9a055b8f.json.md` | `9355786af7f6984a5b3ecb2df569fb1acff9c769f1cbf27c7d0163e2c26b79af` | LIT `cmt-9a055b8f-010e-47ae-88f4-de8a21817bbc`, `created_by` `claude_dcd8fbeb-5a25-4c49-93f9-a632ef4d0813` (profile-coder author), under claim `cmt-792618a5` |
 | 5 | Author grounding: mechanism facts and the open questions Q1–Q5 at H `14b785d8` | host-only `profile-coder-dcd8fbeb/combined-contract-grounding.md` | `231f2cbf62306569ce1fda68d561eaee1580f00ba0a46bab5403b76bfaf01a90` | profile-coder `dcd8fbeb`; recorded under item 4 |
 | 6 | Author closure of Q1–Q5 (single enforcer, record format, reader semantics, precedence, witnesses), the direct input to spec v1.137 | host-only `profile-coder-ccb4ae89/q1-q5-closure.md`; LIT entry `lit-cmt-bfd03da3.json.md` | file `c4cd24fd2d0498d41fdd7540ef073f5a77f7cda9d3587b70527f06da36168439`; entry `b9bf23d8a186b30fc900e1c31ede9c1753f92ef53dbbb6e18fff2dfd2a543eae` | LIT `cmt-bfd03da3-7b82-4e01-8350-bd445944f82c`, `created_by` `claude_ccb4ae89-f171-455d-a075-1836f4037e4b`. Author decisions, not independently reviewed or ratified before this candidate's review |
+| 7 | Integration-lead disposition of the first correction: B-310 v4 cross-binding invariant kept with no binding exception (spec Rule B7 records the missing shared authority); companion OD C-OD-30.5.1 owner and bounded OD spec/plan delta paths | LIT entry `lit-cmt-1ba063e7.json.md` | `a8be8e03b25446e558777ec75fadb446c1569fc8b6c52277d3e82c059b900da2` | LIT `cmt-1ba063e7-3bd6-42df-b628-639aeed7f2bb`, Buford integration lead `01a1a61a` |
 
 ## Portability
 
-The pack at `.harness/review-evidence/runtime-resume-contract-authority/` holds three extracted LIT
-entries (items 2, 4 and 6), each one complete entry with every exported field. The four host files are
+The pack at `.harness/review-evidence/runtime-resume-contract-authority/` holds four extracted LIT
+entries (items 2, 4, 6 and 7), each one complete entry with every exported field. The four host files are
 pinned by SHA256 only; a reviewer reads them at the host origin. Items 1 and 3 cite their review
 comments by ID only. Copying bytes would not establish a missing LIT link, and none of these items is
 human consent.
