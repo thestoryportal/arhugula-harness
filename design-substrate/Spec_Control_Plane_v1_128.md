@@ -10,7 +10,7 @@ draft.
 **Lineage:** grounded on cleared v1.124 (`.harness/clearance/spec-control-plane-v1-124-cleared-2026-09-25.md`).
 Slots v1.125 … v1.127 exist only as historical drafts in preserved worktrees and are NOT ratified;
 this delta neither revives nor supersedes them. Buford owns the version fold and numbering at filing.
-The concurrent Proposed Runtime folds (A3 v1.134, A5 v1.135, A4 Runtime v1.136 / U-RT-159) change no CP spec or plan file. Whether they affect CP contracts in meaning is not judged here.
+The Runtime folds A3 v1.134 (cleared 2026-10-04), A5 v1.135 (Proposed) and A4 Runtime v1.136 / U-RT-159 (Proposed) change no CP spec or plan file. Whether they affect CP contracts in meaning is not judged here.
 
 **Authority:** A4 typed-refusal arc (LIT `arhugula-harness-trial-193` `cmt-7d8db0b5-6fe0-4f33-8529-9f1c9dd5e821`), independent
 design GO `.harness/review-evidence/a4-contract-authority/a4-opus-design-review.md`; fork record

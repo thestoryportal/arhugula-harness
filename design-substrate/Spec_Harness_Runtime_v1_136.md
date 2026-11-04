@@ -1,21 +1,28 @@
-# Spec: Harness Runtime — v1.136 (PROPOSED delta over cleared v1.133)
+# Spec: Harness Runtime — v1.136 (PROPOSED delta over cleared v1.134)
 
 *Delta-only file. Amendment sites: the `RT-FAIL-SUB-AGENT-CHILD-FAILED` rows in the C-RT-17
 §14.7 failure-mode taxonomy and the C-RT-14 §14 Runtime-local fail-class taxonomy; the composer
 §14.7.2 step 7 FAILED mapping seam; and items (b) and (c) of the C-RT-24 §14.14.8 paragraph
 "Refusal typing and precedence (AMENDED at v1.130)" (`Spec_Harness_Runtime_v1_132.md:6512`, not
-amended by v1.133). Every other v1.133 and earlier term remains in force. Cleared predecessor files
+amended by v1.133 or v1.134). Every other v1.134 and earlier term remains in force. Cleared predecessor files
 are not edited.*
 
 **Status: PROPOSED — not cleared.** No clearance marker, artifact-head row or pointer is filed.
 
-**Lineage (pending fold):** grounded on cleared v1.133. v1.134 (A3 Ollama MCP loop and post-effect
-fence; on main through PR #1633, `763e726585fced31f7c768ee7f503da1955773fd`) and v1.135 (A5 Codex read boundary; on main through PR #1635, `01cb8d17b18d7d3b531a75d29d778781f3ac03d1`) are separately PROPOSED and not cleared; v1.133 remains the cleared head. Root settled the Proposed fold order A3 (v1.134, U-RT-157) → A5 (v1.135, U-RT-158) → A4 (this v1.136, U-RT-159). This delta does not overlap their
-amendment sites and must be folded after them before any clearance is filed. Exact authority identifiers are in the fork record.
+**Lineage (pending fold):** grounded on cleared v1.134, the A3 Ollama MCP loop and post-effect
+fence (`.harness/clearance/spec-harness-runtime-v1-134-cleared-2026-10-04.md`; contract on main through
+PR #1633, `763e726585fced31f7c768ee7f503da1955773fd`; source through PR #1643,
+`8d684b42a1f07ddd43f1c43c093cca5f77764eca`). v1.134 is the cleared head. v1.135 (A5 Codex read
+boundary; on main through PR #1635, `01cb8d17b18d7d3b531a75d29d778781f3ac03d1`) is separately PROPOSED
+and not cleared. Root settled the Proposed fold order A3 (v1.134, U-RT-157) → A5 (v1.135, U-RT-158) →
+A4 (this v1.136, U-RT-159). This delta does not overlap the v1.134 or v1.135 amendment sites. It must
+be folded after v1.135 before any clearance is filed, and the actual A5 interfaces are bound before an
+affected A4 candidate is frozen or integrated. Exact authority identifiers are in the fork record;
+source and version dependencies are in `.harness/a4_contract_authority.md`.
 Authority: CP v1.128 §0.3–§0.4 (proposed, same arc); fork record
 `.harness/class_1_fork_a4_typed_resume_refusal.md`.
 
-## §0 Change-note (v1.133 → v1.136)
+## §0 Change-note (v1.134 → v1.136)
 
 ### §0.1 C-RT-17 / C-RT-14 failure taxonomy rows and §14.7.2 step 7 (AMENDED)
 
@@ -32,7 +39,7 @@ This Proposed delta also supersedes
 §14.7.2 step 7's historical "do NOT raise" clause for FAILED children: set
 `subagent.result_status = "failed"`, perform the applicable best-effort audit, then raise the
 typed error below. The SUCCESS and DRAINED mappings are unchanged. Resolving that contradiction
-is part of the pending Proposed fold; it does not assert that cleared v1.132/v1.133 already
+is part of the pending Proposed fold; it does not assert that cleared v1.132/v1.133/v1.134 already
 resolved it or that this delta is cleared.
 
 When the child workflow returns `RunStatus.FAILED`:
@@ -80,7 +87,7 @@ A grandchild that genuinely ran and failed keeps the existing semantics at every
 
 ### §0.3 C-RT-24 §14.14.8 "Refusal typing and precedence", items (b) and (c) (AMENDED)
 
-These items, as last amended at v1.130 and carried unchanged in cleared v1.132 and v1.133, are
+These items, as last amended at v1.130 and carried unchanged in cleared v1.132, v1.133 and v1.134, are
 superseded as follows. Items (a) and (d) are unchanged; (d)'s recorded-before-the-barrier limit
 applies to both arms of §0.1.
 

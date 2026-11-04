@@ -42,6 +42,48 @@ The seven extracts in rows 5–11 are exact six-line wrappers. Each holds one co
 every field as exported, from a private root literal snapshot. Each was checked before filing:
 wrapper and payload hashes, and a parse-back that equals the literal entry.
 
+## Source and version dependencies
+
+These contract files were drafted against cleared Runtime v1.133 / plan v2.64 and are now reconciled
+against main `39aa78e8d55f68feb4b2ea76cd87abec5245aebd`. Main carries the four Proposed A4 documents
+and this record, but none of the A4 source or A4 tests.
+
+- **Cleared Runtime head: A3 v1.134 / v2.65.** Cleared 2026-10-04 by
+  `.harness/clearance/spec-harness-runtime-v1-134-cleared-2026-10-04.md` and
+  `.harness/clearance/implementation-plan-harness-runtime-v2-65-cleared-2026-10-04.md`; contracts on
+  main through PR #1633 (`763e726585fced31f7c768ee7f503da1955773fd`), source through PR #1643
+  (`8d684b42a1f07ddd43f1c43c093cca5f77764eca`). Its authority is
+  `.harness/a3_runtime_fence_fold_authority.md`.
+- **The returned-arm carrier keeps both bases under v1.134.** v1.134 amends C-RT-38 (Ollama scope and
+  the post-effect fence) and the linked C-RT-16 §14.6.3/§14.6.4 accounting. It names no
+  `PostEffectAuditSigningError`, `effect_class`, `result_ref` or C-RT-18 §14.8.11 term, and its
+  fence exclusions keep the audit-signing hard failures on their existing carriers
+  (`Spec_Harness_Runtime_v1_134.md:72-75`). It touches no §14.7, §14.14.8 or C-RT-24 site. On main,
+  `harness-runtime/src/harness_runtime/lifecycle/audit_signing_errors.py` and `sub_agent_dispatch.py`
+  were last changed by #1616 (`d2095b18`), not by #1643. The `ChildResumeRefusedError` and
+  `PostEffectAuditSigningError` bases that v1.136 §0.1 item 1 requires are therefore those of v1.133.
+- **A5 stays Proposed.** Runtime v1.135 / plan v2.66 (on main through PR #1635,
+  `01cb8d17b18d7d3b531a75d29d778781f3ac03d1`) amends C-RT-05 only; see
+  `.harness/a5_contract_authority.md`. The fold order is A3 (U-RT-157) → A5 (U-RT-158) → A4
+  (U-RT-159). Under the accepted release campaign's A5-to-A4 dependency, A4 corrections and
+  discriminating tests may be prepared against provisional interfaces. The actual A5 interfaces are bound before an
+  affected A4 candidate is frozen or integrated. This record changes no A5 decision.
+- **Preparation heads (not on main).** Unit 1 `c71bf24c7a76c292c4e7099b80a3744d60ff46bd` (branches
+  `pack/a4-final-u1`, `pack/a4-final-u2`), Unit 2 `cf1c916f252a4f49450d81898de5055984b6b94c`
+  (`pack/a4-final-u2`) and public test `bba659dc5c22d381e931fa71922c6d7e5da26483`
+  (`test/omarchy-public-resume-refusal`). None of their `harness-*` files cites an A4 contract version
+  or unit ID (v1.136, v2.67, v1.128, v2.56, U-RT-159, U-CP-106), so a renumber of these documents
+  changes no citation at those heads. The heads must be rechecked at whatever head actually lands.
+- **Owed result-preserving carrier.** The preparation heads implement the superseded refusal-only
+  returned arm. Runtime v1.136 §0.1 item 1's `RefusedChildResultAuditSigningError` (a
+  `ChildResumeRefusedError` and a `PostEffectAuditSigningError` with `effect_class = sub-agent-result`,
+  the child `RunResult` and its resolved `result_ref`), plan v2.67 criterion 2, criterion 5's
+  returned-arm mutations and criterion 4's real-dispatcher, real-leaf witness are owed source work at
+  the applicable head, after the A5 binding above.
+
+Buford owns version numbering, clearance markers and artifact-head rows at filing. A renumber of
+v1.136 / v2.67 or v1.128 / v2.56 must update every citation of them in the same change.
+
 ## Not in this record
 
 There is no clearance status, no clearance marker, no head or pointer row, and no claim that any
