@@ -291,7 +291,9 @@ def test_deploy_docs_give_the_operator_setup_and_state_the_limits() -> None:
         "omarchy.ollama.toml.example",
         "omarchy.claude-code.toml.example",
         "omarchy.codex.toml.example",
-        "omarchy.offline-embedding.toml.example",
+        "Four additive, complete profiles",
+        "| `examples/omarchy.offline-embedding.toml.example` | local Ollama with offline embedding"
+        " routing ([guide](operations/omarchy-offline-embedding.md)) | source-checked only |",
         "HELD",
         "durable",
     ):
