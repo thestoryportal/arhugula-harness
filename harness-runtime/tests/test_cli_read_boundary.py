@@ -16,6 +16,8 @@ import errno
 import hashlib
 import json
 import os
+import platform
+import re
 import shutil
 import socket
 import subprocess
@@ -37,6 +39,29 @@ TEST_RUNTIME_EXECUTABLE = (
     (os.path.realpath("/lib/ld-linux-aarch64.so.1"),)
     if os.path.exists("/lib/ld-linux-aarch64.so.1")
     else (os.path.realpath("/lib64/ld-linux-x86-64.so.2"),)
+)
+
+
+def _host_refusal() -> str | None:
+    """Why the launcher refuses THIS host (its own step-2 check), or None if it is supported."""
+    try:
+        boundary.require_supported_abi(platform.machine(), boundary._query_abi)
+    except boundary.LauncherRefusalError as refusal:
+        return str(refusal)
+    return None
+
+
+HOST_REFUSAL = _host_refusal()
+# [LAW:single-enforcer] the launcher's own host check decides which canaries can run here.
+# A canary that needs the kernel to enforce (or to pass step 2) is HELD, unproved, on a host
+# the launcher refuses; that host instead runs the real-refusal tests marked UNSUPPORTED_HOST.
+SUPPORTED_HOST = pytest.mark.skipif(
+    HOST_REFUSAL is not None,
+    reason=f"HELD (unproved here): needs kernel Landlock ABI >= {boundary.MIN_ABI} on "
+    f"aarch64/x86_64; the launcher refuses this host: {HOST_REFUSAL}",
+)
+UNSUPPORTED_HOST = pytest.mark.skipif(
+    HOST_REFUSAL is None, reason="this host is supported: the SUPPORTED_HOST canaries run instead"
 )
 
 PROBE = r"""
@@ -147,6 +172,7 @@ def _probe(spec: boundary.RulesetSpec, targets: dict[str, Any], **kw: Any) -> di
     return json.loads(result.stdout.strip().splitlines()[-1])
 
 
+@SUPPORTED_HOST
 def test_unrelated_operator_files_are_denied_and_owned_dirs_are_usable(tmp_path: Path) -> None:
     paths = _layout(tmp_path)
     seen = _probe(
@@ -180,12 +206,14 @@ def test_unrelated_operator_files_are_denied_and_owned_dirs_are_usable(tmp_path:
     assert not (paths["home"] / "planted.txt").exists()
 
 
+@SUPPORTED_HOST
 def test_a_descendant_inherits_the_boundary(tmp_path: Path) -> None:
     paths = _layout(tmp_path)
     seen = _probe(_spec(paths), {"child": str(paths["home"] / "secret-notes.txt")})
     assert seen == {"descendant": "EACCES"}
 
 
+@SUPPORTED_HOST
 def test_an_inherited_descriptor_is_closed_before_the_target_runs(tmp_path: Path) -> None:
     paths = _layout(tmp_path)
     fd = os.open(paths["home"] / "secret-notes.txt", os.O_RDONLY)
@@ -196,6 +224,7 @@ def test_an_inherited_descriptor_is_closed_before_the_target_runs(tmp_path: Path
     assert seen == {"inherited": "EBADF"}
 
 
+@SUPPORTED_HOST
 def test_unix_sockets_created_outside_the_domain_are_unreachable(tmp_path: Path) -> None:
     paths = _layout(tmp_path)
     # AF_UNIX paths are limited to 108 bytes: a short OWNED directory under TMPDIR serves
@@ -275,11 +304,13 @@ def _bare_spec(token: str = REFUSAL_TOKEN) -> boundary.RulesetSpec:
     )
 
 
+@SUPPORTED_HOST
 def test_a_pin_mismatch_is_refused_before_the_target_runs(tmp_path: Path) -> None:
     paths = _layout(tmp_path)
     assert "sha256" in _refusal(_launch(_spec(paths, sha="0" * 64), {}))
 
 
+@SUPPORTED_HOST
 def test_a_symlinked_or_missing_executable_is_refused(tmp_path: Path) -> None:
     paths = _layout(tmp_path)
     link = tmp_path / "codex-latest"
@@ -289,11 +320,13 @@ def test_a_symlinked_or_missing_executable_is_refused(tmp_path: Path) -> None:
     assert "executable" in _refusal(_launch(_spec(paths, executable=missing), {}))
 
 
+@SUPPORTED_HOST
 def test_a_missing_allowed_path_is_refused(tmp_path: Path) -> None:
     paths = _layout(tmp_path)
     assert "path" in _refusal(_launch(_spec(paths, extra=(str(tmp_path / "nope"),)), {}))
 
 
+@SUPPORTED_HOST
 def test_a_directory_executable_allowance_is_refused_at_launch(tmp_path: Path) -> None:
     """An `executable_paths` entry must be a regular file: a directory would grant execute
     beneath it, so the launcher refuses before the target runs."""
@@ -364,6 +397,7 @@ def test_an_unsupported_host_is_refused_by_the_launcher_entry_point(
     assert reason in _refusal(_launch_entry(_spec(paths), inject, PROBE, {}))
 
 
+@SUPPORTED_HOST
 def test_the_entry_driver_runs_the_target_on_a_supported_report(tmp_path: Path) -> None:
     """Control for the refusals above: the same driver with a supported report runs."""
     paths = _layout(tmp_path)
@@ -443,6 +477,7 @@ def _rights_probe(
     return json.loads(result.stdout.strip().splitlines()[-1])
 
 
+@SUPPORTED_HOST
 def test_a_confined_child_cannot_signal_outside_its_domain(tmp_path: Path) -> None:
     """Item 6.4, the SIGNAL scope: an unconfined same-user sibling is out of reach (EPERM)
     while the child's own confined descendant is not."""
@@ -477,6 +512,7 @@ def _rights_layout(tmp_path: Path) -> tuple[dict[str, Path], Path]:
     return paths, public
 
 
+@SUPPORTED_HOST
 def test_each_exercisable_right_is_denied_outside_the_grants_and_allowed_inside(
     tmp_path: Path,
 ) -> None:
@@ -559,6 +595,7 @@ def _device_node_prerequisites(tmp_path: Path) -> str | None:
     return None
 
 
+@SUPPORTED_HOST
 def test_device_node_creation_is_denied_by_landlock_not_by_the_missing_capability(
     tmp_path: Path,
 ) -> None:
@@ -579,6 +616,7 @@ def test_device_node_creation_is_denied_by_landlock_not_by_the_missing_capabilit
     assert not (home / "cdev").exists() and not (home / "bdev").exists()
 
 
+@SUPPORTED_HOST
 @pytest.mark.parametrize("broad", ["/", "/usr", "/home", "HOME", "HOME_PARENT"])
 def test_a_broad_allowance_is_refused_at_launch(tmp_path: Path, broad: str) -> None:
     paths = _layout(tmp_path)
@@ -586,6 +624,7 @@ def test_a_broad_allowance_is_refused_at_launch(tmp_path: Path, broad: str) -> N
     assert "exposes" in _refusal(_launch(_spec(paths, extra=(target,)), {}))
 
 
+@SUPPORTED_HOST
 def test_a_symlinked_allowance_cannot_reach_the_protected_home(tmp_path: Path) -> None:
     """Review P2-1: the check and the grant are the same opened object, not two strings."""
     paths = _layout(tmp_path)
@@ -594,6 +633,7 @@ def test_a_symlinked_allowance_cannot_reach_the_protected_home(tmp_path: Path) -
     assert "canonical" in _refusal(_launch(_spec(paths, extra=(str(alias),)), {}))
 
 
+@SUPPORTED_HOST
 def test_an_ancestor_symlink_on_an_allowance_is_refused(tmp_path: Path) -> None:
     paths = _layout(tmp_path)
     (tmp_path / "public").mkdir()
@@ -603,6 +643,7 @@ def test_an_ancestor_symlink_on_an_allowance_is_refused(tmp_path: Path) -> None:
     assert "canonical" in _refusal(_launch(_spec(paths, extra=(str(ancestor / "hosts"),)), {}))
 
 
+@SUPPORTED_HOST
 @pytest.mark.parametrize("where", ["residence", "inside"])
 def test_the_interactive_codex_residence_is_never_granted(tmp_path: Path, where: str) -> None:
     """Review P2-2: the operator's own ``~/.codex`` (or anything in it) is not dedicated."""
@@ -614,6 +655,7 @@ def test_the_interactive_codex_residence_is_never_granted(tmp_path: Path, where:
     assert "sealed" in _refusal(_launch(spec, {}))
 
 
+@SUPPORTED_HOST
 def test_a_descriptor_above_a_lowered_soft_limit_is_closed(tmp_path: Path) -> None:
     """Review P2-3: closure is independent of RLIMIT_NOFILE, not ``[3, SC_OPEN_MAX)``."""
     paths = _layout(tmp_path)
@@ -645,3 +687,66 @@ def test_a_descriptor_above_a_lowered_soft_limit_is_closed(tmp_path: Path) -> No
     )
     assert result.returncode == 0, result.stderr[-2000:]
     assert json.loads(result.stdout.strip().splitlines()[-1]) == {"high": "EBADF"}
+
+
+@UNSUPPORTED_HOST
+def test_this_unsupported_host_is_refused_by_the_real_launcher(tmp_path: Path) -> None:
+    """Spec item 6.2 with the REAL host report: the refusal every HELD canary names."""
+    assert _refusal(_launch(_spec(_layout(tmp_path)), {})) == HOST_REFUSAL
+
+
+# The launcher's own grant and executable checks, called in-process on any host: they open
+# and compare descriptors only, so they need no ruleset. The launch tests above prove the
+# same refusals on the real entry path where the kernel supports it.
+def _unsafe_allowance(tmp_path: Path, paths: dict[str, Path], case: str) -> str:
+    if case == "missing":
+        return str(tmp_path / "nope")
+    if case == "symlinked":
+        (alias := tmp_path / "public-dns-alias").symlink_to(paths["home"], target_is_directory=True)
+        return str(alias)
+    if case == "ancestor-symlink":
+        (tmp_path / "public").mkdir()
+        (tmp_path / "public" / "hosts").write_text("fixture")
+        (via := tmp_path / "via-link").symlink_to(tmp_path / "public", target_is_directory=True)
+        return str(via / "hosts")
+    if case in ("residence", "inside-residence"):
+        granted = paths["home"] / ".codex" / ("harness" if case == "inside-residence" else "")
+        granted.mkdir(mode=0o700, exist_ok=True)
+        return str(granted)
+    return {"HOME": str(paths["home"]), "HOME_PARENT": str(tmp_path)}.get(case, case)
+
+
+@pytest.mark.parametrize(
+    ("case", "reason"),
+    [
+        ("missing", "allowed path unusable (ENOENT)"),
+        ("symlinked", "allowed path is not canonical"),
+        ("ancestor-symlink", "allowed path is not canonical"),
+        ("residence", "allowance exposes a protected or sealed root"),
+        ("inside-residence", "allowance lies inside a sealed root"),
+        *((broad, "allowance exposes") for broad in ("/", "/usr", "/home", "HOME", "HOME_PARENT")),
+    ],
+)
+def test_the_grant_policy_refuses_an_unsafe_allowance_on_any_host(
+    tmp_path: Path, case: str, reason: str
+) -> None:
+    paths = _layout(tmp_path)
+    allowance = _unsafe_allowance(tmp_path, paths, case)
+    policy = boundary._GrantPolicy.of(_spec(paths))
+    with pytest.raises(boundary.LauncherRefusalError, match=re.escape(reason)):
+        boundary._grant_descriptor(allowance, os.O_PATH, policy)
+
+
+@pytest.mark.parametrize("case", ["pin", "symlinked", "missing"])
+def test_the_executable_check_refuses_on_any_host(tmp_path: Path, case: str) -> None:
+    paths = _layout(tmp_path)
+    if case == "symlinked":
+        (tmp_path / "codex-latest").symlink_to(INTERPRETER)
+    spec = {
+        "pin": _spec(paths, sha="0" * 64),
+        "symlinked": _spec(paths, executable=tmp_path / "codex-latest"),
+        "missing": _spec(paths, executable=tmp_path / "absent-codex"),
+    }[case]
+    expected = "sha256 does not match" if case == "pin" else "executable allowed path"
+    with pytest.raises(boundary.LauncherRefusalError, match=expected):
+        boundary._open_verified_executable(spec, boundary._GrantPolicy.of(spec))

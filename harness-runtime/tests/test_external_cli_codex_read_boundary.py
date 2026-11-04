@@ -40,6 +40,8 @@ from harness_runtime.types import (
     ExternalCLIProviderKind,
 )
 
+from .test_cli_read_boundary import HOST_REFUSAL, SUPPORTED_HOST, UNSUPPORTED_HOST
+
 INTERPRETER = Path(os.path.realpath(sys.executable))
 TEST_RUNTIME_READ_ONLY = (
     Path(sys.base_prefix).resolve(),
@@ -190,6 +192,7 @@ async def test_an_unsafe_home_is_refused_before_any_process(tmp_path: Path, defe
         await _run_once(runner)
 
 
+@SUPPORTED_HOST
 @pytest.mark.parametrize("alias", ["dot-codex", "inside-dot-codex", "operator-codex-home-env"])
 async def test_the_operator_interactive_codex_home_is_not_a_dedicated_home(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _simulated_operator: Path, alias: str
@@ -283,6 +286,7 @@ async def test_default_construction_of_the_named_codex_never_runs_unconfined(
 ENV_PROBE = "import json, os; print(json.dumps({'env': dict(os.environ), 'cwd': os.getcwd()}))"
 
 
+@SUPPORTED_HOST
 async def test_the_child_gets_only_the_allow_listed_environment_and_private_scratch(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -305,6 +309,21 @@ async def test_the_child_gets_only_the_allow_listed_environment_and_private_scra
     }
 
 
+@UNSUPPORTED_HOST
+async def test_an_unsupported_host_is_a_typed_refusal_and_the_target_never_runs(
+    tmp_path: Path,
+) -> None:
+    """The real runner with the real host report: the refusal the HELD launches name."""
+    home, scratch = _homes(tmp_path)
+    runner = provider._CodexReadBoundaryRunner(_boundary(home, scratch))
+    program = "import os; open(os.environ['CODEX_HOME'] + '/ran', 'w').close()"
+    with pytest.raises(ExternalCLIReadBoundaryError) as error:
+        await runner.run(("codex", "-I", "-S", "-c", program), stdin="", timeout_seconds=30)
+    assert error.value.reason == HOST_REFUSAL
+    assert not (home / "ran").exists() and list(scratch.iterdir()) == []
+
+
+@SUPPORTED_HOST
 async def test_a_launcher_refusal_is_a_typed_error(tmp_path: Path) -> None:
     home, scratch = _homes(tmp_path)
     runner = provider._CodexReadBoundaryRunner(_boundary(home, scratch, executable_sha256="0" * 64))
@@ -344,6 +363,7 @@ class _ForgingTarget:
         )
 
 
+@SUPPORTED_HOST
 async def test_a_target_forging_a_refusal_gets_no_typed_error_and_its_output_is_withheld(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -369,6 +389,7 @@ async def test_a_target_forging_a_refusal_gets_no_typed_error_and_its_output_is_
     assert "UNTRUSTED" not in caplog.text
 
 
+@SUPPORTED_HOST
 async def test_cancellation_settles_the_confined_process_group(tmp_path: Path) -> None:
     home, scratch = _homes(tmp_path)
     pid_file = home / "pid"
@@ -422,6 +443,7 @@ if outcome == "cancel":
 """
 
 
+@SUPPORTED_HOST
 @pytest.mark.parametrize("outcome", ["success", "forged", "cancel"])
 async def test_scratch_is_removed_only_after_an_outliving_group_member_settles(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, outcome: str
@@ -508,6 +530,7 @@ def _reap_zombie(pid: int) -> bool:
     return os.waitpid(pid, os.WNOHANG)[0] == pid
 
 
+@SUPPORTED_HOST
 @pytest.mark.parametrize("outcome", ["success", "forged", "cancel"])
 async def test_scratch_is_kept_and_reported_when_the_group_does_not_settle(
     tmp_path: Path,
@@ -554,6 +577,7 @@ async def test_scratch_is_kept_and_reported_when_the_group_does_not_settle(
         assert retained in caught.__notes__
 
 
+@SUPPORTED_HOST
 async def test_cancellation_removes_scratch_only_after_an_outliving_member_settles(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, held_orphans: list[int]
 ) -> None:
