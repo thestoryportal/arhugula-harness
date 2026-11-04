@@ -1,0 +1,62 @@
+{
+  "_comment": "A5 kernel CI venues (trial-193 ci-venue-v2). The guarded node IDs are bound to the git blobs that define them; any change to a bound file makes this file stale and fails the gate until it is re-reviewed.",
+  "bound_blobs": {
+    "harness-runtime/src/harness_runtime/lifecycle/cli_read_boundary.py": "1e13a98681b67bdf1218ba9a21e525402e4488fa",
+    "harness-runtime/tests/test_cli_read_boundary.py": "267b244159a1ee0aad40a92641b3736171d94e32",
+    "harness-runtime/tests/test_external_cli_codex_read_boundary.py": "abad4fa3d50647ea6dbd82d1464f025482e877a4"
+  },
+  "venues": {
+    "supported": {
+      "kind": "supported",
+      "image_os": "ubuntu26"
+    },
+    "unsupported-abi8": {
+      "kind": "refused",
+      "image_os": "ubuntu24",
+      "abi": 8,
+      "refusal": "Landlock ABI 8 < required 9"
+    }
+  },
+  "supported_host_ids": [
+    "harness-runtime/tests/test_cli_read_boundary.py::test_unrelated_operator_files_are_denied_and_owned_dirs_are_usable",
+    "harness-runtime/tests/test_cli_read_boundary.py::test_a_descendant_inherits_the_boundary",
+    "harness-runtime/tests/test_cli_read_boundary.py::test_an_inherited_descriptor_is_closed_before_the_target_runs",
+    "harness-runtime/tests/test_cli_read_boundary.py::test_unix_sockets_created_outside_the_domain_are_unreachable",
+    "harness-runtime/tests/test_cli_read_boundary.py::test_a_pin_mismatch_is_refused_before_the_target_runs",
+    "harness-runtime/tests/test_cli_read_boundary.py::test_a_symlinked_or_missing_executable_is_refused",
+    "harness-runtime/tests/test_cli_read_boundary.py::test_a_missing_allowed_path_is_refused",
+    "harness-runtime/tests/test_cli_read_boundary.py::test_a_directory_executable_allowance_is_refused_at_launch",
+    "harness-runtime/tests/test_cli_read_boundary.py::test_the_entry_driver_runs_the_target_on_a_supported_report",
+    "harness-runtime/tests/test_cli_read_boundary.py::test_a_confined_child_cannot_signal_outside_its_domain",
+    "harness-runtime/tests/test_cli_read_boundary.py::test_each_exercisable_right_is_denied_outside_the_grants_and_allowed_inside",
+    "harness-runtime/tests/test_cli_read_boundary.py::test_device_node_creation_is_denied_by_landlock_not_by_the_missing_capability",
+    "harness-runtime/tests/test_cli_read_boundary.py::test_a_broad_allowance_is_refused_at_launch[/]",
+    "harness-runtime/tests/test_cli_read_boundary.py::test_a_broad_allowance_is_refused_at_launch[/usr]",
+    "harness-runtime/tests/test_cli_read_boundary.py::test_a_broad_allowance_is_refused_at_launch[/home]",
+    "harness-runtime/tests/test_cli_read_boundary.py::test_a_broad_allowance_is_refused_at_launch[HOME]",
+    "harness-runtime/tests/test_cli_read_boundary.py::test_a_broad_allowance_is_refused_at_launch[HOME_PARENT]",
+    "harness-runtime/tests/test_cli_read_boundary.py::test_a_symlinked_allowance_cannot_reach_the_protected_home",
+    "harness-runtime/tests/test_cli_read_boundary.py::test_an_ancestor_symlink_on_an_allowance_is_refused",
+    "harness-runtime/tests/test_cli_read_boundary.py::test_the_interactive_codex_residence_is_never_granted[residence]",
+    "harness-runtime/tests/test_cli_read_boundary.py::test_the_interactive_codex_residence_is_never_granted[inside]",
+    "harness-runtime/tests/test_cli_read_boundary.py::test_a_descriptor_above_a_lowered_soft_limit_is_closed",
+    "harness-runtime/tests/test_external_cli_codex_read_boundary.py::test_the_operator_interactive_codex_home_is_not_a_dedicated_home[dot-codex]",
+    "harness-runtime/tests/test_external_cli_codex_read_boundary.py::test_the_operator_interactive_codex_home_is_not_a_dedicated_home[inside-dot-codex]",
+    "harness-runtime/tests/test_external_cli_codex_read_boundary.py::test_the_operator_interactive_codex_home_is_not_a_dedicated_home[operator-codex-home-env]",
+    "harness-runtime/tests/test_external_cli_codex_read_boundary.py::test_the_child_gets_only_the_allow_listed_environment_and_private_scratch",
+    "harness-runtime/tests/test_external_cli_codex_read_boundary.py::test_a_launcher_refusal_is_a_typed_error",
+    "harness-runtime/tests/test_external_cli_codex_read_boundary.py::test_a_target_forging_a_refusal_gets_no_typed_error_and_its_output_is_withheld",
+    "harness-runtime/tests/test_external_cli_codex_read_boundary.py::test_cancellation_settles_the_confined_process_group",
+    "harness-runtime/tests/test_external_cli_codex_read_boundary.py::test_scratch_is_removed_only_after_an_outliving_group_member_settles[success]",
+    "harness-runtime/tests/test_external_cli_codex_read_boundary.py::test_scratch_is_removed_only_after_an_outliving_group_member_settles[forged]",
+    "harness-runtime/tests/test_external_cli_codex_read_boundary.py::test_scratch_is_removed_only_after_an_outliving_group_member_settles[cancel]",
+    "harness-runtime/tests/test_external_cli_codex_read_boundary.py::test_scratch_is_kept_and_reported_when_the_group_does_not_settle[success]",
+    "harness-runtime/tests/test_external_cli_codex_read_boundary.py::test_scratch_is_kept_and_reported_when_the_group_does_not_settle[forged]",
+    "harness-runtime/tests/test_external_cli_codex_read_boundary.py::test_scratch_is_kept_and_reported_when_the_group_does_not_settle[cancel]",
+    "harness-runtime/tests/test_external_cli_codex_read_boundary.py::test_cancellation_removes_scratch_only_after_an_outliving_member_settles"
+  ],
+  "unsupported_host_ids": [
+    "harness-runtime/tests/test_cli_read_boundary.py::test_this_unsupported_host_is_refused_by_the_real_launcher",
+    "harness-runtime/tests/test_external_cli_codex_read_boundary.py::test_an_unsupported_host_is_a_typed_refusal_and_the_target_never_runs"
+  ]
+}
