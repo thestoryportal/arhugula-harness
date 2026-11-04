@@ -1,9 +1,10 @@
 """Provider-free contract checks for three local topology manifests in examples/README.md
 and the offline-embedding Omarchy profile (docs/operations/omarchy-offline-embedding.md).
 
-The manifest and config checks load the SHIPPED file through the loader the CLI uses; the
-model-directory checks run the guide's own step-3 shell block; and the behaviour checks
-drive the real CP driver and Runtime LLM dispatcher with a recording stand-in for the
+The manifest and config checks load the SHIPPED file through the loader the CLI uses, and
+one compares the raw TOML of the offline-embedding and Ollama profiles; the model-directory
+checks lay the model out with the guide's own step-3 shell block, except one that refuses
+a directory that does not exist; and the behaviour checks drive the real CP driver and Runtime LLM dispatcher with a recording stand-in for the
 Ollama client. No model, daemon or network is used; a live run of these examples on
 an installed candidate remains a separate, unwitnessed acceptance.
 """
