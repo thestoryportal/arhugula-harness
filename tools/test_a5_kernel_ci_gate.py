@@ -25,6 +25,7 @@ import pytest
 import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import a5_kernel_ci_gate as gate
 from a5_kernel_ci_gate import (
     EXPECTATIONS,
     ROOT,
@@ -32,6 +33,7 @@ from a5_kernel_ci_gate import (
     ExpectationsError,
     HostReport,
     JUnitError,
+    Leg,
     NodeId,
     Outcome,
     PreflightError,
@@ -320,6 +322,18 @@ def test_the_real_preflight_record_parses_back() -> None:
     assert (prior.venue, prior.expectations_sha256) == ("supported", "e" * 64)
     assert prior.blobs == _EXPECTED.bound_blobs
     assert set(prior.binding) == set(_ENV)
+    # What check re-measures on the same runner is exactly what preflight recorded.
+    assert prior.leg == gate._measure_leg()
+
+
+# The runner and checkout `check` measures in the CLI fixture.
+_LEG = Leg(
+    HostReport("x86_64", 9, None),
+    "6.17.0-1004-azure",
+    "Ubuntu 26.04 LTS",
+    _ENV["CI_TESTED"],
+    ("p" * 40, "q" * 40),
+)
 
 
 def _record(expectations_sha256: str) -> dict[str, Any]:
@@ -327,11 +341,12 @@ def _record(expectations_sha256: str) -> dict[str, Any]:
     return {
         "venue": "x",
         "started_at": (datetime.now(UTC) - timedelta(minutes=5)).isoformat(),
-        "host": {"machine": "x86_64", "landlock_abi": 9, "launcher": "accepted",
-                 "refusal": None, "kernel": "6.17.0-1004-azure", "os": "Ubuntu 26.04 LTS"},
+        "host": {"machine": _LEG.host.machine, "landlock_abi": _LEG.host.abi,
+                 "launcher": "accepted", "refusal": None, "kernel": _LEG.kernel,
+                 "os": _LEG.os_release},
         "binding": dict(_ENV),
-        "checked_out": _ENV["CI_TESTED"],
-        "parents": ["p" * 40, "q" * 40],
+        "checked_out": _LEG.checked_out,
+        "parents": list(_LEG.parents),
         "blobs": dict(_BLOBS),
         "expectations_sha256": expectations_sha256,
         "problems": [],
@@ -362,6 +377,7 @@ def _write_leg(
 def _run(monkeypatch: pytest.MonkeyPatch, argv: list[str]) -> tuple[int, dict[str, Any]]:
     for name, value in _ENV.items():
         monkeypatch.setenv(name, value)
+    monkeypatch.setattr(gate, "_measure_leg", lambda: _LEG)
     code = main(argv)
     return code, json.loads(Path(argv[-1]).read_text())
 
@@ -405,6 +421,13 @@ _REFUSED_HOST = {"landlock_abi": 8, "launcher": "refused", "refusal": _REFUSAL}
         (_JUNIT, lambda r: r["host"].update(launcher="refused"), "contradicts"),
         (_JUNIT, lambda r: r["host"].update(landlock_abi="9"), "not int"),
         (_JUNIT, lambda r: r["host"].pop("kernel"), "incomplete"),
+        (_JUNIT, lambda r: r["host"].update(machine="", landlock_abi=0, kernel="", os=""),
+         "this leg measures"),
+        (_JUNIT, lambda r: r["host"].update(landlock_abi=8), "this leg measures"),
+        (_JUNIT, lambda r: r["host"].update(machine="riscv64"), "this leg measures"),
+        (_JUNIT, lambda r: r["host"].update(kernel="6.8.0-1017-azure"), "this leg measures"),
+        (_JUNIT, lambda r: r.update(parents=[]), "this leg measures"),
+        (_JUNIT, lambda r: r.update(parents=["0" * 40]), "this leg measures"),
         (_JUNIT, lambda r: r.update(checked_out="c" * 40), "checked-out"),
         (_JUNIT, lambda r: r.pop("parents"), "incomplete"),
         (_JUNIT, lambda r: r.update(started_at="2026-11-04T00:00:00"), "no timezone"),
@@ -419,7 +442,9 @@ _REFUSED_HOST = {"landlock_abi": 8, "launcher": "refused", "refusal": _REFUSAL}
          "other-runner", "other-image-version", "binding-incomplete", "stale-expectations",
          "no-expectations-digest", "no-blobs", "stale-blob", "unreviewed-blob", "blob-not-sha",
          "blob-map-absent", "host-absent", "host-refused", "launcher-contradicts-refusal",
-         "abi-not-int", "kernel-absent", "other-checkout", "parents-absent", "naive-start",
+         "abi-not-int", "kernel-absent", "accepted-impossible-host", "accepted-abi8-host",
+         "other-arch", "other-kernel", "no-parents", "unrelated-parents", "other-checkout",
+         "parents-absent", "naive-start",
          "problems-absent", "problem-not-str", "parent-not-str", "review-probe", "missing-id",
          "malformed-junit"],
 )  # fmt: skip

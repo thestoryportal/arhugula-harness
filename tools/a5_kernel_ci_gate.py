@@ -8,7 +8,8 @@ unchanged suite:
 * ``preflight`` (before pytest) runs the REAL launcher host check on the runner's actual
   architecture and measured Landlock ABI, binds the result to image, kernel, run and commit
   identity, and fails unless the allocation is exactly the venue it was selected as.
-* ``check`` (after pytest) re-judges that leg's preflight record against the expectations it
+* ``check`` (after pytest) measures the same runner and checkout again, requires the
+  preflight record to describe exactly them, re-judges it against the expectations it
   loads now, then reads the leg's fresh JUnit by exact node ID and fails unless every
   guarded ID appears exactly once with the outcome its venue requires.
 
@@ -201,6 +202,29 @@ def _git(*args: str) -> str:
     ).stdout.strip()
 
 
+@dataclass(frozen=True)
+class Leg:
+    """The runner and checkout one job runs on, constant across its steps."""
+
+    host: HostReport
+    kernel: str
+    os_release: str
+    checked_out: str
+    parents: tuple[str, ...]
+
+
+def _measure_leg() -> Leg:
+    # [LAW:one-source-of-truth] Both subcommands measure the leg here, so the record
+    # preflight writes and the facts check re-measures are the same kind of map.
+    return Leg(
+        _measure_host(),
+        platform.release(),
+        platform.freedesktop_os_release().get("PRETTY_NAME", ""),
+        _git("rev-parse", "HEAD"),
+        tuple(_git("rev-list", "--parents", "-n", "1", "HEAD").split()[1:]),
+    )
+
+
 def _read_blob(path: Path) -> str | None:
     return git_blob(path.read_bytes()) if path.is_file() else None
 
@@ -209,10 +233,9 @@ def preflight(venue_id: str, expectations: Expectations, raw_sha256: str) -> dic
     venue = expectations.venues[venue_id]
     started_at = datetime.now(UTC).isoformat()
     env = {name: os.environ.get(name, "") for name in _BINDING_ENV}
-    host = _measure_host()
+    leg = _measure_leg()
+    host = leg.host
     blobs = {p: _read_blob(ROOT / p) for p in expectations.bound_blobs}
-    checked_out = _git("rev-parse", "HEAD")
-    parents = _git("rev-list", "--parents", "-n", "1", "HEAD").split()[1:]
     return {
         "venue": venue_id,
         "started_at": started_at,
@@ -221,15 +244,17 @@ def preflight(venue_id: str, expectations: Expectations, raw_sha256: str) -> dic
             "landlock_abi": host.abi,
             "launcher": "accepted" if host.refusal is None else "refused",
             "refusal": host.refusal,
-            "kernel": platform.release(),
-            "os": platform.freedesktop_os_release().get("PRETTY_NAME", ""),
+            "kernel": leg.kernel,
+            "os": leg.os_release,
         },
         "binding": env,
-        "checked_out": checked_out,
-        "parents": parents,
+        "checked_out": leg.checked_out,
+        "parents": list(leg.parents),
         "blobs": blobs,
         "expectations_sha256": raw_sha256,
-        "problems": judge_preflight(venue, host, env, blobs, expectations.bound_blobs, checked_out),
+        "problems": judge_preflight(
+            venue, host, env, blobs, expectations.bound_blobs, leg.checked_out
+        ),
     }
 
 
@@ -244,12 +269,8 @@ class PreflightError(ValueError):
 class PreflightRecord:
     venue: str
     started_at: datetime
-    host: HostReport
-    kernel: str
-    os_release: str
+    leg: Leg
     binding: Mapping[str, str]
-    checked_out: str
-    parents: tuple[str, ...]
     blobs: Mapping[str, str | None]
     expectations_sha256: str
     problems: tuple[str, ...]
@@ -291,14 +312,16 @@ def parse_preflight(raw: Any) -> PreflightRecord:
         return PreflightRecord(
             venue=_typed(raw, "venue", str),
             started_at=started_at,
-            host=HostReport(
-                _typed(host, "machine", str), _typed(host, "landlock_abi", int), refusal
+            leg=Leg(
+                HostReport(
+                    _typed(host, "machine", str), _typed(host, "landlock_abi", int), refusal
+                ),
+                _typed(host, "kernel", str),
+                _typed(host, "os", str),
+                _typed(raw, "checked_out", str),
+                _strings(raw, "parents"),
             ),
-            kernel=_typed(host, "kernel", str),
-            os_release=_typed(host, "os", str),
             binding={name: _typed(binding, name, str) for name in _BINDING_ENV},
-            checked_out=_typed(raw, "checked_out", str),
-            parents=_strings(raw, "parents"),
             blobs={path: _blob(blob) for path, blob in blobs.items()},
             expectations_sha256=_typed(raw, "expectations_sha256", str),
             problems=_strings(raw, "problems"),
@@ -411,6 +434,7 @@ def check(
     expectations: Expectations,
     expectations_sha256: str,
     env: Mapping[str, str],
+    leg: Leg,
     preflight_path: Path,
     junit_path: Path,
 ) -> dict[str, Any]:
@@ -426,7 +450,12 @@ def check(
     # the expectations loaded now, so a stale or edited record cannot carry a pass it did
     # not earn; a record that judged itself the same way contributes no duplicates.
     rejudged = judge_preflight(
-        venue, prior.host, prior.binding, prior.blobs, expectations.bound_blobs, prior.checked_out
+        venue,
+        prior.leg.host,
+        prior.binding,
+        prior.blobs,
+        expectations.bound_blobs,
+        prior.leg.checked_out,
     )
     problems = [f"preflight: {p}" for p in dict.fromkeys([*prior.problems, *rejudged])]
     if prior.venue != venue_id:
@@ -436,6 +465,10 @@ def check(
             f"preflight bound expectations {prior.expectations_sha256}, "
             f"check loaded {expectations_sha256}: stale"
         )
+    # The runner, launcher decision and checkout are constant within one job, so a record
+    # that is not this leg's measurement describes another host, commit or edit.
+    if prior.leg != leg:
+        problems.append(f"preflight recorded {prior.leg}, this leg measures {leg}")
     # Every binding is constant within one job, so any difference is another run, attempt,
     # commit or runner.
     problems += [
@@ -482,7 +515,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     record = (
         preflight(args.venue, expectations, raw_sha256)
         if args.command == "preflight"
-        else check(args.venue, expectations, raw_sha256, os.environ, args.preflight, args.junit)
+        else check(
+            args.venue,
+            expectations,
+            raw_sha256,
+            os.environ,
+            _measure_leg(),
+            args.preflight,
+            args.junit,
+        )
         | {"expectations_sha256": raw_sha256}
     )
     record["verdict"] = "fail" if record["problems"] else "pass"
