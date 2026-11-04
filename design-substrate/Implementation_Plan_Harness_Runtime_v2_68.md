@@ -146,11 +146,12 @@ reuses this value's strict parser for its `isError` reply.
     capturing before R2's admission gives exit 6 `pause-record-superseded`. From no root file, a
     snapshot written while the test holds the journal lock and an admission waits on it is superseded
     (exit 6); a mutation that checks existence before taking the lock gives exit 0 and fails the test.
-    Two concurrent daemon `run_workflow` calls, held at a barrier until both admissions exist, are
-    released in a forced order: F records its root-resolution failure before its first step, then S
-    runs and completes with its own `run_id`, and S's outcome is projected before F's. Both outcomes
-    are asserted, so a mutation that shares the admission object, `run_id` or pre-body failure fails
-    the test.
+    Three concurrent daemon `run_workflow` calls, held at a barrier until all three admissions exist,
+    are released in a forced order. W's non-empty root file is read-only: F1 (W, root resolution fails)
+    and F2 (W, append fails) both record their pre-body failures before either F caller's outcome is
+    projected; S (W2, non-empty root file) then completes with its own `run_id` and is projected
+    first. All three outcomes are asserted, each caller its own, so a mutation that shares the
+    admission object, `run_id` or pre-body failure fails the test.
 
 **Dependencies and gates.** Implementation starts only after spec v1.137 and this plan are ratified
 and applied. Spec §D.4 proof 5 (a child-refusal `RunResult` stays a child refusal) binds the actual
