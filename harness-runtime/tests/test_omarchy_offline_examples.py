@@ -4,9 +4,10 @@ and the offline-embedding Omarchy profile (docs/operations/omarchy-offline-embed
 The manifest and config checks load the SHIPPED file through the loader the CLI uses, and
 one compares the raw TOML of the offline-embedding and Ollama profiles; the model-directory
 checks lay the model out with the guide's own step-3 shell block, except one that refuses
-a directory that does not exist; and the behaviour checks drive the real CP driver and Runtime LLM dispatcher with a recording stand-in for the
-Ollama client. No model, daemon or network is used; a live run of these examples on
-an installed candidate remains a separate, unwitnessed acceptance.
+a directory that does not exist; and the behaviour checks drive the real CP driver and
+Runtime LLM dispatcher with a recording stand-in for the Ollama client. No model, daemon
+or network is used; a live run of these examples on an installed candidate remains a
+separate, unwitnessed acceptance.
 """
 
 from __future__ import annotations
