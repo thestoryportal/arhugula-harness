@@ -1,9 +1,9 @@
 # Runtime resume contract authority record
 
-**Status:** Proposed provenance for Runtime spec v1.137 / plan v2.68 (superseded-record refusal and
-`harness resume`), filed at this path; not cleared. It records where each authority the contract
+**Status:** Provenance for Runtime spec v1.137 / plan v2.68 (superseded-record refusal and
+`harness resume`), filed at this path. The contract is cleared by its markers (see **Clearance**). It records where each authority the contract
 relies on lives and its exact bytes. It is provenance, not normative content: the contract's behaviour
-lives entirely in the spec text. This record does not clear, ratify or release anything.
+lives entirely in the spec text. This record itself does not clear, ratify or release anything.
 
 The SHA256 values below were computed on 2026-11-04 from the files at the listed host origins, all
 under the root orchestration checkout `.local/release-campaign-20261103/`. Those files are host-only
@@ -25,16 +25,24 @@ compact JSON payload in its document, not of the Markdown document or of the sou
 | 6 | Author closure of Q1–Q5 (single enforcer, record format, reader semantics, precedence, witnesses), the direct input to spec v1.137 | host-only `profile-coder-ccb4ae89/q1-q5-closure.md`; LIT entry `lit-cmt-bfd03da3.json.md` | file `c4cd24fd2d0498d41fdd7540ef073f5a77f7cda9d3587b70527f06da36168439`; entry `b9bf23d8a186b30fc900e1c31ede9c1753f92ef53dbbb6e18fff2dfd2a543eae` | LIT `cmt-bfd03da3-7b82-4e01-8350-bd445944f82c`, `created_by` `claude_ccb4ae89-f171-455d-a075-1836f4037e4b`. Author decisions, not independently reviewed or ratified before this candidate's review |
 | 7 | Integration-lead disposition of the first correction: B-310 v4 cross-binding invariant kept with no binding exception (spec Rule B7 records the missing shared authority); companion OD C-OD-30.5.1 owner and bounded OD spec/plan delta paths | LIT entry `lit-cmt-1ba063e7.json.md` | `a8be8e03b25446e558777ec75fadb446c1569fc8b6c52277d3e82c059b900da2` | LIT `cmt-1ba063e7-3bd6-42df-b628-639aeed7f2bb`, Buford integration lead `01a1a61a` |
 | 8 | Integration-lead disposition of the second correction HOLD `cmt-1087cb00`: the Rule B7 root is the only journal location (binding-cell fan-out removed); prerequisite owners named: retained root storage selection and binding evidence Buford, C-IS-01 companion profile-coder under claim `cmt-792618a5` | LIT entry `lit-cmt-8b76cb48.json.md` | `550bd4961b5ad9c1dc13c964571f137997c22ade8a2ab841ac76d282965e9c51` | LIT `cmt-8b76cb48-6e7a-4d2c-8e83-e7dc2fc62e64`, Buford integration lead `01a1a61a` |
+| 9 | Integration-lead ratification of Runtime spec v1.137 / plan v2.68 and OD spec v1.43 / plan v2.37 at exact H `002f40a6` after independent GREEN `cmt-53662ef5`, delegating the mechanical clearance apply to profile-coder | LIT entry `lit-cmt-7cc5fc50.json.md` | `a665c9d5637cac9ae32e496a5e8918266ad46a98d18133ecc258201136ecc99e` | LIT `cmt-7cc5fc50-f3cc-4592-a441-4f1f5198349e` (body FROM Buford integration lead `01a1a61a`; LIT `created_by` `unknown`) |
+| 10 | Integration-lead ratification of exact H `eb607692` after independent GREEN `cmt-b58fbcee`: IS spec v1.17 C-IS-01 §1.1, IS plan v2.11 U-IS-21 and the Runtime B3/B8 amendment; OD retained at unchanged bytes; six-marker apply authorized | LIT entry `lit-cmt-9733f3e9.json.md` | `83e89bcca801c27e515e9743c74cc04d1ec857e10d638669c1bb40690c16af1e` | LIT `cmt-9733f3e9-e3e7-4c8a-97b5-d3770f8c0f40` (body FROM Buford integration lead `01a1a61a`; LIT `created_by` `unknown`) |
 
 ## Portability
 
-The pack at `.harness/review-evidence/runtime-resume-contract-authority/` holds five extracted LIT
-entries (items 2, 4, 6, 7 and 8), each one complete entry with every exported field. The four host files are
+The pack at `.harness/review-evidence/runtime-resume-contract-authority/` holds seven extracted LIT
+entries (items 2, 4, 6, 7, 8, 9 and 10), each one complete entry with every exported field. The four host files are
 pinned by SHA256 only; a reviewer reads them at the host origin. Items 1 and 3 cite their review
 comments by ID only. Copying bytes would not establish a missing LIT link, and none of these items is
 human consent.
 
-## Not in this record
+Items 9 and 10 come from a later host-only export (SHA256
+`22ab8944636d75ff534af979fa2adc9fbe39336a674dbc983f1fef2d3bbdfde6`, retained at
+`.local/release-campaign-20261103/profile-coder-54db2711/lit-export-20261104.json`).
 
-There is no clearance status, no clearance marker content, no head or pointer row, and no claim that
-any authority above clears or ratifies v1.137 or v2.68.
+## Clearance
+
+Items 9 and 10 ratify the contract. Under them six markers in `.harness/clearance/`, dated
+2026-11-04, clear Runtime spec v1.137 and plan v2.68, OD spec v1.43 and plan v2.37, and IS spec v1.17
+and plan v2.11 for source consumption. No authority above accepts an implementation, exposes
+`harness resume` or selects storage, and none clears the Proposed A5 or A4 deltas.

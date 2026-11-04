@@ -1,11 +1,13 @@
-# Spec: Operational Discipline — v1.43 (PROPOSED delta over v1.42)
+# Spec: Operational Discipline — v1.43 (delta over v1.42)
 
 *Delta-only file. One amendment site: C-OD-30.5.1, the cause-attribution row of the required-content
 table (`Spec_Operational_Discipline_v1_36.md:62`, unchanged through v1.42). Every other v1.42 and
 earlier term, including the rest of §30.5, remains in force. Cleared predecessor files are not
 edited.*
 
-**Status: PROPOSED — not cleared.** No clearance marker, artifact-head row or pointer is filed.
+**Status: Cleared** for source consumption by
+`.harness/clearance/spec-operational-discipline-v1-43-cleared-2026-11-04.md` after independent review GREEN
+(LIT `cmt-53662ef5`) and integration-lead ratification `cmt-7cc5fc50`, retained at unchanged bytes by `cmt-9733f3e9`.
 
 **Authority.** Companion to Runtime spec v1.137 Rule A4 and plan v2.68 U-RT-160 portion 160a
 (`Spec_Harness_Runtime_v1_137.md`, `Implementation_Plan_Harness_Runtime_v2_68.md`; authority

@@ -3,7 +3,8 @@
 *Delta-only file. The v2.36 body and every existing `U-OD-NN` body are PRESERVED VERBATIM. This is the
 OD plan leg of `Spec_Operational_Discipline_v1_43.md`, the companion to Runtime spec v1.137 Rule A4.*
 
-**Status:** Proposed
+**Status:** Cleared for source consumption by
+`.harness/clearance/implementation-plan-operational-discipline-v2-37-cleared-2026-11-04.md` (ratification `cmt-7cc5fc50`).
 
 ---
 

@@ -5,7 +5,7 @@
 accepted release campaign (LIT `arhugula-harness-trial-193`, `cmt-fe2c7b08-00c3-4838-8b9e-562d34699de4`).
 One combined candidate covers B-310, B-313 and the B-314 prerequisite (work record
 `cmt-9a055b8f-010e-47ae-88f4-de8a21817bbc`). No new H_T primitive or cross-axis edge. Authorities are
-pinned in `.harness/runtime-resume-contract-authority.md` (Proposed; not cleared).
+pinned in `.harness/runtime-resume-contract-authority.md`.
 
 ## Fork
 
@@ -23,7 +23,7 @@ pinned in `.harness/runtime-resume-contract-authority.md` (Proposed; not cleared
 
 ## Disposition
 
-- Runtime spec **v1.137** (Proposed, numbered after Proposed v1.135 and v1.136; amends no site they
+- Runtime spec **v1.137** (cleared 2026-11-04, numbered after Proposed v1.135 and v1.136; amends no site they
   amend):
   - a second journal record kind, the supersession record, appended by the fresh-run root admission;
   - a `superseded` read attribution, the refusal `ResumePauseRecordSupersededError`, and the
@@ -60,8 +60,9 @@ pinned in `.harness/runtime-resume-contract-authority.md` (Proposed; not cleared
 
 ## Clearance
 
-Owed after independent review of the exact head:
-- ratification of spec v1.137 and plan v2.68, then their markers and derived head rows, filed by the
-  integration lead;
+Cleared 2026-11-04 after independent review GREEN (`cmt-53662ef5`; exact H `eb607692`, `cmt-b58fbcee`)
+and integration-lead ratification (`cmt-7cc5fc50`, `cmt-9733f3e9`). Under that decision profile-coder
+applied the six markers (Runtime spec v1.137 and plan v2.68, OD spec v1.43 and plan v2.37, IS spec v1.17
+and plan v2.11) and the derived head rows; Buford verifies the apply before landing. Still owed:
 - an integration collision check against the A3 v1.134/v2.65 fold and the Proposed A5 and A4 deltas,
   including the U-RT-160 unit ID.

@@ -1,4 +1,4 @@
-# Spec: Harness Runtime — v1.137 (PROPOSED delta over cleared v1.134)
+# Spec: Harness Runtime — v1.137 (delta over cleared v1.134)
 
 *Delta-only file. Amendment sites: C-RT-29 §14.18.1 subcommand table (new `resume` row); C-RT-29
 §14.18.2 exit code mapping (row 5(b) at `Spec_Harness_Runtime_v1_132.md:1431` replaced; rows 6 and 7
@@ -9,7 +9,10 @@ write, and the pre-bootstrap refusal battery; C-RT-35 §14.14.9.4 pause-state ac
 Neither proposed v1.135 (A5) nor proposed v1.136 (A4) amends any of these sites. Every other v1.134 and
 earlier term remains in force. Cleared predecessor files are not edited.*
 
-**Status: PROPOSED — not cleared.** No clearance marker, artifact-head row or pointer is filed.
+**Status: Cleared** for source consumption by
+`.harness/clearance/spec-harness-runtime-v1-137-cleared-2026-11-04.md` after independent review GREEN
+(LIT `cmt-53662ef5`; exact H `eb607692`, `cmt-b58fbcee`) and integration-lead ratification (`cmt-7cc5fc50`,
+`cmt-9733f3e9`). It clears no implementation and neither Proposed delta v1.135 nor v1.136.
 Corrected after the first independent review of the combined candidate (HOLD, LIT `cmt-bcef30fd`):
 F1 in Rules B2, B3, B5, B6 and C2 and witnesses I.2 and I.14; F2 in Rules A3 and A4 and witness I.13.
 Second correction (HOLD `cmt-bd5730ba`, disposition `cmt-1ba063e7`): the Rule B6 bound is replaced by

@@ -1,13 +1,15 @@
-# Implementation Plan: Harness Runtime — v2.68 (PROPOSED delta over cleared v2.65)
+# Implementation Plan: Harness Runtime — v2.68 (delta over cleared v2.65)
 
-**Status: PROPOSED — not cleared.** Grounded on cleared v2.65 (A3, U-RT-157;
+**Status: Cleared** for source consumption by
+`.harness/clearance/implementation-plan-harness-runtime-v2-68-cleared-2026-11-04.md` (ratification
+`cmt-7cc5fc50`; exact H `eb607692`, `cmt-9733f3e9`). Grounded on cleared v2.65 (A3, U-RT-157;
 `.harness/clearance/implementation-plan-harness-runtime-v2-65-cleared-2026-10-04.md`); implements
-proposed Runtime spec v1.137. Plans v2.66 (A5, U-RT-158) and v2.67 (A4, U-RT-159) are separately
+cleared Runtime spec v1.137. Plans v2.66 (A5, U-RT-158) and v2.67 (A4, U-RT-159) are separately
 PROPOSED and not cleared. Fold order is A3 → A5 → A4 → this delta, so this unit is U-RT-160; a unit-ID
 collision recheck is owed at landing. Spec v1.137 amends no site that v1.135 or v1.136 amends.
 Authority: `.harness/runtime-resume-contract-authority.md`. Fork:
-`.harness/class_1_fork_runtime_resume_cli_supersession.md`. This is a proposed contract, not
-clearance, ratification or a product release. Corrected after the first independent review of the
+`.harness/class_1_fork_runtime_resume_cli_supersession.md`. This is a cleared contract, not
+an accepted implementation or a product release. Corrected after the first independent review of the
 combined candidate (HOLD, LIT `cmt-bcef30fd`, F1 and F2), and after HOLD `cmt-1087cb00` (disposition
 `cmt-8b76cb48`): the spec Rule B7 root is the only journal location, with no binding-cell fan-out.
 Fourth correction (HOLD `cmt-b64cde80`, F3 and F4): the durable snapshot capture resolves the same root

@@ -2,7 +2,7 @@
 
 *Delta over v2.10. This revision decomposes IS spec v1.17 §1.1, the installation pause-journal root that Runtime spec v1.137 Rule B7 requires, into one new foundational unit, U-IS-21. All v2.10 and earlier rows, unit bodies, criteria, dependency edges and coverage rows remain unchanged.*
 
-**Status:** Proposed — not cleared. No clearance marker, artifact-head row or pointer is filed. Corrected after independent review HOLD `cmt-8720af2b` (F1–F3): the resolution takes no tenant input (tenants stay separated by the Runtime journal key in one flat root), takes the observed real path of the root, and preserves `harness-inspect` enumeration. After HOLD `cmt-e4e959b9` (disposition `cmt-49143c9e`), witness 5 also covers the pre-upgrade inventory under an unbound declaration.
+**Status:** Cleared for source consumption by `.harness/clearance/implementation-plan-information-substrate-v2-11-cleared-2026-11-04.md` after independent review GREEN `cmt-b58fbcee` and integration-lead ratification `cmt-9733f3e9` at exact H `eb607692`. Corrected after independent review HOLD `cmt-8720af2b` (F1–F3): the resolution takes no tenant input (tenants stay separated by the Runtime journal key in one flat root), takes the observed real path of the root, and preserves `harness-inspect` enumeration. After HOLD `cmt-e4e959b9` (disposition `cmt-49143c9e`), witness 5 also covers the pre-upgrade inventory under an unbound declaration.
 
 ---
 
@@ -112,4 +112,4 @@ All other coverage rows are unchanged from v2.10.
 | Authority | IS spec v1.17 C-IS-01 §1.1; Runtime spec v1.137 Rules B3/B7/B8 and plan v2.68 U-RT-160 (criteria 15, 17); Runtime spec v1 §13.7 and v1.108 §14.14.8; LIT `cmt-8b76cb48`, ratification `cmt-7cc5fc50`, review HOLD `cmt-8720af2b` |
 | Net delta | One new unit U-IS-21 and one DAG node; all earlier units, rows and criteria preserved |
 | Source grounding | `harness-is/src/harness_is/path_class_registry.py`, `path_binding.py` and `path_resolver.py`; `harness-runtime/src/harness_runtime/lifecycle/journal_workflow_pause_store.py` (key encoding) and `admin/inspect.py` (§13.7 enumeration) at this branch's base |
-| Clearance | Owed after independent review and Buford's decision; none filed here |
+| Clearance | Cleared by `.harness/clearance/implementation-plan-information-substrate-v2-11-cleared-2026-11-04.md` (ratification `cmt-9733f3e9`) |
