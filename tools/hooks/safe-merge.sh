@@ -4,14 +4,15 @@
 # ever issues is `gh pr merge <pr> --squash --match-head-commit <head_sha>` (inside merge_door).
 # No flags are accepted or forwarded. The door's own WO-U03 selection routes the landing
 # (WO-U08): a trial landing never needs the refresh producer and releases on its own-main
-# result; only a legacy landing probes for and drives the terminating refresh.
+# result; milestone delivery also needs no separate refresh. Retained legacy
+# refresh continuations still use their original driver.
 set -euo pipefail
 [ "$#" -eq 1 ] || { echo "usage: safe-merge.sh <pr-number>" >&2; exit 64; }
 case "$1" in ''|*[!0-9]*) echo "safe-merge: pr must be all digits" >&2; exit 64 ;; esac
 : "${HARNESS_LANE_ID:?HARNESS_LANE_ID must be set (lane-init)}"
 : "${HARNESS_ARC_ID:?HARNESS_ARC_ID must be set (roadmap-continue arc open)}"
 cd "$(git rev-parse --show-toplevel)"
-# `profile` prints trial|legacy, or exits 6 when the selection is held (no lease taken);
+# `profile --with-refresh` prints the profile and refresh posture, or exits 6 when held;
 # errexit carries that status out. `land` re-observes and refuses a posture it disagrees with.
 profile_and_refresh="$(uv run python tools/merge_door.py profile --arc-id "$HARNESS_ARC_ID" --with-refresh)"
 read -r profile refresh_mode <<< "$profile_and_refresh"
@@ -33,7 +34,7 @@ case "$profile:$refresh_mode" in
       --refresh-cmd "uv run python tools/roadmap_status_refresh.py --emit-refresh-pr-json $1"
     ;;
   *)
-    echo "safe-merge: merge_door profile printed '$profile', not trial|legacy; aborting pre-lease" >&2
+    echo "safe-merge: invalid profile/posture '$profile_and_refresh'; aborting pre-lease" >&2
     exit 70
     ;;
 esac

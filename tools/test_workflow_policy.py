@@ -63,18 +63,22 @@ POLICY = parse_policy(_raw(_policy_doc()))
 
 
 def test_delivery_policy_removes_refresh_without_fabricating_trial_activation():
-    policy = parse_policy(_raw(_policy_doc(
-        review_rules={"delivery": "single-independent-milestone-status-v1"}
-    )))
+    policy = parse_policy(
+        _raw(_policy_doc(review_rules={"delivery": "single-independent-milestone-status-v1"}))
+    )
     assert refresh_rule(policy, ActivationAbsent()) == "trial"
-    assert select_profile(policy, SelectionFacts(
-        REPOSITORY, UNIT, ARC, "confirmed", "confirmed", ActivationAbsent()
-    )).kind == "legacy"
+    assert (
+        select_profile(
+            policy,
+            SelectionFacts(REPOSITORY, UNIT, ARC, "confirmed", "confirmed", ActivationAbsent()),
+        ).kind
+        == "legacy"
+    )
 
 
 @pytest.mark.parametrize("value", [None, True, "skip-ci", "single-independant"])
 def test_malformed_delivery_policy_cannot_relax_gates(value):
-    with pytest.raises(PolicyError, match="review_rules.delivery"):
+    with pytest.raises(PolicyError, match=r"review_rules\.delivery"):
         parse_policy(_raw(_policy_doc(review_rules={"delivery": value})))
 
 

@@ -387,7 +387,7 @@ def decide(
         pfx = f"HARNESS_ARC_ID={arc_id} HARNESS_LANE_ID={lane_id} "
     else:
         pfx = "HARNESS_ARC_ID=<arc-id> HARNESS_LANE_ID=<lane-id> "
-    if cycle is not None:
+    if cycle is not None and cycle.cycle_pass not in ("initial", "correction"):
         return _decide_cycle(
             state,
             rows,
@@ -419,6 +419,16 @@ def decide(
                 ".harness/session-audit-2026-08-22-u-he-29.md §4) — extension exists "
                 "exactly so that evidence is never silently lost."
             ),
+        )
+    if cycle is not None:
+        return _decide_cycle(
+            state,
+            rows,
+            arc_id=arc_id,
+            head_sha=head_sha,
+            diff_digest=diff_digest,
+            cycle=cycle,
+            pfx=pfx,
         )
     try:
         unanswered = unanswered_findings(state, rows, arc_id)
@@ -662,13 +672,22 @@ def replay(
     count: the walk skips it, so the escalation it now demands is required next and,
     once it runs, the cycle carries on from there.
 
-    The cycle's start is its own history — the first completed run — so a doc-only cycle
-    that later gains a code commit keeps its shape; the current diff (`doc_only`)
-    decides only for an arc with no completed run yet."""
+    The first delivered verdict fixes the cycle's policy, including an incomplete
+    legacy pass. A policy change cannot erase that delivery or its spent budget."""
     # [LAW:effects-at-boundaries] pure: rows in, state out — admit() reads the log
     disposed = _last_dispositions(rows)
+    # [LAW:no-ambient-temporal-coupling] retain the first delivered policy even
+    # while its remaining legacy reviewers have not returned their verdicts.
+    first = next(
+        (
+            r["cycle_pass"]
+            for r in rows
+            if r.get("arc_id") == arc_id and _delivering_role(r) is not None
+        ),
+        None,
+    )
     runs = [r for r in pass_runs(rows, arc_id) if r.complete]
-    history = runs[0].cycle_pass if runs and runs[0].cycle_pass in ("1", "3", "initial") else None
+    history = first if first in ("1", "3", "initial") else None
     expected: str | None = history or ("initial" if initial_policy else "3" if doc_only else "1")
     completed_by: PassRun | None = None
     last: PassRun | None = None
@@ -683,7 +702,12 @@ def replay(
 
 
 def next_pass(
-    rows: list[dict], arc_id: str, *, doc_only: bool, head_sha: str, diff_digest: str,
+    rows: list[dict],
+    arc_id: str,
+    *,
+    doc_only: bool,
+    head_sha: str,
+    diff_digest: str,
     initial_policy: bool = False,
 ) -> str | None:
     """The pass the cycle admits next on the binding (`head_sha`, `diff_digest`); None when
@@ -692,7 +716,9 @@ def next_pass(
     done = state.completed_by
     if done is not None and (head_sha, diff_digest) == (done.head_sha, done.diff_digest):
         return None
-    return state.expected or ("correction" if state.last and state.last.cycle_pass in ("initial", "correction") else "3")
+    return state.expected or (
+        "correction" if state.last and state.last.cycle_pass in ("initial", "correction") else "3"
+    )
 
 
 def completing_run(rows: list[dict], arc_id: str) -> PassRun | None:
@@ -1126,14 +1152,18 @@ def _decide_cycle(
             ),
         )
     expected = next_pass(
-        rows, arc_id, doc_only=cycle.doc_only, head_sha=head_sha, diff_digest=diff_digest,
+        rows,
+        arc_id,
+        doc_only=cycle.doc_only,
+        head_sha=head_sha,
+        diff_digest=diff_digest,
         initial_policy=cycle.initial_policy,
     )
     if expected is None:
         return Refused(
             code="CYCLE_COMPLETE",
-            detail=f"{arc_id}'s cycle is complete at {head_sha[:12]}: pass 3 was clean",
-            recipe="nothing to review; a new commit gets one pass 3 (a merge-gate lens)",
+            detail=f"{arc_id}'s cycle is complete at {head_sha[:12]}",
+            recipe="nothing to review on this binding; changed code needs correction review",
         )
     if cycle_pass != expected:
         return Refused(
@@ -1180,7 +1210,11 @@ def _decide_cycle(
     # other pass reviews the full diff. The order check above guarantees pass 2 follows
     # a counted run.
     last = replay(rows, arc_id, doc_only=cycle.doc_only).last
-    base = last.head_sha if cycle_pass in ("2", "correction") and last is not None else cycle.full_diff_base
+    base = (
+        last.head_sha
+        if cycle_pass in ("2", "correction") and last is not None
+        else cycle.full_diff_base
+    )
     # A material scope change may deliberately request a full correction review;
     # the normal correction binding remains the previous reviewed head's delta.
     full_correction = cycle_pass == "correction" and cycle.base_sha == cycle.full_diff_base
@@ -1238,7 +1272,7 @@ def admit(repo: Path, base: str, arc_id: str) -> Decision:
         return Refused(
             code="STATE_UNREADABLE",
             detail=str(exc),
-            recipe="set HARNESS_CYCLE_PASS to one of 1, 2, esc, 3 — or unset it for a legacy round",
+            recipe="set HARNESS_CYCLE_PASS to initial/correction (legacy: 1, 2, esc, 3)",
         )
     state = _gate_state_in_force(repo, arc_id)
     if not isinstance(state, GateState):
@@ -1452,18 +1486,19 @@ def _cycle_request(
         base_sha=binding["base_sha"],
         full_diff_base=full_diff_base,
         doc_only=_doc_only(repo, binding),
-        initial_policy=_streamlined_review(repo),
+        initial_policy=_streamlined_review(repo, head_sha),
     )
 
 
-def _streamlined_review(repo: Path) -> bool:
+def _streamlined_review(repo: Path, head_sha: str) -> bool:
     import workflow_policy as policy
 
-    path = repo / ".harness" / "workflow-policy.json"
-    try:
-        raw = path.read_bytes()
-    except FileNotFoundError:
+    # [LAW:one-source-of-truth] the reviewed commit supplies its tracked rules;
+    # uncommitted policy edits cannot change which review cycle approves it.
+    path = ".harness/workflow-policy.json"
+    if not rw._git(repo, "ls-tree", "--name-only", head_sha, "--", path):
         return False
+    raw = rw._git(repo, "show", f"{head_sha}:{path}").encode()
     parsed = policy.load_policy(raw)
     if isinstance(parsed, policy.PolicyDefect):
         raise GateError(parsed.reason)

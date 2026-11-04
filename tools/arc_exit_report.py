@@ -90,6 +90,7 @@ YAML_FIELDS = (
     "merge_commit",
     "main_ci",
     "refresh_commit",
+    "refresh_required",
     "checkpoint",
     "todo_for_human",
 )
@@ -383,6 +384,26 @@ def _refresh_shape_ok(sha: str, cwd: Path) -> bool | None:
     if rc != 0:
         return None
     return [f for f in files.splitlines() if f.strip()] == [REFRESH_ONLY_FILE]
+
+
+def _refresh_required(merge_commit: str, cwd: Path, notes: list[str]) -> bool | None:
+    """[LAW:one-source-of-truth] bind status obligations to the merged policy,
+    never to a later checkout that may have changed delivery rules."""
+    import workflow_policy as wp
+
+    if not merge_commit:
+        return None
+    rc, text = run(["git", "show", f"{merge_commit}:.harness/workflow-policy.json"], cwd)
+    if rc != 0:
+        notes.append("Merged delivery policy unavailable; refresh obligation is unknown.")
+        return None
+    policy = wp.load_policy(text.encode())
+    if isinstance(policy, wp.PolicyDefect):
+        notes.append(
+            f"Merged delivery policy invalid: {policy.reason}; refresh obligation unknown."
+        )
+        return None
+    return not wp.streamlined_delivery(policy)
 
 
 def _refresh_commit(merge_commit: str, cwd: Path, notes: list[str]) -> str | None:
@@ -800,7 +821,8 @@ def collect(
             "are unavailable."
         )
 
-    refresh = _refresh_commit(merge_commit, repo_root, notes)
+    refresh_required = _refresh_required(merge_commit, repo_root, notes)
+    refresh = None if refresh_required is False else _refresh_commit(merge_commit, repo_root, notes)
     # The arc's CLOSING commit: the terminating refresh when one landed (this report is
     # emitted after the §12.2.1 fixed point), else the merge. Anything written before it is
     # not the arc's final checkpoint.
@@ -812,6 +834,7 @@ def collect(
         "merge_commit": merge_commit or None,
         "main_ci": _main_ci(merge_commit, repo_root, notes),
         "refresh_commit": refresh,
+        "refresh_required": refresh_required,
         "checkpoint": _checkpoint(
             anchor, anchor_kind, repo_root, repo_root, gstack_root, checkpoint, notes
         ),
@@ -870,6 +893,8 @@ def render(data: dict[str, Any]) -> str:
     lines.append(
         f"The §12.2.1 terminating refresh is `{_sha8(data.get('refresh_commit'))}`."
         if data.get("refresh_commit")
+        else "Milestone status policy: no separate roadmap refresh PR is required."
+        if data.get("refresh_required") is False
         else "No §12.2.1 terminating refresh commit was verified after the merge — one may "
         "still be owed."
     )

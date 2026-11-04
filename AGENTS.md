@@ -1,5 +1,16 @@
 # AGENTS.md — Codex Compatibility Layer
 
+**Delivery policy (user-approved 2026-11-04).** When the tracked
+`.harness/workflow-policy.json` selects `single-independent-milestone-status-v1`,
+`docs/governance/delivery-policy.md` governs delivery: one independent review,
+correction delta, focused local checks with qualifying reuse, generated Git/LIT
+status or milestone refresh, and independent isolated work during CI. It replaces
+contrary default review-stack, duplicate full-local-suite, per-merge status-PR,
+cleanup and local-main-sync requirements below. Required exact-candidate CI,
+installed acceptance, recovery proof, findings, budgets and actual denials remain.
+Delivered legacy reviews and recorded refresh intents keep their original gates.
+
+
 This repository is developed primarily with Claude Code CLI. For Codex, this file is the authoritative compact projection of the project rules. The canonical governance remains in `CLAUDE.md`; load it only for targeted sections or exact lineage, not as default context.
 
 ## Startup Context

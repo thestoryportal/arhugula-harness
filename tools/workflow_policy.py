@@ -333,13 +333,12 @@ def activation_binds(policy: WorkflowPolicy, activation: ActivationState) -> boo
 
 
 def refresh_rule(policy: WorkflowPolicy | PolicyDefect, activation: ActivationState) -> RefreshRule:
-    """Which rule governs the post-merge terminating refresh (WS-11, WS-17 §19.1).
+    """Refresh posture, independent of trial unit activation.
 
-    `legacy` until a receipt activates the tracked policy: every substantive merge owes a
-    terminating refresh and the roadmap-status enforcers keep requiring it. `trial` once
-    one does: the merge door applies `select_profile` to each landing, driving a legacy
-    landing's refresh PR before it releases and giving a trial landing none, so the
-    status enforcers stop demanding a refresh the door has already ruled on."""
+    The historical `trial` value means unpinned/milestone status. Either the
+    user-approved tracked delivery setting or a bound trial receipt selects it.
+    It grants no review, candidate CI, admission or installed acceptance credit.
+    """
     bound = streamlined_delivery(policy) or (
         isinstance(policy, WorkflowPolicy) and activation_binds(policy, activation)
     )

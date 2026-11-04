@@ -1456,3 +1456,27 @@ def test_render_is_pure_no_subprocess(monkeypatch):
     first = aer.render(data)
     assert first == aer.render(data), "render must be deterministic (no clock, no randomness)"
     assert yaml.safe_load(yaml_block(first))["merge_state"] == "MERGED"
+
+
+def test_milestone_policy_closes_at_merge_without_borrowing_a_later_refresh(
+    repo, gstack, monkeypatch
+):
+    policy = json.loads(
+        (Path(__file__).resolve().parents[1] / ".harness/workflow-policy.json").read_text()
+    )
+    policy["review_rules"] = {"delivery": "single-independent-milestone-status-v1"}
+    fake = make_run(scenario(), repo)
+
+    def merged_policy(cmd, cwd, timeout=20):
+        if cmd == ["git", "show", f"{MERGE}:.harness/workflow-policy.json"]:
+            return 0, json.dumps(policy)
+        return fake(cmd, cwd, timeout)
+
+    monkeypatch.setattr(aer, "run", merged_policy)
+    data = aer.collect(1202, MERGE, repo, gstack_root=gstack)
+    assert data["refresh_required"] is False
+    assert data["refresh_commit"] is None
+    assert data["main_ci"]["conclusion"] == "success"
+    assert "no separate roadmap refresh PR is required" in aer.render(data)
+    assert "may still be owed" not in aer.render(data)
+    assert not any(cmd[0:2] == ["git", "log"] for cmd in fake.calls)

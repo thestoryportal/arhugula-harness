@@ -4492,3 +4492,63 @@ def test_one_lens_closing_pass_completes_a_concern_complete_cycle_under_trial():
     partial_first = _trial_rows("1", producers=[LOOP_PRODUCER, *_LENSES3[:2]])
     d = _trial(partial_first + _trial_rows("2") + one_lens)
     assert d.state != "approved" and rlg._WITNESS_LENS in d.missing_concerns
+
+
+def test_new_policy_preserves_partially_delivered_legacy_cycle():
+    rows = [_crow("1", 1)]
+    assert (
+        rlg.next_pass(
+            rows, ARC, doc_only=False, head_sha=HEAD, diff_digest=DIGEST, initial_policy=True
+        )
+        == "1"
+    )
+    cycle = rlg.CycleRequest("initial", "codex", BASE, BASE, False, initial_policy=True)
+    result = _decide(_state(), rows, cycle=cycle)
+    assert isinstance(result, rlg.Refused) and result.code == "PASS_OUT_OF_ORDER"
+
+
+def test_clean_initial_remains_complete_when_policy_is_reloaded():
+    rows = [_crow("initial", 1)]
+    assert rlg.completing_run(rows, ARC) is not None
+    assert (
+        rlg.next_pass(
+            rows, ARC, doc_only=False, head_sha=H2, diff_digest=DIGEST, initial_policy=True
+        )
+        == "correction"
+    )
+
+
+def test_single_review_preserves_spent_round_budget():
+    rows = [_crow("initial", 1, fid="single-budget", sev="P2"), _adj("single-budget", "accepted")]
+    cycle = rlg.CycleRequest("correction", "codex", HEAD, BASE, False, initial_policy=True)
+    decision = rlg.decide(
+        _state(), rows, arc_id=ARC, head_sha=H2, diff_digest=DIGEST, budget=1, cycle=cycle
+    )
+    assert isinstance(decision, rlg.Refused) and decision.code == "BUDGET_EXHAUSTED"
+
+
+@pytest.mark.parametrize("producer", ["codex_review_wrapper", "gemini_review_wrapper"])
+def test_real_wrapper_emission_completes_single_review(repo, monkeypatch, producer):
+    policy = json.loads(
+        (Path(__file__).resolve().parents[1] / ".harness/workflow-policy.json").read_text()
+    )
+    policy["review_rules"] = {"delivery": "single-independent-milestone-status-v1"}
+    (repo / ".harness/workflow-policy.json").write_text(json.dumps(policy))
+    _commit_on_branch(repo, "candidate.py", "value = 1\n")
+    binding = rw.code_binding(repo, "main")
+    state = _state(preflights=(_pf(head=binding["head_sha"], digest=binding["diff_digest"]),))
+    monkeypatch.setattr(rlg, "_gate_state_in_force", lambda *_: state)
+    monkeypatch.setenv(fr.CYCLE_PASS_ENV, "initial")
+    assert isinstance(rlg.admit(repo, "main", ARC), rlg.Allowed)
+    outcome = rw.ReviewOutcome("APPROVE", "independent", None, "", [], binding, "stdout")
+    admission = rlg.delivery_admission(repo, outcome, producer=producer, arc_id=ARC, lane_id="test")
+    rows = rw.emit_outcome(
+        outcome, producer=producer, arc_id=ARC, lane_id="test", round_n=1, admit=admission
+    )
+    assert len(rows) == 1 and rows[0]["cycle_pass"] == "initial"
+    assert rlg.completing_run(fr.read_rows(), ARC) is not None
+    duplicate = rlg.admit(repo, "main", ARC)
+    assert isinstance(duplicate, rlg.Refused) and duplicate.code == "CYCLE_COMPLETE"
+    # Changing the worktree alone cannot alter the reviewed commit's policy.
+    (repo / ".harness/workflow-policy.json").write_text("{}")
+    assert rlg._streamlined_review(repo, binding["head_sha"]) is True

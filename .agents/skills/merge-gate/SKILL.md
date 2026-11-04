@@ -1,7 +1,21 @@
 ---
 name: merge-gate
-description: Use for each pass of an arhugula-v2 PR's bounded review cycle (spec v1.9 X9a), from the push that opens it until pass 3 is clean, concurrent with PR CI — all three lenses in pass 1 and the escalation, the witness lens in pass 2, one lens in pass 3.
+description: Review an exact candidate under the tracked delivery policy; use specialty lenses only for named risk or retained legacy cycles.
 ---
+
+## Delivery policy selection — read before the legacy procedure
+
+Read `.harness/workflow-policy.json`. When `review_rules.delivery` is
+`single-independent-milestone-status-v1`, follow
+`docs/governance/delivery-policy.md` for new arcs and **stop here**. That procedure
+uses one independent review, delta correction review, focused local checks and
+milestone status. No default three-lens stack or separate roadmap-refresh PR is
+owed. Existing delivered legacy pass tags and refresh intents retain their
+obligations; use the legacy sections below only for that retained scope.
+
+The remainder of this file is the legacy procedure. Do not combine its review
+stack or refresh cycle with the selected delivery procedure.
+
 
 # Merge Gate
 

@@ -1,7 +1,21 @@
 ---
 name: ship-pr
-description: Open a PR for the current arc, run its one bounded review cycle (codex + the decorrelated `merge-gate` lenses, launched on push and concurrent with CI), merge on CI green AND a clean pass 3, and run the post-merge fixed-point refresh checklist correctly. Use when the operator says "/ship-pr", "ship it", "open the PR", "land this", or when an arc is built+green and ready to merge. Codifies the §12.2 post-merge audit + the §12.2.1 terminating-refresh fixed-point so the roadmap_status.md refresh is done right (and does not recurse). Do NOT use to author code (that is the arc itself) — use it for the PR + gate + refresh ritual.
+description: Ship a reviewed arc through required candidate CI and the safe merge door using the tracked delivery policy; retain in-flight legacy obligations.
 ---
+
+## Delivery policy selection — read before the legacy procedure
+
+Read `.harness/workflow-policy.json`. When `review_rules.delivery` is
+`single-independent-milestone-status-v1`, follow
+`docs/governance/delivery-policy.md` for new arcs and **stop here**. That procedure
+uses one independent review, delta correction review, focused local checks and
+milestone status. No default three-lens stack or separate roadmap-refresh PR is
+owed. Existing delivered legacy pass tags and refresh intents retain their
+obligations; use the legacy sections below only for that retained scope.
+
+The remainder of this file is the legacy procedure. Do not combine its review
+stack or refresh cycle with the selected delivery procedure.
+
 
 # ship-pr — PR + fixed-point refresh (U-HK-23)
 

@@ -1,5 +1,16 @@
 # CLAUDE.md — Multi-LLM Agent Harness Workspace
 
+**Delivery policy (user-approved 2026-11-04).** When the tracked
+`.harness/workflow-policy.json` selects `single-independent-milestone-status-v1`,
+`docs/governance/delivery-policy.md` governs delivery: one independent review,
+correction delta, focused local checks with qualifying reuse, generated Git/LIT
+status or milestone refresh, and independent isolated work during CI. It replaces
+contrary default review-stack, duplicate full-local-suite, per-merge status-PR,
+cleanup and local-main-sync requirements below. Required exact-candidate CI,
+installed acceptance, recovery proof, findings, budgets and actual denials remain.
+Delivered legacy reviews and recorded refresh intents keep their original gates.
+
+
 *Workspace-level guidance for Claude Code Loaded at every session startup.*
 
 **Start here:** `CONTEXT.md` (workspace root) is the compact task router — it routes an incoming session to the operative posture (§11) and the entry points that posture needs. This file is the full governance behind it; read it for anything the router does not answer.

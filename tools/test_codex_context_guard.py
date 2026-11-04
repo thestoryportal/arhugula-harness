@@ -344,7 +344,7 @@ def test_trial_refresh_rule_owes_no_refresh_for_any_caller(mode: str, owed_lag: 
 
     findings = cg.validate(state, mode=mode)
 
-    assert any(f.code == "ROADMAP_STATUS_TRIAL_UNPINNED" and f.severity == "warn" for f in findings)
+    assert any(f.code == "ROADMAP_STATUS_UNPINNED" and f.severity == "warn" for f in findings)
     assert not any(f.code.startswith("ROADMAP_STATUS_DRIFT") for f in findings)
 
 
@@ -354,7 +354,7 @@ def test_legacy_refresh_rule_keeps_the_hard_drift_on_main() -> None:
     findings = cg.validate(state, mode="preflight")
 
     assert any(f.code == "ROADMAP_STATUS_DRIFT" and f.severity == "hard" for f in findings)
-    assert not any(f.code == "ROADMAP_STATUS_TRIAL_UNPINNED" for f in findings)
+    assert not any(f.code == "ROADMAP_STATUS_UNPINNED" for f in findings)
 
 
 @pytest.mark.parametrize("published", [False, True])
@@ -371,6 +371,14 @@ def test_refresh_rule_cli_reads_the_tracked_policy_and_canonical_receipt(
 
     policy = workflow_boundaries.observe_policy()
     assert isinstance(policy, workflow_policy.WorkflowPolicy)
+    # Pin this receipt-specific witness to legacy policy. The checkout may now
+    # select milestone delivery without an activation receipt.
+    doc = json.loads(workflow_boundaries.POLICY_PATH.read_text())
+    doc["review_rules"] = {}
+    policy = workflow_policy.parse_policy(json.dumps(doc).encode())
+    (tmp_path / ".harness").mkdir()
+    (tmp_path / ".harness/workflow-policy.json").write_text(json.dumps(doc))
+    monkeypatch.setattr(cg, "repo_root", lambda _: tmp_path)
     receipt = tmp_path / "workflow-activation.json"
     if published:
         receipt.write_text(

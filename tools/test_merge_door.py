@@ -2004,7 +2004,7 @@ case "$1 $2" in
     ;;
   "worktree remove") ;;
   "worktree list") echo "worktree /x" ;;
-  "fetch origin") ;;
+  "fetch origin"|"fetch -q") ;;
   "add .harness/roadmap_status.md") ;;
   "diff --cached") echo ".harness/roadmap_status.md" ;;
   "commit -m") ;;
@@ -3879,3 +3879,65 @@ def test_trial_resume_never_drops_an_outstanding_refresh(selected):
         )
     assert md.read_lease()["blocked_reason"] == "refresh_outstanding_under_trial"
     assert _receipts() == []
+
+
+def test_milestone_wrapper_preserves_started_legacy_refresh(door, monkeypatch, capsys):
+    monkeypatch.setattr(md, "observed_refresh_rule", lambda: "trial")
+    assert md.main(["profile", "--arc-id", "pr-1", "--with-refresh"]) == 0
+    assert capsys.readouterr().out == "legacy no-refresh\n"
+    lease = md.acquire(lane_id="A", arc_id="pr-1", pr=1, head_sha="a" * 40, base_sha="b" * 40)
+    from arc_metrics import publish_exclusive
+
+    publish_exclusive(md._sidecar(lease["lease_token"], "refresh.intent"), "{}")
+    assert md.main(["profile", "--arc-id", "pr-1", "--with-refresh"]) == 0
+    assert capsys.readouterr().out == "legacy refresh\n"
+
+
+@pytest.mark.parametrize(
+    ("posture", "profile_rc", "expected_rc", "refresh"),
+    [
+        ("legacy no-refresh", 0, 0, False),
+        ("legacy refresh", 0, 0, True),
+        ("trial no-refresh", 0, 0, False),
+        ("held", 6, 6, None),
+        ("legacy nonsense", 0, 70, None),
+    ],
+)
+def test_safe_wrapper_routes_posture_and_holds_query_failure(
+    tmp_path, posture, profile_rc, expected_rc, refresh
+):
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    log = tmp_path / "land.log"
+    uv = bindir / "uv"
+    uv.write_text(
+        """#!/usr/bin/env bash
+case "$*" in
+  *"merge_door.py profile"*) printf '%s\\n' "$TEST_POSTURE"; exit "$TEST_PROFILE_RC" ;;
+  *"roadmap_status_refresh.py --help"*) echo --emit-refresh-pr-json ;;
+  *"merge_door.py land"*) printf '%s\\n' "$*" > "$TEST_LAND_LOG" ;;
+  *) exit 99 ;;
+esac
+"""
+    )
+    uv.chmod(0o755)
+    env = {
+        **os.environ,
+        "PATH": f"{bindir}:{os.environ['PATH']}",
+        "HARNESS_ARC_ID": "test-wrapper",
+        "HARNESS_LANE_ID": "test",
+        "TEST_POSTURE": posture,
+        "TEST_PROFILE_RC": str(profile_rc),
+        "TEST_LAND_LOG": str(log),
+    }
+    result = subprocess.run(
+        ["bash", str(TOOLS / "hooks/safe-merge.sh"), "1"],
+        cwd=ROOT_REPO,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == expected_rc, result.stderr
+    assert log.exists() is (refresh is not None)
+    if log.exists():
+        assert ("--refresh-cmd" in log.read_text()) is refresh

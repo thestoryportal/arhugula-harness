@@ -1756,7 +1756,7 @@ def land(
         # the green refresh for legacy, the receipted own-main runs for trial
         cycle_confirmed = False
         if profile.kind == "trial" or ground.refresh_rule() == "trial":
-            if recorded is not None or view.get("refresh_intent"):
+            if recorded is not None or view.get("refresh_intent") is not None:
                 # a lease that began a refresh arc under legacy still owes it: a later
                 # trial selection must not silently abandon that refresh
                 mark_blocked(lease, sha=merge_sha, reason="refresh_outstanding_under_trial")
@@ -2474,7 +2474,17 @@ def main(argv: list[str] | None = None) -> int:
             profile = observe_landing_profile(args.arc_id)
             require_landable(profile, args.arc_id)
             if args.with_refresh:
-                refresh = profile.kind == "legacy" and observed_refresh_rule() == "legacy"
+                live = read_lease()
+                retained = (
+                    live is not None
+                    and live.get("reservation_id") == args.arc_id
+                    and (live.get("refresh") is not None or live.get("refresh_intent"))
+                )
+                # [LAW:no-ambient-temporal-coupling] resume an already started
+                # legacy refresh through the same wrapper after policy adoption.
+                refresh = profile.kind == "legacy" and (
+                    observed_refresh_rule() == "legacy" or retained
+                )
                 print(profile.kind, "refresh" if refresh else "no-refresh")
             else:
                 print(profile.kind)
