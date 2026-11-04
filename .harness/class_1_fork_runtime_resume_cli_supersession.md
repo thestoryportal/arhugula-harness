@@ -42,8 +42,12 @@ pinned in `.harness/runtime-resume-contract-authority.md` (Proposed; not cleared
 - The HITL probe (spec §I.11) decides whether a Runtime-side refusal is needed before acceptance.
 - Cross-binding supersession (disposition `cmt-1ba063e7`): no binding exception. Spec Rule B7 records
   that current bindings cannot carry the invariant and names the missing shared authority, an
-  installation-level per-tenant pause-journal root; its storage selection and C-IS-01 amendment are
-  prerequisites outside this delta, and witness I.2 case (d) gates acceptance.
+  installation-level per-tenant pause-journal root. After HOLD `cmt-1087cb00` (disposition
+  `cmt-8b76cb48`) that root is the only journal location for read, write, supersession and claim; the
+  binding-cell fan-out is removed. Its storage selection and binding evidence (owner Buford) and the
+  C-IS-01 companion (owner profile-coder; IS spec v1.17, IS plan v2.11 U-IS-21) are prerequisites
+  outside this delta. No implementation is accepted and `harness resume` is not exposed until both are
+  ratified and applied; witnesses I.2 case (d) and I.14 then gate acceptance.
 - The companion OD C-OD-30.5.1 amendment is authored at `Spec_Operational_Discipline_v1_43.md` and OD
   plan v2.37 unit U-OD-62 (owner profile-coder, same claim); it needs ratification before Runtime
   implementation ratification.

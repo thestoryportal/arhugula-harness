@@ -15,6 +15,9 @@ F1 in Rules B2, B3, B5, B6 and C2 and witnesses I.2 and I.14; F2 in Rules A3 and
 Second correction (HOLD `cmt-bd5730ba`, disposition `cmt-1ba063e7`): the Rule B6 bound is replaced by
 Rule B7 and witness I.2 case (d); the Rule A4 companion OD amendment is authored at
 `Spec_Operational_Discipline_v1_43.md` and OD plan v2.37 unit U-OD-62.
+Third correction (HOLD `cmt-1087cb00`, disposition `cmt-8b76cb48`): Rules B2, B3, B5, B6, B7 and C2 and
+witnesses I.2 and I.14 make the Rule B7 root the only journal location; the binding-cell fan-out is
+removed.
 
 **Lineage (pending fold):** grounded on cleared v1.134 at H `14b785d84e4d80f15c4e8c0ac1dbf7a69e1afed9`.
 Fold order A3 → A5 (v1.135) → A4 (v1.136) → this delta. It combines three decided inputs into one
@@ -99,50 +102,39 @@ fresh-run admission replacing `UNCLAIMED` is the one place that writes a superse
 appends the record, then calls `body(None)`. It runs before the run's first step or any model, tool or
 body effect.
 
-**Rule B2 — what is written, and when.** The fresh-run admission appends one supersession record for
-(tenant, workflow_id) to every journal file for that key that already exists and is non-empty, in
-every directory Rule B3 names, each under that file's journal lock. Where no such file exists there is
-nothing to supersede and nothing is written. The `run_id` field is the fresh run's own `run_id`.
+**Rule B2 — what is written, and when.** When the journal file for (tenant, workflow_id) in the Rule B3
+location exists and is non-empty, the fresh-run admission appends one supersession record to it under
+its journal lock. When it does not exist there is nothing to supersede and nothing is written. The
+`run_id` field is the fresh run's own `run_id`.
 
-**Rule B3 — journal locations: every STATE_LEDGER cell of the run's binding.** The STATE_LEDGER
-directory, and with it the journal directory, depends on `(workload_class, deployment_surface)`
-(`P/api.py:849-853`), and a manifest can keep its `workflow_id` while changing its `workload_class`. A
-later run of W can therefore bind a different journal directory from the one holding W's earlier
-record, so the admission does not write only to its own run's directory. It takes every
-`PathBindingEntry` whose `path_class` is `STATE_LEDGER` in the run's path binding (built from
-`config.path_bindings`; the binding is the resolver's only path source,
-`harness_is/path_binding.py:49-54`, and an unbound triple has no default,
-`harness_is/path_resolver.py:62-68`). For each entry it resolves
-`PathResolver.resolve_path(STATE_LEDGER, entry.workflow_class, entry.deployment_surface)`, applies
-`pause_journal_dir_for` and `os.path.realpath` as the read does (`P/api.py:849-857`), and removes
-duplicates. The set always contains the run's own capture directory
+**Rule B3 — journal location: the one Rule B7 root.** Every pause-journal read, snapshot write,
+supersession write and claim for (tenant, workflow_id) uses the one journal file for that key in the
+Rule B7 pause-journal root of the installation and tenant. This replaces today's derivation of the
+journal directory from the run's STATE_LEDGER cell, on the read (`P/api.py:849-857`) and on the claim
 (`pause_journal_dir_for(ctx.ledger_writer.handle.canonical_path.parent)`,
-`P/lifecycle/root_resume_admission.py:158`; `ctx.ledger_writer` exists after bootstrap stage 1,
-`P/bootstrap/stage_1_is.py:103-108`) and the daemon's fixed `SOFTWARE_ENGINEERING` cell
-(`P/cli/app.py:619`) when bound. Directories are visited in sorted path order. Each append uses the
-placement verification `DurableRootResume` applies before its claim
-(`P/lifecycle/root_resume_admission.py:148-155`). Any failed verification or append fails the fresh run
-before its first step; no path continues after a partial write. The write does not depend on the
-durable pause opt-in: a later run whose config lacks `pause_resume_protocol_config` or the durable
-opt-in still supersedes.
+`P/lifecycle/root_resume_admission.py:158`), and the resume's `JournalDirectoryMismatchError`
+comparison between the two (`:158-160`). No journal path is derived from the run's `path_bindings`,
+workload class or deployment surface, and no other directory is read, written or enumerated: a
+STATE_LEDGER cell holds no journal. The append uses the placement verification `DurableRootResume`
+applies before its claim (`P/lifecycle/root_resume_admission.py:148-155`), applied to the root. A
+failed root resolution, verification or append fails the fresh run before its first step. The write
+does not depend on the durable pause opt-in: a later run whose config lacks
+`pause_resume_protocol_config` or the durable opt-in still supersedes.
 
 **Rule B4 — scope.** Only depth-0 fresh runs write. Resumed runs write nothing: their `started` claim
 already spends the record. Child runs (`P/child_workflow_runner.py:306`) write nothing.
 
 **Rule B5 — outcome independence.** Because the record is written at the start of the later run, it
-covers every later outcome with one write per journal file: engine-native pause, completion, failure,
-drain and a crash after the writes. A crash between two appends leaves the later files unsuperseded;
-the run has had no step, so those records are not stale relative to it.
+covers every later outcome with one write: engine-native pause, completion, failure, drain and a crash
+after the write. A crash before the append leaves the record unsuperseded; the run has had no step,
+so the record is not stale relative to it.
 
-**Rule B6 — guarantee within the run's binding.** A later fresh root run of W
-under the same tenant supersedes W's earlier record whenever its path binding binds that record's
-directory as a STATE_LEDGER cell. This holds whatever workload class or deployment surface the later
-run uses, and whether it then pauses engine-natively, completes or fails. Example: W pauses under
-workload class A; a later fresh run of W under class B, with the same binding, appends a supersession
-record to A's journal, so a resume with the class-A manifest reads `superseded`. The resume's own
-`JournalDirectoryMismatchError` check (`P/lifecycle/root_resume_admission.py:158-160`) compares its read
-directory only with its own capture derivation, so it cannot detect a run in another cell. Rule B3's
-enumeration does.
+**Rule B6 — guarantee.** With the Rule B7 root bound, a later fresh root run of W under the same tenant
+supersedes W's earlier record whatever its path binding, workload class, deployment surface or
+process, and whether it then pauses engine-natively, completes or fails. Example: W pauses under
+configuration A; a later fresh run of W in another process uses configuration B, whose
+`path_bindings` omit A's STATE_LEDGER directory, and appends to the same root file, so a resume with
+configuration A reads `superseded`.
 
 **Rule B7 — a later run under a different binding: the missing shared authority.** Disposition
 `cmt-1ba063e7` keeps the B-310 v4 invariant with no binding exception: after any later fresh root run
@@ -150,7 +142,8 @@ of W for the same tenant, W's earlier record is never claimed, including when th
 configuration binds different STATE_LEDGER directories and when it runs in another process. Current
 bindings cannot carry this. C-IS-01 declares four path classes, each varying by workflow class and
 deployment surface (`harness_is/path_class_registry.py:31-37`, `:109-112`), and a run's own
-`config.path_bindings` is the resolver's only path source, with no default (Rule B3 citations). A run
+`config.path_bindings` is the resolver's only path source, with no default (`harness_is/path_binding.py:49-54`,
+`harness_is/path_resolver.py:62-68`). A run
 whose binding omits directory A holds no name for A, and a resume bound to A holds no name for the
 later run's directories. So neither a refusal nor an admission restriction can be enforced from state
 either process holds: the resume cannot see the later run, the later run cannot see the record, and
@@ -162,13 +155,15 @@ server, daemon) resolves identically from installation state, not from per-run `
 workload class or deployment surface; (2) holds the one journal file per (tenant, workflow_id), keyed
 as today, under that file's existing cross-process lock; (3) fails closed: a fresh root run that cannot
 resolve it fails before its first step, and a resume that cannot resolve it refuses before any claim or
-bootstrap. With it bound, Rule B3's directory set is that one directory, Rules B2, B5, C1 and C2 apply
-unchanged, and the journal stays the only ordering record: no second journal, read path or claim
+bootstrap. Rule B3 makes it the only journal location, Rules B2, B5, C1 and C2 apply to its one file
+per key, and the journal stays the only ordering record: no second journal, read path or claim
 store. Its storage location is the retained runtime-state boundary release-campaign §4 lists as not yet
-selected, and C-IS-01 has no path class for it. Selecting that location and amending C-IS-01 are
-prerequisites outside this delta. Until both are ratified and bound, this contract does not satisfy
-the B-310 v4 invariant across bindings, and witness I.2 case (d) must pass before `harness resume` is
-accepted.
+selected, and C-IS-01 has no path class for it. Two prerequisites sit outside this delta, each with a
+named owner (LIT `cmt-8b76cb48`): selecting and binding that storage with its retention evidence
+(Buford, integration lead), and the C-IS-01 companion amendment (profile-coder; IS spec v1.17, IS plan
+v2.11 unit U-IS-21). (4) Gate: no implementation of this contract is accepted and `harness resume` is
+not exposed until both are ratified and applied. Until the root is bound, every resume refuses under
+item 3 before any claim, bootstrap or effect.
 
 ## C. C-RT-35 §30 — refusal battery (AMENDED)
 
@@ -184,8 +179,8 @@ and exposes no workflow identifier, run identifier, path or digest. It is raised
 bootstrap or resumed body: zero new model, tool or body effects; the superseded record stays
 unclaimed; the original `run_id` is never reused by a new run.
 
-**Rule C2 — race ordering.** For each journal file, position under that file's cross-process lock is
-the order.
+**Rule C2 — race ordering.** Position in the root journal file, under its cross-process lock, is the
+order.
 
 - Supersession record appended after the pre-bootstrap handle read and before the claim: the claim's
   exact-current check (`P/lifecycle/resume_claim_store.py:699-713`) refuses, which maps to
@@ -277,14 +272,11 @@ Future tests, not run by this delta.
 2. Superseded records, three cases with the same assertions: W pauses at the workflow layer and is
    left unclaimed, then a later fresh run of W (a) pauses engine-natively, (b) completes, (c) fails.
    `harness resume` exits 6 `pause-record-superseded` in both output modes, before any claim; zero new
-   model, tool or body effects; the old record stays unclaimed. Each case runs twice: with the later
-   run in the same STATE_LEDGER cell, and as an A/B directory witness, where W pauses under workload
-   class A, the later fresh run uses class B in a different directory of the same binding, and the
-   resume uses the class-A manifest and config. Case (d), distinct bindings: W pauses under
-   configuration A; a later fresh run of W in another process uses configuration B, whose
-   `path_bindings` omit A's STATE_LEDGER directory, and pauses engine-natively, completes or fails;
-   `harness resume` with the old manifest and configuration A exits 6 `pause-record-superseded` with
-   the same assertions. It needs the Rule B7 authority and fails without it.
+   model, tool or body effects; the old record stays unclaimed. All runs share one bound Rule B7 root.
+   Each case runs twice: with the later run under the same configuration, and as case (d), distinct
+   bindings: W pauses under configuration A (workload class A); the later fresh run of W, in another
+   process, uses configuration B (workload class B), whose `path_bindings` omit A's STATE_LEDGER
+   directory; `harness resume` with the old manifest and configuration A gives the same result.
 3. Race: a supersession record appended between the handle read and the claim yields exit 7 `claim`,
    reason `claim-refused`; the record stays unclaimed; zero body effects. Cross-process.
 4. No prior file: a bare engine-native pause yields exit 6 `handle`/`absent`; no supersession record is
@@ -310,6 +302,9 @@ Future tests, not run by this delta.
     false, and returns no token. In a fresh process, exactly one `pause.state.read` event with
     `succeeded=false`, `cause_attribution` `superseded` and no token is retrievable from the real sink.
     The Runtime and OD cause vocabularies are equal at six members.
-14. Fan-out (Rule B3): two cells that resolve to one directory receive one record; a cell with no journal
-    file for (tenant, W) gets no file; a failed verification or append in any directory fails the fresh
-    run before its first step with zero model, tool or body effects.
+14. One root (Rules B3 and B7): across configurations with different `path_bindings`, workload
+    classes and deployment surfaces, and from CLI, MCP server and daemon processes, every journal read,
+    snapshot write, supersession append and claim for (tenant, W) touches only the root file; no journal
+    file is created or read under a STATE_LEDGER cell. Unresolvable root: a fresh run fails before its
+    first step and a resume refuses before any claim or bootstrap, each with zero model, tool or body
+    effects and no journal write. A failed verification or append fails the fresh run likewise.

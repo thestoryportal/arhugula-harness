@@ -8,7 +8,8 @@ collision recheck is owed at landing. Spec v1.137 amends no site that v1.135 or 
 Authority: `.harness/runtime-resume-contract-authority.md`. Fork:
 `.harness/class_1_fork_runtime_resume_cli_supersession.md`. This is a proposed contract, not
 clearance, ratification or a product release. Corrected after the first independent review of the
-combined candidate (HOLD, LIT `cmt-bcef30fd`, F1 and F2).
+combined candidate (HOLD, LIT `cmt-bcef30fd`, F1 and F2), and after HOLD `cmt-1087cb00` (disposition
+`cmt-8b76cb48`): the spec Rule B7 root is the only journal location, with no binding-cell fan-out.
 
 ## U-RT-160 — superseded-record refusal and `harness resume` (B-314 prerequisite, B-313, B-310)
 
@@ -19,12 +20,14 @@ combined candidate (HOLD, LIT `cmt-bcef30fd`, F1 and F2).
 appended only through `_append`; `read_latest_attributed` returns `superseded`; `read_latest` and
 `read_exact` return `None` at a supersession position);
 `P/lifecycle/root_resume_admission.py` (the Runtime-owned fresh-run admission that replaces
-`UNCLAIMED` for depth-0 fresh runs and, before `body(None)`, appends the supersession record to every
-existing non-empty journal for (tenant, workflow_id) across the STATE_LEDGER cells of the run's path
-binding, spec Rules B2–B3);
+`UNCLAIMED` for depth-0 fresh runs and, before `body(None)`, appends the supersession record to the
+existing non-empty journal for (tenant, workflow_id) in the spec Rule B7 root, spec Rules B2–B3; the
+claim resolves the same root, replacing the capture-directory derivation and its
+`JournalDirectoryMismatchError` check);
 `P/mcp_server.py` (binds that admission as the `run_workflow` default, so `api.run` and daemon clients
 share it);
-`P/api.py` (`ResumePauseRecordSupersededError`, raised from the handle read where a `None` snapshot
+`P/api.py` (the journal read resolves the Rule B7 root instead of the run's STATE_LEDGER cell;
+`ResumePauseRecordSupersededError`, raised from the handle read where a `None` snapshot
 raises `ResumeHandleUnknownError`, before depth; the pause-state accessor's `superseded` result and its
 failed-read audit event, spec Rule A4);
 `harness-od/src/harness_od/pause_resume_namespace.py` (`PauseStateCauseAttribution.SUPERSEDED`), only
@@ -47,10 +50,10 @@ reuses this value's strict parser for its `isError` reply.
    run of W (a) pauses engine-natively, (b) completes, (c) fails. Three separate cases, same
    assertions: exit 6 `pause-record-superseded` in both output modes, before any claim; zero new
    model, tool or body effects; the old record stays unclaimed; never presented as success or PAUSED.
-   Each case also runs as the A/B directory witness: W pauses under workload class A, the later fresh
-   run uses class B in a different directory of the same binding, and the resume uses the class-A
-   manifest and config. Case (d) (spec §I.2 (d)): the later run uses configuration B whose bindings
-   omit A's directory, in another process; it needs the spec Rule B7 shared journal root.
+   All runs share one bound Rule B7 root. Each case also runs as case (d) (spec §I.2): W pauses under
+   configuration A (workload class A); the later fresh run, in another process, uses configuration B
+   (workload class B), whose `path_bindings` omit A's STATE_LEDGER directory; the resume uses the
+   old manifest and configuration A.
 3. Race (spec §I.3), cross-process: a supersession record appended between the handle read and the
    claim yields exit 7 `claim`, reason `claim-refused`; the record stays unclaimed; zero body effects.
 4. No prior file (spec §I.4): a bare engine-native pause yields exit 6 `handle`/`absent`, and the
@@ -87,8 +90,12 @@ reuses this value's strict parser for its `isError` reply.
     `superseded`, not retryable, not indeterminate, no token; one failed-read `pause.state.read` event
     with `cause_attribution` `superseded` is retrievable from the real sink in a fresh process; the
     Runtime and OD vocabularies are equal at six members.
-15. Fan-out (spec §I.14): duplicate cells get one record; a cell without a journal for the key gets no
-    file; a failed verification or append fails the fresh run before its first step with zero effects.
+15. One root (spec §I.14): across configurations with different bindings, workload classes and
+    surfaces, and from CLI, MCP server and daemon processes, every journal read, write and claim for
+    the key touches only the root file and no STATE_LEDGER cell holds a journal. With the root
+    unresolvable, a fresh run fails before its first step and a resume refuses before any claim or
+    bootstrap, both with zero effects and no journal write; a failed verification or append fails the
+    fresh run likewise.
 16. Ruff and pyright clean on the touched files; the existing resume, claim, journal, durable child
     admission and CLI suites pass.
 
@@ -96,8 +103,12 @@ reuses this value's strict parser for its `isError` reply.
 and applied. B-313 v2 proof 5 (a child-refusal `RunResult` stays a child refusal) binds the actual
 U-RT-159 interface before the affected 160b candidate is accepted. The accessor change in 160a and its
 criterion 14 need the companion OD C-OD-30.5.1 amendment (spec Rule A4) ratified first; its owner is
-profile-coder (OD spec v1.43, OD plan v2.37 unit U-OD-62). Criterion 2 case (d) needs the shared
-journal root spec Rule B7 names; 160b is not accepted until that case passes. Portion 160b's criteria 1–2 need
+profile-coder (OD spec v1.43, OD plan v2.37 unit U-OD-62). The journal location (spec Rules B3 and B7)
+needs two prerequisites ratified and applied first, with owners named in LIT `cmt-8b76cb48`: the
+retained root storage selection and binding evidence (Buford, integration lead) and the C-IS-01
+companion (profile-coder; IS spec v1.17, IS plan v2.11 unit U-IS-21). Until then no 160a journal
+change is accepted and `harness resume` is not exposed; criteria 2 (including case (d)) and 15 then
+pass on the bound root. Portion 160b's criteria 1–2 need
 160a; its value module, parser and criterion 10 can be prepared first.
 
 **Installed witness enabled.** Criterion 2 cases (a)–(c) against the installed CLI, with criterion 1
@@ -105,5 +116,5 @@ as the positive control on the same installation (B-310 v4 witness 5 and 1).
 
 **Not delivered here.** Safe resume of engine-native pauses (original B-314 obligation, OPEN); daemon
 resume (B-311); HTTP operator surface (B-312, excluded); approval collection (B-315). The spec Rule B7
-shared journal root: its storage selection and C-IS-01 path-class amendment are prerequisites with
-their own owners; this plan consumes them.
+shared journal root: its storage selection (Buford) and C-IS-01 companion (profile-coder) are
+prerequisites this plan consumes.
