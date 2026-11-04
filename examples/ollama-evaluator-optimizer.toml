@@ -1,0 +1,47 @@
+# Local evaluator-optimizer loop; run with examples/ollama.handoff.local.toml.example
+# copied as harness.handoff.toml PLUS the content-creation path bindings in
+# examples/README.md. The driver treats steps[0] as the generator and steps[1] as the
+# evaluator, and repeats generate -> evaluate until the evaluator accepts or three
+# iterations have run. The handoff config's inter_step_data_flow carries the draft to
+# the evaluator and the evaluator's feedback to the next regenerate; without it the
+# evaluator never sees the draft.
+#
+# The evaluator's reply must be exactly one JSON object {"accepted": <bool>,
+# "feedback": "<text>"} with no other keys; anything else (extra keys, a quoted
+# boolean, a truncated reply) fails the run rather than counting as accept or reject.
+# `format` asks Ollama for that shape through structured outputs. Only local Ollama is
+# bound; the fallback chain is empty, so no hosted provider can be reached.
+version = 1
+
+[workflow]
+workflow_id = "example-ollama-evaluator-optimizer"
+workload_class = "content-creation"
+persona_tier = "solo-developer"
+engine_class = "pure-pattern-no-engine"
+topology_pattern = "evaluator-optimizer"
+layer_budgets = []
+hitl_placements = []
+per_step_overrides = {}
+fallback_chain = { primary = { provider = "ollama", model = "llama3.2:3b", family = "local_open_weight" }, same_family = [], cross_family = [] }
+
+[default_model_binding]
+provider = "ollama"
+model = "llama3.2:3b"
+
+[[steps]]
+step_id = "generate-tagline"
+step_kind = "inference-step"
+
+[steps.step_payload]
+messages = [{ role = "user", content = "Write a tagline of at most eight words for a local-first note-taking app. If upstream evaluator feedback is shown above, revise the tagline to address it. Reply with the tagline only." }]
+tools = []
+params = { options = { num_predict = 32 } }
+
+[[steps]]
+step_id = "evaluate-tagline"
+step_kind = "inference-step"
+
+[steps.step_payload]
+messages = [{ role = "user", content = "Judge the tagline in the upstream output above. Accept it only if it has at most eight words and mentions working locally or offline. Reply with a JSON object: accepted (boolean) and feedback (one short sentence)." }]
+tools = []
+params = { format = { type = "object", properties = { accepted = { type = "boolean" }, feedback = { type = "string" } }, required = ["accepted", "feedback"], additionalProperties = false }, options = { num_predict = 64, temperature = 0 } }
