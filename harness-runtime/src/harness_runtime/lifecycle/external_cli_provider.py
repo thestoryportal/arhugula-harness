@@ -29,8 +29,9 @@ from typing import Any, Protocol, cast
 
 from harness_runtime.lifecycle.cli_read_boundary import (
     REFUSAL_EXIT,
-    REFUSAL_MARKER,
     build_ruleset_spec,
+    new_refusal_token,
+    refusal_reason,
 )
 from harness_runtime.lifecycle.cli_read_boundary import launcher_argv as boundary_launcher_argv
 from harness_runtime.types import (
@@ -563,6 +564,15 @@ class AsyncioSubprocessRunner:
         )
 
 
+_ChildLaunch = tuple[tuple[str, ...], dict[str, str], Callable[[CLIProcessResult], None]]
+"""A prepared child: its argv, its environment and the check that raises its boundary's
+own refusal from the finished result."""
+
+
+def _no_refusal_channel(result: CLIProcessResult) -> None:
+    _ = result
+
+
 class _PrivateCwdSubprocessRunner(AsyncioSubprocessRunner):
     """A production boundary that runs each child in its own fresh empty private cwd."""
 
@@ -576,12 +586,9 @@ class _PrivateCwdSubprocessRunner(AsyncioSubprocessRunner):
     def _preflight(self) -> None:
         """Refuse before any directory or process exists (no-op unless a boundary needs it)."""
 
-    def _prepare(self, argv: tuple[str, ...], cwd: str) -> tuple[tuple[str, ...], dict[str, str]]:
+    def _prepare(self, argv: tuple[str, ...], cwd: str) -> _ChildLaunch:
         _ = cwd
-        return argv, self._child_env()
-
-    def _checked(self, result: CLIProcessResult) -> CLIProcessResult:
-        return result
+        return argv, self._child_env(), _no_refusal_channel
 
     async def run(
         self,
@@ -595,18 +602,18 @@ class _PrivateCwdSubprocessRunner(AsyncioSubprocessRunner):
         group = _ChildGroup()
         cwd = tempfile.mkdtemp(prefix=self._cwd_prefix, dir=self._scratch_root())
         try:
-            child_argv, env = self._prepare(argv, cwd)
-            return self._checked(
-                await self._run_process(
-                    child_argv,
-                    stdin=stdin,
-                    timeout_seconds=timeout_seconds,
-                    on_wire=on_wire,
-                    env=env,
-                    cwd=cwd,
-                    group=group,
-                )
+            child_argv, env, raise_refusal = self._prepare(argv, cwd)
+            result = await self._run_process(
+                child_argv,
+                stdin=stdin,
+                timeout_seconds=timeout_seconds,
+                on_wire=on_wire,
+                env=env,
+                cwd=cwd,
+                group=group,
             )
+            raise_refusal(result)
+            return result
         finally:
             outcome = sys.exc_info()[1]
             note = self._release_scratch(cwd, group)
@@ -670,7 +677,9 @@ class _CodexReadBoundaryRunner(_PrivateCwdSubprocessRunner):
         if not stat.S_ISREG(auth_stat.st_mode):
             raise ExternalCLIReadBoundaryError("codex_home/auth.json is not a regular file")
 
-    def launcher_argv(self, argv: tuple[str, ...], *, scratch: Path) -> tuple[str, ...]:
+    def launcher_argv(
+        self, argv: tuple[str, ...], *, scratch: Path, refusal_token: str
+    ) -> tuple[str, ...]:
         """``argv`` (argv[0] is the configured command name) under this call's boundary.
 
         Allowances are declared by their canonical targets (the launcher re-proves each on
@@ -686,13 +695,14 @@ class _CodexReadBoundaryRunner(_PrivateCwdSubprocessRunner):
             executable_sha256=config.executable_sha256,
             read_write_dirs=_canonical((config.codex_home, scratch)),
             read_only_paths=_canonical(config.read_only_paths),
+            refusal_token=refusal_token,
             executable_paths=_canonical(config.executable_paths),
             protected_roots=(str(operator_home),),
             sealed_roots=(interactive,),
         )
         return boundary_launcher_argv(spec, (str(config.executable), *argv[1:]))
 
-    def _prepare(self, argv: tuple[str, ...], cwd: str) -> tuple[tuple[str, ...], dict[str, str]]:
+    def _prepare(self, argv: tuple[str, ...], cwd: str) -> _ChildLaunch:
         env = {
             "HOME": cwd,
             "TMPDIR": cwd,
@@ -700,18 +710,17 @@ class _CodexReadBoundaryRunner(_PrivateCwdSubprocessRunner):
             "PATH": "/usr/bin:/bin",
             "LANG": "C.UTF-8",
         }
-        return self.launcher_argv(argv, scratch=Path(cwd)), env
+        # [LAW:no-shared-mutable-globals] each call's token lives only in its own check.
+        token = new_refusal_token()
 
-    def _checked(self, result: CLIProcessResult) -> CLIProcessResult:
-        if result.exit_code == REFUSAL_EXIT:
-            refusals = [
-                line[len(REFUSAL_MARKER) :].strip()
-                for line in result.stderr.splitlines()
-                if line.startswith(REFUSAL_MARKER)
-            ]
-            if refusals:
-                raise ExternalCLIReadBoundaryError(refusals[0])
-        return result
+        def raise_refusal(result: CLIProcessResult) -> None:
+            # Any other exit, even 125 with the marker, stays a result whose untrusted output
+            # the adapter withholds: the target that ran shares the launcher's stderr.
+            reason = refusal_reason(token, result.exit_code, result.stderr)
+            if reason is not None:
+                raise ExternalCLIReadBoundaryError(reason)
+
+        return self.launcher_argv(argv, scratch=Path(cwd), refusal_token=token), env, raise_refusal
 
 
 def _canonical(paths: Sequence[Path]) -> tuple[str, ...]:

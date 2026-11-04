@@ -5,7 +5,9 @@ before any other thread exists it closes every inherited descriptor, verifies th
 executable through an open descriptor, restricts itself with a deny-by-default Landlock
 ruleset, sets no-new-privs and executes that same descriptor. Every failure prints one
 ``REFUSAL_MARKER`` line on stderr and exits ``REFUSAL_EXIT`` without running the target:
-there is no unrestricted fallback.
+there is no unrestricted fallback. The executed target inherits that same stderr, so the
+line carries the spec's per-launch ``refusal_token``, which the target never receives;
+`refusal_reason` recognizes only a line carrying it.
 
 The launcher is the single enforcer of what a grant may be. Each allowance is opened
 once; that descriptor must still name the declared canonical path, and its inode must not
@@ -25,6 +27,7 @@ import hashlib
 import json
 import os
 import platform
+import secrets
 import stat
 import sys
 from collections.abc import Callable, Iterable, Sequence
@@ -43,6 +46,8 @@ __all__ = [
     "build_ruleset_spec",
     "handled_access_fs",
     "launcher_argv",
+    "new_refusal_token",
+    "refusal_reason",
     "require_supported_abi",
 ]
 
@@ -50,6 +55,7 @@ LAUNCHER_PATH = Path(__file__).resolve()
 REFUSAL_EXIT = 125
 REFUSAL_MARKER = "arhugula-read-boundary-refused:"
 MIN_ABI = 9
+_TOKEN_HEX = 32
 """`LANDLOCK_ACCESS_FS_RESOLVE_UNIX` (pathname-socket lookups) arrived in ABI 9."""
 
 DEFAULT_DEVICES = ("/dev/null", "/dev/urandom")
@@ -136,6 +142,8 @@ class RulesetSpec:
     executable_sha256: str
     read_write_dirs: tuple[str, ...]
     read_only_paths: tuple[str, ...]
+    refusal_token: str
+    """This launch's secret, prefixed to the launcher's refusal line (`new_refusal_token`)."""
     devices: tuple[str, ...] = DEFAULT_DEVICES
     executable_paths: tuple[str, ...] = ()
     """Extra FILES the target may execute (e.g. a dynamic ELF loader). Empty for the
@@ -152,6 +160,7 @@ class RulesetSpec:
                 "executable_sha256": self.executable_sha256,
                 "read_write_dirs": list(self.read_write_dirs),
                 "read_only_paths": list(self.read_only_paths),
+                "refusal_token": self.refusal_token,
                 "devices": list(self.devices),
                 "executable_paths": list(self.executable_paths),
                 "protected_roots": list(self.protected_roots),
@@ -168,6 +177,7 @@ class RulesetSpec:
             executable_sha256=raw["executable_sha256"],
             read_write_dirs=tuple(raw["read_write_dirs"]),
             read_only_paths=tuple(raw["read_only_paths"]),
+            refusal_token=raw["refusal_token"],
             devices=tuple(raw["devices"]),
             executable_paths=tuple(raw["executable_paths"]),
             protected_roots=tuple(raw["protected_roots"]),
@@ -181,11 +191,12 @@ def build_ruleset_spec(
     executable_sha256: str,
     read_write_dirs: Sequence[str],
     read_only_paths: Sequence[str],
+    refusal_token: str,
     executable_paths: Sequence[str] = (),
     protected_roots: Sequence[str] = (),
     sealed_roots: Sequence[str] = (),
 ) -> RulesetSpec:
-    """Parse and freeze one boundary's shape: absolute paths and a hex pin.
+    """Parse and freeze one boundary's shape: absolute paths, a hex pin and a refusal token.
 
     What a grant may *be* is decided by the launcher on the descriptor it grants
     (`_grant_descriptor`), never here on strings that a symlink can redirect.
@@ -197,15 +208,35 @@ def build_ruleset_spec(
             raise ValueError(f"boundary path must be absolute: {path!r}")
     if len(executable_sha256) != 64 or set(executable_sha256) - set("0123456789abcdef"):
         raise ValueError("executable_sha256 must be 64 lowercase hex characters")
+    if len(refusal_token) != _TOKEN_HEX or set(refusal_token) - set("0123456789abcdef"):
+        raise ValueError(f"refusal_token must be {_TOKEN_HEX} lowercase hex characters")
     return RulesetSpec(
         executable=executable,
         executable_sha256=executable_sha256,
         read_write_dirs=tuple(read_write_dirs),
         read_only_paths=tuple(read_only_paths),
+        refusal_token=refusal_token,
         executable_paths=tuple(executable_paths),
         protected_roots=tuple(protected_roots),
         sealed_roots=tuple(sealed_roots),
     )
+
+
+def new_refusal_token() -> str:
+    """A fresh unguessable per-launch token; the runtime makes one for every launch."""
+    return secrets.token_hex(_TOKEN_HEX // 2)
+
+
+def refusal_reason(token: str, exit_code: int, stderr: str) -> str | None:
+    """The refusal reason the launcher holding ``token`` printed, or None if it did not refuse.
+
+    A target that ran shares the launcher's stderr and exit-status channel and may print the
+    marker and exit 125 itself; without the token its line is not a launcher refusal.
+    """
+    if exit_code != REFUSAL_EXIT:
+        return None
+    prefix = f"{REFUSAL_MARKER} {token} "
+    return next((ln[len(prefix) :] for ln in stderr.splitlines() if ln.startswith(prefix)), None)
 
 
 def launcher_argv(spec: RulesetSpec, target_argv: Sequence[str]) -> tuple[str, ...]:
@@ -400,6 +431,12 @@ def _refuse(reason: str) -> NoReturn:
     os._exit(REFUSAL_EXIT)
 
 
+def _parse_invocation(argv: Sequence[str]) -> RulesetSpec:
+    if len(argv) < 3 or argv[1] != "--":
+        raise LauncherRefusalError("usage: <spec json> -- <target argv>")
+    return RulesetSpec.from_json(argv[0])
+
+
 def main(
     argv: Sequence[str],
     *,
@@ -409,21 +446,24 @@ def main(
 ) -> NoReturn:
     """The launcher entry point. ``__main__`` passes only ``argv``; the keyword seams let a
     source canary run this same path with an injected host report or control ruleset."""
+    # Parsing creates no descriptor, so it precedes closure and every later refusal carries
+    # this launch's token. An unparseable invocation has no token: its refusal stays untyped.
     try:
-        if len(argv) < 3 or argv[1] != "--":
-            raise LauncherRefusalError("usage: <spec json> -- <target argv>")
+        spec = _parse_invocation(argv)
+    except Exception as exc:  # [LAW:no-silent-failure] an unusable spec still refuses loudly
+        _refuse(f"unusable invocation: {type(exc).__name__}: {exc}")
+    try:
         libc = _libc()
         _close_inherited_descriptors(libc)  # before any rule or executable descriptor exists
-        spec = RulesetSpec.from_json(argv[0])
         abi = require_supported_abi(machine(), query_abi)
         policy = _GrantPolicy.of(spec)
         exe_fd = _open_verified_executable(spec, policy)
         _restrict(libc, spec, policy, exe_fd, handled(abi))
         os.execve(exe_fd, list(argv[2:]), dict(os.environ))  # fexecve: no check/exec gap
     except LauncherRefusalError as refusal:
-        _refuse(str(refusal))
+        _refuse(f"{spec.refusal_token} {refusal}")
     except Exception as exc:  # [LAW:no-silent-failure] any other fault still refuses loudly
-        _refuse(f"unexpected {type(exc).__name__}: {exc}")
+        _refuse(f"{spec.refusal_token} unexpected {type(exc).__name__}: {exc}")
 
 
 if __name__ == "__main__":

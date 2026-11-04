@@ -28,6 +28,7 @@ import pytest
 from harness_runtime.lifecycle import cli_read_boundary as boundary
 
 INTERPRETER = Path(os.path.realpath(sys.executable))
+REFUSAL_TOKEN = boundary.new_refusal_token()
 # The target interpreter's runtime needs (test-only): its install prefix, the system
 # loader/libc directory and the loader cache. None contains a canary.
 TEST_RUNTIME_READ_ONLY = (str(Path(sys.base_prefix).resolve()), "/usr/lib", "/etc/ld.so.cache")
@@ -116,6 +117,7 @@ def _spec(
         executable_sha256=sha if sha is not None else _sha256(INTERPRETER),
         read_write_dirs=read_write or (str(paths["codex_home"]), str(paths["scratch"])),
         read_only_paths=(*TEST_RUNTIME_READ_ONLY, *extra),
+        refusal_token=REFUSAL_TOKEN,
         executable_paths=TEST_RUNTIME_EXECUTABLE,
         protected_roots=(str(paths["home"]),),
         sealed_roots=(str(paths["home"] / ".codex"),),
@@ -218,10 +220,59 @@ def test_unix_sockets_created_outside_the_domain_are_unreachable(tmp_path: Path)
 
 
 def _refusal(result: subprocess.CompletedProcess[str]) -> str:
+    """The launcher's own reason: exit 125 and one marker line carrying this launch's token."""
     assert result.returncode == boundary.REFUSAL_EXIT, (result.returncode, result.stderr)
     [line] = [ln for ln in result.stderr.splitlines() if ln.startswith(boundary.REFUSAL_MARKER)]
     assert result.stdout == "", "the target must never have run"
-    return line
+    reason = boundary.refusal_reason(REFUSAL_TOKEN, result.returncode, result.stderr)
+    assert reason is not None and line == f"{boundary.REFUSAL_MARKER} {REFUSAL_TOKEN} {reason}"
+    return reason
+
+
+def test_only_a_line_carrying_this_launchs_token_is_its_refusal() -> None:
+    """The target inherits the launcher's stderr: the marker and exit 125 alone prove nothing."""
+    marker, mine, other = boundary.REFUSAL_MARKER, REFUSAL_TOKEN, boundary.new_refusal_token()
+    assert boundary.refusal_reason(mine, 125, f"noise\n{marker} {mine} pin mismatch\n") == (
+        "pin mismatch"
+    )
+    for forged in (f"{marker} forged", f"{marker} {other} forged", f"x {marker} {mine} forged"):
+        assert boundary.refusal_reason(mine, 125, forged) is None, forged
+    assert boundary.refusal_reason(mine, 1, f"{marker} {mine} not a refusal exit") is None
+
+
+@pytest.mark.parametrize("token", ["", "0" * 31, "0" * 33, "g" * 32, "A" * 32])
+def test_a_malformed_refusal_token_is_rejected(token: str) -> None:
+    assert _bare_spec().refusal_token == REFUSAL_TOKEN  # the well-formed control builds
+    with pytest.raises(ValueError, match="refusal_token"):
+        _bare_spec(token)
+
+
+@pytest.mark.parametrize("spec_json", ["not json", "{}"])
+def test_an_unparseable_invocation_refuses_without_a_token(spec_json: str) -> None:
+    """No spec, no token: the launcher still refuses loudly, and nothing reads it as typed."""
+    argv = boundary.launcher_argv(_bare_spec(), (str(INTERPRETER), "-c", "print('ran')"))
+    at = argv.index(str(boundary.LAUNCHER_PATH)) + 1
+    result = subprocess.run(
+        (*argv[:at], spec_json, *argv[at + 1 :]),
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env={"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8"},
+        check=False,
+    )
+    assert result.returncode == boundary.REFUSAL_EXIT and result.stdout == ""
+    assert result.stderr.startswith(f"{boundary.REFUSAL_MARKER} unusable invocation:")
+    assert boundary.refusal_reason(REFUSAL_TOKEN, result.returncode, result.stderr) is None
+
+
+def _bare_spec(token: str = REFUSAL_TOKEN) -> boundary.RulesetSpec:
+    return boundary.build_ruleset_spec(
+        executable=str(INTERPRETER),
+        executable_sha256=_sha256(INTERPRETER),
+        read_write_dirs=(),
+        read_only_paths=(),
+        refusal_token=token,
+    )
 
 
 def test_a_pin_mismatch_is_refused_before_the_target_runs(tmp_path: Path) -> None:

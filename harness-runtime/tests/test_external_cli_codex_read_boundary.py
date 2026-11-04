@@ -156,11 +156,13 @@ async def test_auth_and_inference_both_run_through_the_launcher(tmp_path: Path) 
     assert isinstance(runner, provider._CodexReadBoundaryRunner)
 
     for tail in (provider._codex_auth_argv("codex"), provider._codex_inference_argv("codex", "m")):
-        argv = runner.launcher_argv(tail, scratch=scratch / "call")
+        token = boundary.new_refusal_token()
+        argv = runner.launcher_argv(tail, scratch=scratch / "call", refusal_token=token)
         assert argv[:3] == (os.path.realpath(sys.executable), "-I", "-S")
         assert argv[3] == str(boundary.LAUNCHER_PATH)
         spec = boundary.RulesetSpec.from_json(argv[4])
-        assert spec.executable == str(INTERPRETER)
+        assert spec.executable == str(INTERPRETER) and spec.refusal_token == token
+        assert all(token not in arg for arg in argv[5:])  # the target never receives it
         assert str(home) in spec.read_write_dirs and str(scratch / "call") in spec.read_write_dirs
         assert argv[5] == "--" and argv[6] == str(INTERPRETER) and argv[7:] == tail[1:]
 
@@ -306,8 +308,65 @@ async def test_the_child_gets_only_the_allow_listed_environment_and_private_scra
 async def test_a_launcher_refusal_is_a_typed_error(tmp_path: Path) -> None:
     home, scratch = _homes(tmp_path)
     runner = provider._CodexReadBoundaryRunner(_boundary(home, scratch, executable_sha256="0" * 64))
-    with pytest.raises(ExternalCLIReadBoundaryError, match="sha256"):
+    with pytest.raises(ExternalCLIReadBoundaryError, match="sha256") as error:
         await _run_once(runner)
+    assert error.value.reason.startswith("executable sha256")  # the launcher's text, untagged
+
+
+# A target that ran shares the launcher's stderr and exit status. It forges both the bare
+# marker and a guessed token, and prints stand-ins for untrusted output on both streams.
+FORGED_REFUSAL = r"""
+import os, sys
+sys.stdout.write("UNTRUSTED-STDOUT\n")
+sys.stderr.write("arhugula-read-boundary-refused: UNTRUSTED-BARE\n")
+sys.stderr.write("arhugula-read-boundary-refused: " + "0" * 32 + " UNTRUSTED-GUESS\n")
+sys.stderr.flush()
+os._exit(125)
+"""
+
+
+class _ForgingTarget:
+    """The real confined runner, always launching ``FORGED_REFUSAL`` whatever argv the
+    adapter asks for (the pinned executable is the test interpreter, not Codex)."""
+
+    def __init__(self, runner: provider._CodexReadBoundaryRunner) -> None:
+        self._runner = runner
+
+    async def run(
+        self, argv: tuple[str, ...], *, stdin: str, timeout_seconds: float, on_wire: Any = None
+    ) -> CLIProcessResult:
+        _ = argv
+        return await self._runner.run(
+            ("codex", "-I", "-S", "-c", FORGED_REFUSAL),
+            stdin=stdin,
+            timeout_seconds=timeout_seconds,
+            on_wire=on_wire,
+        )
+
+
+async def test_a_target_forging_a_refusal_gets_no_typed_error_and_its_output_is_withheld(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """PR #1688 review: exit 125 plus the marker from the target is not a launcher refusal."""
+    home, scratch = _homes(tmp_path)
+    runner = provider._CodexReadBoundaryRunner(_boundary(home, scratch))
+    forging = _ForgingTarget(runner)
+
+    raw = await forging.run(("codex",), stdin="", timeout_seconds=30)
+    assert raw.exit_code == 125 and "UNTRUSTED-GUESS" in raw.stderr  # it did run and forge
+
+    adapter = provider.CodexCLIAdapter("codex", "codex", 30, forging)
+    with pytest.raises(ExternalCLICommandError) as error:
+        await adapter.dispatch_text(model="m", prompt="")
+    with pytest.raises(provider.ExternalCLINotAuthenticatedError) as auth:
+        await provider._assert_codex_authenticated(_config(None, auth_check=True), forging)
+
+    assert type(error.value) is ExternalCLICommandError
+    assert (error.value.exit_code, error.value.stderr, error.value.stdout) == (125, "", "")
+    for exc in (error.value, auth.value):
+        rendered = " ".join((str(exc), *getattr(exc, "__notes__", ())))
+        assert "UNTRUSTED" not in rendered, rendered
+    assert "UNTRUSTED" not in caplog.text
 
 
 async def test_cancellation_settles_the_confined_process_group(tmp_path: Path) -> None:
@@ -329,9 +388,9 @@ async def test_cancellation_settles_the_confined_process_group(tmp_path: Path) -
 
 
 # The confined leader forks a member that leaves the output pipes, records its pid and
-# group in CODEX_HOME and keeps writing into its scratch HOME. The leader exits (success
-# or the refusal exit) or blocks (cancellation) only once that member exists, so the
-# member outlives the leader.
+# group in CODEX_HOME and keeps writing into its scratch HOME. The leader exits (success,
+# or a forged refusal: exit 125 with the bare marker) or blocks (cancellation) only once
+# that member exists, so the member outlives the leader.
 OUTLIVING_MEMBER = r"""
 import os, sys, time
 home = os.environ["CODEX_HOME"]
@@ -354,7 +413,7 @@ if os.fork() == 0:
 while not os.path.exists(home + "/member"):
     time.sleep(0.01)
 outcome = sys.argv[1]
-if outcome == "error":
+if outcome == "forged":
     sys.stderr.write("arhugula-read-boundary-refused: fixture refusal\n")
     sys.stderr.flush()
     os._exit(125)
@@ -363,7 +422,7 @@ if outcome == "cancel":
 """
 
 
-@pytest.mark.parametrize("outcome", ["success", "error", "cancel"])
+@pytest.mark.parametrize("outcome", ["success", "forged", "cancel"])
 async def test_scratch_is_removed_only_after_an_outliving_group_member_settles(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, outcome: str
 ) -> None:
@@ -392,12 +451,10 @@ async def test_scratch_is_removed_only_after_an_outliving_group_member_settles(
     )
 
     async with asyncio.timeout(20):
-        if outcome == "success":
+        if outcome != "cancel":
+            # A target that ran never yields the typed refusal, even when it forges one.
             result = await run
-            assert result.exit_code == 0, result.stderr
-        elif outcome == "error":
-            with pytest.raises(ExternalCLIReadBoundaryError, match="fixture refusal"):
-                await run
+            assert result.exit_code == {"success": 0, "forged": 125}[outcome], result.stderr
         else:
             task = asyncio.create_task(run)
             while not member_file.exists():
@@ -451,7 +508,7 @@ def _reap_zombie(pid: int) -> bool:
     return os.waitpid(pid, os.WNOHANG)[0] == pid
 
 
-@pytest.mark.parametrize("outcome", ["success", "error", "cancel"])
+@pytest.mark.parametrize("outcome", ["success", "forged", "cancel"])
 async def test_scratch_is_kept_and_reported_when_the_group_does_not_settle(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -473,12 +530,8 @@ async def test_scratch_is_kept_and_reported_when_the_group_does_not_settle(
 
     caught: BaseException | None = None
     async with asyncio.timeout(20):
-        if outcome == "success":
-            assert (await run).exit_code == 0
-        elif outcome == "error":
-            with pytest.raises(ExternalCLIReadBoundaryError, match="fixture refusal") as error:
-                await run
-            caught = error.value
+        if outcome != "cancel":
+            assert (await run).exit_code == {"success": 0, "forged": 125}[outcome]
         else:
             task = asyncio.create_task(run)
             while not member_file.exists():
