@@ -278,6 +278,12 @@ REFUSED_BY_THE_PARSER: dict[str, str] = {
     "non-JSON constant": _envelope(
         {"kind": "depth", "fail_class": "RT-FAIL-RESUME-DIRECT-CHILD-HANDLE", "depth": 0}
     ).replace('"depth": 0', '"depth": NaN'),
+    # Well-formed JSON the decoder itself refuses: RecursionError and ValueError, not
+    # JSONDecodeError.
+    "nesting past the decoder limit": "[" * 100_000 + "]" * 100_000,
+    "depth past the integer digit limit": _envelope(
+        {"kind": "depth", "fail_class": "RT-FAIL-RESUME-DIRECT-CHILD-HANDLE", "depth": 0}
+    ).replace('"depth": 0', '"depth": ' + "9" * 10_000),
 }
 
 

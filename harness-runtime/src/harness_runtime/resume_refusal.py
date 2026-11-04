@@ -267,7 +267,11 @@ def parse(text: str) -> ResumeRefusal:
         loaded: object = json.loads(
             text, object_pairs_hook=_no_duplicate_keys, parse_constant=_reject_constant
         )
-    except json.JSONDecodeError as exc:
+    except (ValueError, RecursionError) as exc:
+        # [LAW:no-silent-failure] Besides JSONDecodeError and the hooks' own refusals, the
+        # decoder refuses text past its limits (integer digits, nesting) with ValueError or
+        # RecursionError; each is still "not one value" and reaches the caller as the protocol
+        # error (§D.2), with the decoder's reason chained.
         raise ResumeRefusalProtocolError("malformed JSON") from exc
     envelope = _object(loaded, {"protocol", "refusal"}, "envelope")
     if envelope["protocol"] != PROTOCOL or type(envelope["protocol"]) is not str:
