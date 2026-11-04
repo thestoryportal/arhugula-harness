@@ -572,8 +572,11 @@ Future tests, not run by this delta.
     under the held lock, then releases it. The admission appends its supersession record and the resume
     exits 6 `pause-record-superseded`; a mutation that checks the file's existence before taking the
     lock writes nothing, so the resume exits 0 and the test fails. Per-invocation admission: two
-    concurrent daemon `run_workflow` calls for W are held at a barrier until both admissions are
-    constructed. One call's bound paths make root resolution fail (IS spec v1.17 §1.1 `overlapping`), so
-    it fails before its first step; the other succeeds and appends a record carrying its own `run_id`.
-    Each caller receives only its own outcome. A mutation that shares the admission object, the `run_id`
-    or the pre-body failure between invocations fails this test.
+    concurrent daemon `run_workflow` calls for W, F and S, are held at a barrier until both admissions
+    are constructed, then released in a forced order. F's bound paths make root resolution fail (IS
+    spec v1.17 §1.1 `overlapping`), and F records its pre-body failure before its first step. Only then
+    does S run, append a record carrying S's own `run_id` and complete. S's outcome is projected to its
+    caller before F's. The test asserts both outcomes: S's caller receives success with S's `run_id`,
+    and F's caller receives F's root-resolution failure. A mutation that shares the admission object,
+    the `run_id` or the pre-body failure between invocations fails this test, because S then reports
+    F's failure or F's failure is overwritten before F's caller reads it.
