@@ -5,8 +5,7 @@
 # three direct children per parent (a fourth is refused, never truncated). At the
 # root, steps[0] is the lead; its children are a direct worker and a sub-agent
 # dispatch whose child workflow itself declares hierarchical-delegation, so the
-# driver re-enters the same strategy one level down (its own lead plus two workers,
-# fanned out concurrently). The root's terminal post-join-synthesis step receives the
+# driver re-enters the same strategy one level down (its own lead plus two workers). The root's terminal post-join-synthesis step receives the
 # root children's outputs after the barrier; the delegated child contributes its own
 # aggregate. Three Ollama calls run at the root level and three in the child.
 #

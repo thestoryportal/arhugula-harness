@@ -1,9 +1,10 @@
-"""Provider-free contract checks for the A7 examples: three local topology manifests and
-the offline-embedding Omarchy profile.
+"""Provider-free contract checks for three local topology manifests in examples/README.md
+and the offline-embedding Omarchy profile (docs/operations/omarchy-offline-embedding.md).
 
-Every check loads the SHIPPED file through the loader the CLI uses, and the behaviour
-checks drive the real CP driver and Runtime LLM dispatcher with a recording stand-in for
-the Ollama client. No model, daemon or network is used; a live run of these examples on
+The manifest and config checks load the SHIPPED file through the loader the CLI uses; the
+model-directory checks run the guide's own step-3 shell block; and the behaviour checks
+drive the real CP driver and Runtime LLM dispatcher with a recording stand-in for the
+Ollama client. No model, daemon or network is used; a live run of these examples on
 an installed candidate remains a separate, unwitnessed acceptance.
 """
 
@@ -15,6 +16,7 @@ import hashlib
 import json
 import os
 import subprocess
+import tomllib
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -417,6 +419,31 @@ def test_evaluator_optimizer_reaching_its_cap_completes_without_acceptance(
     assert result.final_state is not None and result.final_state["accepted"] is False
 
 
+@pytest.mark.parametrize(
+    "verdict",
+    [
+        '{"accepted": true, "feedback": "ok", "score": 9}',
+        '{"accepted": "true", "feedback": "ok"}',
+        '{"accepted": true, "feedback": "o',
+    ],
+    ids=["extra-key", "quoted-boolean", "cut-off"],
+)
+def test_evaluator_optimizer_fails_on_a_reply_that_is_not_the_verdict_object(
+    verdict: str, tmp_path: Path
+) -> None:
+    """The README's promise: a reply that is not exactly the verdict object fails the run."""
+
+    def reply(messages: list[dict[str, Any]]) -> str:
+        return verdict if _is_evaluation(messages) else "a tagline"
+
+    client = _Client(reply)
+    result = _run(_EXAMPLES[0], client, tmp_path)
+
+    assert result.status is RunStatus.FAILED
+    assert "evaluator-optimizer-verdict-malformed" in result.fail_class
+    assert len(client.calls) == 2  # the first evaluation ends the run; nothing regenerates
+
+
 def test_orchestrator_workers_synthesis_receives_only_the_worker_outputs(
     tmp_path: Path,
 ) -> None:
@@ -503,7 +530,7 @@ def test_hierarchical_delegation_runs_the_child_hierarchy_through_the_production
     sent = [prompts.get(str(c[0]["content"]), "synthesis") for c in client.calls]
     root = [str(s.step_id) for s in root_steps] + ["synthesis"]
     child = [str(s.step_id) for s in child_steps]
-    assert sorted(sent) == sorted(root + child)  # three root calls and three child calls
+    assert sorted(sent) == sorted(root + child)  # one call per declared root and child step
     synthesis = next(c for c in client.calls if POST_JOIN_SYNTHESIS_SIBLINGS_PREFIX in _text(c))
     worker, delegated = json.loads(
         synthesis[-1]["content"].removeprefix(POST_JOIN_SYNTHESIS_SIBLINGS_PREFIX)
@@ -518,6 +545,25 @@ def test_hierarchical_delegation_runs_the_child_hierarchy_through_the_production
 
 
 # --- the offline-embedding profile and the documented model directory -------------------
+
+
+def test_offline_embedding_profile_is_the_ollama_profile_plus_four_routing_keys() -> None:
+    """Pins the header's claim: removing the four routing keys leaves the Ollama profile."""
+    # [LAW:one-source-of-truth] the Ollama profile is the original; this one must not drift.
+    offline = tomllib.loads((ROOT / EMBEDDING_CONFIG).read_text())
+    ollama = tomllib.loads((ROOT / "examples/omarchy.ollama.toml.example").read_text())
+    routing_keys = (
+        "routing_activation",
+        "embedding_routing_candidates",
+        "embedding_model_dir",
+        "embedding_cache_dir",
+    )
+
+    for key in routing_keys:
+        assert key not in ollama["runtime"]
+        del offline["runtime"][key]
+
+    assert offline == ollama
 
 
 def test_offline_embedding_config_activates_l2_over_an_unbound_manifest(tmp_path: Path) -> None:
