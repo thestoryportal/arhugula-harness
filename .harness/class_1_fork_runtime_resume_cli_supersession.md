@@ -26,7 +26,9 @@ pinned in `.harness/runtime-resume-contract-authority.md` (Proposed; not cleared
 - Runtime spec **v1.137** (Proposed, numbered after Proposed v1.135 and v1.136; amends no site they
   amend):
   - a second journal record kind, the supersession record, appended by the fresh-run root admission;
-  - a `superseded` handle attribution and the refusal `ResumePauseRecordSupersededError`;
+  - a `superseded` read attribution, the refusal `ResumePauseRecordSupersededError`, and the
+    pause-state accessor's `superseded` failure cause and audit value (with a companion OD C-OD-30.5.1
+    amendment that this arc names but does not author);
   - a ninth arm `pause-record-superseded` on the B-313 v2 closed value;
   - the `harness resume` subcommand, exits 6 and 7, the failure-mode row, and the replaced exit-5
     row (b).
@@ -38,8 +40,11 @@ pinned in `.harness/runtime-resume-contract-authority.md` (Proposed; not cleared
 - The original B-314 obligation, a safe resume path for engine-native pauses, stays OPEN.
 - B-311 (daemon resume and its MCP refusal reply) and B-315 (approval collection) are not defined.
 - The HITL probe (spec §I.11) decides whether a Runtime-side refusal is needed before acceptance.
-- Disclosed residual: the visibility bound in spec Rule B6. A resume that resolves a different
-  journal directory is refused by the existing mismatch check rather than by this record.
+- Scope disposition requested (spec Rule B6 bound): a later run under a path binding that does not
+  bind the earlier record's directory does not supersede it. Runs in other cells of the same binding
+  do supersede it (Rule B3).
+- The companion OD C-OD-30.5.1 amendment and its OD plan unit (spec Rule A4) need an owner before
+  implementation ratification.
 - Whether a child run can share its root's workflow_id is pinned by a witness, not assumed.
 
 ## Clearance

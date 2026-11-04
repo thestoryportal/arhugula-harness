@@ -7,7 +7,8 @@ PROPOSED and not cleared. Fold order is A3 → A5 → A4 → this delta, so this
 collision recheck is owed at landing. Spec v1.137 amends no site that v1.135 or v1.136 amends.
 Authority: `.harness/runtime-resume-contract-authority.md`. Fork:
 `.harness/class_1_fork_runtime_resume_cli_supersession.md`. This is a proposed contract, not
-clearance, ratification or a product release.
+clearance, ratification or a product release. Corrected after the first independent review of the
+combined candidate (HOLD, LIT `cmt-bcef30fd`, F1 and F2).
 
 ## U-RT-160 — superseded-record refusal and `harness resume` (B-314 prerequisite, B-313, B-310)
 
@@ -18,11 +19,16 @@ clearance, ratification or a product release.
 appended only through `_append`; `read_latest_attributed` returns `superseded`; `read_latest` and
 `read_exact` return `None` at a supersession position);
 `P/lifecycle/root_resume_admission.py` (the Runtime-owned fresh-run admission that replaces
-`UNCLAIMED` for depth-0 fresh runs and appends the supersession record before `body(None)`);
+`UNCLAIMED` for depth-0 fresh runs and, before `body(None)`, appends the supersession record to every
+existing non-empty journal for (tenant, workflow_id) across the STATE_LEDGER cells of the run's path
+binding, spec Rules B2–B3);
 `P/mcp_server.py` (binds that admission as the `run_workflow` default, so `api.run` and daemon clients
 share it);
 `P/api.py` (`ResumePauseRecordSupersededError`, raised from the handle read where a `None` snapshot
-raises `ResumeHandleUnknownError`, before depth).
+raises `ResumeHandleUnknownError`, before depth; the pause-state accessor's `superseded` result and its
+failed-read audit event, spec Rule A4);
+`harness-od/src/harness_od/pause_resume_namespace.py` (`PauseStateCauseAttribution.SUPERSEDED`), only
+after the companion OD amendment named in spec Rule A4 is ratified under its own owner.
 
 **Source, portion 160b (CLI, spec v1.137 §D–§F):**
 one Runtime-owned module for the closed `harness.resume-refusal.v1` value (B-313 v2 plus the ninth
@@ -41,6 +47,9 @@ reuses this value's strict parser for its `isError` reply.
    run of W (a) pauses engine-natively, (b) completes, (c) fails. Three separate cases, same
    assertions: exit 6 `pause-record-superseded` in both output modes, before any claim; zero new
    model, tool or body effects; the old record stays unclaimed; never presented as success or PAUSED.
+   Each case also runs as the A/B directory witness: W pauses under workload class A, the later fresh
+   run uses class B in a different directory of the same binding, and the resume uses the class-A
+   manifest and config.
 3. Race (spec §I.3), cross-process: a supersession record appended between the handle read and the
    claim yields exit 7 `claim`, reason `claim-refused`; the record stays unclaimed; zero body effects.
 4. No prior file (spec §I.4): a bare engine-native pause yields exit 6 `handle`/`absent`, and the
@@ -59,8 +68,10 @@ reuses this value's strict parser for its `isError` reply.
    CLI witnesses.
 9. Mutations that must fail a test: moving any arm to another kind, fail_class or exit; reporting
    `superseded` as a `handle` cause, as `claim` or as `corrupt-latest`; writing the supersession
-   record only when the durable opt-in is present; writing it from a resumed or child run; writing it
-   after the first step; dropping the record-count or digest change from the staleness token.
+   record only when the durable opt-in is present; writing it only to the run's own capture
+   directory; writing it from a resumed or child run; writing it after the first step; continuing the
+   run after a failed append; mapping the accessor's `superseded` to any of the five causes; dropping
+   the record-count or digest change from the staleness token.
 10. Request shape (spec §I.10): the subcommand accepts no snapshot, context, daemon or model-override
     input, calls `api.resume` exactly once with `resume_handle == workflow.workflow_id` and
     `resume_context is None`, and performs no journal read, claim, lease or store of its own.
@@ -71,17 +82,27 @@ reuses this value's strict parser for its `isError` reply.
     runs write no supersession record.
 13. Operator guide (spec §I.12): the guide and its pinned test list exits 6 and 7 with their
     meanings; the code-5 row states no safe resume for engine-native pauses.
-14. Ruff and pyright clean on the touched files; the existing resume, claim, journal, durable child
+14. Accessor (spec §I.13): `superseded` raises `PausedWorkflowStateUnavailableError` with cause
+    `superseded`, not retryable, not indeterminate, no token; one failed-read `pause.state.read` event
+    with `cause_attribution` `superseded` is retrievable from the real sink in a fresh process; the
+    Runtime and OD vocabularies are equal at six members.
+15. Fan-out (spec §I.14): duplicate cells get one record; a cell without a journal for the key gets no
+    file; a failed verification or append fails the fresh run before its first step with zero effects.
+16. Ruff and pyright clean on the touched files; the existing resume, claim, journal, durable child
     admission and CLI suites pass.
 
 **Dependencies and gates.** Implementation starts only after spec v1.137 and this plan are ratified
 and applied. B-313 v2 proof 5 (a child-refusal `RunResult` stays a child refusal) binds the actual
-U-RT-159 interface before the affected 160b candidate is accepted. Portion 160b's criteria 1–2 need
+U-RT-159 interface before the affected 160b candidate is accepted. The accessor change in 160a and its
+criterion 14 need the companion OD C-OD-30.5.1 amendment (spec Rule A4) ratified first; that OD spec
+delta and OD plan unit have no owner yet. The spec Rule B6 bound needs the integration lead's scope
+disposition before ratification. Portion 160b's criteria 1–2 need
 160a; its value module, parser and criterion 10 can be prepared first.
 
 **Installed witness enabled.** Criterion 2 cases (a)–(c) against the installed CLI, with criterion 1
 as the positive control on the same installation (B-310 v4 witness 5 and 1).
 
 **Not delivered here.** Safe resume of engine-native pauses (original B-314 obligation, OPEN); daemon
-resume (B-311); HTTP operator surface (B-312, excluded); approval collection (B-315). The visibility
-bound in spec Rule B6 is a named residual, not a gap this unit closes.
+resume (B-311); HTTP operator surface (B-312, excluded); approval collection (B-315). A later run
+under a path binding that does not bind the earlier record's directory (spec Rule B6 bound) is not
+covered unless that disposition requires it.
