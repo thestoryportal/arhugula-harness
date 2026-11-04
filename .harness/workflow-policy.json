@@ -15,6 +15,6 @@
     ],
     "artifact_roots": []
   },
-  "review_rules": {},
+  "review_rules": {"delivery": "single-independent-milestone-status-v1"},
   "compatibility": {"phase_record_versions": [1]}
 }

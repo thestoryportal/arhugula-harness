@@ -3561,6 +3561,30 @@ def test_an_operator_suppressed_p1_lets_pass_3_complete():
     assert _next(rows) is None
 
 
+def test_single_independent_review_finishes_without_specialty_stack():
+    cycle = rlg.CycleRequest("initial", "codex", BASE, BASE, False, initial_policy=True)
+    assert isinstance(_decide(_state(preflights=(_pf(),)), [], cycle=cycle), rlg.Allowed)
+    rows = [_crow("initial", 1)]
+    assert rlg.completing_run(rows, ARC) is not None
+    assert _next(rows) is None
+    assert _next(rows, head=H2) == "correction"
+
+
+def test_single_review_correction_is_bound_to_delta_and_preserves_findings():
+    rows = [_crow("initial", 1, fid="single-f1", sev="P2")]
+    assert rlg.completing_run(rows, ARC) is None
+    rows.append(_adj("single-f1", "accepted"))
+    cycle = rlg.CycleRequest("correction", "codex", HEAD, BASE, False, initial_policy=True)
+    same = _decide(_state(preflights=(_pf(),)), rows, cycle=cycle)
+    assert isinstance(same, rlg.Refused) and same.code == "FIX_NOT_COMMITTED"
+    assert isinstance(_decide(_state(), rows, cycle=cycle, head_sha=H2), rlg.Allowed)
+    wrong = rlg.CycleRequest("correction", "codex", H3, BASE, False, initial_policy=True)
+    refused = _decide(_state(), rows, cycle=wrong, head_sha=H2)
+    assert isinstance(refused, rlg.Refused) and refused.code == "WRONG_BASE"
+    rows.append(_crow("correction", 2, head=H2))
+    assert _next(rows, head=H2) is None
+
+
 def test_deterministic_check_rows_are_not_cycle_findings():
     # a hard/warn/info row shares the record shape but is not a reviewer's finding
     rows = [*_pass("1", 1, fid="h1", sev="hard")]

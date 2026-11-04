@@ -57,6 +57,7 @@ def door(tmp_path, monkeypatch):
     # Hermeticity: the door's own WO-U03 observation reads the canonical activation
     # receipt; every arc is legacy here unless a test enrols it through `selected`.
     monkeypatch.setattr(md, "observe_landing_profile", lambda arc: LEGACY)
+    monkeypatch.setattr(md, "observed_refresh_rule", lambda: "legacy")
     rs.reserve("pr-1", lane_id="A", branch="b", arc_type="inventing")
     rs.open_with_sensor("pr-1", "A")
     # ship-pr back-fills the merge tuple BEFORE the door (C-HE-03 §3); acquire()
@@ -898,6 +899,9 @@ class FakeGround:
     sketch's single shared dict made gh_view(1) report the refresh PR's state after the
     continuation began, breaking every resume assertion)."""
 
+    def refresh_rule(self):
+        return "legacy"
+
     def __init__(self, *, head="a" * 40, base="b" * 40, tree="d" * 40, ci="success"):
         self.states = {
             1: {
@@ -986,6 +990,26 @@ def test_happy_path_lands_holds_through_ci_and_releases(door):
     assert g.merge_calls == [(1, "a" * 40)]
     assert rs.current("pr-1")[1]["state"] == "merged"
     assert md.read_lease() is None
+
+
+def test_milestone_policy_releases_after_own_main_without_refresh(door):
+    g = FakeGround()
+    g.refresh_rule = lambda: "trial"
+    original = g.gh_runs_for_sha
+    g.gh_runs_for_sha = lambda sha: [{**r, "databaseId": 10, "attempt": 1} for r in original(sha)]
+    assert _land(door, g) == "released"
+    assert md.read_lease() is None
+    assert len(g.states) == 1  # no refresh PR was ever created
+
+
+def test_milestone_policy_still_blocks_failed_own_main(door):
+    g = FakeGround(ci="failure")
+    g.refresh_rule = lambda: "trial"
+    with pytest.raises(md.DoorBlocked, match="post_merge_ci_not_green"):
+        _land(door, g)
+    assert md.read_lease()["state"] == "blocked"
+    assert g.merge_calls == [(1, "a" * 40)]
+    assert rs.current("pr-1")[1]["state"] == "merged"
 
 
 def test_local_base_cas_check_fails_door_on_tree_mismatch(door):

@@ -13,12 +13,13 @@ case "$1" in ''|*[!0-9]*) echo "safe-merge: pr must be all digits" >&2; exit 64 
 cd "$(git rev-parse --show-toplevel)"
 # `profile` prints trial|legacy, or exits 6 when the selection is held (no lease taken);
 # errexit carries that status out. `land` re-observes and refuses a posture it disagrees with.
-profile="$(uv run python tools/merge_door.py profile --arc-id "$HARNESS_ARC_ID")"
-case "$profile" in
-  trial)
+profile_and_refresh="$(uv run python tools/merge_door.py profile --arc-id "$HARNESS_ARC_ID" --with-refresh)"
+read -r profile refresh_mode <<< "$profile_and_refresh"
+case "$profile:$refresh_mode" in
+  trial:no-refresh|legacy:no-refresh)
     exec uv run python tools/merge_door.py land "$1" --lane-id "$HARNESS_LANE_ID" --arc-id "$HARNESS_ARC_ID"
     ;;
-  legacy)
+  legacy:refresh)
     # Pre-lease availability guard (merge-gate r1, all three lenses; landed U-HE-25, kept as
     # a permanent probe now that U-HE-28 shipped the flag): merge_door.land() runs the
     # refresh AFTER the irreversible merge (check=True), so a checkout whose refresh CLI

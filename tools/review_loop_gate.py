@@ -517,6 +517,8 @@ _PASS_REVIEWERS: dict[str, frozenset[str]] = {
     "2": frozenset({_CODEX, _WITNESS_LENS}),
     "esc": frozenset({_CODEX, *_LENSES}),
     "3": _LENSES,
+    "initial": frozenset({_CODEX}),
+    "correction": frozenset({_CODEX}),
 }
 
 #: The passes with a codex half; pass 3 is one merge-gate lens.
@@ -620,6 +622,15 @@ def _successor(run: PassRun, disposed: dict[str, str | None]) -> str | None:
     """The pass X9a requires after `run` under the current dispositions; None when `run`
     completes the cycle."""
     p1 = [f["finding_id"] for f in run.findings if f["severity"] == "P1"]
+    if run.cycle_pass in ("initial", "correction"):
+        # [LAW:one-type-per-behavior] the same independent judgment verifies the
+        # initial candidate and each correction; no automatic specialty stack.
+        open_or_accepted = any(
+            f["severity"] in ("P1", "P2")
+            and disposed.get(f["finding_id"]) not in ("rejected", "suppressed")
+            for f in run.findings
+        )
+        return "correction" if open_or_accepted else None
     if run.cycle_pass == "1":
         return "2"
     if run.cycle_pass == "2":
@@ -642,7 +653,9 @@ class CycleReplay:
     last: PassRun | None
 
 
-def replay(rows: list[dict], arc_id: str, *, doc_only: bool) -> CycleReplay:
+def replay(
+    rows: list[dict], arc_id: str, *, doc_only: bool, initial_policy: bool = False
+) -> CycleReplay:
     """Walk the completed runs in log order against the pass X9a requires under the
     CURRENT dispositions. A run that departs from it was superseded by a later
     disposition (a pass-2 P1 rejected, then accepted after a clean pass 3) and does not
@@ -655,12 +668,12 @@ def replay(rows: list[dict], arc_id: str, *, doc_only: bool) -> CycleReplay:
     # [LAW:effects-at-boundaries] pure: rows in, state out — admit() reads the log
     disposed = _last_dispositions(rows)
     runs = [r for r in pass_runs(rows, arc_id) if r.complete]
-    history = runs[0].cycle_pass if runs and runs[0].cycle_pass in ("1", "3") else None
-    expected: str | None = history or ("3" if doc_only else "1")
+    history = runs[0].cycle_pass if runs and runs[0].cycle_pass in ("1", "3", "initial") else None
+    expected: str | None = history or ("initial" if initial_policy else "3" if doc_only else "1")
     completed_by: PassRun | None = None
     last: PassRun | None = None
     for run in runs:
-        want = expected or "3"  # after completion, a new commit gets one pass 3
+        want = expected or ("correction" if history == "initial" else "3")
         if run.cycle_pass != want:
             continue
         expected = _successor(run, disposed)
@@ -670,15 +683,16 @@ def replay(rows: list[dict], arc_id: str, *, doc_only: bool) -> CycleReplay:
 
 
 def next_pass(
-    rows: list[dict], arc_id: str, *, doc_only: bool, head_sha: str, diff_digest: str
+    rows: list[dict], arc_id: str, *, doc_only: bool, head_sha: str, diff_digest: str,
+    initial_policy: bool = False,
 ) -> str | None:
     """The pass the cycle admits next on the binding (`head_sha`, `diff_digest`); None when
     the cycle is complete on exactly that binding."""
-    state = replay(rows, arc_id, doc_only=doc_only)
+    state = replay(rows, arc_id, doc_only=doc_only, initial_policy=initial_policy)
     done = state.completed_by
     if done is not None and (head_sha, diff_digest) == (done.head_sha, done.diff_digest):
         return None
-    return state.expected or "3"
+    return state.expected or ("correction" if state.last and state.last.cycle_pass in ("initial", "correction") else "3")
 
 
 def completing_run(rows: list[dict], arc_id: str) -> PassRun | None:
@@ -693,7 +707,7 @@ def unfixed_after_pass_3(rows: list[dict], arc_id: str) -> int:
     disposed = _last_dispositions(rows)
     n = 0
     for run in reversed([r for r in pass_runs(rows, arc_id) if r.complete]):
-        if run.cycle_pass != "3" or not _accepted(run, ("P1",), disposed):
+        if run.cycle_pass not in ("3", "correction") or not _accepted(run, ("P1",), disposed):
             break
         n += 1
     return n
@@ -1057,6 +1071,7 @@ class CycleRequest:
     base_sha: str  # the base of the diff this reviewer reads
     full_diff_base: str  # merge-base(FULL_DIFF_REF, head): the base of the PR's whole diff
     doc_only: bool
+    initial_policy: bool = False
 
 
 def _decide_cycle(
@@ -1111,7 +1126,8 @@ def _decide_cycle(
             ),
         )
     expected = next_pass(
-        rows, arc_id, doc_only=cycle.doc_only, head_sha=head_sha, diff_digest=diff_digest
+        rows, arc_id, doc_only=cycle.doc_only, head_sha=head_sha, diff_digest=diff_digest,
+        initial_policy=cycle.initial_policy,
     )
     if expected is None:
         return Refused(
@@ -1164,8 +1180,11 @@ def _decide_cycle(
     # other pass reviews the full diff. The order check above guarantees pass 2 follows
     # a counted run.
     last = replay(rows, arc_id, doc_only=cycle.doc_only).last
-    base = last.head_sha if cycle_pass == "2" and last is not None else cycle.full_diff_base
-    if cycle.base_sha != base:
+    base = last.head_sha if cycle_pass in ("2", "correction") and last is not None else cycle.full_diff_base
+    # A material scope change may deliberately request a full correction review;
+    # the normal correction binding remains the previous reviewed head's delta.
+    full_correction = cycle_pass == "correction" and cycle.base_sha == cycle.full_diff_base
+    if cycle.base_sha != base and not full_correction:
         return Refused(
             code="WRONG_BASE",
             detail=(
@@ -1182,6 +1201,8 @@ def _decide_cycle(
 
 
 def _pass_recipe(cycle_pass: str) -> str:
+    if cycle_pass in ("initial", "correction"):
+        return f"run one independent `just review-cycle-pass {cycle_pass} <log> <base>`"
     codex = (
         f"`just review-cycle-pass {cycle_pass} <log> <base>` for its codex half, and "
         if cycle_pass in CODEX_PASSES
@@ -1431,7 +1452,22 @@ def _cycle_request(
         base_sha=binding["base_sha"],
         full_diff_base=full_diff_base,
         doc_only=_doc_only(repo, binding),
+        initial_policy=_streamlined_review(repo),
     )
+
+
+def _streamlined_review(repo: Path) -> bool:
+    import workflow_policy as policy
+
+    path = repo / ".harness" / "workflow-policy.json"
+    try:
+        raw = path.read_bytes()
+    except FileNotFoundError:
+        return False
+    parsed = policy.load_policy(raw)
+    if isinstance(parsed, policy.PolicyDefect):
+        raise GateError(parsed.reason)
+    return policy.streamlined_delivery(parsed)
 
 
 def diff_names(repo: Path, base_sha: str, head_sha: str) -> list[bytes]:
