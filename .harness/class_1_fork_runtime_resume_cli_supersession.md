@@ -1,0 +1,51 @@
+# Fork record — Runtime resume: superseded-record refusal and `harness resume`
+
+**Class:** 1 (design-substrate amendment), absorbed through a documented bundled back-flow source arc
+(CLAUDE.md §11.4). The integration lead accepted the B-310 v4 definition and broadened B-314 under the
+accepted release campaign (LIT `arhugula-harness-trial-193`, `cmt-fe2c7b08-00c3-4838-8b9e-562d34699de4`).
+One combined candidate covers B-310, B-313 and the B-314 prerequisite (work record
+`cmt-9a055b8f-010e-47ae-88f4-de8a21817bbc`). No new H_T primitive or cross-axis edge. Authorities are
+pinned in `.harness/runtime-resume-contract-authority.md` (Proposed; not cleared).
+
+## Fork
+
+- **What the contract requires.** The accepted operator surfaces are CLI and MCP (B-312 excludes a
+  separate HTTP surface). A CLI operator must be able to resume a durable workflow-layer pause through
+  `api.resume` without a second claim, journal or approval store (B-310), and each root refusal must
+  reach the operator as a closed typed value with its own exit code (B-313).
+- **Why current source cannot meet it.** The CLI has no `resume` subcommand and defines exits 0–5
+  only. The journal holds one record kind, so a workflow-layer record stays resumable after a later
+  run of the same workflow paused engine-natively, completed or failed: a resume would replay a stale
+  pause over newer state (B-314 broadened scope).
+- **What the existing seams provide.** Every fresh root run enters the MCP tool `run_workflow` and its
+  root admission; journal appends already serialize under one cross-process lock; the resume claim
+  already refuses a record that is no longer the latest.
+
+## Disposition
+
+- Runtime spec **v1.137** (Proposed, numbered after Proposed v1.135 and v1.136; amends no site they
+  amend):
+  - a second journal record kind, the supersession record, appended by the fresh-run root admission;
+  - a `superseded` handle attribution and the refusal `ResumePauseRecordSupersededError`;
+  - a ninth arm `pause-record-superseded` on the B-313 v2 closed value;
+  - the `harness resume` subcommand, exits 6 and 7, the failure-mode row, and the replaced exit-5
+    row (b).
+- Plan **v2.68** adds U-RT-160, delivered as portions 160a (Runtime prerequisite) and 160b (CLI).
+- No source, test or operator-guide change is made by this arc.
+
+## Open
+
+- The original B-314 obligation, a safe resume path for engine-native pauses, stays OPEN.
+- B-311 (daemon resume and its MCP refusal reply) and B-315 (approval collection) are not defined.
+- The HITL probe (spec §I.11) decides whether a Runtime-side refusal is needed before acceptance.
+- Disclosed residual: the visibility bound in spec Rule B6. A resume that resolves a different
+  journal directory is refused by the existing mismatch check rather than by this record.
+- Whether a child run can share its root's workflow_id is pinned by a witness, not assumed.
+
+## Clearance
+
+Owed after independent review of the exact head:
+- ratification of spec v1.137 and plan v2.68, then their markers and derived head rows, filed by the
+  integration lead;
+- an integration collision check against the A3 v1.134/v2.65 fold and the Proposed A5 and A4 deltas,
+  including the U-RT-160 unit ID.
