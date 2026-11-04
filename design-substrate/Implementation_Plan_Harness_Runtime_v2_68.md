@@ -12,6 +12,8 @@ combined candidate (HOLD, LIT `cmt-bcef30fd`, F1 and F2), and after HOLD `cmt-10
 `cmt-8b76cb48`): the spec Rule B7 root is the only journal location, with no binding-cell fan-out.
 Fourth correction (HOLD `cmt-b64cde80`, F3 and F4): the durable snapshot capture resolves the same root
 (spec Rule B3), and journals at the old location get a fail-closed cutover (spec Rule B8).
+C-IS-01 companion (after ratification `cmt-7cc5fc50`): criterion 15 pins the unresolved-root resume
+refusal to `protocol-not-bound` (spec Rule B7 item 3).
 
 ## U-RT-160 — superseded-record refusal and `harness resume` (B-314 prerequisite, B-313, B-310)
 
@@ -101,8 +103,9 @@ reuses this value's strict parser for its `isError` reply.
 15. One root (spec §I.14): across configurations with different bindings, workload classes and
     surfaces, and from CLI, MCP server and daemon processes, every journal read, write and claim for
     the key touches only the root file and no STATE_LEDGER cell holds a journal. With the root
-    unresolvable, a fresh run fails before its first step and a resume refuses before any claim or
-    bootstrap, both with zero effects and no journal write; a failed verification or append fails the
+    unresolvable, a fresh run fails before its first step and a resume refuses exit 6
+    `protocol-not-bound` before any claim or bootstrap for each unresolved cause of IS spec v1.17 §1.1,
+    both with zero effects and no journal write; a failed verification or append fails the
     fresh run likewise. Capture-to-read identity: under configurations whose STATE_LEDGER cells
     differ, the durable factory's store appends a captured snapshot to the same file (same real path)
     that the `api.resume` handle read and the claim open.
@@ -120,7 +123,8 @@ criterion 14 need the companion OD C-OD-30.5.1 amendment (spec Rule A4) ratified
 profile-coder (OD spec v1.43, OD plan v2.37 unit U-OD-62). The journal location (spec Rules B3 and B7)
 needs two prerequisites ratified and applied first, with owners named in LIT `cmt-8b76cb48`: the
 retained root storage selection and binding evidence (Buford, integration lead) and the C-IS-01
-companion (profile-coder; IS spec v1.17, IS plan v2.11 unit U-IS-21). Until then no 160a journal
+companion (profile-coder; IS spec v1.17 §1.1, IS plan v2.11 unit U-IS-21, whose resolution result
+160a's root resolver consumes). Until then no 160a journal
 change is accepted and `harness resume` is not exposed; criteria 2 (including case (d)), 15 and 17
 then pass on the bound root. Portion 160b's criteria 1–2 need
 160a; its value module, parser and criterion 10 can be prepared first.

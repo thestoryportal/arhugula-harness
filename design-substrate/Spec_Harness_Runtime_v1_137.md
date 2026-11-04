@@ -21,6 +21,8 @@ removed.
 Fourth correction (HOLD `cmt-b64cde80`): F3 in Rule B3 and witness I.14 (the durable snapshot capture
 resolves the same root); F4 in Rule A1, new Rule B8 and witness I.15 (fail-closed cutover of journals
 at the old location).
+C-IS-01 companion (after ratification `cmt-7cc5fc50`): Rule B7 item 3 and witness I.14 pin the resume
+refusal for an unresolved root to `protocol-not-bound`; IS spec v1.17 §1.1 declares the root.
 
 **Lineage (pending fold):** grounded on cleared v1.134 at H `14b785d84e4d80f15c4e8c0ac1dbf7a69e1afed9`.
 Fold order A3 → A5 (v1.135) → A4 (v1.136) → this delta. It combines three decided inputs into one
@@ -164,7 +166,11 @@ server, daemon) resolves identically from installation state, not from per-run `
 workload class or deployment surface; (2) holds the one journal file per (tenant, workflow_id), keyed
 as today, under that file's existing cross-process lock; (3) fails closed: a fresh root run that cannot
 resolve it fails before its first step, and a resume that cannot resolve it refuses before any claim or
-bootstrap. Rule B3 makes it the only journal location, Rules B2, B5, C1 and C2 apply to its one file
+bootstrap, with the existing `protocol-not-bound` arm (`ResumeProtocolNotBoundError`, exit 6) at that
+check's position: without a resolved root the pause protocol is not bound. No arm, field or handle
+cause is added, and an unresolved root never presents as `handle`/`absent`, which would make a lost
+root indistinguishable from a missing pause. Rule B3 makes it the only journal location, Rules B2,
+B5, C1 and C2 apply to its one file
 per key, and the journal stays the only ordering record: no second journal, read path or claim
 store. Its storage location is the retained runtime-state boundary release-campaign §4 lists as not yet
 selected, and C-IS-01 has no path class for it. Two prerequisites sit outside this delta, each with a
@@ -326,7 +332,8 @@ Future tests, not run by this delta.
     classes and deployment surfaces, and from CLI, MCP server and daemon processes, every journal read,
     snapshot write, supersession append and claim for (tenant, W) touches only the root file; no journal
     file is created or read under a STATE_LEDGER cell. Unresolvable root: a fresh run fails before its
-    first step and a resume refuses before any claim or bootstrap, each with zero model, tool or body
+    first step and a resume refuses exit 6 `protocol-not-bound` in both output modes before any claim or
+    bootstrap, for each unresolved cause of IS spec v1.17 §1.1, each with zero model, tool or body
     effects and no journal write. A failed verification or append fails the fresh run likewise.
     Capture-to-read identity: under configurations whose STATE_LEDGER cells differ, the file the
     durable factory's store appends a captured snapshot to is the same file (same real path) that the
