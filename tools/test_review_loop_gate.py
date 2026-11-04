@@ -4142,6 +4142,22 @@ def test_correction_carries_legacy_p1_streak():
     assert _trial([], policy=_policy(stopped=True)).state == "review_quarantined"
 
 
+def test_initial_p1_spends_a_round_but_does_not_count_as_a_correction_streak():
+    rows = _trial_rows("initial", producers=[LOOP_PRODUCER], finding=("first", "P1", "accepted"))
+    rows += _trial_rows(
+        "correction", producers=[LOOP_PRODUCER], head="d" * 40, finding=("fix1", "P1", "accepted")
+    )
+    first = _trial(rows)
+    assert len(first.completed_rounds) == 2
+    assert first.p1_streak == 1 and first.state != "review_quarantined"
+    rows += _trial_rows(
+        "correction", producers=[LOOP_PRODUCER], head="e" * 40, finding=("fix2", "P1", "accepted")
+    )
+    second = _trial(rows)
+    assert len(second.completed_rounds) == 3
+    assert second.p1_streak == 2 and second.state == "review_quarantined"
+
+
 def test_author_cannot_approve_own_material_fix():
     codex_fixed = _binding(authors=("claude", "codex"))
     d = _trial(_CLEAN_CYCLE, binding=codex_fixed)

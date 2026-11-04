@@ -804,6 +804,7 @@ class TrialBinding:
     diff_digest: str
     authors: frozenset[str]  # author session IDs; historical rows may name legacy routes
     doc_only: bool
+    initial_policy: bool = False
 
 
 @dataclass(frozen=True)
@@ -881,7 +882,7 @@ def trial_review_decision(
     spent = [(a, r) for a in members for r in pass_runs(rows, a) if r.complete]
     streak = legacy.p1_streak
     for _, run in spent:
-        if run.cycle_pass != "1":
+        if run.cycle_pass not in ("1", "initial"):
             streak = streak + 1 if _accepted(run, ("P1",), disposed) else 0
     completed = legacy.rounds + tuple(_round_id(a, r) for a, r in spent)
     undisposed = sorted(
@@ -905,7 +906,7 @@ def trial_review_decision(
             else _LEGACY_PRODUCER_ROUTE.get(r.get("producer")) not in binding.authors
         )
     ]
-    cycle = replay(rows, arc, doc_only=binding.doc_only)
+    cycle = replay(rows, arc, doc_only=binding.doc_only, initial_policy=binding.initial_policy)
     done = cycle.completed_by
     expected = cycle.pending_pass
     runs = pass_runs(rows, arc)
