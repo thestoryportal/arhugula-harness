@@ -31,7 +31,7 @@ prose tail — it never crashes and never fabricates a value. In particular:
   * `refresh_commit` is bound by POSITION as well as shape: only the merge's IMMEDIATE
     first-parent successor on the default branch may qualify (both ship-pr carriers
     require the refresh to land as the immediate next commit), and it must also match
-    CLAUDE.md §12.2.1's shape — subject prefix AND a changed-file set of exactly
+    CLAUDE.md §12.2.1's shape — this PR's refresh title AND a changed-file set of exactly
     `.harness/roadmap_status.md`. A shape-match anywhere else belongs to a LATER arc and
     is reported as a note, never bound (codex round-4 P1).
   * `main_ci` is the merge commit's own `--branch <default> --event push` run — the
@@ -75,6 +75,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -406,13 +407,13 @@ def _refresh_required(merge_commit: str, cwd: Path, notes: list[str]) -> bool | 
     return not wp.streamlined_delivery(policy)
 
 
-def _refresh_commit(merge_commit: str, cwd: Path, notes: list[str]) -> str | None:
+def _refresh_commit(pr: int, merge_commit: str, cwd: Path, notes: list[str]) -> str | None:
     """THIS merge's §12.2.1 terminating-refresh commit, or None.
 
     Bound by POSITION, not merely by shape (codex round-4 P1). Both ship-pr carriers
     require the refresh to land as the **immediate next commit**, so only the merge's
     IMMEDIATE first-parent successor on the default branch is a candidate — and it must
-    additionally match the shape (reserved subject prefix AND a changed-file set of exactly
+    additionally match the shape (this PR's refresh title AND a changed-file set of exactly
     `.harness/roadmap_status.md`).
 
     Scanning the whole history for the first shape-match was the defect: when THIS arc's
@@ -467,7 +468,11 @@ def _refresh_commit(merge_commit: str, cwd: Path, notes: list[str]) -> str | Non
             )
             return None
         if ok:
-            return sha
+            # [LAW:one-source-of-truth] the landed successor must name this arc.
+            if re.fullmatch(rf"{re.escape(REFRESH_PREFIX)}post-#{pr}(?: \(#\d+\))?", subject):
+                return sha
+            notes.append(f"{sha[:8]} is a refresh for another PR; not this arc's refresh.")
+            return None
         notes.append(
             f"{sha[:8]} is the immediate successor and carries the refresh title, but is not "
             "roadmap-status-only — not a §12.2.1 terminating refresh."
@@ -822,7 +827,9 @@ def collect(
         )
 
     refresh_required = _refresh_required(merge_commit, repo_root, notes)
-    refresh = None if refresh_required is False else _refresh_commit(merge_commit, repo_root, notes)
+    refresh = _refresh_commit(pr, merge_commit, repo_root, notes)
+    if refresh:
+        refresh_required = True
     # The arc's CLOSING commit: the terminating refresh when one landed (this report is
     # emitted after the §12.2.1 fixed point), else the merge. Anything written before it is
     # not the arc's final checkpoint.

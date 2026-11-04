@@ -1458,14 +1458,12 @@ def test_render_is_pure_no_subprocess(monkeypatch):
     assert yaml.safe_load(yaml_block(first))["merge_state"] == "MERGED"
 
 
-def test_milestone_policy_closes_at_merge_without_borrowing_a_later_refresh(
-    repo, gstack, monkeypatch
-):
+def collect_milestone(sc, repo, gstack, monkeypatch, checkpoint=None):
     policy = json.loads(
         (Path(__file__).resolve().parents[1] / ".harness/workflow-policy.json").read_text()
     )
     policy["review_rules"] = {"delivery": "single-independent-milestone-status-v1"}
-    fake = make_run(scenario(), repo)
+    fake = make_run(sc, repo)
 
     def merged_policy(cmd, cwd, timeout=20):
         if cmd == ["git", "show", f"{MERGE}:.harness/workflow-policy.json"]:
@@ -1473,10 +1471,46 @@ def test_milestone_policy_closes_at_merge_without_borrowing_a_later_refresh(
         return fake(cmd, cwd, timeout)
 
     monkeypatch.setattr(aer, "run", merged_policy)
-    data = aer.collect(1202, MERGE, repo, gstack_root=gstack)
+    return aer.collect(1202, MERGE, repo, gstack_root=gstack, checkpoint=checkpoint)
+
+
+@pytest.mark.parametrize("other_pr", [1300, 12020])
+def test_milestone_policy_closes_at_merge_without_borrowing_another_prs_refresh(
+    repo, gstack, monkeypatch, other_pr
+):
+    sc = scenario(log=[(REFRESH, MERGE, f"ops: roadmap status refresh post-#{other_pr} (#1301)")])
+    data = collect_milestone(sc, repo, gstack, monkeypatch)
     assert data["refresh_required"] is False
     assert data["refresh_commit"] is None
     assert data["main_ci"]["conclusion"] == "success"
     assert "no separate roadmap refresh PR is required" in aer.render(data)
     assert "may still be owed" not in aer.render(data)
-    assert not any(cmd[0:2] == ["git", "log"] for cmd in fake.calls)
+
+
+@pytest.mark.parametrize("suffix", ["", " (#1203)"])
+@pytest.mark.parametrize("after_refresh", [False, True])
+def test_milestone_policy_retains_own_refresh_and_anchors_final_checkpoint(
+    repo, gstack, monkeypatch, tmp_path, suffix, after_refresh
+):
+    sc = scenario(log=[(REFRESH, MERGE, f"ops: roadmap status refresh post-#1202{suffix}")])
+    timestamp = REFRESH_TS + 1 if after_refresh else MERGE_TS + 1
+    checkpoint = mk_ckpt(tmp_path, timestamp)
+    data = collect_milestone(sc, repo, gstack, monkeypatch, checkpoint)
+    assert data["refresh_required"] is True
+    assert data["refresh_commit"] == REFRESH
+    assert data["checkpoint"]["confirmed"] is after_refresh
+    assert "no separate roadmap refresh PR is required" not in aer.render(data)
+
+
+def test_milestone_policy_does_not_borrow_a_later_refresh_even_with_matching_pr(
+    repo, gstack, monkeypatch
+):
+    sc = scenario(
+        log=[
+            (OTHER, MERGE, "feat: unrelated content"),
+            (REFRESH, OTHER, "ops: roadmap status refresh post-#1202 (#1203)"),
+        ]
+    )
+    data = collect_milestone(sc, repo, gstack, monkeypatch)
+    assert data["refresh_commit"] is None
+    assert data["refresh_required"] is False
