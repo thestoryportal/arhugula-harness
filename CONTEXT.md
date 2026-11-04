@@ -5,7 +5,9 @@
 `docs/governance/delivery-policy.md` before work. It replaces contrary default
 review-stack, full-local-suite and per-merge status-PR requirements in the legacy
 procedure below. Continue independent isolated work during CI; retain candidate
-CI, acceptance, findings, budgets and in-flight legacy obligations.
+CI, acceptance, findings, budgets and in-flight legacy obligations. One separate
+reviewer session may use any model family; author/correction-author self-approval
+remains forbidden. No mandatory Gemini, fallback or shadow review.
 
 
 Router only. Every rule traces to root `CLAUDE.md` (§ cited inline); read it for the rest.

@@ -11,6 +11,12 @@ procedure below. Continue independent isolated work during CI; retain candidate
 CI, acceptance, findings, budgets and in-flight legacy obligations.
 
 
+The direct instruction "Eliminate the gemini requirement" selects a separate
+independent reviewer session of any model family. Follow delivery-policy.md's
+native-session evidence route; author/correction-author self-approval remains
+forbidden. No mandatory Gemini, fallback or shadow step is owed, including when
+retaining legacy findings and spent passes. Preserve actual disclosure denials.
+
 # Roadmap Continue
 
 Run the live roadmap loop through a verified fixed point. The canonical authorities are

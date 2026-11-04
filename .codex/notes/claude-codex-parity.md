@@ -4,6 +4,11 @@ This is the durable audit record for replacing Claude as the interactive runner
 without discarding compatible workflow capability. "Surgical" means no unrelated
 repo churn; it does not mean reduced parity.
 
+The selected delivery procedure in `docs/governance/delivery-policy.md` supersedes
+the historical default review stack below: use one separate independent session of
+any model family, with no author/correction-author self-approval or mandatory
+Gemini/fallback/shadow. Retain historical findings, spent passes and actual denials.
+
 ## Capability matrix
 
 | Surface | Claude posture immediately before handoff | Codex adoption |
@@ -17,7 +22,7 @@ repo churn; it does not mean reduced parity.
 | Project memory | Claude project `memory/MEMORY.md` plus linked topic files | Mandatory discipline digest at startup; task-relevant index/topic lookup remains available and required |
 | Context checkpoints | `context-save-lean` (the workspace copy of the gstack save flow, U-SR-08/WR-15) / gstack `context-restore` and repo handoffs | Same gstack skills plus `.harness/handoff/README-resume.md` and Codex deterministic checkpoints; all advisory until HEAD verification |
 | Orchestration models | Fable 5 interactive orchestrator/planner with Opus 5 subagent implementers | `gpt-5.6-sol` high controller via `arhugula-forward`; `gpt-5.6-terra` high implementer legs via `arhugula-implementer` |
-| Out-of-family review | Codex reviewed Claude-authored diffs | OAuth-authenticated Antigravity (`agy`) pinned to Gemini 3.1 Pro High through `just gemini-review` reviews Codex-authored diffs |
+| Independent review | Separate native reviewer session | Any model family; actual author/correction-author sessions excluded. See `docs/governance/delivery-policy.md`; Gemini/fallback/shadow optional. |
 | Pre-merge review | Three fresh agent lenses | Three fresh ephemeral, lifecycle-isolated, read-only `codex exec` lenses; all-approve and logged |
 | CI | Green PR CI, then green `main` CI | Same, including merge-SHA pinning and terminating-refresh `main` CI before forward work |
 | Git autonomy | Safe scoped commands with destructive operations guarded | Same scoped approvals plus permission guard; force push, history rewrite, remote delete, and force cleanup remain denied |
@@ -33,7 +38,7 @@ that file routes to, then follow that workflow with only these runner translatio
 - Claude `Agent` / `Task` becomes a dedicated Codex subagent or isolated `codex exec`.
 - `AskUserQuestion` becomes the Codex user-input surface only for a genuine user-owned fork.
 - Claude scratch output becomes `/tmp` or another ignored scratch path.
-- Reviewer routing follows authorship: Claude author → Codex review; Codex author → Antigravity.
+- Reviewer routing selects a separate session of any model family; exclude every author and correction author. Gemini/Antigravity is optional, with actual denials retained.
 - Transcript-aware judgment is the transcript-brief review: an ISOLATED fresh-context reviewer — a separate `codex exec` call handed a written session brief, never the interactive controller reviewing its own work — complemented, never silently replaced, by the out-of-family artifact review. Where the approval surface exposes no isolated exec shape (unattended loops), the discipline is not dischargeable in this venue: the arc HALTS at the owing decision-fork/pre-done point (recorded as DEFERRED-HIL / a handoff row) and resumes where an isolated reviewer is invocable — the Claude-venue transcript-brief Agent review on the same written brief. A merge-gate lens is not a discharge (no brief; doc-only skips the gate). Never controller self-review, never a silent skip.
 
 The Codex-native `roadmap-continue`, `ship-pr`, `codex-autonomous-loop`, and

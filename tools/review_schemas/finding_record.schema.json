@@ -27,6 +27,18 @@
     "disposition": {"enum": [null, "accepted", "rejected", "suppressed"]},
     "disposition_actor": {"type": ["string", "null"], "pattern": "^[^:]+$"},
     "unique_catch": {"type": ["boolean", "null"]},
-    "cycle_pass": {"enum": [null, "1", "2", "esc", "3", "initial", "correction"]}
-  }
+    "cycle_pass": {"enum": [null, "1", "2", "esc", "3", "initial", "correction"]},
+    "reviewer_session": {"type": ["string", "null"], "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"},
+    "author_sessions": {"type": ["array", "null"], "minItems": 1, "uniqueItems": true,
+      "items": {"type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"}}
+  },
+  "allOf": [{
+    "if": {"anyOf": [
+      {"required": ["reviewer_session"], "properties": {"reviewer_session": {"type": "string"}}},
+      {"required": ["author_sessions"], "properties": {"author_sessions": {"type": "array"}}}
+    ]},
+    "then": {"required": ["reviewer_session", "author_sessions"], "properties": {
+      "reviewer_session": {"type": "string"}, "author_sessions": {"type": "array"}
+    }}
+  }]
 }

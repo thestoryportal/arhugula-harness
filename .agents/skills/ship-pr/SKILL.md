@@ -13,6 +13,12 @@ milestone status. No default three-lens stack or separate roadmap-refresh PR is
 owed. Existing delivered legacy pass tags and refresh intents retain their
 obligations; use the legacy sections below only for that retained scope.
 
+The direct instruction "Eliminate the gemini requirement" selects a separate
+independent reviewer session of any model family. Follow delivery-policy.md's
+native-session evidence route; author/correction-author self-approval remains
+forbidden. No mandatory Gemini, fallback or shadow step is owed, including when
+retaining legacy findings and spent passes. Preserve actual disclosure denials.
+
 The remainder of this file is the legacy procedure. Do not combine its review
 stack or refresh cycle with the selected delivery procedure.
 

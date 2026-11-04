@@ -35,20 +35,46 @@ mandatory sequence. A failure needs resolution or an accepted disposition.
 ## One independent review
 
 Freeze the candidate and evidence before review. The default is ONE independent
-reviewer: Claude-authored code uses the Codex wrapper; Codex-authored code uses
-`just gemini-review` through the authorized Antigravity subscription. Retain normal
-permissions, authentication and fail-closed verdict parsing; no paid API fallback.
-A reviewer must not approve its own authored correction.
+reviewer session. The reviewer may use the author's model family. Neither the
+author nor any material correction author may approve their own changes. Retain
+normal permissions, authentication and fail-closed verdict parsing; no paid API
+fallback. Gemini/Antigravity, vendor diversity, automatic fallback and shadow
+review are not required. Preserve actual denials; a policy change does not retry
+a rejected disclosure.
 
-Attest the existing preflight once, then launch with the existing arc/lane IDs:
+Use the verified registered native reviewer when available. Record every material
+author session, including predecessor and correction authors, in the existing
+claim. Attest the frozen preflight through the existing gate. With the actual
+reviewer's native transcript and that author list, run:
 
-- Claude author: `just review-cycle-pass initial <round-log> origin/main`.
-- Codex author: `HARNESS_CYCLE_PASS=initial just gemini-review origin/main`.
+```bash
+uv run python tools/native_review.py binding --transcript <native-transcript> --authors <author-session> <correction-author-session> --base origin/main
+```
 
-Set `HARNESS_ARC_ID` and `HARNESS_LANE_ID` for either command. The wrappers emit
-`initial`/`correction` tags into the same canonical finding log. Untagged reviews
-are not cycle completion. Record independent verdicts and evidence in existing
-LIT records; wrapper rows and LIT serve their existing distinct purposes.
+Give the reviewer those six immutable binding values, the exact frozen candidate,
+and the existing review request. The reviewer inspects the diff and surrounding
+code read-only, records its evidence in LIT, and ends its native turn with ONE
+fenced JSON verdict matching `tools/review_schemas/codex.schema.json` and the six
+binding values. Do not write a verdict for the reviewer or substitute tool output
+for its final answer. After that native turn actually completes, import it:
+
+```bash
+HARNESS_ARC_ID=<arc-id> HARNESS_LANE_ID=<lane-id> HARNESS_CYCLE_PASS=initial uv run python tools/native_review.py record --transcript <native-transcript> --authors <author-session> <correction-author-session> --base origin/main
+```
+
+The adapter derives the reviewer UUID and final answer from the actual completed
+native transcript, binds the author list, and uses the existing schema, cycle
+admission, canonical finding log and round accounting. Keep the actual Codex
+producer provenance; do not label it Gemini to pass a family test. Correction
+review uses `HARNESS_CYCLE_PASS=correction` and the previous reviewed head as
+`--base`; add new material authors without dropping previous ones.
+
+A separately launched subscription wrapper remains an optional independent
+review route where that launch is authorized: `just review-cycle-pass initial
+<round-log> origin/main`, with the existing arc/lane IDs. Initial/correction passes
+do not invoke Gemini fallback when the selected reviewer is unavailable. Untagged
+reviews do not complete the cycle. Recorded legacy verdicts, findings and spent
+passes remain evidence; they do not require a future Gemini launch.
 
 Return findings together. Adjudicate each through the existing append-only
 mechanism; fix accepted P1/P2 findings together and commit before correction

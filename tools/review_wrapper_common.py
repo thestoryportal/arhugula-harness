@@ -137,6 +137,12 @@ class Attempt:
 
 
 @dataclass
+class ReviewParticipants:
+    reviewer_session: str
+    author_sessions: tuple[str, ...]
+
+
+@dataclass
 class ReviewOutcome:
     terminal: str  # APPROVE | BLOCK | REVIEWER_UNAVAILABLE
     channel: str
@@ -148,6 +154,7 @@ class ReviewOutcome:
     #: silent-death row is still bound to its head; None only for a bare parse failure)
     binding: dict[str, str] | None = None
     source: str | None = None  # stdout | session-artifact | None
+    participants: ReviewParticipants | None = None
 
 
 def classify(channel: str, text: str) -> str:
@@ -464,6 +471,10 @@ def outcome_rows(
         diff_digest=b.get("diff_digest"),
         round_n=round_n,
         cycle_pass=fr.cycle_pass_from_env(),
+        reviewer_session=(outcome.participants.reviewer_session if outcome.participants else None),
+        author_sessions=(
+            list(outcome.participants.author_sessions) if outcome.participants else None
+        ),
     )
     if outcome.terminal == "REVIEWER_UNAVAILABLE":
         ft = "permanent-fail-exit" if outcome.failure_class == "permanent" else "transient-retry"
@@ -532,6 +543,8 @@ _ENV_KEYS = (
     "cause_attribution",
     "unique_catch",
     "cycle_pass",
+    "reviewer_session",
+    "author_sessions",
 )
 
 

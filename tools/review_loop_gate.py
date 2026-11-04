@@ -583,6 +583,7 @@ def _delivering_role(row: Mapping) -> str | None:
         cycle_pass in _PASS_REVIEWERS
         and role in _PASS_REVIEWERS[cycle_pass]
         and row.get("record_kind") in ("finding", "no_finding")
+        and (row.get("reviewer_session") is None or fr.independent_session(dict(row)))
     )
     return role if delivers else None
 
@@ -748,9 +749,9 @@ def unfixed_after_pass_3(rows: list[dict], arc_id: str) -> int:
 TRIAL_MAX_ROUNDS = 5
 #: Consecutive correction rounds raising an accepted P1 that quarantine the unit.
 TRIAL_P1_STOP = 2
-#: The authoring route each loop producer's judgment comes from; a lens has no route of
-#: its own. A route that materially authored the subject cannot judge it.
-_PRODUCER_ROUTE = {"codex_review_wrapper": "codex", "gemini_review_wrapper": "gemini"}
+#: Historical rows without session provenance keep their original conservative routing.
+#: Native session evidence proves independence without a model-family restriction.
+_LEGACY_PRODUCER_ROUTE = {"codex_review_wrapper": "codex", "gemini_review_wrapper": "gemini"}
 _NEXT_ACTION = {
     "unreviewed": "launch one complete independent judgment covering the concern map",
     "correction_review": "independently verify the frozen correction and affected concerns",
@@ -795,7 +796,7 @@ class TrialPolicy:
 class TrialBinding:
     head_sha: str
     diff_digest: str
-    authors: frozenset[str]  # routes that materially authored the subject or a correction
+    authors: frozenset[str]  # author session IDs; historical rows may name legacy routes
     doc_only: bool
 
 
@@ -889,7 +890,15 @@ def trial_review_decision(
     # [LAW:single-enforcer] independence is decided here once. The cycle's shape comes
     # from every run; a judgment from an authoring route delivers nothing toward approval,
     # so each completed run must also complete on the eligible rows alone.
-    eligible = [r for r in rows if _PRODUCER_ROUTE.get(r.get("producer")) not in binding.authors]
+    eligible = [
+        r
+        for r in rows
+        if (
+            fr.independent_session(r, binding.authors)
+            if r.get("reviewer_session") is not None
+            else _LEGACY_PRODUCER_ROUTE.get(r.get("producer")) not in binding.authors
+        )
+    ]
     cycle = replay(rows, arc, doc_only=binding.doc_only)
     done = cycle.completed_by
     expected = cycle.expected or "3"

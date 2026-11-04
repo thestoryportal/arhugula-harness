@@ -4155,6 +4155,16 @@ def test_author_cannot_approve_own_material_fix():
     assert _trial(gemini, binding=codex_fixed).state == "approved"
 
 
+def test_native_codex_reviewer_is_independent_of_codex_author():
+    author = "00000000-0000-4000-8000-000000000001"
+    reviewer = "00000000-0000-4000-8000-000000000002"
+    rows = _trial_rows("initial", producers=[LOOP_PRODUCER])
+    for row in rows:
+        row.update(reviewer_session=reviewer, author_sessions=[author])
+    assert _trial(rows, binding=_binding(authors=("codex", author))).state == "approved"
+    assert _trial(rows, binding=_binding(authors=(reviewer,))).state != "approved"
+
+
 def test_consolidated_review_requires_complete_concerns():
     partial = _trial_rows("1", producers=[LOOP_PRODUCER, *_LENSES3[:2]])
     d = _trial(partial)
@@ -4552,3 +4562,29 @@ def test_real_wrapper_emission_completes_single_review(repo, monkeypatch, produc
     # Changing the worktree alone cannot alter the reviewed commit's policy.
     (repo / ".harness/workflow-policy.json").write_text("{}")
     assert rlg._streamlined_review(repo, binding["head_sha"]) is True
+
+
+def test_native_session_delivery_uses_real_gate_and_cannot_deliver_twice(repo, monkeypatch):
+    import native_review as native
+
+    policy = json.loads(
+        (Path(__file__).resolve().parents[1] / ".harness/workflow-policy.json").read_text()
+    )
+    policy["review_rules"] = {"delivery": "single-independent-milestone-status-v1"}
+    (repo / ".harness/workflow-policy.json").write_text(json.dumps(policy))
+    _commit_on_branch(repo, "candidate.py", "value = 1\n")
+    people = native.participants(
+        "00000000-0000-4000-8000-000000000002", ["00000000-0000-4000-8000-000000000001"]
+    )
+    binding = native.binding(repo, "main", people)
+    state = _state(preflights=(_pf(head=binding["head_sha"], digest=binding["diff_digest"]),))
+    monkeypatch.setattr(rlg, "_gate_state_in_force", lambda *_: state)
+    monkeypatch.setenv(fr.CYCLE_PASS_ENV, "initial")
+    monkeypatch.setenv("HARNESS_ARC_ID", ARC)
+    monkeypatch.setenv("HARNESS_LANE_ID", "test")
+    monkeypatch.setattr(rw, "record_round_outcome_if_reserved", lambda *a, **k: None)
+    text = "```json\n" + json.dumps({"verdict": "APPROVE", "findings": [], **binding}) + "\n```"
+    assert native.record(repo, text, binding, people) == 0
+    with pytest.raises(rlg.CycleRefusedError, match="CYCLE_COMPLETE"):
+        native.record(repo, text, binding, people)
+    assert len(fr.read_rows()) == 1

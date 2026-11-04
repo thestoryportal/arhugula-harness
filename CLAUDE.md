@@ -2,7 +2,8 @@
 
 **Delivery policy (user-approved 2026-11-04).** When the tracked
 `.harness/workflow-policy.json` selects `single-independent-milestone-status-v1`,
-`docs/governance/delivery-policy.md` governs delivery: one independent review,
+`docs/governance/delivery-policy.md` governs delivery: one independent reviewer session of any model family,
+no author/correction-author self-approval or mandatory Gemini/fallback/shadow,
 correction delta, focused local checks with qualifying reuse, generated Git/LIT
 status or milestone refresh, and independent isolated work during CI. It replaces
 contrary default review-stack, duplicate full-local-suite, per-merge status-PR,
@@ -445,6 +446,12 @@ Verify any memory or checkpoint claim empirically against HEAD before authoring 
 *Codifies how Claude allocates effort and reaches for multi-agent / multi-voice tooling, across BOTH postures (design-phase + Phase 7) and every effort level. Distilled from the 2026-06-01 ultracode retrospective. Load-bearing principle: **the verification disciplines (§13.1, cheap) catch the bugs — not raw reasoning depth or multi-agent fan-out.** Reach for heavier machinery deliberately, at named high-leverage moments; not by default.*
 
 ### 13.1 Always-on disciplines (every session, every posture, independent of the effort knob)
+
+For the selected delivery policy, use ONE independent native reviewer session of
+any model family under `docs/governance/delivery-policy.md`. The author and every
+material correction author are excluded. The two review rows below describe the
+retained legacy procedure; they do not add a second review, Gemini fallback or
+shadow obligation to current delivery. Additional review requires a named risk.
 
 | Discipline | When |
 |---|---|
