@@ -10,6 +10,7 @@ an installed candidate remains a separate, unwitnessed acceptance.
 from __future__ import annotations
 
 import asyncio
+import copy
 import hashlib
 import json
 import os
@@ -23,13 +24,15 @@ import pytest
 from harness_core import DeploymentSurface, WorkloadClass
 from harness_cp.cp_shared_types import ProviderAgnosticPayload
 from harness_cp.per_workload_class_topology import is_topology_permitted_for_workload
-from harness_cp.sub_agent_brief import SubAgentBrief, compute_brief_summary_hash
+from harness_cp.sub_agent_brief import compute_brief_summary_hash
 from harness_cp.topology_pattern import TopologyPattern
 from harness_cp.workflow_driver import execute_workflow
 from harness_cp.workflow_driver_types import RunStatus, StepKind
-from harness_cp.workflow_manifest_entry import WorkflowManifestEntry
 from harness_is.path_class_registry import PathClass
 from harness_is.path_resolver import PathResolver
+from harness_runtime.api import RunResult
+from harness_runtime.api import run as api_run
+from harness_runtime.bootstrap import stage_3a_cp_clients, stage_4_od
 from harness_runtime.config.path_bindings import build_path_binding
 from harness_runtime.config_source import RuntimeConfigSource
 from harness_runtime.lifecycle.embedding_resolution import (
@@ -46,6 +49,8 @@ from harness_runtime.lifecycle.post_join_synthesis_dispatch import (
     PostJoinSynthesisStepDispatcher,
     post_join_tool_binding_violations,
 )
+from harness_runtime.lifecycle.providers import OllamaAdapter, ProviderClientsStage
+from harness_runtime.lifecycle.sub_agent_dispatch import SubAgentDispatchPayload
 from harness_runtime.lifecycle.sync_dispatcher_facade import SyncDispatcherFacade
 from harness_runtime.lifecycle.workflow_manifest_loader import (
     LoadedWorkflow,
@@ -53,6 +58,7 @@ from harness_runtime.lifecycle.workflow_manifest_loader import (
 )
 from harness_runtime.types import RuntimeConfig
 from opentelemetry.sdk.trace import TracerProvider
+from pydantic import ValidationError
 
 from .test_local_ollama_examples import (
     _EmitterDouble,
@@ -66,12 +72,15 @@ README = ROOT / "examples/README.md"
 SHARED_CONFIG = "examples/ollama.local.toml.example"
 HANDOFF_CONFIG = "examples/ollama.handoff.local.toml.example"
 EMBEDDING_CONFIG = "examples/omarchy.offline-embedding.toml.example"
+OFFLINE_EMBEDDING_GUIDE = ROOT / "docs/operations/omarchy-offline-embedding.md"
+DOWNLOADED_FILES = "/absolute/path/to/the/five/downloaded/files"
 
 _PLACEHOLDERS = {
     "/absolute/path/to/your/workspace": "workspace",
     "/absolute/path/to/your/state-root": "state-root",
     "/absolute/path/to/your/models": "models",
     "/absolute/path/to/your/embedding-cache": "embedding-cache",
+    DOWNLOADED_FILES: "downloaded",
 }
 
 
@@ -200,24 +209,36 @@ def test_the_synthesis_step_is_terminal_and_effect_free(example: _Example) -> No
     assert "messages" not in payload["params"]
 
 
+# The strict object `read_ollama_evaluator_verdict` accepts: both fields always present.
+_VERDICT_SCHEMA = {
+    "type": "object",
+    "properties": {"accepted": {"type": "boolean"}, "feedback": {"type": "string"}},
+    "required": ["accepted", "feedback"],
+    "additionalProperties": False,
+}
+
+
 def test_the_evaluator_requests_exactly_the_verdict_shape() -> None:
     evaluator = _load(_EXAMPLES[0]).steps[1]
     schema = evaluator.step_payload["params"]["format"]
 
-    assert set(schema["properties"]) == {"accepted", "feedback"}
-    assert schema["additionalProperties"] is False
-    assert schema["properties"]["accepted"]["type"] == "boolean"
+    assert schema == _VERDICT_SCHEMA
+
+
+def _dispatch_payload(workflow: LoadedWorkflow) -> SubAgentDispatchPayload:
+    """The shipped dispatch payload, parsed by the model the production dispatcher uses."""
+    dispatch = next(s for s in workflow.steps if s.step_kind is StepKind.SUB_AGENT_DISPATCH)
+    return SubAgentDispatchPayload.model_validate(dispatch.step_payload)
 
 
 def test_the_delegated_child_is_a_bounded_local_hierarchy_with_a_canonical_brief() -> None:
     workflow = _load(_EXAMPLES[2])
     children = [s for s in workflow.steps[1:] if s.step_kind is not _SYNTH]
-    dispatch = next(s for s in workflow.steps if s.step_kind is StepKind.SUB_AGENT_DISPATCH)
-    payload = dispatch.step_payload
-    child = WorkflowManifestEntry.model_validate(payload["child_manifest_entry"])
-    brief = SubAgentBrief.model_validate(payload["brief"])
+    payload = _dispatch_payload(workflow)
+    child, brief = payload.child_manifest_entry, payload.brief
 
     assert len(children) <= 3
+    assert payload.child_workflow_id == child.workflow_id
     assert child.topology_pattern is TopologyPattern.HIERARCHICAL_DELEGATION
     assert is_topology_permitted_for_workload(child.topology_pattern, child.workload_class)
     assert (child.fallback_chain.primary.provider, child.fallback_chain.primary.model) == (
@@ -225,10 +246,33 @@ def test_the_delegated_child_is_a_bounded_local_hierarchy_with_a_canonical_brief
         "llama3.2:3b",
     )
     assert not child.fallback_chain.same_family and not child.fallback_chain.cross_family
-    assert 2 <= len(payload["child_steps"]) <= 4
-    for step in payload["child_steps"]:
-        assert ProviderAgnosticPayload.model_validate(step["step_payload"]).tools == ()
+    assert 2 <= len(payload.child_steps) <= 4
+    for step in payload.child_steps:
+        assert step.step_kind is _INFER
+        assert ProviderAgnosticPayload.model_validate(step.step_payload).tools == ()
     assert compute_brief_summary_hash(brief) == brief.summary_hash
+
+
+_BROKEN_DISPATCH: list[Any] = [
+    pytest.param(lambda p: p.pop("child_workflow_id"), id="no-child-workflow-id"),
+    pytest.param(lambda p: p.update(stray=True), id="stray-key"),
+    pytest.param(lambda p: p["child_steps"][0].update(step_kind="bogus"), id="bad-child-kind"),
+]
+
+
+@pytest.mark.parametrize("mutate", _BROKEN_DISPATCH)
+def test_the_dispatch_payload_check_refuses_what_the_dispatcher_refuses(
+    mutate: Callable[[dict[str, Any]], object],
+) -> None:
+    """Negative control: the parse above is the production gate, so a payload the
+    dispatcher would fail with RT-FAIL-PAYLOAD-SHAPE fails it too."""
+    workflow = _load(_EXAMPLES[2])
+    dispatch = next(s for s in workflow.steps if s.step_kind is StepKind.SUB_AGENT_DISPATCH)
+    payload = copy.deepcopy(dict(dispatch.step_payload))
+    mutate(payload)
+
+    with pytest.raises(ValidationError):
+        SubAgentDispatchPayload.model_validate(payload)
 
 
 # --- provider-free behaviour through the real driver and dispatcher ---------------------
@@ -253,15 +297,21 @@ class _Reply:
 
 @dataclass
 class _Client:
-    """Answers each chat by asking `reply` for the text; records the messages it was sent."""
+    """Answers each chat by asking `reply` for the text; records the messages it was sent
+    and the structured-output `format` each chat requested (None when it requested none)."""
 
     reply: Callable[[list[dict[str, Any]]], str]
     calls: list[list[dict[str, Any]]] = field(default_factory=lambda: [])
+    formats: list[Any] = field(default_factory=lambda: [])
 
     async def chat(self, **kwargs: Any) -> _Reply:
         messages = list(kwargs["messages"])
         self.calls.append(messages)
+        self.formats.append(kwargs.get("format"))
         return _Reply(self.reply(messages))
+
+    async def close(self) -> None:
+        return None
 
 
 class _Registry:
@@ -345,6 +395,8 @@ def test_evaluator_optimizer_carries_draft_and_feedback_and_stops_on_accept(
     assert "DRAFT-1" in _text(first_eval)
     assert "VERDICT-False" in _text(regenerate)
     assert "DRAFT-2" in _text(second_eval)
+    evaluated = [_is_evaluation(c) for c in client.calls]
+    assert client.formats == [_VERDICT_SCHEMA if e else None for e in evaluated]
 
 
 def test_evaluator_optimizer_reaching_its_cap_completes_without_acceptance(
@@ -394,6 +446,77 @@ def test_orchestrator_workers_synthesis_receives_only_the_worker_outputs(
         assert "OUT-lead-plan" not in _text(sent)
 
 
+class _Collector:
+    async def start(self) -> None:
+        return None
+
+    async def stop(self, *, timeout_seconds: float = 5.0) -> None:
+        return None
+
+
+def _run_as_the_cli_does(
+    example: _Example, client: _Client, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> RunResult:
+    """Run a shipped manifest the way `harness run` does: the documented config and the
+    manifest loader feed `api.run`, whose bootstrap builds the production dispatcher
+    registry, sub-agent dispatcher and child-workflow runner. Only the Ollama client and
+    the OD collector/tracer stages are in-process stand-ins."""
+    config = _load_config(example.config, tmp_path, extra=example.workload)
+
+    async def _unreachable_ping() -> None:
+        raise AssertionError("stage 3a is replaced, so nothing pings the stand-in")
+
+    async def _clients(*_args: object, **_kwargs: object) -> ProviderClientsStage:
+        adapter = OllamaAdapter(client=cast(Any, client), ping=_unreachable_ping)
+        return ProviderClientsStage(providers={"ollama": adapter})
+
+    collector = type("_CollectorStage", (), {"daemon": _Collector()})()
+    tracer = type(
+        "_TracerStage", (), {"provider": TracerProvider(), "registered_globally": False}
+    )()
+    monkeypatch.setattr(stage_3a_cp_clients, "materialize_provider_clients_stage", _clients)
+    monkeypatch.setattr(stage_4_od, "materialize_collector_daemon_stage", lambda c, **_: collector)
+    monkeypatch.setattr(stage_4_od, "materialize_ring_buffer_stage", lambda c, _d: None)
+    monkeypatch.setattr(stage_4_od, "materialize_tracer_provider_stage", lambda c, **_: tracer)
+    monkeypatch.setattr(stage_4_od, "materialize_span_processor_stage", lambda c, _p, **_k: None)
+    return asyncio.run(api_run(_load(example), config=config))
+
+
+def test_hierarchical_delegation_runs_the_child_hierarchy_through_the_production_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workflow = _load(_EXAMPLES[2])
+    root_steps = [s for s in workflow.steps if s.step_kind is _INFER]
+    child_steps = list(_dispatch_payload(workflow).child_steps)
+    prompts = {
+        str(step.step_payload["messages"][0]["content"]): str(step.step_id)
+        for step in (*root_steps, *child_steps)
+    }
+
+    def reply(messages: list[dict[str, Any]]) -> str:
+        return f"OUT-{prompts.get(str(messages[0]['content']), 'synthesis')}"
+
+    client = _Client(reply)
+    result = _run_as_the_cli_does(_EXAMPLES[2], client, tmp_path, monkeypatch)
+
+    assert result.status == "completed", result.failure_cause
+    sent = [prompts.get(str(c[0]["content"]), "synthesis") for c in client.calls]
+    root = [str(s.step_id) for s in root_steps] + ["synthesis"]
+    child = [str(s.step_id) for s in child_steps]
+    assert sorted(sent) == sorted(root + child)  # three root calls and three child calls
+    synthesis = next(c for c in client.calls if POST_JOIN_SYNTHESIS_SIBLINGS_PREFIX in _text(c))
+    worker, delegated = json.loads(
+        synthesis[-1]["content"].removeprefix(POST_JOIN_SYNTHESIS_SIBLINGS_PREFIX)
+    )
+    assert worker["output"]["message"]["content"] == "OUT-root-worker-hardware"
+    # The delegated child contributes its own lead-plus-workers aggregate.
+    assert delegated["output"]["orchestrator"]["message"]["content"] == f"OUT-{child[0]}"
+    assert {
+        step: output["message"]["content"]
+        for step, output in delegated["output"]["worker_outputs"].items()
+    } == {step: f"OUT-{step}" for step in child[1:]}
+
+
 # --- the offline-embedding profile and the documented model directory -------------------
 
 
@@ -411,21 +534,26 @@ def test_offline_embedding_config_activates_l2_over_an_unbound_manifest(tmp_path
     assert len(set(candidates.values())) >= 2
 
 
-def _recipe_model(root: Path, *, sha256sum_args: tuple[str, ...] = ()) -> Path:
-    """Lay out a synthetic model directory with the documented `sha256sum` recipe."""
-    model = root / "bge-small-en-v1.5"
-    model.mkdir(parents=True)
-    for name in sorted(MODEL_FILES):
-        (model / name).write_bytes(hashlib.sha256(name.encode()).digest())
-    sums = subprocess.run(
-        ["sha256sum", *sha256sum_args, *sorted(MODEL_FILES)],
-        cwd=model,
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout
-    (model / "SHA256SUMS").write_text(sums)
-    return model
+def _step_3_recipe() -> str:
+    """The shell block of the guide's step 3, exactly as an operator copies it."""
+    section = OFFLINE_EMBEDDING_GUIDE.read_text().split("\n## 3. ", 1)[1].split("\n## ", 1)[0]
+    return section.split("```sh\n", 1)[1].split("```", 1)[0]
+
+
+def _recipe_model(root: Path, recipe: str | None = None) -> Path:
+    """Run the step-3 recipe (default: the documented one) with `sh -e` over five synthetic
+    downloaded files, its placeholders replaced; return the model directory it laid out.
+    The recipe also creates the cache at `root / "embedding-cache"`."""
+    downloaded = root / _PLACEHOLDERS[DOWNLOADED_FILES]
+    downloaded.mkdir()
+    for name in MODEL_FILES:
+        (downloaded / name).write_bytes(hashlib.sha256(name.encode()).digest())
+    script = _step_3_recipe() if recipe is None else recipe
+    for placeholder, name in _PLACEHOLDERS.items():
+        script = script.replace(placeholder, str(root / name))
+    assert "/absolute/path/" not in script, "the recipe has a placeholder this test cannot fill"
+    subprocess.run(["sh", "-e", "-c", script], cwd=root, check=True, capture_output=True)
+    return root / "models/bge-small-en-v1.5"
 
 
 def test_the_documented_recipe_passes_the_verifier_and_creates_a_private_cache(
@@ -438,6 +566,48 @@ def test_the_documented_recipe_passes_the_verifier_and_creates_a_private_cache(
 
     assert verified.model_dir == model
     assert (cache.stat().st_mode & 0o777) == 0o700
+
+
+def _edited_recipe(old: str, new: str) -> str:
+    recipe = _step_3_recipe()
+    assert recipe.count(old) == 1, f"the step-3 recipe no longer contains {old!r} once"
+    return recipe.replace(old, new)
+
+
+# Edits a reader could make to the documented recipe; each must stop the operator before
+# bootstrap does. Dropping a file from `cp` fails the recipe itself at `sha256sum`.
+_HASHED = "sha256sum config.json model_optimized.onnx special_tokens_map.json"
+_BROKEN_RECIPES: list[Any] = [
+    pytest.param(
+        (_HASHED + " tokenizer.json tokenizer_config.json", _HASHED + " tokenizer.json"),
+        "does not cover the pinned model files",
+        id="file-dropped-from-sha256sum",
+    ),
+    pytest.param(
+        ("sha256sum config.json", "sha256sum -b config.json"),
+        "malformed embedding SHA256SUMS entry",
+        id="binary-mode-sha256sum",
+    ),
+]
+
+
+@pytest.mark.parametrize(("edit", "message"), _BROKEN_RECIPES)
+def test_the_verifier_refuses_a_model_laid_out_by_an_edited_recipe(
+    tmp_path: Path, edit: tuple[str, str], message: str
+) -> None:
+    model = _recipe_model(tmp_path, _edited_recipe(*edit))
+
+    with pytest.raises(EmbeddingModelError, match=message):
+        verify_local_embedding(model, tmp_path / "embedding-cache")
+
+
+def test_a_file_dropped_from_the_recipe_copy_fails_the_recipe(tmp_path: Path) -> None:
+    recipe = _edited_recipe(
+        " tokenizer_config.json special_tokens_map.json", " special_tokens_map.json"
+    )
+
+    with pytest.raises(subprocess.CalledProcessError):
+        _recipe_model(tmp_path, recipe)
 
 
 def _extra_file(model: Path, cache: Path) -> None:
@@ -453,7 +623,6 @@ def _missing_manifest(model: Path, cache: Path) -> None:
 
 
 def _shared_cache(model: Path, cache: Path) -> None:
-    cache.mkdir(mode=0o755)
     cache.chmod(0o755)
 
 
@@ -487,13 +656,6 @@ def test_the_verifier_refuses_a_missing_cache_parent(tmp_path: Path) -> None:
 def test_the_verifier_refuses_a_missing_model_directory(tmp_path: Path) -> None:
     with pytest.raises(EmbeddingModelError, match="cannot be verified"):
         verify_local_embedding(tmp_path / "absent-model", tmp_path / "embedding-cache")
-
-
-def test_the_verifier_refuses_binary_mode_sha256sum_entries(tmp_path: Path) -> None:
-    model = _recipe_model(tmp_path, sha256sum_args=("-b",))
-
-    with pytest.raises(EmbeddingModelError, match="malformed embedding SHA256SUMS entry"):
-        verify_local_embedding(model, tmp_path / "embedding-cache")
 
 
 def test_the_verifier_accepts_an_additional_listed_file(tmp_path: Path) -> None:
