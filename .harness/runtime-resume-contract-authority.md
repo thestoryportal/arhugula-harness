@@ -32,7 +32,9 @@ compact JSON payload in its document, not of the Markdown document or of the sou
 
 The pack at `.harness/review-evidence/runtime-resume-contract-authority/` holds seven extracted LIT
 entries (items 2, 4, 6, 7, 8, 9 and 10), each one complete entry with every exported field. The four host files are
-pinned by SHA256 only; a reviewer reads them at the host origin. Items 1 and 3 cite their review
+pinned by SHA256 only; a reviewer reads them at the host origin. The normative content of item 3 (the closed value, MCP and Python boundaries, CLI redaction and
+required proof) is transcribed word for word into Runtime spec v1.137 §D.1–§D.4, so implementing it
+needs no host file. Items 1 and 3 cite their review
 comments by ID only. Copying bytes would not establish a missing LIT link, and none of these items is
 human consent.
 

@@ -19,6 +19,10 @@ refusal to `protocol-not-bound` (spec Rule B7 item 3); after review HOLD `cmt-87
 and criterion 15 retarget the `harness-inspect` enumeration to the root; after HOLD `cmt-e4e959b9`
 (disposition `cmt-49143c9e`) 160a keeps the spec Rule B8 pre-upgrade inventory and criterion 17
 witnesses it.
+Merge-gate correction (PR #1697 pass 1 BLOCK, LIT `cmt-5d0f2389`; pending independent review and
+ratification): 160a constructs the fresh-run admission per invocation and checks and appends under the
+journal lock (spec Rules B1 and B2); new criterion 18 witnesses overlap and admission (spec §I.16). Upstream finding
+`discussion_r4470801910` (LIT `cmt-7a16a6df`): the refusal value and proof cites resolve to spec §D.
 
 ## U-RT-160 — superseded-record refusal and `harness resume` (B-314 prerequisite, B-313, B-310)
 
@@ -33,12 +37,14 @@ Runtime root resolver that every journal site below uses, spec Rule B3);
 resolves the Rule B7 root instead of `<state_ledger_dir>/pause-journal`, spec Rule B3, so captured
 snapshots land in the file the read and claim use);
 `P/lifecycle/root_resume_admission.py` (the Runtime-owned fresh-run admission that replaces
-`UNCLAIMED` for depth-0 fresh runs and, before `body(None)`, appends the supersession record to the
-existing non-empty journal for (tenant, workflow_id) in the spec Rule B7 root, spec Rules B2–B3; the
+`UNCLAIMED` for depth-0 fresh runs and, before `body(None)`, takes the journal lock for (tenant,
+workflow_id) in the spec Rule B7 root and, under it, appends the supersession record when that journal
+exists and is non-empty, spec Rules B2–B3; the
 claim resolves the same root, replacing the capture-directory derivation and its
 `JournalDirectoryMismatchError` check);
-`P/mcp_server.py` (binds that admission as the `run_workflow` default, so `api.run` and daemon clients
-share it);
+`P/lifecycle/mcp_server.py` (constructs that admission per `run_workflow` invocation with the
+invocation's own `run_id` and pre-body failure, spec Rule B1, so `api.run` and daemon clients use it and
+no invocation shares another's);
 `P/api.py` (the journal read resolves the Rule B7 root instead of the run's STATE_LEDGER cell;
 `ResumePauseRecordSupersededError`, raised from the handle read where a `None` snapshot
 raises `ResumeHandleUnknownError`, before depth; the pause-state accessor's `superseded` result and its
@@ -52,7 +58,7 @@ an absent chosen directory; the choice is a read-only diagnostic, never a journa
 after the companion OD amendment (OD spec v1.43, OD plan v2.37 unit U-OD-62) is ratified.
 
 **Source, portion 160b (CLI, spec v1.137 §D–§F):**
-one Runtime-owned module for the closed `harness.resume-refusal.v1` value (B-313 v2 plus the ninth
+one Runtime-owned module for the closed `harness.resume-refusal.v1` value (spec §D: B-313 v2 plus the ninth
 arm): the typed value, its projection from the nine typed exceptions, and its strict parser;
 `P/cli/app.py` (`resume` subcommand, exits 6 and 7, JSON/text refusal presentation);
 `docs/how-to-operate-runtime.md` and `harness-runtime/tests/test_operator_guide_exit_codes.py`
@@ -81,7 +87,7 @@ reuses this value's strict parser for its `isError` reply.
 7. Readers (spec §I.7): `read_latest` returns `None` at a supersession record; child admission at a
    supersession position refuses `UNREADABLE_RECORD`; a legacy journal without `kind` reads
    unchanged; a `kind` line with an unknown value or extra/missing fields reads `corrupt-latest`.
-8. Refusal mapping (spec §I.8; B-313 v2 proof 1–3, 6 at the CLI-reachable inputs): each reachable
+8. Refusal mapping (spec §I.8; spec §D.4 proof 1–3, 6 at the CLI-reachable inputs): each reachable
    arm keeps its kind, fail_class, typed facts and exit; a config that loads without the pause
    protocol exits 6 `protocol-not-bound`, a genuine config-file load error keeps exit 3; the strict
    parser refuses malformed JSON, extra or missing fields, quoted booleans, unknown discriminators and
@@ -133,9 +139,15 @@ reuses this value's strict parser for its `isError` reply.
     `--pause-journal-dir`. Every file stays byte-identical, nothing is claimed, and a resume of a listed
     legacy workflow refuses as without the inventory. A mutation that disengages the surface on an
     unbound declaration over a populated legacy directory fails a test.
+18. Overlap and admission (spec §I.16), cross-process: R1 admitted, R2 admitted and completed, then R1
+    captures: `harness resume` claims R1's snapshot once (exit 0); R1 capturing before R2's admission
+    gives exit 6 `pause-record-superseded`. A capture that creates the file during an admission gives
+    one of those orders. Concurrent daemon `run_workflow` calls each append a record carrying their
+    own `run_id`. Mutations that check existence before taking the lock or share one admission object
+    between invocations fail a test.
 
 **Dependencies and gates.** Implementation starts only after spec v1.137 and this plan are ratified
-and applied. B-313 v2 proof 5 (a child-refusal `RunResult` stays a child refusal) binds the actual
+and applied. Spec §D.4 proof 5 (a child-refusal `RunResult` stays a child refusal) binds the actual
 U-RT-159 interface before the affected 160b candidate is accepted. The accessor change in 160a and its
 criterion 14 need the companion OD C-OD-30.5.1 amendment (spec Rule A4) ratified first; its owner is
 profile-coder (OD spec v1.43, OD plan v2.37 unit U-OD-62). The journal location (spec Rules B3 and B7)
@@ -143,8 +155,8 @@ needs two prerequisites ratified and applied first, with owners named in LIT `cm
 retained root storage selection and binding evidence (Buford, integration lead) and the C-IS-01
 companion (profile-coder; IS spec v1.17 §1.1, IS plan v2.11 unit U-IS-21, whose resolution result
 160a's root resolver consumes). Until then no 160a journal
-change is accepted and `harness resume` is not exposed; criteria 2 (including case (d)), 15 and 17
-then pass on the bound root. Portion 160b's criteria 1–2 need
+change is accepted and `harness resume` is not exposed; criteria 2 (including case (d)), 15, 17
+and 18 then pass on the bound root. Portion 160b's criteria 1–2 need
 160a; its value module, parser and criterion 10 can be prepared first.
 
 **Installed witness enabled.** Criterion 2 cases (a)–(c) against the installed CLI, with criterion 1

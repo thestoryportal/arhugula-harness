@@ -30,6 +30,15 @@ review HOLD `cmt-8720af2b`, witness I.14 adds the `harness-inspect` inventory ov
 HOLD `cmt-e4e959b9` (disposition `cmt-49143c9e`), Rules B3 and B8 confine their no-read terms to
 Runtime journal operations, Rule B8 keeps the operator-only pre-upgrade inventory and witness I.15
 covers it.
+Merge-gate correction (PR #1697 pass 1 BLOCK, LIT `cmt-5d0f2389`; pending independent review and
+ratification): Rule B1 requires a per-invocation fresh-run admission; Rule B2 makes the existence check
+and the append one step under the journal lock; Rules B5, B6 and C2 define earlier and later by journal
+position, including for overlapping root runs; Rule B7 item 1 states that a run's bindings can only
+make resolution fail; new witness I.16.
+Upstream review finding (PR #1697 `discussion_r4470801910`, P2, LIT `cmt-7a16a6df`; pending independent
+review and ratification): §D.1–§D.4 transcribe the adopted B-313 v2 value, boundaries, redaction and
+proof word for word, so the eight adopted arms are normative in this repository; §D.5 holds the
+ninth arm.
 
 **Lineage (pending fold):** grounded on cleared v1.134 at H `14b785d84e4d80f15c4e8c0ac1dbf7a69e1afed9`.
 Fold order A3 → A5 (v1.135) → A4 (v1.136) → this delta. It combines three decided inputs into one
@@ -107,18 +116,25 @@ disposition `cmt-1ba063e7`.
 ## B. C-RT-35 §30 — fresh-run supersession write (NEW)
 
 **Rule B1 — single enforcer.** Every fresh (non-resume) root run enters the MCP tool `run_workflow`
-(`P/mcp_server.py:296`), from `api.run` (`P/api.py:668` → `:779` → `call_tool("run_workflow")` `:596`)
+(`P/lifecycle/mcp_server.py:296`), from `api.run` (`P/api.py:668` → `:779` → `call_tool("run_workflow")` `:596`)
 and from daemon clients (`P/cli/app.py:229-231`). That tool runs the body through
-`_admission.run(harness_ctx, _execute)` (`P/mcp_server.py:494-497`); a fresh run uses the default
+`_admission.run(harness_ctx, _execute)` (`P/lifecycle/mcp_server.py:494-497`); a fresh run uses the default
 `UNCLAIMED` admission (`:381`; `P/lifecycle/root_resume_admission.py:185-187`). The Runtime-owned
 fresh-run admission replacing `UNCLAIMED` is the one place that writes a supersession record. It
 appends the record, then calls `body(None)`. It runs before the run's first step or any model, tool or
-body effect.
+body effect. Each `run_workflow` invocation constructs its own fresh-run admission in the handler,
+carrying that invocation's `run_id` (`P/lifecycle/mcp_server.py:376`) and its own pre-body failure, as
+`api.resume` constructs one `DurableRootResume` per resume (`P/lifecycle/root_resume_admission.py:139`).
+No admission object, `run_id` or failure is shared between invocations. The daemon handler takes no
+process lock, so concurrent daemon calls would otherwise overwrite each other's `run_id` or failure.
 
-**Rule B2 — what is written, and when.** When the journal file for (tenant, workflow_id) in the Rule B3
-location exists and is non-empty, the fresh-run admission appends one supersession record to it under
-its journal lock. When it does not exist there is nothing to supersede and nothing is written. The
-`run_id` field is the fresh run's own `run_id`.
+**Rule B2 — what is written, and when.** The fresh-run admission takes the journal lock of the
+(tenant, workflow_id) file in the Rule B3 location, then checks and writes in that one locked step. When
+the file exists and is non-empty it appends one supersession record; otherwise there is nothing to
+supersede, and it writes no journal line (the lock file is created as for any journal operation). The
+existence check is never made before the lock is held, so a concurrent snapshot capture that creates
+the file is ordered entirely before or entirely after the check. The `run_id` field is the fresh run's
+own `run_id`. This locked step is the run's admission point in the journal order (Rule C2).
 
 **Rule B3 — journal location: the one Rule B7 root.** Every pause-journal read, snapshot write,
 supersession write and claim for (tenant, workflow_id) uses the one journal file for that key in the
@@ -143,8 +159,8 @@ does not depend on the durable pause opt-in: a later run whose config lacks
 **Rule B4 — scope.** Only depth-0 fresh runs write. Resumed runs write nothing: their `started` claim
 already spends the record. Child runs (`P/child_workflow_runner.py:306`) write nothing.
 
-**Rule B5 — outcome independence.** Because the record is written at the start of the later run, it
-covers every later outcome with one write: engine-native pause, completion, failure, drain and a crash
+**Rule B5 — outcome independence.** Because the record is written at the later run's admission point, it
+covers every outcome of that run with one write: engine-native pause, completion, failure, drain and a crash
 after the write. A crash before the append leaves the record unsuperseded; the run has had no step,
 so the record is not stale relative to it.
 
@@ -154,6 +170,16 @@ process, and whether it then pauses engine-natively, completes or fails. Example
 configuration A; a later fresh run of W in another process uses configuration B, whose
 `path_bindings` omit A's STATE_LEDGER directory, and appends to the same root file, so a resume with
 configuration A reads `superseded`.
+
+Earlier and later are journal positions in the root file (Rule C2), not process start or wall-clock
+time. A record is earlier than a fresh run when it precedes that run's admission point (Rule B2).
+Overlapping root runs follow the same order. If run R1 has been admitted, run R2 is then admitted, and
+R1 captures a snapshot afterwards, that snapshot follows R2's admission point. It is the latest record
+and stays resumable until another fresh run is admitted. Resuming it continues R1 over R2's effects,
+exactly as R1 would have continued had it not paused. Root runs of one workflow can overlap today: the
+`_run_lock` check (`P/api.py:531`, `:714`) is per process and guards only `api.run` and `api.resume`.
+This delta neither adds nor removes that concurrency. A snapshot captured before R2's admission point
+is superseded.
 
 **Rule B7 — a later run under a different binding: the missing shared authority.** Disposition
 `cmt-1ba063e7` keeps the B-310 v4 invariant with no binding exception: after any later fresh root run
@@ -171,7 +197,9 @@ per-run configuration is exactly what differs between them.
 The missing shared authority, exactly: one Runtime-owned pause-journal root per Runtime installation
 and tenant that (1) every process able to start or resume a root run of that installation (CLI, MCP
 server, daemon) resolves identically from installation state, not from per-run `path_bindings`,
-workload class or deployment surface; (2) holds the one journal file per (tenant, workflow_id), keyed
+workload class or deployment surface, where a run's bound paths can only make resolution fail (IS spec
+v1.17 §1.1 `overlapping`) and never select another root, and a fresh run that fails resolution has no
+first step, so it neither supersedes a record nor captures one; (2) holds the one journal file per (tenant, workflow_id), keyed
 as today, under that file's existing cross-process lock; (3) fails closed: a fresh root run that cannot
 resolve it fails before its first step, and a resume that cannot resolve it refuses before any claim or
 bootstrap, with the existing `protocol-not-bound` arm (`ResumeProtocolNotBoundError`, exit 6) at that
@@ -235,23 +263,179 @@ order.
   occurs.
 - Supersession record appended after the `started` claim is fsynced: the resume owns the record and
   the later run proceeds independently. Any later resume of the workflow sees `superseded`.
+- Overlapping root runs: every admission point (Rule B2) and every snapshot capture is a locked step
+  under the same lock, so their order is total. A capture after another fresh run's admission point is
+  the latest record and is resumable (Rule B6). A capture before that point is superseded by it.
 
 **Rule C3 — tenant and absence.** Journal files are keyed by sha256(tenant, workflow_id); a fresh run
 never touches another tenant's file. A wrong-tenant handle therefore reads `absent` exactly as today,
 and wrong-tenant and absent stay indistinguishable. A bare engine-native pause with no earlier
 workflow-layer record leaves no journal file and reads as `handle`/`absent`.
 
-## D. Root refusal value — ninth arm (AMENDS the B-313 v2 value)
+## D. Root refusal value — the adopted B-313 v2 value plus a ninth arm (AMENDS the B-313 v2 value)
 
-The B-313 v2 closed value (`protocol: "harness.resume-refusal.v1"`, eight arms, its field, redaction,
-strict-parser, MCP `isError` carrier and tenant-indistinguishability rules) is adopted unchanged, with
-one added arm:
+The B-313 v2 closed value is adopted unchanged, with one added arm (§D.5). §D.1–§D.4 make it normative
+in this repository. They transcribe, word for word, the adopted decision's sections "Closed refusal
+value", "MCP and Python boundaries", the redaction paragraph of "CLI presentation" and items 1–6 of
+"Required discriminating proof after contract application" (authority item 3 in
+`.harness/runtime-resume-contract-authority.md`, SHA256
+`c63b16f754b4298790e6682d1b435f7def232a50d2c7287eb97cccd8b3e9dfc3`). No word is changed.
+"Proposed" and "this proposal" in the transcribed text mean the B-313 v2 decision as adopted here. §F
+replaces its CLI presentation table, and the seven pre-bootstrap validation refusals it counts are eight
+with §D.5.
+
+### D.1 Closed refusal value (B-313 v2, adopted)
+
+A refusal is an object with exactly `protocol` and `refusal`.
+`protocol` is the literal string `harness.resume-refusal.v1`. `refusal` is
+exactly one of these closed objects; fields from different arms cannot mix.
+
+| `kind` | Exact `fail_class` | Additional required fields |
+| --- | --- | --- |
+| `arguments` | `RT-FAIL-RESUME-ARGS` | None |
+| `handle` | `RT-FAIL-RESUME-HANDLE-UNKNOWN` | `cause`, `retryable`, `indeterminate` |
+| `depth` | `RT-FAIL-RESUME-DIRECT-CHILD-HANDLE` | `depth` |
+| `protocol-not-bound` | `RT-FAIL-RESUME-PROTOCOL-NOT-BOUND` | None |
+| `pause-state-stale` | `RT-FAIL-RESUME-PAUSE-STATE-STALE` | None |
+| `workflow-mismatch` | `RT-FAIL-RESUME-WORKFLOW-MISMATCH` | None |
+| `step-index-out-of-range` | `RT-FAIL-RESUME-STEP-INDEX-OUT-OF-RANGE` | None |
+| `claim` | `RT-FAIL-RESUME-CLAIM-REFUSED` | `reason` |
+
+`cause` is exactly one of `absent`, `empty-journal`, `read-error`,
+`corrupt-latest`, `workflow-mismatch`. `retryable` and `indeterminate` are JSON
+booleans copied from the original `ResumeHandleUnknownError`. They are not
+recomputed from `cause`: `read-error` retryability depends on the underlying
+read error, and corrupt-latest decode and parse failures differ in
+indeterminacy. Preserve these facts while withholding the raw errno, exception
+message, filesystem path and bytes. Preserve the existing indistinguishability
+of absent, wrong-tenant and abandoned legacy records; introduce no discriminator
+or existence oracle for those underlying states.
+
+`depth` is the recorded integer or JSON null for unknown depth, copied from
+`ResumeDirectChildHandleError`; a JSON boolean is not an integer. Do not infer
+root depth from null, a malformed record or an omitted field.
+
+`reason` is exactly one of `placement`, `claim-refused`, `claim-busy`,
+`start-refused`, copied from the typed root refusal. Claim-busy retains its
+existing retryable meaning; other reasons do not acquire it. The presentation
+layer does not automatically retry any refusal.
+
+The four validation arms with no additional fields identify only their exact
+kind/fail_class. They expose no workflow identifiers, indices, pause tokens,
+configuration values or exception prose. Map each named Python type to its own
+row; do not collapse a validation error into `arguments`, `handle` or `claim`.
+In particular, `handle` with `cause: "workflow-mismatch"` is the durable-read
+failure carried by `ResumeHandleUnknownError`; the separate `workflow-mismatch`
+arm represents `ResumeWorkflowMismatchError`. Neither is inferred from the other.
+
+The pause-state-stale text presentation may say "paused state changed; re-read
+and recompose" without copying the token, comparing digests on the surface, or
+retrying the resume. Protocol-not-bound may say "pause protocol is not bound";
+the other validation kinds may use their stable names. These are descriptions
+of typed values, never recovery instructions to bypass a refusing precondition.
+
+Construct the value from typed exceptions, not their message strings. At the
+receiving boundary, a strict parser returns the corresponding discriminated
+value or an explicit protocol error. Reject extra or missing fields, unknown
+protocols/kinds/codes/reasons/causes, mismatched kind/fail_class pairs, quoted
+booleans and malformed JSON. No success-shaped default and no parsing a human
+exception message to recover a refusal.
+
+Example valid value:
+
+```json
+{"protocol":"harness.resume-refusal.v1","refusal":{"kind":"handle","fail_class":"RT-FAIL-RESUME-HANDLE-UNKNOWN","cause":"read-error","retryable":false,"indeterminate":false}}
+```
+
+The same cause with `retryable: true` is also representable when the originating
+typed error says so. A receiver cannot replace either value with its own cause
+lookup table. A claim refusal carrying a `cause` field, or a handle refusal
+carrying `reason: "claim-busy"`, is invalid.
+
+### D.2 MCP and Python boundaries (B-313 v2, adopted)
+
+For a recognized refusal, the proposed daemon resume operation returns an MCP
+tool result with `isError: true` and exactly one text content item containing
+the serialized closed refusal object above. The text item is explicitly a JSON
+data carrier, not an exception-message convention. The decoder requires both
+the error indicator and the exact protocol/object schema. It accepts no prefix,
+suffix, second content item or recovered substring. It never infers a refusal
+from prose produced by the server or transport.
+
+A non-refusal resume reply retains the existing RunResult representation.
+This change does not wrap ordinary `run_workflow` results, create a replacement
+RunResult type, or reinterpret a child refusal embedded in an applicable
+RunResult as a root pre-body refusal. B-311 separately defines the daemon resume
+request and binding to `api.resume`; this proposal specifies its refusal reply.
+
+The local Python API still returns RunResult or raises its actual existing
+typed exception. Its local `__cause__` relationship is preserved. A decoded
+remote refusal is a presentation value, not a fabricated original Python
+exception or proof of remote exception-object identity.
+
+An unrecognized tool/transport failure is a protocol/runtime failure, not a
+root claim refusal. A malformed or lost reply gives no proof that the body did
+not run and never authorizes replay. Only a valid typed root admission refusal
+carries the existing pre-body refusal meaning. Bootstrap, invalid-workflow,
+concurrent-run and unrelated failures keep their existing classifications;
+they do not become arms of this root-refusal value.
+
+### D.3 CLI output redaction (B-313 v2, adopted)
+
+JSON refusal output adds no raw exception text, resolved path, record digest,
+claim token, tenant identifier or new operation/run identifier. Text mode uses
+the same discriminated value, with no message scraping. The implementation
+must update the operator guide and the owning CLI exit table together with the
+new behavior. A shell exit code alone is not the full refusal classification.
+
+### D.4 Required discriminating proof (B-313 v2, adopted)
+
+1. Exercise the real API errors at their owning pre-bootstrap/pre-body seams
+   and preserve all eight named typed classes and fail_class values across the
+   MCP adapter and receiving parser. At the real API, cover a loaded config
+   without the pause protocol, a stale accessor token, an out-of-range stored
+   step index, and workflow mismatch wherever the selected API input path
+   admits that error. Distinguish a durable-read workflow-mismatch cause from
+   the separate workflow-mismatch exception. A path made unreachable by a
+   surface's admitted inputs is recorded as such, not claimed as a live
+   witness from a mocked exception; its typed adapter mapping is still tested.
+   Test all four root reasons and all five handle
+   causes; use both read-error retryability values and both corrupt-latest
+   indeterminacy values. Confirm the adapter preserves the originating booleans.
+2. Mutate kind/fail_class association, erase a flag, force every read-error to
+   retryable, force every corrupt-latest to permanent, or convert null depth to
+   root depth: each mutation must make the corresponding behavioral test fail.
+   Misclassifying any of the four added validation types as a claim, a handle
+   read, a config-load failure or an unrecognized transport failure must also
+   fail the corresponding adapter/CLI witness.
+3. Run real CLI invocation tests for exits 6 and 7 and both output modes, plus
+   unchanged representative exits 0–5. Prove specifically that a successfully
+   loaded config missing the pause protocol emits its closed refusal with exit
+   6; a genuine config-file load error keeps exit 3. Malformed JSON, extra/missing fields,
+   quoted booleans, unknown discriminators and mixed arms must refuse loudly.
+4. At the real resume entrypoint, prove one handle read/admission path, one-shot
+   resume_context delivery, original run_id retention and no surface-owned
+   claim/approval store. A real root claim-busy/already-claimed refusal must
+   produce zero new model/tool/body effects. An argument/depth error must not
+   be relabeled claim-busy to obtain that result.
+5. Verify a separately accepted child-refusal RunResult stays a child refusal;
+   retain genuine failure/cancellation behavior. This test must bind the actual
+   applicable A4 interface instead of assuming the Proposed result shape is
+   installed. It is an explicit acceptance dependency, not current proof.
+6. Use path/secret/tenant canaries in exception messages and causes; none may
+   appear in refusal output. Wrong-tenant and absent projections must retain
+   their existing indistinguishability. For damaged or missing replies, prove
+   no automatic second resume and no claim that effects were absent.
+
+### D.5 Ninth arm (this delta)
 
 | `kind` | Exact `fail_class` | Additional required fields | Python type | CLI exit |
 | --- | --- | --- | --- | --- |
 | `pause-record-superseded` | `RT-FAIL-RESUME-PAUSE-RECORD-SUPERSEDED` | None | `ResumePauseRecordSupersededError` | 6 |
 
-It is a pre-bootstrap validation arm. It is never collapsed into `handle`, `claim` or `arguments`, and
+With it, `refusal` is exactly one of nine closed objects: the eight of §D.1 and this one. It is a
+pre-bootstrap validation arm. Like the §D.1 validation arms with no additional fields, it identifies only
+its exact kind and fail_class (Rule C1). It is never collapsed into `handle`, `claim` or `arguments`, and
 none of those is inferred from it. Text mode may say "pause record superseded by a later run".
 
 ## E. C-RT-29 §14.18.1 — `harness resume` (NEW row)
@@ -375,3 +559,12 @@ Future tests, not run by this delta.
     workflow refuses as it would without the inventory (exit 6 `protocol-not-bound` while unbound,
     `handle`/`absent` once bound). A mutation that disengages the surface on an unbound declaration
     over a populated legacy directory fails a test.
+16. Overlap and admission (Rules B1, B2, B6 and C2), cross-process: with a non-empty root file for
+    (tenant, W), R1 is admitted and appends its supersession record; R2 is then admitted, appends its
+    own and completes; R1 then pauses at the workflow layer. The journal order is R1's admission,
+    R2's admission, then R1's snapshot, and `harness resume` claims that snapshot once (exit 0). In
+    the reversed case, where R1 captures before R2 is admitted, the resume exits 6
+    `pause-record-superseded`. A capture that creates the file while a fresh run is being admitted gives
+    one of these two orders. A mutation that checks the file's existence before taking the lock fails
+    a test. Two concurrent daemon `run_workflow` calls each append a record carrying their own
+    `run_id`. A mutation that shares one admission object between invocations fails a test.
