@@ -14,7 +14,9 @@ Fourth correction (HOLD `cmt-b64cde80`, F3 and F4): the durable snapshot capture
 (spec Rule B3), and journals at the old location get a fail-closed cutover (spec Rule B8).
 C-IS-01 companion (after ratification `cmt-7cc5fc50`): criterion 15 pins the unresolved-root resume
 refusal to `protocol-not-bound` (spec Rule B7 item 3); after review HOLD `cmt-8720af2b` portion 160a
-and criterion 15 retarget the `harness-inspect` enumeration to the root.
+and criterion 15 retarget the `harness-inspect` enumeration to the root; after HOLD `cmt-e4e959b9`
+(disposition `cmt-49143c9e`) 160a keeps the spec Rule B8 pre-upgrade inventory and criterion 17
+witnesses it.
 
 ## U-RT-160 — superseded-record refusal and `harness resume` (B-314 prerequisite, B-313, B-310)
 
@@ -39,10 +41,11 @@ share it);
 `ResumePauseRecordSupersededError`, raised from the handle read where a `None` snapshot
 raises `ResumeHandleUnknownError`, before depth; the pause-state accessor's `superseded` result and its
 failed-read audit event, spec Rule A4);
-`P/admin/inspect.py` (the §13.7 enumeration's default directory is the resolved Rule B7 root instead
-of `<ledger dir>/pause-journal`, spec Rules B3 and B8 and IS spec v1.17 §1.1; an unbound root leaves the
-surface disengaged under §13.7 term 5, and any other unresolved cause fails as an unreadable
-pause-journal directory);
+`P/admin/inspect.py` (the §13.7 inventory directory, spec Rule B8 and IS spec v1.17 §1.1: the explicit
+`--pause-journal-dir`; otherwise the resolved Rule B7 root; otherwise, for an unbound declaration, the
+existing `<ledger dir>/pause-journal` default, so the §13.7 term 2 pre-upgrade inventory remains; any
+other unresolved cause fails as an unreadable pause-journal directory, and term 5 disengages only for
+an absent chosen directory; the choice is a read-only diagnostic, never a journal location);
 `harness-od/src/harness_od/pause_resume_namespace.py` (`PauseStateCauseAttribution.SUPERSEDED`), only
 after the companion OD amendment (OD spec v1.43, OD plan v2.37 unit U-OD-62) is ratified.
 
@@ -113,15 +116,21 @@ reuses this value's strict parser for its `isError` reply.
     both with zero effects and no journal write; a failed verification or append fails the
     fresh run likewise. Capture-to-read identity: under configurations whose STATE_LEDGER cells
     differ, the durable factory's store appends a captured snapshot to the same file (same real path)
-    that the `api.resume` handle read and the claim open. `harness-inspect` over a root holding journals
-    of several tenants lists every canonical journal there, classified per §13.7.1, and enumerates no
+    that the `api.resume` handle read and the claim open. By default `harness-inspect` over a root holding
+    journals of several tenants lists every canonical journal there, classified per §13.7.1, and enumerates no
     STATE_LEDGER cell (IS spec v1.17 §1.1 witnesses 4 and 5).
 16. Ruff and pyright clean on the touched files; the existing resume, claim, journal, durable child
     admission and CLI suites pass.
 17. Cutover (spec §I.15, Rule B8): with the root bound and no root file for (tenant, W), a valid
     legacy snapshot journal at `<state_ledger_dir>/pause-journal` yields exit 6 `handle`/`absent`
     before any claim or bootstrap with zero effects; a fresh run of W writes no supersession record;
-    the legacy file stays byte-identical and unclaimed.
+    the legacy file stays byte-identical and unclaimed. Operator inventory: with the root unbound,
+    `harness-inspect` lists every canonical journal in a populated `<ledger dir>/pause-journal`,
+    classified per §13.7.1, and its output is byte-unchanged when that directory is absent; with the
+    root bound it lists the root by default and the legacy journals under an explicit
+    `--pause-journal-dir`. Every file stays byte-identical, nothing is claimed, and a resume of a listed
+    legacy workflow refuses as without the inventory. A mutation that disengages the surface on an
+    unbound declaration over a populated legacy directory fails a test.
 
 **Dependencies and gates.** Implementation starts only after spec v1.137 and this plan are ratified
 and applied. B-313 v2 proof 5 (a child-refusal `RunResult` stays a child refusal) binds the actual

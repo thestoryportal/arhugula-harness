@@ -2,7 +2,7 @@
 
 *Delta over v2.10. This revision decomposes IS spec v1.17 §1.1, the installation pause-journal root that Runtime spec v1.137 Rule B7 requires, into one new foundational unit, U-IS-21. All v2.10 and earlier rows, unit bodies, criteria, dependency edges and coverage rows remain unchanged.*
 
-**Status:** Proposed — not cleared. No clearance marker, artifact-head row or pointer is filed. Corrected after independent review HOLD `cmt-8720af2b` (F1–F3): the resolution takes no tenant input (tenants stay separated by the Runtime journal key in one flat root), takes the observed real path of the root, and preserves `harness-inspect` enumeration.
+**Status:** Proposed — not cleared. No clearance marker, artifact-head row or pointer is filed. Corrected after independent review HOLD `cmt-8720af2b` (F1–F3): the resolution takes no tenant input (tenants stay separated by the Runtime journal key in one flat root), takes the observed real path of the root, and preserves `harness-inspect` enumeration. After HOLD `cmt-e4e959b9` (disposition `cmt-49143c9e`), witness 5 also covers the pre-upgrade inventory under an unbound declaration.
 
 ---
 
@@ -85,7 +85,7 @@ def resolve_root(
 - `test_no_default_root` (criterion 5; mutation: returning a STATE_LEDGER-derived `pause-journal` path when unbound fails).
 - `test_path_class_registry_unchanged` (criterion 6).
 
-**Consumed witnesses.** Spec witnesses 2 (cross-process identity), 4 (tenants: `None`, non-ASCII and lone-surrogate scopes in one root under the §14.14.8 key, wrong tenant absent) and 5 (`harness-inspect` inventory over a populated root), and the fail-closed refusal of each cause (exit 6 `protocol-not-bound`, Runtime spec v1.137 Rule B7 item 3), need real Runtime processes. They run at Runtime plan v2.68 criterion 15, and the old-location cutover at criterion 17, on the bound root.
+**Consumed witnesses.** Spec witnesses 2 (cross-process identity), 4 (tenants: `None`, non-ASCII and lone-surrogate scopes in one root under the §14.14.8 key, wrong tenant absent) and 5 (`harness-inspect` inventory over a populated root, and over the pre-upgrade directory while unbound), and the fail-closed refusal of each cause (exit 6 `protocol-not-bound`, Runtime spec v1.137 Rule B7 item 3), need real Runtime processes. They run at Runtime plan v2.68 criterion 15, and the old-location cutover and pre-upgrade inventory at criterion 17.
 
 **Non-goals.** No Runtime resolver, journal I/O, journal key or tenant encoding, declaration storage location, refusal mapping, placement verification (Runtime Rule B3 keeps it), enumeration, migration (Runtime Rule B8) or provisioning.
 

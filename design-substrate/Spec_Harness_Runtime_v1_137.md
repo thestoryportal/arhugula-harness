@@ -23,7 +23,10 @@ resolves the same root); F4 in Rule A1, new Rule B8 and witness I.15 (fail-close
 at the old location).
 C-IS-01 companion (after ratification `cmt-7cc5fc50`): Rule B7 item 3 and witness I.14 pin the resume
 refusal for an unresolved root to `protocol-not-bound`; IS spec v1.17 §1.1 declares the root. After
-review HOLD `cmt-8720af2b`, witness I.14 adds the `harness-inspect` inventory over the root.
+review HOLD `cmt-8720af2b`, witness I.14 adds the `harness-inspect` inventory over the root. After
+HOLD `cmt-e4e959b9` (disposition `cmt-49143c9e`), Rules B3 and B8 confine their no-read terms to
+Runtime journal operations, Rule B8 keeps the operator-only pre-upgrade inventory and witness I.15
+covers it.
 
 **Lineage (pending fold):** grounded on cleared v1.134 at H `14b785d84e4d80f15c4e8c0ac1dbf7a69e1afed9`.
 Fold order A3 → A5 (v1.135) → A4 (v1.136) → this delta. It combines three decided inputs into one
@@ -126,8 +129,9 @@ comparison between capture and claim directories (`:158-160`). These are the onl
 `pause_journal_dir_for` (`P/lifecycle/journal_workflow_pause_store.py:338`). All three sites, and the
 supersession append, obtain the journal directory from one Runtime root resolver; the STATE_LEDGER
 derivation is removed, so a captured snapshot lands in the file the handle read and the claim open. No journal path is derived from the run's `path_bindings`,
-workload class or deployment surface, and no other directory is read, written or enumerated: a
-STATE_LEDGER cell holds no journal. The append uses the placement verification `DurableRootResume`
+workload class or deployment surface, and no journal operation reads, writes or enumerates any
+other directory: a STATE_LEDGER cell holds no journal. The operator-only §13.7 inventory is not a
+journal operation (Rule B8). The append uses the placement verification `DurableRootResume`
 applies before its claim (`P/lifecycle/root_resume_admission.py:148-155`), applied to the root. A
 failed root resolution, verification or append fails the fresh run before its first step. The write
 does not depend on the durable pause opt-in: a later run whose config lacks
@@ -183,13 +187,25 @@ item 3 before any claim, bootstrap or effect.
 
 **Rule B8 — journals at the old location: fail-closed cutover, no migration.** Journals persisted under
 a STATE_LEDGER cell (`<state_ledger_dir>/pause-journal`) before the root is bound are not read,
-written, claimed, enumerated, moved or deleted by any Runtime process. A resume whose key has no file
+written, claimed, enumerated, moved or deleted by any Runtime journal operation: fresh run, snapshot
+capture, handle read, supersession append or claim. A resume whose key has no file
 in the root refuses with handle cause `absent` (Rule A3) before any claim or bootstrap, as a resume
 does today when its binding omits the capture directory; a fresh run writes no supersession record for
 that key (Rule B2). A migration is not specified because it would have to enumerate every STATE_LEDGER
 cell a past binding used, which Rule B7 shows no process can name, and a legacy-location fallback
 would be a second read and claim path. The files stay on disk, unclaimed, as operator-owned data. The
 operator guide states that a pause captured before the root was bound cannot be resumed.
+
+Operator inventory stays (disposition `cmt-49143c9e`). The operator-only `harness-inspect` surface
+(spec v1 §13.7) is not a journal operation and keeps its term 2 pre-upgrade inventory. Each invocation
+reads and enumerates one directory, chosen in this order: the explicit `--pause-journal-dir`; otherwise
+the resolved root; otherwise, when the root is `unresolved(unbound)` (IS spec v1.17 §1.1), the existing
+`<ledger dir>/pause-journal` default. Any other unresolved cause fails as an unreadable pause-journal
+directory. An unbound declaration is not an absent directory: term 5 disengages the surface only when
+the chosen directory does not exist. Terms 1–7 and §13.7.1 apply unchanged, including the read-only
+invariant. The chosen directory is a diagnostic read, never a journal location, and no inventory
+result resumes, claims, moves or deletes a journal. The tenant-facing read path gains no enumeration,
+and no other past binding's directory is scanned.
 
 ## C. C-RT-35 §30 — refusal battery (AMENDED)
 
@@ -339,11 +355,20 @@ Future tests, not run by this delta.
     Capture-to-read identity: under configurations whose STATE_LEDGER cells differ, the file the
     durable factory's store appends a captured snapshot to is the same file (same real path) that the
     `api.resume` handle read and the claim open; a test fails if the store is built from the
-    STATE_LEDGER cell. Inventory: `harness-inspect` (§13.7) lists the root as its pause-journal
-    directory; over a root holding journals of several tenants it lists every canonical journal,
+    STATE_LEDGER cell. Inventory: by default `harness-inspect` (§13.7) lists the root as its
+    pause-journal directory; over a root holding journals of several tenants it lists every canonical journal,
     classified per §13.7.1, and enumerates no STATE_LEDGER cell.
 15. Cutover (Rule B8): with the root bound and holding no file for (tenant, W), and a valid snapshot
     journal for W at `<state_ledger_dir>/pause-journal` from the old derivation, `harness resume`
     exits 6 `handle`/`absent` before any claim or bootstrap with zero model, tool or body effects; a
     fresh run of W writes no supersession record; the legacy file is byte-identical and unclaimed
-    afterwards; a mutation that reads or claims the legacy location fails a test.
+    afterwards; a mutation that makes a journal operation read or claim the legacy location fails a
+    test. Operator inventory (Rule B8): with the root unbound and `<ledger dir>/pause-journal`
+    populated, `harness-inspect` lists every canonical journal there, classified per §13.7.1 with the
+    term 3-bis limit; with the root unbound and that directory absent, its output is byte-unchanged
+    (term 5); with the root bound, the default lists the root and an explicit `--pause-journal-dir`
+    naming the legacy directory lists the legacy journals. In each case every file is byte-identical
+    afterwards (the chmod-readonly fixture), nothing is claimed, and a resume of a listed legacy
+    workflow refuses as it would without the inventory (exit 6 `protocol-not-bound` while unbound,
+    `handle`/`absent` once bound). A mutation that disengages the surface on an unbound declaration
+    over a populated legacy directory fails a test.

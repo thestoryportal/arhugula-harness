@@ -50,8 +50,9 @@ pinned in `.harness/runtime-resume-contract-authority.md` (Proposed; not cleared
   outside this delta. No implementation is accepted and `harness resume` is not exposed until both are
   ratified and applied; witnesses I.2 case (d) and I.14 then gate acceptance. After HOLD `cmt-b64cde80`
   the durable snapshot capture resolves the same root (Rule B3), and journals already persisted under a
-  STATE_LEDGER cell get a fail-closed cutover with no migration and no legacy read (Rule B8, witness
-  I.15). An unresolved root refuses a resume as `protocol-not-bound` (Rule B7 item 3).
+  STATE_LEDGER cell get a fail-closed cutover with no migration and no legacy read by any journal
+  operation; after HOLD `cmt-e4e959b9` (disposition `cmt-49143c9e`) the operator-only `harness-inspect`
+  keeps its read-only pre-upgrade inventory (Rule B8, witness I.15). An unresolved root refuses a resume as `protocol-not-bound` (Rule B7 item 3).
 - The companion OD C-OD-30.5.1 amendment is authored at `Spec_Operational_Discipline_v1_43.md` and OD
   plan v2.37 unit U-OD-62 (owner profile-coder, same claim); it needs ratification before Runtime
   implementation ratification.
