@@ -72,13 +72,13 @@
 
 snapshot:
   total: 311
-  open: 2
+  open: 3
   design_substrate_gated: 8
   registered_finding: 129
   operator_gated: 1
   held: 4
-  closed: 167
-  identity_digest: 6d166bdac1175b4b
+  closed: 166
+  identity_digest: f7a3d919aa2d3ea1
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -12327,11 +12327,10 @@ items:
   council: "NO — registers one owned gap from an accepted cross-surface decision; its design question belongs to the owner named in the summary."
 - id: "B-316"
   title: "Operator guide exit-code table omits 5 (PAUSED)"
-  status: "closed"
-  pr: "PR pending (B-316 branch feat/b316-exit-code-paused)"
-  heading: "### B-316 · Operator guide exit-code table omits 5 (PAUSED) *(WO-U17 decision gap, 2026-10-24; CLOSED)*"
+  status: "open"
+  heading: "### B-316 · Operator guide exit-code table omits 5 (PAUSED) *(WO-U17 decision gap, 2026-10-24; OPEN)*"
   summary: "WO-U17 gap G8, registered from the WO-U17 operator-surface recovery decision, docs/orchestration/operator-surface-recovery-decision.md in the root orchestration repo at main 12829c3c484b0093f87699732c1bee7bad04f123 (PR #41 there; SHA256 e4180f6d917d012c0cfcd6abd0a179a520420e92b8329abbc748d260a99c1c51; LIT arhugula-harness-trial-193.u9f.ytk), grounded at H 46a3b74e5e5579aae4dadd081c84e3157ddd8b63. The exit-code table in docs/how-to-operate-runtime.md stops at 4 and omits 5 (PAUSED), which the CLI already returns as EXIT_PAUSED in harness-runtime/src/harness_runtime/cli/app.py (E23, E26, E27). Owner: product docs. A docs-only change, not a hold."
-  close_out: "CLOSED 2026-11-04 by the B-316 docs PR (branch feat/b316-exit-code-paused): the Exit Codes table in docs/how-to-operate-runtime.md now lists 5 for a paused workflow, matching EXIT_PAUSED in harness-runtime/src/harness_runtime/cli/app.py, and harness-runtime/tests/test_operator_guide_exit_codes.py fails when an EXIT_* constant lacks a table row or a row lacks a constant. It documents the existing code only and adds no resume behavior. Main landing and successful post-main CI remain this row's closing gates."
+  close_out: "OPEN 2026-10-24. WHAT CLOSES THIS ROW: a product docs PR adds exit code 5 (PAUSED) to that table, matching the CLI's EXIT_PAUSED, with main landing and successful post-main CI. It documents the existing code only and adds no resume behavior. Registering this row, the decision record's source review or its main landing does not ratify a contract, file a fork or release product work."
   council: "NO — registers one owned gap from an accepted cross-surface decision; its design question belongs to the owner named in the summary."
 - id: "B-317"
   title: "PR #1689 offline examples: profile drift witness and carried gate notes"
