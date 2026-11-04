@@ -105,7 +105,7 @@ The routing manifest in the example binds no role or workload, so every request 
 | The `sha256sum` layout in step 3 passes the source verifier; an extra file, a changed file or a `0755` cache fails it | Source-checked against synthetic files |
 | The embedding extra installs and imports on the final aarch64 artifact | Not run |
 | Real model files, with their hashes recorded from a pinned commit | Not recorded |
-| A run with outbound network blocked, including the three historical L2 checks | Not run |
+| A run with outbound network blocked, including the three historical L2 witness tests that the Local L2 embedding row of the [profile contract decision](../../.harness/review-evidence/a5-contract-authority/profile-contract-decision-1.md) requires: `test_l2_real_embedding_discriminates_across_workload_classes`, `test_l2_real_embedding_is_deterministic` and `test_l2_factory_builds_real_classifier_when_routing_activation_on` in [test_l2_embedding_live_e2e.py](../../harness-runtime/tests/integration/test_l2_embedding_live_e2e.py). The first asserts at least three distinct picks, so it needs a profile with three or more distinct candidate labels; this example has two | Not run |
 | Routing chooses between two or more candidates on a live request | Not run |
 
 The runtime itself never enables network access or a model download for this path. Blocking outbound network during the witness run is still the operator's job.
