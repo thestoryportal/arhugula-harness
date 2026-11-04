@@ -18,6 +18,9 @@ Rule B7 and witness I.2 case (d); the Rule A4 companion OD amendment is authored
 Third correction (HOLD `cmt-1087cb00`, disposition `cmt-8b76cb48`): Rules B2, B3, B5, B6, B7 and C2 and
 witnesses I.2 and I.14 make the Rule B7 root the only journal location; the binding-cell fan-out is
 removed.
+Fourth correction (HOLD `cmt-b64cde80`): F3 in Rule B3 and witness I.14 (the durable snapshot capture
+resolves the same root); F4 in Rule A1, new Rule B8 and witness I.15 (fail-closed cutover of journals
+at the old location).
 
 **Lineage (pending fold):** grounded on cleared v1.134 at H `14b785d84e4d80f15c4e8c0ac1dbf7a69e1afed9`.
 Fold order A3 → A5 (v1.135) → A4 (v1.136) → this delta. It combines three decided inputs into one
@@ -44,7 +47,8 @@ one of:
 | Snapshot record | no `kind` key | unchanged: `workflow_id`, `pause_snapshot`, `depth` |
 | Supersession record | `"kind": "supersession"` | exactly `kind`, `workflow_id`, `run_id` (the superseding run's `run_id`) |
 
-A line without `kind` remains a snapshot record, so existing journals need no migration. Any other
+A line without `kind` remains a snapshot record, so a journal's content needs no format migration.
+Its location changes (Rule B3); Rule B8 disposes of journals persisted at the old location. Any other
 `kind` value, or a supersession line with missing or extra fields, is an undecodable line and keeps the
 existing `corrupt-latest` treatment.
 
@@ -110,10 +114,15 @@ its journal lock. When it does not exist there is nothing to supersede and nothi
 **Rule B3 — journal location: the one Rule B7 root.** Every pause-journal read, snapshot write,
 supersession write and claim for (tenant, workflow_id) uses the one journal file for that key in the
 Rule B7 pause-journal root of the installation and tenant. This replaces today's derivation of the
-journal directory from the run's STATE_LEDGER cell, on the read (`P/api.py:849-857`) and on the claim
-(`pause_journal_dir_for(ctx.ledger_writer.handle.canonical_path.parent)`,
+journal directory from the run's STATE_LEDGER cell at all three of its sites: the durable snapshot
+capture (`JournalWorkflowPauseStore(journal_dir=pause_journal_dir_for(state_ledger_dir))`,
+`P/bootstrap/factories/pause_resume_protocol_factory.py:199-210`), the read (`P/api.py:849-857`) and
+the claim (`pause_journal_dir_for(ctx.ledger_writer.handle.canonical_path.parent)`,
 `P/lifecycle/root_resume_admission.py:158`), and the resume's `JournalDirectoryMismatchError`
-comparison between the two (`:158-160`). No journal path is derived from the run's `path_bindings`,
+comparison between capture and claim directories (`:158-160`). These are the only callers of
+`pause_journal_dir_for` (`P/lifecycle/journal_workflow_pause_store.py:338`). All three sites, and the
+supersession append, obtain the journal directory from one Runtime root resolver; the STATE_LEDGER
+derivation is removed, so a captured snapshot lands in the file the handle read and the claim open. No journal path is derived from the run's `path_bindings`,
 workload class or deployment surface, and no other directory is read, written or enumerated: a
 STATE_LEDGER cell holds no journal. The append uses the placement verification `DurableRootResume`
 applies before its claim (`P/lifecycle/root_resume_admission.py:148-155`), applied to the root. A
@@ -164,6 +173,16 @@ named owner (LIT `cmt-8b76cb48`): selecting and binding that storage with its re
 v2.11 unit U-IS-21). (4) Gate: no implementation of this contract is accepted and `harness resume` is
 not exposed until both are ratified and applied. Until the root is bound, every resume refuses under
 item 3 before any claim, bootstrap or effect.
+
+**Rule B8 — journals at the old location: fail-closed cutover, no migration.** Journals persisted under
+a STATE_LEDGER cell (`<state_ledger_dir>/pause-journal`) before the root is bound are not read,
+written, claimed, enumerated, moved or deleted by any Runtime process. A resume whose key has no file
+in the root refuses with handle cause `absent` (Rule A3) before any claim or bootstrap, as a resume
+does today when its binding omits the capture directory; a fresh run writes no supersession record for
+that key (Rule B2). A migration is not specified because it would have to enumerate every STATE_LEDGER
+cell a past binding used, which Rule B7 shows no process can name, and a legacy-location fallback
+would be a second read and claim path. The files stay on disk, unclaimed, as operator-owned data. The
+operator guide states that a pause captured before the root was bound cannot be resumed.
 
 ## C. C-RT-35 §30 — refusal battery (AMENDED)
 
@@ -296,7 +315,8 @@ Future tests, not run by this delta.
     the gate re-fired, webhook delivery count, claim state and the new journal record. The result decides
     whether a Runtime-side refusal is needed before acceptance (B-310 v4). No approval is recorded.
 12. Operator guide: the guide's exit table and its pinned test list exits 6 and 7, and its code-5 row
-    states that engine-native pauses have no safe resume.
+    states that engine-native pauses have no safe resume, and that a pause captured before the Rule B7
+    root was bound cannot be resumed (Rule B8).
 13. Accessor (Rule A4): on a superseded record `read_paused_workflow_state()` raises
     `PausedWorkflowStateUnavailableError` with cause `superseded`, `retryable` and `indeterminate`
     false, and returns no token. In a fresh process, exactly one `pause.state.read` event with
@@ -308,3 +328,12 @@ Future tests, not run by this delta.
     file is created or read under a STATE_LEDGER cell. Unresolvable root: a fresh run fails before its
     first step and a resume refuses before any claim or bootstrap, each with zero model, tool or body
     effects and no journal write. A failed verification or append fails the fresh run likewise.
+    Capture-to-read identity: under configurations whose STATE_LEDGER cells differ, the file the
+    durable factory's store appends a captured snapshot to is the same file (same real path) that the
+    `api.resume` handle read and the claim open; a test fails if the store is built from the
+    STATE_LEDGER cell.
+15. Cutover (Rule B8): with the root bound and holding no file for (tenant, W), and a valid snapshot
+    journal for W at `<state_ledger_dir>/pause-journal` from the old derivation, `harness resume`
+    exits 6 `handle`/`absent` before any claim or bootstrap with zero model, tool or body effects; a
+    fresh run of W writes no supersession record; the legacy file is byte-identical and unclaimed
+    afterwards; a mutation that reads or claims the legacy location fails a test.

@@ -10,6 +10,8 @@ Authority: `.harness/runtime-resume-contract-authority.md`. Fork:
 clearance, ratification or a product release. Corrected after the first independent review of the
 combined candidate (HOLD, LIT `cmt-bcef30fd`, F1 and F2), and after HOLD `cmt-1087cb00` (disposition
 `cmt-8b76cb48`): the spec Rule B7 root is the only journal location, with no binding-cell fan-out.
+Fourth correction (HOLD `cmt-b64cde80`, F3 and F4): the durable snapshot capture resolves the same root
+(spec Rule B3), and journals at the old location get a fail-closed cutover (spec Rule B8).
 
 ## U-RT-160 — superseded-record refusal and `harness resume` (B-314 prerequisite, B-313, B-310)
 
@@ -18,7 +20,11 @@ combined candidate (HOLD, LIT `cmt-bcef30fd`, F1 and F2), and after HOLD `cmt-10
 **Source, portion 160a (Runtime prerequisite, spec v1.137 §A–§D, §G):**
 `P/lifecycle/journal_workflow_pause_store.py` (supersession record kind beside the snapshot record;
 appended only through `_append`; `read_latest_attributed` returns `superseded`; `read_latest` and
-`read_exact` return `None` at a supersession position);
+`read_exact` return `None` at a supersession position; `pause_journal_dir_for` is replaced by the one
+Runtime root resolver that every journal site below uses, spec Rule B3);
+`P/bootstrap/factories/pause_resume_protocol_factory.py` (the durable snapshot store's journal directory
+resolves the Rule B7 root instead of `<state_ledger_dir>/pause-journal`, spec Rule B3, so captured
+snapshots land in the file the read and claim use);
 `P/lifecycle/root_resume_admission.py` (the Runtime-owned fresh-run admission that replaces
 `UNCLAIMED` for depth-0 fresh runs and, before `body(None)`, appends the supersession record to the
 existing non-empty journal for (tenant, workflow_id) in the spec Rule B7 root, spec Rules B2–B3; the
@@ -73,7 +79,8 @@ reuses this value's strict parser for its `isError` reply.
 9. Mutations that must fail a test: moving any arm to another kind, fail_class or exit; reporting
    `superseded` as a `handle` cause, as `claim` or as `corrupt-latest`; writing the supersession
    record only when the durable opt-in is present; writing it only to the run's own capture
-   directory; writing it from a resumed or child run; writing it after the first step; continuing the
+   directory; building the durable snapshot store from the STATE_LEDGER cell; reading or claiming a
+   journal at the old location; writing it from a resumed or child run; writing it after the first step; continuing the
    run after a failed append; mapping the accessor's `superseded` to any of the five causes; dropping
    the record-count or digest change from the staleness token.
 10. Request shape (spec §I.10): the subcommand accepts no snapshot, context, daemon or model-override
@@ -85,7 +92,8 @@ reuses this value's strict parser for its `isError` reply.
 12. Child workflow_id (spec §I.9): pin whether a child run can share its root's workflow_id; child
     runs write no supersession record.
 13. Operator guide (spec §I.12): the guide and its pinned test list exits 6 and 7 with their
-    meanings; the code-5 row states no safe resume for engine-native pauses.
+    meanings; the code-5 row states no safe resume for engine-native pauses; the guide states that a
+    pause captured before the root was bound cannot be resumed (spec Rule B8).
 14. Accessor (spec §I.13): `superseded` raises `PausedWorkflowStateUnavailableError` with cause
     `superseded`, not retryable, not indeterminate, no token; one failed-read `pause.state.read` event
     with `cause_attribution` `superseded` is retrievable from the real sink in a fresh process; the
@@ -95,9 +103,15 @@ reuses this value's strict parser for its `isError` reply.
     the key touches only the root file and no STATE_LEDGER cell holds a journal. With the root
     unresolvable, a fresh run fails before its first step and a resume refuses before any claim or
     bootstrap, both with zero effects and no journal write; a failed verification or append fails the
-    fresh run likewise.
+    fresh run likewise. Capture-to-read identity: under configurations whose STATE_LEDGER cells
+    differ, the durable factory's store appends a captured snapshot to the same file (same real path)
+    that the `api.resume` handle read and the claim open.
 16. Ruff and pyright clean on the touched files; the existing resume, claim, journal, durable child
     admission and CLI suites pass.
+17. Cutover (spec §I.15, Rule B8): with the root bound and no root file for (tenant, W), a valid
+    legacy snapshot journal at `<state_ledger_dir>/pause-journal` yields exit 6 `handle`/`absent`
+    before any claim or bootstrap with zero effects; a fresh run of W writes no supersession record;
+    the legacy file stays byte-identical and unclaimed.
 
 **Dependencies and gates.** Implementation starts only after spec v1.137 and this plan are ratified
 and applied. B-313 v2 proof 5 (a child-refusal `RunResult` stays a child refusal) binds the actual
@@ -107,8 +121,8 @@ profile-coder (OD spec v1.43, OD plan v2.37 unit U-OD-62). The journal location 
 needs two prerequisites ratified and applied first, with owners named in LIT `cmt-8b76cb48`: the
 retained root storage selection and binding evidence (Buford, integration lead) and the C-IS-01
 companion (profile-coder; IS spec v1.17, IS plan v2.11 unit U-IS-21). Until then no 160a journal
-change is accepted and `harness resume` is not exposed; criteria 2 (including case (d)) and 15 then
-pass on the bound root. Portion 160b's criteria 1–2 need
+change is accepted and `harness resume` is not exposed; criteria 2 (including case (d)), 15 and 17
+then pass on the bound root. Portion 160b's criteria 1–2 need
 160a; its value module, parser and criterion 10 can be prepared first.
 
 **Installed witness enabled.** Criterion 2 cases (a)–(c) against the installed CLI, with criterion 1

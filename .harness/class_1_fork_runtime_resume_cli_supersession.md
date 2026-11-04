@@ -47,7 +47,10 @@ pinned in `.harness/runtime-resume-contract-authority.md` (Proposed; not cleared
   binding-cell fan-out is removed. Its storage selection and binding evidence (owner Buford) and the
   C-IS-01 companion (owner profile-coder; IS spec v1.17, IS plan v2.11 U-IS-21) are prerequisites
   outside this delta. No implementation is accepted and `harness resume` is not exposed until both are
-  ratified and applied; witnesses I.2 case (d) and I.14 then gate acceptance.
+  ratified and applied; witnesses I.2 case (d) and I.14 then gate acceptance. After HOLD `cmt-b64cde80`
+  the durable snapshot capture resolves the same root (Rule B3), and journals already persisted under a
+  STATE_LEDGER cell get a fail-closed cutover with no migration and no legacy read (Rule B8, witness
+  I.15).
 - The companion OD C-OD-30.5.1 amendment is authored at `Spec_Operational_Discipline_v1_43.md` and OD
   plan v2.37 unit U-OD-62 (owner profile-coder, same claim); it needs ratification before Runtime
   implementation ratification.
