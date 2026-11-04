@@ -53,18 +53,17 @@ Copy **only** the five files. Download tools can leave metadata or cache folders
 Choose a model location outside every checkout and backup-restore scope. Use paths with no symlinks; `realpath -e <dir>` must print the path unchanged.
 
 ```sh
+FILES=/absolute/path/to/the/five/downloaded/files
 MODEL=/absolute/path/to/your/models/bge-small-en-v1.5
 CACHE=/absolute/path/to/your/embedding-cache
 install -d -m 0755 "$MODEL"
-cp config.json tokenizer.json tokenizer_config.json special_tokens_map.json model_optimized.onnx "$MODEL"/
-cd "$MODEL"
-sha256sum config.json model_optimized.onnx special_tokens_map.json tokenizer.json tokenizer_config.json > SHA256SUMS
-sha256sum -c SHA256SUMS
+(cd "$FILES" && cp config.json tokenizer.json tokenizer_config.json special_tokens_map.json model_optimized.onnx "$MODEL"/)
+(cd "$MODEL" && sha256sum config.json model_optimized.onnx special_tokens_map.json tokenizer.json tokenizer_config.json > SHA256SUMS && sha256sum -c SHA256SUMS)
 install -d -m 0700 "$CACHE"
 ls -la "$MODEL"; stat -c '%U %a %n' "$CACHE"; realpath -e "$MODEL" "$CACHE"
 ```
 
-The `SHA256SUMS` hashes must match the ones you recorded in step 2. Keep the cache separate from the model directory, not inside it.
+The `SHA256SUMS` hashes must match the ones you recorded in step 2. Keep the cache separate from the model directory, not inside it. Both `cd` commands run in subshells, so your shell stays where it was; run step 4 from the root of this checkout.
 
 ## 4. Activate the config
 
