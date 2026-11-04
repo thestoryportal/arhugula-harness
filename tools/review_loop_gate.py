@@ -663,6 +663,14 @@ class CycleReplay:
     completed_by: PassRun | None
     last: PassRun | None
 
+    @property
+    def pending_pass(self) -> str:
+        # [LAW:one-source-of-truth] approval reports and write-time admission share
+        # the selected cycle's continuation after an already reviewed binding changes.
+        return self.expected or (
+            "correction" if self.last and self.last.cycle_pass in ("initial", "correction") else "3"
+        )
+
 
 def replay(
     rows: list[dict], arc_id: str, *, doc_only: bool, initial_policy: bool = False
@@ -717,9 +725,7 @@ def next_pass(
     done = state.completed_by
     if done is not None and (head_sha, diff_digest) == (done.head_sha, done.diff_digest):
         return None
-    return state.expected or (
-        "correction" if state.last and state.last.cycle_pass in ("initial", "correction") else "3"
-    )
+    return state.pending_pass
 
 
 def completing_run(rows: list[dict], arc_id: str) -> PassRun | None:
@@ -901,7 +907,7 @@ def trial_review_decision(
     ]
     cycle = replay(rows, arc, doc_only=binding.doc_only)
     done = cycle.completed_by
-    expected = cycle.expected or "3"
+    expected = cycle.pending_pass
     runs = pass_runs(rows, arc)
     judged = {(r.cycle_pass, r.head_sha, r.diff_digest): r for r in pass_runs(eligible, arc)}
     unjudged = {(r.cycle_pass, r.head_sha, r.diff_digest) for r in runs if r.complete} - {

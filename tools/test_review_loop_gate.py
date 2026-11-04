@@ -4528,6 +4528,27 @@ def test_clean_initial_remains_complete_when_policy_is_reloaded():
     )
 
 
+@pytest.mark.parametrize("after_correction", [False, True])
+@pytest.mark.parametrize("change", ["head", "digest"])
+def test_trial_reports_the_correction_pass_the_gate_admits(after_correction, change):
+    rows = [_crow("initial", 1)]
+    reviewed_head = HEAD
+    if after_correction:
+        rows.append(_crow("correction", 2, head=H2))
+        reviewed_head = H2
+    assert _trial(rows, binding=_binding(reviewed_head)).state == "approved"
+    head, digest = (H3, DIGEST) if change == "head" else (reviewed_head, "e" * 64)
+    decision = _trial(rows, binding=_binding(head, digest))
+    assert decision.state == "binding_stale" and decision.admit_launch
+    assert decision.next_pass == "correction"
+    cycle = rlg.CycleRequest(
+        decision.next_pass, "codex", reviewed_head, BASE, False, initial_policy=True
+    )
+    assert isinstance(
+        _decide(_state(), rows, head_sha=head, diff_digest=digest, cycle=cycle), rlg.Allowed
+    )
+
+
 def test_single_review_preserves_spent_round_budget():
     rows = [_crow("initial", 1, fid="single-budget", sev="P2"), _adj("single-budget", "accepted")]
     cycle = rlg.CycleRequest("correction", "codex", HEAD, BASE, False, initial_policy=True)
