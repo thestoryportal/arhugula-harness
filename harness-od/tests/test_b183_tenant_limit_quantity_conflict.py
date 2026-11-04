@@ -201,16 +201,25 @@ def test_a_head_advance_forces_regrounding() -> None:
     the row-20 membership + count reconciliation) and touches neither `tenant_rate_limit` nor
     `observation_window`, so the spans/sec field signature this row disputes is unchanged.
     The frozen quotes above therefore remain accurate at the new heads.
+
+    **RE-GROUNDED 2026-11-04 against OD spec v1.43 + OD plan v2.37 (the Runtime v1.137 Rule A4
+    companion), and the pins advanced.** **`B-183`'s conflict is unmoved.** v1.43 has one
+    amendment site, the C-OD-30.5.1 cause-attribution row, which gains a sixth identifier
+    `superseded`; it does not name C-OD-11, C-OD-21, `tenant_rate_limit`, `observation_window`,
+    spans/sec or cardinality, so neither half of this row's conflict is settled or altered.
+    Plan v2.37 adds one unit (`U-OD-62`, the `PauseStateCauseAttribution.SUPERSEDED` member in
+    `pause_resume_namespace.py`) and amends no existing unit, so the spans/sec field signature
+    this row disputes is unchanged. The frozen quotes above remain accurate at the new heads.
     """
     heads = (Path(__file__).resolve().parents[2] / ".harness" / "artifact-heads.md").read_text(
         encoding="utf-8"
     )
-    assert "| `spec-operational-discipline` | `v1.42` |" in heads, (
-        "the OD spec head advanced past v1.42. B-183's quantity conflict is pinned against "
+    assert "| `spec-operational-discipline` | `v1.43` |" in heads, (
+        "the OD spec head advanced past v1.43. B-183's quantity conflict is pinned against "
         "historical deltas that a new head does not touch — re-ground the row against the "
         "new head before trusting anything above."
     )
-    assert "| `implementation-plan-operational-discipline` | `v2.36` |" in heads, (
-        "the OD plan head advanced past v2.36 — same reason: re-ground B-183, since the "
+    assert "| `implementation-plan-operational-discipline` | `v2.37` |" in heads, (
+        "the OD plan head advanced past v2.37 — same reason: re-ground B-183, since the "
         "spans/sec field signature may have been amended by the new delta."
     )
