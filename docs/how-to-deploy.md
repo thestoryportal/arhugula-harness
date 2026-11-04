@@ -92,7 +92,7 @@ Each profile has two literal placeholders you must edit (the offline-embedding p
 its model and cache directories, described in its guide): `/absolute/path/to/your/workspace`
 (this checkout) and `/absolute/path/to/your/state-root` (used in `[runtime.state_placement]`
 and again as the parent of the `STATE_LEDGER` cell). No `~` or environment variable is
-expanded. Replace both placeholders before starting; bootstrap reports
+expanded. Replace every placeholder before starting; bootstrap reports
 `parent-missing` when a placeholder's parent does not exist.
 
 Setup, in order:
@@ -111,7 +111,7 @@ Setup, in order:
    `.harness/memory` or `.harness/onboarding/state-ledger`, bootstrap refuses with
    `legacy-state-present`. Archive or migrate it yourself first; the harness never copies
    or deletes it. A custom older ledger binding is not detected; inventory it yourself.
-5. Edit both placeholders, then run. The first run creates and stamps the root. There is
+5. Edit every placeholder, then run. The first run creates and stamps the root. There is
    no read-only placement-check command yet, and `inspect` does not report placement.
 
 `/home/robbo/.local/state/arhugula-harness` is a host path that is a candidate, not accepted.

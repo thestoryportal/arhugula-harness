@@ -291,6 +291,7 @@ def test_deploy_docs_give_the_operator_setup_and_state_the_limits() -> None:
         "omarchy.ollama.toml.example",
         "omarchy.claude-code.toml.example",
         "omarchy.codex.toml.example",
+        "omarchy.offline-embedding.toml.example",
         "HELD",
         "durable",
     ):
