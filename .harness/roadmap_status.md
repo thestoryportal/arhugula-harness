@@ -8,11 +8,11 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `d1a82397af67` |
+| `workspace_state_hash` | `514db0a0051a` |
 | `last_refreshed` | 2026-11-04T00:00:00Z |
-| `git_head` | `2df67736` —  |
+| `git_head` | `e8c798fb` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
-| `open_fork_doc_count` | 125 |
+| `open_fork_doc_count` | 126 |
 
 **Hash recipe.** `sha256(git_head[:8] + "|" + sorted_open_pr_csv + "|" + open_fork_doc_count + "|" + latest_retirement_batch_path)[:12]`. See `Project_Roadmap_v1.md` §7.1.
 
@@ -22,7 +22,7 @@
 
 **Purpose.** Live pointer to the next Claude/Codex-executable frontier. Full round-by-round history (every prior round, verbatim, most-recent-first) lives in the archive below — grep it by PR/`B-`/`R-`-id/round, never read wholesale.
 
-**Current next action (post-#1695).** Continue the accepted Trial 193 release campaign under /home/robbo/Work/arhugula-omarchy/docs/orchestration/release-campaign.md and live LIT arhugula-harness-trial-193. PR #1695 adds the existing exit-code-5 PAUSED behavior to the operator guide and its numeric parity witness; record B-316 main/post-main closure evidence separately from the four still-open B-318 follow-up notes. Profile-coder owns the combined B-310/B-313/B-314 Runtime back-flow candidate, followed by independent contract review, prerequisite implementation, CLI implementation and installed resume/refusal witnesses; the original engine-native safe-recovery obligation remains open. Installed A7 examples, topologies, provider routes and offline assets remain open, including the two PR #1692 pass-3 P3 notes owed to the next A7/B-317 PR under B-298. A4 clearance, actual A5 interface binding, returned-arm source and result_ref/real-leaf witnesses remain open. Preserve A5 exact native-delivery hold, all actual denials, protected work and spent review passes. Qualify all 38 original rows and 122 criteria and obtain the independent six-category release decision on one exact integrated candidate, then select the next eligible bounded campaign unit from current LIT.
+**Current next action (post-#1697).** Continue the accepted Trial 193 campaign under /home/robbo/Work/arhugula-omarchy/docs/orchestration/release-campaign.md and live LIT arhugula-harness-trial-193. PR #1697 lands the cleared Runtime v1.137/plan v2.68, IS v1.17/plan v2.11 and OD v1.43/plan v2.37 contracts for B-310/B-313/B-314; it delivers no supersession implementation, resume exposure or installed acceptance. Buford owns the next prerequisite: select and prove the retained installation journal root and its binding across supported processes; it remains UNSELECTED/UNBOUND until witnessed, and consumes journal implementation/resume exposure. Profile-coder is the next implementation owner once that prerequisite and explicit source-path ownership are recorded, with an independently admitted reviewer; continue other eligible isolated slices under live LIT meanwhile. Preserve journal-position ordering, the original engine-native recovery obligation, three PR #1697 pass-3 P3 notes and four PR #1691 pass-3 P3 notes owed to their next PR under B-298, plus B-319. Installed A7 examples/topologies/routes/assets, Proposed A5/A4 compatibility and returned-arm result_ref/real-leaf witnesses, venue/restore, all 38 original rows and 122 criteria, and the independent six-category decision remain open. Preserve actual denials, A5 native-delivery hold, repair_paused, protected work and spent passes; source clearance is not release acceptance.
 
 **Archive.** `.harness/roadmap-next-action-archive.md` (PRIOR rounds only, verbatim as each stood when superseded — the current round lives only in this head; the newest superseded round may lag there until the next content PR archives it, and is always losslessly recoverable from this file's own git history meanwhile).
 
@@ -51,11 +51,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #1697 | 2026-11-04 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1695 | 2026-11-04 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1692 | 2026-11-04 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1691 | 2026-11-04 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1689 | 2026-11-04 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
-| PR #1683 | 2026-10-30 | WO-U07 G1 inactive companion lineage and accepted witness correction landed; source own-main verified by merge door before this continuation. |
 
 ---
 
