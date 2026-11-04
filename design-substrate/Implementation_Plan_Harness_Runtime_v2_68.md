@@ -23,6 +23,8 @@ Merge-gate correction (PR #1697 pass 1 BLOCK, LIT `cmt-5d0f2389`; pending indepe
 ratification): 160a constructs the fresh-run admission per invocation and checks and appends under the
 journal lock (spec Rules B1 and B2); new criterion 18 witnesses overlap and admission (spec §I.16). Upstream finding
 `discussion_r4470801910` (LIT `cmt-7a16a6df`): the refusal value and proof cites resolve to spec §D.
+Merge-gate pass 2 (PR #1697, witness-adequacy BLOCK at `a1072c21`; pending independent review and
+ratification): criterion 18 follows spec §I.16's forced interleavings and states its non-empty root file.
 
 ## U-RT-160 — superseded-record refusal and `harness resume` (B-314 prerequisite, B-313, B-310)
 
@@ -139,12 +141,15 @@ reuses this value's strict parser for its `isError` reply.
     `--pause-journal-dir`. Every file stays byte-identical, nothing is claimed, and a resume of a listed
     legacy workflow refuses as without the inventory. A mutation that disengages the surface on an
     unbound declaration over a populated legacy directory fails a test.
-18. Overlap and admission (spec §I.16), cross-process: R1 admitted, R2 admitted and completed, then R1
-    captures: `harness resume` claims R1's snapshot once (exit 0); R1 capturing before R2's admission
-    gives exit 6 `pause-record-superseded`. A capture that creates the file during an admission gives
-    one of those orders. Concurrent daemon `run_workflow` calls each append a record carrying their
-    own `run_id`. Mutations that check existence before taking the lock or share one admission object
-    between invocations fail a test.
+18. Overlap and admission (spec §I.16), cross-process, with a non-empty root file: R1 admitted, R2
+    admitted and completed, then R1 captures: `harness resume` claims R1's snapshot once (exit 0); R1
+    capturing before R2's admission gives exit 6 `pause-record-superseded`. From no root file, a
+    snapshot written while the test holds the journal lock and an admission waits on it is superseded
+    (exit 6); a mutation that checks existence before taking the lock gives exit 0 and fails the test.
+    Two concurrent daemon `run_workflow` calls, held at a barrier until both admissions exist, one
+    failing root resolution before its first step and one succeeding with its own `run_id`, each
+    receive only their own outcome; a mutation that shares the admission object, `run_id` or pre-body
+    failure fails the test.
 
 **Dependencies and gates.** Implementation starts only after spec v1.137 and this plan are ratified
 and applied. Spec §D.4 proof 5 (a child-refusal `RunResult` stays a child refusal) binds the actual

@@ -35,6 +35,9 @@ ratification): Rule B1 requires a per-invocation fresh-run admission; Rule B2 ma
 and the append one step under the journal lock; Rules B5, B6 and C2 define earlier and later by journal
 position, including for overlapping root runs; Rule B7 item 1 states that a run's bindings can only
 make resolution fail; new witness I.16.
+Merge-gate pass 2 (PR #1697, witness-adequacy BLOCK at `a1072c21`; pending independent review and
+ratification): witness I.16 pins lock scope and per-invocation admission with forced interleavings
+that each have one expected result, including a pre-body failure beside a success.
 Upstream review finding (PR #1697 `discussion_r4470801910`, P2, LIT `cmt-7a16a6df`; pending independent
 review and ratification): §D.1–§D.4 transcribe the adopted B-313 v2 value, boundaries, redaction and
 proof word for word, so the eight adopted arms are normative in this repository; §D.5 holds the
@@ -564,7 +567,13 @@ Future tests, not run by this delta.
     own and completes; R1 then pauses at the workflow layer. The journal order is R1's admission,
     R2's admission, then R1's snapshot, and `harness resume` claims that snapshot once (exit 0). In
     the reversed case, where R1 captures before R2 is admitted, the resume exits 6
-    `pause-record-superseded`. A capture that creates the file while a fresh run is being admitted gives
-    one of these two orders. A mutation that checks the file's existence before taking the lock fails
-    a test. Two concurrent daemon `run_workflow` calls each append a record carrying their own
-    `run_id`. A mutation that shares one admission object between invocations fails a test.
+    `pause-record-superseded`. Lock scope, from no root file: the test holds the journal lock, starts a
+    fresh run and waits until its admission blocks on that lock, writes one snapshot for (tenant, W)
+    under the held lock, then releases it. The admission appends its supersession record and the resume
+    exits 6 `pause-record-superseded`; a mutation that checks the file's existence before taking the
+    lock writes nothing, so the resume exits 0 and the test fails. Per-invocation admission: two
+    concurrent daemon `run_workflow` calls for W are held at a barrier until both admissions are
+    constructed. One call's bound paths make root resolution fail (IS spec v1.17 §1.1 `overlapping`), so
+    it fails before its first step; the other succeeds and appends a record carrying its own `run_id`.
+    Each caller receives only its own outcome. A mutation that shares the admission object, the `run_id`
+    or the pre-body failure between invocations fails this test.
