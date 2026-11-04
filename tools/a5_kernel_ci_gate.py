@@ -8,8 +8,9 @@ unchanged suite:
 * ``preflight`` (before pytest) runs the REAL launcher host check on the runner's actual
   architecture and measured Landlock ABI, binds the result to image, kernel, run and commit
   identity, and fails unless the allocation is exactly the venue it was selected as.
-* ``check`` (after pytest) reads that leg's fresh JUnit by exact node ID and fails unless
-  every guarded ID appears exactly once with the outcome its venue requires.
+* ``check`` (after pytest) re-judges that leg's preflight record against the expectations it
+  loads now, then reads the leg's fresh JUnit by exact node ID and fails unless every
+  guarded ID appears exactly once with the outcome its venue requires.
 
 The guarded IDs, the venues and the git blobs defining them live in
 `tools/a5_kernel_ci_expectations.json`. Editing a bound file makes that file stale, and
@@ -36,7 +37,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 ROOT = Path(__file__).resolve().parents[1]
 EXPECTATIONS = ROOT / "tools" / "a5_kernel_ci_expectations.json"
@@ -54,8 +55,6 @@ _BINDING_ENV = (
     "RUNNER_NAME",
     "RUNNER_ENVIRONMENT",
 )
-# A record from a different run, attempt or commit is stale evidence for this leg.
-_SAME_LEG = ("CI_HEAD", "CI_BASE", "CI_TESTED", "GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT")
 
 
 class ExpectationsError(ValueError):
@@ -168,9 +167,9 @@ def judge_preflight(
         problems.append(f"ImageOS {env['ImageOS']!r} is not this venue's {venue.image_os!r}")
     if env.get("CI_TESTED") and checked_out != env["CI_TESTED"]:
         problems.append(f"checked-out {checked_out} is not the bound tested {env['CI_TESTED']}")
-    for path, want in expected_blobs.items():
-        if blobs.get(path) != want:
-            problems.append(f"{path} is blob {blobs.get(path)}, expectations bind {want}: stale")
+    for path in sorted(expected_blobs.keys() | blobs.keys()):
+        if (got := blobs.get(path)) != (want := expected_blobs.get(path)):
+            problems.append(f"{path} is blob {got}, expectations bind {want}: stale")
     match venue:
         case Supported():
             if host.refusal is not None:
@@ -235,6 +234,79 @@ def preflight(venue_id: str, expectations: Expectations, raw_sha256: str) -> dic
 
 
 # --- check --------------------------------------------------------------------------
+
+
+class PreflightError(ValueError):
+    """The preflight record is not a complete record of one preflight."""
+
+
+@dataclass(frozen=True)
+class PreflightRecord:
+    venue: str
+    started_at: datetime
+    host: HostReport
+    kernel: str
+    os_release: str
+    binding: Mapping[str, str]
+    checked_out: str
+    parents: tuple[str, ...]
+    blobs: Mapping[str, str | None]
+    expectations_sha256: str
+    problems: tuple[str, ...]
+
+
+def _typed[T](raw: Mapping[str, Any], key: str, kind: type[T]) -> T:
+    if type(value := raw[key]) is not kind:
+        raise PreflightError(f"{key} is {value!r}, not {kind.__name__}")
+    return value
+
+
+def _strings(raw: Mapping[str, Any], key: str) -> tuple[str, ...]:
+    items = cast(list[Any], _typed(raw, key, list))
+    if any(type(item) is not str for item in items):
+        raise PreflightError(f"{key} {items!r} is not a list of strings")
+    return tuple(items)
+
+
+def _blob(value: Any) -> str | None:
+    if value is not None and type(value) is not str:
+        raise PreflightError(f"blob {value!r} is neither a git blob nor absent")
+    return value
+
+
+def parse_preflight(raw: Any) -> PreflightRecord:
+    # [LAW:parse-dont-validate] A record missing any fact preflight writes is refused here,
+    # so `check` never mistakes an absent host, binding or blob map for a passing one.
+    try:
+        host = cast(dict[str, Any], _typed(raw, "host", dict))
+        refusal = None if host["refusal"] is None else _typed(host, "refusal", str)
+        launcher = _typed(host, "launcher", str)
+        if launcher != ("accepted" if refusal is None else "refused"):
+            raise PreflightError(f"launcher {launcher!r} contradicts refusal {refusal!r}")
+        started_at = datetime.fromisoformat(_typed(raw, "started_at", str))
+        if started_at.tzinfo is None:
+            raise PreflightError(f"started_at {started_at} has no timezone")
+        binding = cast(dict[str, Any], _typed(raw, "binding", dict))
+        blobs = cast(dict[str, Any], _typed(raw, "blobs", dict))
+        return PreflightRecord(
+            venue=_typed(raw, "venue", str),
+            started_at=started_at,
+            host=HostReport(
+                _typed(host, "machine", str), _typed(host, "landlock_abi", int), refusal
+            ),
+            kernel=_typed(host, "kernel", str),
+            os_release=_typed(host, "os", str),
+            binding={name: _typed(binding, name, str) for name in _BINDING_ENV},
+            checked_out=_typed(raw, "checked_out", str),
+            parents=_strings(raw, "parents"),
+            blobs={path: _blob(blob) for path, blob in blobs.items()},
+            expectations_sha256=_typed(raw, "expectations_sha256", str),
+            problems=_strings(raw, "problems"),
+        )
+    except PreflightError:
+        raise
+    except (KeyError, TypeError, ValueError) as exc:
+        raise PreflightError(f"incomplete preflight record: {exc!r}") from exc
 
 
 class Status(enum.Enum):
@@ -335,30 +407,49 @@ def judge_outcomes(
 
 
 def check(
-    venue_id: str, expectations: Expectations, preflight_path: Path, junit_path: Path
+    venue_id: str,
+    expectations: Expectations,
+    expectations_sha256: str,
+    env: Mapping[str, str],
+    preflight_path: Path,
+    junit_path: Path,
 ) -> dict[str, Any]:
     record: dict[str, Any] = {"venue": venue_id, "outcomes": {}}
     try:
-        prior = json.loads(preflight_path.read_text())
+        raw = preflight_path.read_bytes()
+        record["preflight_sha256"] = hashlib.sha256(raw).hexdigest()
+        prior = parse_preflight(json.loads(raw))
     except (OSError, ValueError) as exc:
-        return record | {"problems": [f"preflight record unreadable: {exc}"]}
-    record["preflight_sha256"] = hashlib.sha256(preflight_path.read_bytes()).hexdigest()
-    problems = [f"preflight: {p}" for p in prior.get("problems", ["record has no problems list"])]
-    if prior.get("venue") != venue_id:
-        problems.append(f"preflight is for venue {prior.get('venue')!r}")
-    binding = prior.get("binding", {})
-    for name in _SAME_LEG:
-        if binding.get(name) != os.environ.get(name):
-            problems.append(f"preflight {name}={binding.get(name)!r} is not this leg's")
+        return record | {"problems": [f"preflight record unusable: {exc}"]}
+    venue = expectations.venues[venue_id]
+    # [LAW:single-enforcer] The recorded facts are re-judged by preflight's own rule against
+    # the expectations loaded now, so a stale or edited record cannot carry a pass it did
+    # not earn; a record that judged itself the same way contributes no duplicates.
+    rejudged = judge_preflight(
+        venue, prior.host, prior.binding, prior.blobs, expectations.bound_blobs, prior.checked_out
+    )
+    problems = [f"preflight: {p}" for p in dict.fromkeys([*prior.problems, *rejudged])]
+    if prior.venue != venue_id:
+        problems.append(f"preflight is for venue {prior.venue!r}")
+    if prior.expectations_sha256 != expectations_sha256:
+        problems.append(
+            f"preflight bound expectations {prior.expectations_sha256}, "
+            f"check loaded {expectations_sha256}: stale"
+        )
+    # Every binding is constant within one job, so any difference is another run, attempt,
+    # commit or runner.
+    problems += [
+        f"preflight {name}={prior.binding[name]!r} is not this leg's"
+        for name in _BINDING_ENV
+        if prior.binding[name] != env.get(name)
+    ]
     try:
         text = junit_path.read_text()
         record["junit_sha256"] = hashlib.sha256(text.encode()).hexdigest()
-        outcomes = parse_junit(text, datetime.fromisoformat(prior["started_at"]))
-    except (OSError, KeyError, ValueError) as exc:
+        outcomes = parse_junit(text, prior.started_at)
+    except (OSError, ValueError) as exc:
         return record | {"problems": [*problems, f"JUnit not usable: {exc}"]}
-    observed, outcome_problems = judge_outcomes(
-        required_outcomes(expectations, expectations.venues[venue_id]), outcomes
-    )
+    observed, outcome_problems = judge_outcomes(required_outcomes(expectations, venue), outcomes)
     return record | {"outcomes": observed, "problems": problems + outcome_problems}
 
 
@@ -391,7 +482,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     record = (
         preflight(args.venue, expectations, raw_sha256)
         if args.command == "preflight"
-        else check(args.venue, expectations, args.preflight, args.junit)
+        else check(args.venue, expectations, raw_sha256, os.environ, args.preflight, args.junit)
         | {"expectations_sha256": raw_sha256}
     )
     record["verdict"] = "fail" if record["problems"] else "pass"

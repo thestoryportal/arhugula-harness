@@ -6,14 +6,17 @@ current files, and the venues are the ci.yml matrix legs. The preflight lens dri
 pure host judgement with each allocation a runner could produce. The outcome lens runs
 real pytest to produce real JUnit, then drives every failure path the gate exists for:
 missing, duplicate, skipped (including the device-node prerequisite), xfailed, held for
-the wrong reason, stale, malformed and cross-run evidence."""
+the wrong reason, stale, malformed and cross-run evidence, and a preflight record that is
+incomplete, stale against the reviewed expectations or not this leg's."""
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
 import sys
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -31,6 +34,7 @@ from a5_kernel_ci_gate import (
     JUnitError,
     NodeId,
     Outcome,
+    PreflightError,
     Refused,
     Status,
     Supported,
@@ -40,6 +44,8 @@ from a5_kernel_ci_gate import (
     main,
     parse_expectations,
     parse_junit,
+    parse_preflight,
+    preflight,
     required_outcomes,
 )
 
@@ -181,7 +187,7 @@ def test_a_wrong_allocation_fails_preflight(
 
 def test_a_stale_binding_fails_preflight() -> None:
     venue, host = Refused("ubuntu24", 8, _REFUSAL), HostReport("x86_64", 8, _REFUSAL)
-    for actual in ({"a.py": "2" * 40}, {"a.py": None}):
+    for actual in ({"a.py": "2" * 40}, {"a.py": None}, {}, _BLOBS | {"b.py": "3" * 40}):
         problems = judge_preflight(venue, host, _ENV, actual, _BLOBS, _ENV["CI_TESTED"])
         assert any("stale" in p for p in problems), problems
 
@@ -308,18 +314,44 @@ def test_malformed_or_stale_junit_is_refused(real_junit: tuple[str, datetime]) -
 # --- CLI: check binds this leg's evidence --------------------------------------------
 
 
-def _write_leg(tmp_path: Path, junit: str, **preflight: Any) -> list[str]:
-    started = (datetime.now(UTC) - timedelta(minutes=5)).isoformat()
-    record = {"venue": "x", "started_at": started, "binding": dict(_ENV), "problems": []}
-    (tmp_path / "preflight.json").write_text(json.dumps(record | preflight))
-    (tmp_path / "junit.xml").write_text(junit)
-    raw = {
-        "bound_blobs": {},
-        "venues": {"x": {"kind": "supported", "image_os": "ubuntu26"}},
+def test_the_real_preflight_record_parses_back() -> None:
+    record = json.loads(json.dumps(preflight("supported", _EXPECTED, "e" * 64)))
+    prior = parse_preflight(record)
+    assert (prior.venue, prior.expectations_sha256) == ("supported", "e" * 64)
+    assert prior.blobs == _EXPECTED.bound_blobs
+    assert set(prior.binding) == set(_ENV)
+
+
+def _record(expectations_sha256: str) -> dict[str, Any]:
+    """A complete, passing preflight record for the CLI fixture's supported venue `x`."""
+    return {
+        "venue": "x",
+        "started_at": (datetime.now(UTC) - timedelta(minutes=5)).isoformat(),
+        "host": {"machine": "x86_64", "landlock_abi": 9, "launcher": "accepted",
+                 "refusal": None, "kernel": "6.17.0-1004-azure", "os": "Ubuntu 26.04 LTS"},
+        "binding": dict(_ENV),
+        "checked_out": _ENV["CI_TESTED"],
+        "parents": ["p" * 40, "q" * 40],
+        "blobs": dict(_BLOBS),
+        "expectations_sha256": expectations_sha256,
+        "problems": [],
+    }  # fmt: skip
+
+
+def _write_leg(
+    tmp_path: Path, junit: str, mutate: Callable[[dict[str, Any]], object] = lambda r: None
+) -> list[str]:
+    raw = json.dumps({
+        "bound_blobs": _BLOBS,
+        "venues": {"x": {"kind": "supported", "image_os": _ENV["ImageOS"]}},
         "supported_host_ids": [str(_id("test_passes"))],
         "unsupported_host_ids": [],
-    }
-    (tmp_path / "expectations.json").write_text(json.dumps(raw))
+    })  # fmt: skip
+    (tmp_path / "expectations.json").write_text(raw)
+    record = _record(hashlib.sha256(raw.encode()).hexdigest())
+    mutate(record)
+    (tmp_path / "preflight.json").write_text(json.dumps(record))
+    (tmp_path / "junit.xml").write_text(junit)
     return [
         "check", "--venue", "x", "--expectations", str(tmp_path / "expectations.json"),
         "--preflight", str(tmp_path / "preflight.json"), "--junit", str(tmp_path / "junit.xml"),
@@ -347,26 +379,66 @@ def test_check_passes_this_legs_evidence(tmp_path: Path, monkeypatch: pytest.Mon
     assert {"junit_sha256", "preflight_sha256", "expectations_sha256"} <= set(record)
 
 
+_REFUSED_HOST = {"landlock_abi": 8, "launcher": "refused", "refusal": _REFUSAL}
+
+
 @pytest.mark.parametrize(
-    ("junit", "preflight", "needle"),
+    ("junit", "mutate", "needle"),
     [
-        (_JUNIT, {"problems": ["launcher refused"]}, "preflight: launcher refused"),
-        (_JUNIT, {"venue": "y"}, "venue"),
-        (_JUNIT, {"binding": _ENV | {"GITHUB_RUN_ID": "40"}}, "GITHUB_RUN_ID"),
-        (_JUNIT, {"binding": _ENV | {"GITHUB_RUN_ATTEMPT": "2"}}, "GITHUB_RUN_ATTEMPT"),
-        (_JUNIT, {"binding": _ENV | {"CI_HEAD": "0" * 40}}, "CI_HEAD"),
-        (_JUNIT.replace("test_passes", "test_other"), {}, "exactly one"),
-        ("<testsuites>", {}, "JUnit not usable"),
+        (_JUNIT, lambda r: r.update(problems=["launcher refused"]), "preflight: launcher refused"),
+        (_JUNIT, lambda r: r.update(venue="y"), "venue"),
+        (_JUNIT, lambda r: r["binding"].update(GITHUB_RUN_ID="40"), "GITHUB_RUN_ID"),
+        (_JUNIT, lambda r: r["binding"].update(GITHUB_RUN_ATTEMPT="2"), "GITHUB_RUN_ATTEMPT"),
+        (_JUNIT, lambda r: r["binding"].update(CI_HEAD="0" * 40), "CI_HEAD"),
+        (_JUNIT, lambda r: r["binding"].update(RUNNER_NAME="GitHub Actions 9"), "RUNNER_NAME"),
+        (_JUNIT, lambda r: r["binding"].update(ImageVersion="20260101.1"), "ImageVersion"),
+        (_JUNIT, lambda r: r["binding"].pop("ImageOS"), "incomplete"),
+        (_JUNIT, lambda r: r.update(expectations_sha256="wrong"), "bound expectations"),
+        (_JUNIT, lambda r: r.pop("expectations_sha256"), "incomplete"),
+        (_JUNIT, lambda r: r.update(blobs={}), "stale"),
+        (_JUNIT, lambda r: r.update(blobs={"a.py": "2" * 40}), "stale"),
+        (_JUNIT, lambda r: r["blobs"].update({"b.py": "3" * 40}), "stale"),
+        (_JUNIT, lambda r: r.update(blobs={"a.py": 1}), "neither a git blob"),
+        (_JUNIT, lambda r: r.pop("blobs"), "incomplete"),
+        (_JUNIT, lambda r: r.update(host={}), "incomplete"),
+        (_JUNIT, lambda r: r["host"].update(_REFUSED_HOST), "refused the supported venue"),
+        (_JUNIT, lambda r: r["host"].update(launcher="refused"), "contradicts"),
+        (_JUNIT, lambda r: r["host"].update(landlock_abi="9"), "not int"),
+        (_JUNIT, lambda r: r["host"].pop("kernel"), "incomplete"),
+        (_JUNIT, lambda r: r.update(checked_out="c" * 40), "checked-out"),
+        (_JUNIT, lambda r: r.pop("parents"), "incomplete"),
+        (_JUNIT, lambda r: r.update(started_at="2026-11-04T00:00:00"), "no timezone"),
+        (_JUNIT, lambda r: r.pop("problems"), "incomplete"),
+        (_JUNIT, lambda r: r.update(problems=[None]), "not a list of strings"),
+        (_JUNIT, lambda r: r.update(parents=[1]), "not a list of strings"),
+        (_JUNIT, lambda r: r.update(expectations_sha256="wrong", blobs={}, host={}), "incomplete"),
+        (_JUNIT.replace("test_passes", "test_other"), lambda r: None, "exactly one"),
+        ("<testsuites>", lambda r: None, "JUnit not usable"),
     ],
     ids=["preflight-failed", "other-venue", "other-run", "other-attempt", "other-head",
-         "missing-id", "malformed-junit"],
+         "other-runner", "other-image-version", "binding-incomplete", "stale-expectations",
+         "no-expectations-digest", "no-blobs", "stale-blob", "unreviewed-blob", "blob-not-sha",
+         "blob-map-absent", "host-absent", "host-refused", "launcher-contradicts-refusal",
+         "abi-not-int", "kernel-absent", "other-checkout", "parents-absent", "naive-start",
+         "problems-absent", "problem-not-str", "parent-not-str", "review-probe", "missing-id",
+         "malformed-junit"],
 )  # fmt: skip
 def test_check_fails_and_still_records(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, junit: str, preflight: Any, needle: str
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    junit: str,
+    mutate: Callable[[dict[str, Any]], object],
+    needle: str,
 ) -> None:
-    code, record = _run(monkeypatch, _write_leg(tmp_path, junit, **preflight))
+    code, record = _run(monkeypatch, _write_leg(tmp_path, junit, mutate))
     assert (code, record["verdict"]) == (1, "fail")
     assert any(needle in p for p in record["problems"]), record["problems"]
+
+
+def test_a_non_object_preflight_record_is_refused() -> None:
+    for raw in ([], None, "x"):
+        with pytest.raises(PreflightError):
+            parse_preflight(raw)
 
 
 def test_check_without_a_preflight_record_fails(
@@ -375,7 +447,7 @@ def test_check_without_a_preflight_record_fails(
     argv = _write_leg(tmp_path, _JUNIT)
     (tmp_path / "preflight.json").unlink()
     code, record = _run(monkeypatch, argv)
-    assert code == 1 and "preflight record unreadable" in record["problems"][0]
+    assert code == 1 and "preflight record unusable" in record["problems"][0]
 
 
 def test_unusable_expectations_exit_2(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
