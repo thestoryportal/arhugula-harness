@@ -78,7 +78,7 @@ operator-approved only.
 
 ## External state root (Omarchy production profile)
 
-Three additive, complete profiles declare a state placement for Omarchy (Arch Linux
+Four additive, complete profiles declare a state placement for Omarchy (Arch Linux
 ARM) with local Ollama or a subscription CLI. Paid hosted providers are excluded.
 
 | Profile | Route | Status |
@@ -86,8 +86,10 @@ ARM) with local Ollama or a subscription CLI. Paid hosted providers are excluded
 | `examples/omarchy.ollama.toml.example` | local Ollama | source-checked only |
 | `examples/omarchy.claude-code.toml.example` | Claude Code subscription CLI | source-checked only |
 | `examples/omarchy.codex.toml.example` | Codex subscription CLI | **HELD**: the CLI's filesystem read exposure is a separate boundary that is not enforced or tested. A loadable config is not launch acceptance. |
+| `examples/omarchy.offline-embedding.toml.example` | local Ollama with offline embedding routing ([guide](operations/omarchy-offline-embedding.md)) | source-checked only |
 
-Each profile has two literal placeholders you must edit: `/absolute/path/to/your/workspace`
+Each profile has two literal placeholders you must edit (the offline-embedding profile adds
+its model and cache directories, described in its guide): `/absolute/path/to/your/workspace`
 (this checkout) and `/absolute/path/to/your/state-root` (used in `[runtime.state_placement]`
 and again as the parent of the `STATE_LEDGER` cell). No `~` or environment variable is
 expanded. Replace both placeholders before starting; bootstrap reports

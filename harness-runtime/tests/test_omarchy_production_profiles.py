@@ -45,6 +45,7 @@ PROFILES = (
     Profile("examples/omarchy.ollama.toml.example", ("ollama",), ()),
     Profile("examples/omarchy.claude-code.toml.example", ("claude_code",), ("claude-code",)),
     Profile("examples/omarchy.codex.toml.example", ("codex",), ("codex",)),
+    Profile("examples/omarchy.offline-embedding.toml.example", ("ollama",), ()),
 )
 PROFILE_IDS = [Path(p.file).name for p in PROFILES]
 LEGACY_EXAMPLES = (
