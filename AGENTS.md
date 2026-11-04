@@ -2,7 +2,7 @@
 
 **Delivery policy (user-approved 2026-11-04).** When the tracked
 `.harness/workflow-policy.json` selects `single-independent-milestone-status-v1`,
-`docs/governance/delivery-policy.md` governs delivery: one independent reviewer session of any model family,
+`docs/delivery-policy.md` governs delivery: one independent reviewer session of any model family,
 no author/correction-author self-approval or mandatory Gemini/fallback/shadow,
 correction delta, focused local checks with qualifying reuse, generated Git/LIT
 status or milestone refresh, and independent isolated work during CI. It replaces

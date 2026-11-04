@@ -4,7 +4,7 @@ This is the durable audit record for replacing Claude as the interactive runner
 without discarding compatible workflow capability. "Surgical" means no unrelated
 repo churn; it does not mean reduced parity.
 
-The selected delivery procedure in `docs/governance/delivery-policy.md` supersedes
+The selected delivery procedure in `docs/delivery-policy.md` supersedes
 the historical default review stack below: use one separate independent session of
 any model family, with no author/correction-author self-approval or mandatory
 Gemini/fallback/shadow. Retain historical findings, spent passes and actual denials.
@@ -22,7 +22,7 @@ Gemini/fallback/shadow. Retain historical findings, spent passes and actual deni
 | Project memory | Claude project `memory/MEMORY.md` plus linked topic files | Mandatory discipline digest at startup; task-relevant index/topic lookup remains available and required |
 | Context checkpoints | `context-save-lean` (the workspace copy of the gstack save flow, U-SR-08/WR-15) / gstack `context-restore` and repo handoffs | Same gstack skills plus `.harness/handoff/README-resume.md` and Codex deterministic checkpoints; all advisory until HEAD verification |
 | Orchestration models | Fable 5 interactive orchestrator/planner with Opus 5 subagent implementers | `gpt-5.6-sol` high controller via `arhugula-forward`; `gpt-5.6-terra` high implementer legs via `arhugula-implementer` |
-| Independent review | Separate native reviewer session | Any model family; actual author/correction-author sessions excluded. See `docs/governance/delivery-policy.md`; Gemini/fallback/shadow optional. |
+| Independent review | Separate native reviewer session | Any model family; actual author/correction-author sessions excluded. See `docs/delivery-policy.md`; Gemini/fallback/shadow optional. |
 | Pre-merge review | Three fresh agent lenses | Three fresh ephemeral, lifecycle-isolated, read-only `codex exec` lenses; all-approve and logged |
 | CI | Green PR CI, then green `main` CI | Same, including merge-SHA pinning and terminating-refresh `main` CI before forward work |
 | Git autonomy | Safe scoped commands with destructive operations guarded | Same scoped approvals plus permission guard; force push, history rewrite, remote delete, and force cleanup remain denied |

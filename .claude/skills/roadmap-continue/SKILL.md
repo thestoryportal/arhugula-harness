@@ -5,7 +5,7 @@ description: Run one iteration of the workspace roadmap loop — the "continue" 
 
 **Delivery policy selection.** For the tracked
 `review_rules.delivery=single-independent-milestone-status-v1`, read
-`docs/governance/delivery-policy.md` before work. It replaces contrary default
+`docs/delivery-policy.md` before work. It replaces contrary default
 review-stack, full-local-suite and per-merge status-PR requirements in the legacy
 procedure below. Continue independent isolated work during CI; retain candidate
 CI, acceptance, findings, budgets and in-flight legacy obligations.

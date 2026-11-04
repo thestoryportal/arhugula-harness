@@ -7,7 +7,7 @@ description: Review an exact candidate under the tracked delivery policy; use sp
 
 Read `.harness/workflow-policy.json`. When `review_rules.delivery` is
 `single-independent-milestone-status-v1`, follow
-`docs/governance/delivery-policy.md` for new arcs and **stop here**. That procedure
+`docs/delivery-policy.md` for new arcs and **stop here**. That procedure
 uses one independent review, delta correction review, focused local checks and
 milestone status. No default three-lens stack or separate roadmap-refresh PR is
 owed. Existing delivered legacy pass tags and refresh intents retain their

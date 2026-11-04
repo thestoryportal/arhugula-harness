@@ -2,7 +2,7 @@
 
 **Delivery policy (user-approved 2026-11-04).** When the tracked
 `.harness/workflow-policy.json` selects `single-independent-milestone-status-v1`,
-`docs/governance/delivery-policy.md` governs delivery: one independent reviewer session of any model family,
+`docs/delivery-policy.md` governs delivery: one independent reviewer session of any model family,
 no author/correction-author self-approval or mandatory Gemini/fallback/shadow,
 correction delta, focused local checks with qualifying reuse, generated Git/LIT
 status or milestone refresh, and independent isolated work during CI. It replaces
@@ -448,7 +448,7 @@ Verify any memory or checkpoint claim empirically against HEAD before authoring 
 ### 13.1 Always-on disciplines (every session, every posture, independent of the effort knob)
 
 For the selected delivery policy, use ONE independent native reviewer session of
-any model family under `docs/governance/delivery-policy.md`. The author and every
+any model family under `docs/delivery-policy.md`. The author and every
 material correction author are excluded. The two review rows below describe the
 retained legacy procedure; they do not add a second review, Gemini fallback or
 shadow obligation to current delivery. Additional review requires a named risk.
