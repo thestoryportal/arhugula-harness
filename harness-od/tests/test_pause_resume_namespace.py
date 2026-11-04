@@ -21,6 +21,7 @@ from harness_od.pause_resume_namespace import (
     SPAN_SITE_PAUSE_CAPTURED,
     SPAN_SITE_RESUME_ATTEMPTED,
     PauseResumeAuditPayload,
+    PauseStateCauseAttribution,
 )
 from pydantic import ValidationError
 
@@ -311,3 +312,33 @@ def test_pause_resume_audit_payload_extra_forbid() -> None:
             resume_outcome=None,
             unknown_field="should_reject",
         )
+
+
+# ----------------------------------------------------------------------------
+# U-OD-62 (OD plan v2.37) — C-OD-30.5.1 cause vocabulary, six identifiers
+# ----------------------------------------------------------------------------
+
+#: OD spec v1.43 §1: the five Runtime v1.107 §30 identifiers, then `superseded`.
+_SPEC_CAUSES = (
+    ("ABSENT", "absent"),
+    ("EMPTY_JOURNAL", "empty-journal"),
+    ("READ_ERROR", "read-error"),
+    ("CORRUPT_LATEST", "corrupt-latest"),
+    ("WORKFLOW_MISMATCH", "workflow-mismatch"),
+    ("SUPERSEDED", "superseded"),
+)
+
+
+def test_cause_attribution_is_exactly_the_six_spec_identifiers() -> None:
+    """U-OD-62 criteria 1-2 (OD side) — six members with the spec values, the
+    existing five unchanged. A seventh, missing or renamed member fails here; the
+    Runtime-side set equality binds at U-RT-160 portion 160a."""
+    assert tuple((m.name, m.value) for m in PauseStateCauseAttribution) == _SPEC_CAUSES
+
+
+@pytest.mark.parametrize("raw", ["stale", "", "Superseded", "SUPERSEDED", "superseded "])
+def test_cause_attribution_rejects_identifiers_outside_the_six(raw: str) -> None:
+    """U-OD-62 criterion 4 / OD spec v1.43 witness 3 — nothing outside the six
+    maps to a member."""
+    with pytest.raises(ValueError):
+        PauseStateCauseAttribution(raw)
