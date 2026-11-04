@@ -22,7 +22,8 @@ Fourth correction (HOLD `cmt-b64cde80`): F3 in Rule B3 and witness I.14 (the dur
 resolves the same root); F4 in Rule A1, new Rule B8 and witness I.15 (fail-closed cutover of journals
 at the old location).
 C-IS-01 companion (after ratification `cmt-7cc5fc50`): Rule B7 item 3 and witness I.14 pin the resume
-refusal for an unresolved root to `protocol-not-bound`; IS spec v1.17 §1.1 declares the root.
+refusal for an unresolved root to `protocol-not-bound`; IS spec v1.17 §1.1 declares the root. After
+review HOLD `cmt-8720af2b`, witness I.14 adds the `harness-inspect` inventory over the root.
 
 **Lineage (pending fold):** grounded on cleared v1.134 at H `14b785d84e4d80f15c4e8c0ac1dbf7a69e1afed9`.
 Fold order A3 → A5 (v1.135) → A4 (v1.136) → this delta. It combines three decided inputs into one
@@ -338,7 +339,9 @@ Future tests, not run by this delta.
     Capture-to-read identity: under configurations whose STATE_LEDGER cells differ, the file the
     durable factory's store appends a captured snapshot to is the same file (same real path) that the
     `api.resume` handle read and the claim open; a test fails if the store is built from the
-    STATE_LEDGER cell.
+    STATE_LEDGER cell. Inventory: `harness-inspect` (§13.7) lists the root as its pause-journal
+    directory; over a root holding journals of several tenants it lists every canonical journal,
+    classified per §13.7.1, and enumerates no STATE_LEDGER cell.
 15. Cutover (Rule B8): with the root bound and holding no file for (tenant, W), and a valid snapshot
     journal for W at `<state_ledger_dir>/pause-journal` from the old derivation, `harness resume`
     exits 6 `handle`/`absent` before any claim or bootstrap with zero model, tool or body effects; a

@@ -13,7 +13,8 @@ combined candidate (HOLD, LIT `cmt-bcef30fd`, F1 and F2), and after HOLD `cmt-10
 Fourth correction (HOLD `cmt-b64cde80`, F3 and F4): the durable snapshot capture resolves the same root
 (spec Rule B3), and journals at the old location get a fail-closed cutover (spec Rule B8).
 C-IS-01 companion (after ratification `cmt-7cc5fc50`): criterion 15 pins the unresolved-root resume
-refusal to `protocol-not-bound` (spec Rule B7 item 3).
+refusal to `protocol-not-bound` (spec Rule B7 item 3); after review HOLD `cmt-8720af2b` portion 160a
+and criterion 15 retarget the `harness-inspect` enumeration to the root.
 
 ## U-RT-160 — superseded-record refusal and `harness resume` (B-314 prerequisite, B-313, B-310)
 
@@ -38,6 +39,10 @@ share it);
 `ResumePauseRecordSupersededError`, raised from the handle read where a `None` snapshot
 raises `ResumeHandleUnknownError`, before depth; the pause-state accessor's `superseded` result and its
 failed-read audit event, spec Rule A4);
+`P/admin/inspect.py` (the §13.7 enumeration's default directory is the resolved Rule B7 root instead
+of `<ledger dir>/pause-journal`, spec Rules B3 and B8 and IS spec v1.17 §1.1; an unbound root leaves the
+surface disengaged under §13.7 term 5, and any other unresolved cause fails as an unreadable
+pause-journal directory);
 `harness-od/src/harness_od/pause_resume_namespace.py` (`PauseStateCauseAttribution.SUPERSEDED`), only
 after the companion OD amendment (OD spec v1.43, OD plan v2.37 unit U-OD-62) is ratified.
 
@@ -108,7 +113,9 @@ reuses this value's strict parser for its `isError` reply.
     both with zero effects and no journal write; a failed verification or append fails the
     fresh run likewise. Capture-to-read identity: under configurations whose STATE_LEDGER cells
     differ, the durable factory's store appends a captured snapshot to the same file (same real path)
-    that the `api.resume` handle read and the claim open.
+    that the `api.resume` handle read and the claim open. `harness-inspect` over a root holding journals
+    of several tenants lists every canonical journal there, classified per §13.7.1, and enumerates no
+    STATE_LEDGER cell (IS spec v1.17 §1.1 witnesses 4 and 5).
 16. Ruff and pyright clean on the touched files; the existing resume, claim, journal, durable child
     admission and CLI suites pass.
 17. Cutover (spec §I.15, Rule B8): with the root bound and no root file for (tenant, W), a valid

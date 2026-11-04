@@ -2,7 +2,7 @@
 
 *Delta over v2.10. This revision decomposes IS spec v1.17 §1.1, the installation pause-journal root that Runtime spec v1.137 Rule B7 requires, into one new foundational unit, U-IS-21. All v2.10 and earlier rows, unit bodies, criteria, dependency edges and coverage rows remain unchanged.*
 
-**Status:** Proposed — not cleared. No clearance marker, artifact-head row or pointer is filed.
+**Status:** Proposed — not cleared. No clearance marker, artifact-head row or pointer is filed. Corrected after independent review HOLD `cmt-8720af2b` (F1–F3): the resolution takes no tenant input (tenants stay separated by the Runtime journal key in one flat root), takes the observed real path of the root, and preserves `harness-inspect` enumeration.
 
 ---
 
@@ -14,9 +14,9 @@ The storage selection and its binding and retention evidence remain a separate p
 
 ## §1 New unit
 
-### U-IS-21 — installation pause-journal root: declaration, per-tenant root and closed resolution result (IS spec v1.17 §1.1)
+### U-IS-21 — installation pause-journal root: declaration and closed resolution result (IS spec v1.17 §1.1)
 
-**Scope.** The IS-side types and pure decisions for the one installation-scoped pause-journal root. The Runtime root resolver (U-RT-160 portion 160a) performs every effect: it reads the installation state, observes the declared directory, supplies the real paths of the run's bound §1 directories, and enforces the result. U-IS-21 performs no I/O.
+**Scope.** The IS-side types and pure decisions for the one installation-scoped pause-journal root. The Runtime root resolver (U-RT-160 portion 160a) performs every effect: it reads the installation state, observes the declared directory and its real path, supplies the real paths of the run's bound §1 directories, and enforces the result. U-IS-21 performs no I/O. Tenant separation stays in the Runtime journal key (Runtime spec v1.108 §14.14.8); U-IS-21 takes no tenant input and derives no tenant path.
 
 **Spec linkage.** C-IS-01 §1.1 (primary); §10.4 Runtime consumer row.
 
@@ -36,8 +36,18 @@ class PauseJournalRootDeclaration(BaseModel):  # frozen, extra="forbid"
     installation_root: Path  # absolute and normalized; anything else is MALFORMED
 
 @dataclass(frozen=True)
+class ExistingDirectory:
+    real_path: Path  # observed by the Runtime effect boundary
+
+@dataclass(frozen=True)
+class NotADirectory:
+    pass
+
+ObservedRoot = ExistingDirectory | NotADirectory
+
+@dataclass(frozen=True)
 class Resolved:
-    tenant_root: Path
+    root: Path  # the declared installation root
 
 @dataclass(frozen=True)
 class Unresolved:
@@ -49,11 +59,10 @@ def parse_declarations(
     raw: Sequence[Mapping[str, object]],
 ) -> PauseJournalRootDeclaration | Unresolved: ...
 
-def resolve_tenant_root(
+def resolve_root(
     declaration: PauseJournalRootDeclaration,
-    normalized_tenant_scope: str,
+    observed: ObservedRoot,
     bound_real_paths: Iterable[Path],
-    installation_root_is_directory: bool,
 ) -> PauseJournalRootResolution: ...
 ```
 
@@ -62,25 +71,23 @@ def resolve_tenant_root(
 **Acceptance criteria.**
 
 1. Cardinality: zero raw declarations yield `Unresolved(UNBOUND)`; two or more yield `Unresolved(CONFLICTING)`, including two equal ones; exactly one whose `installation_root` is relative, not normalized or not parseable yields `Unresolved(MALFORMED)`.
-2. `installation_root_is_directory=False` yields `Unresolved(MISSING)`.
-3. An installation root equal to, containing or inside any bound real path yields `Unresolved(OVERLAPPING)`.
-4. Otherwise the result is `Resolved(installation_root / sha256(normalized_tenant_scope).hexdigest())`, and it is the same value for every non-overlapping set of bound paths (cross-binding identity, spec witness 1).
-5. Two distinct tenant scopes yield distinct tenant roots, and no tenant root path contains its raw scope (spec witness 4).
-6. The result type is closed: consumers match `Resolved | Unresolved` exhaustively. Neither function takes a `PathBinding`, `PathClass`, workload class, deployment surface or environment input from which a root could be selected, and there is no default or STATE_LEDGER-derived root (spec witness 3).
-7. `PathClass` still has exactly four members and `PATH_CLASS_REGISTRY` is unchanged.
+2. `NotADirectory` yields `Unresolved(MISSING)`.
+3. An observed real path equal to, containing or inside any bound real path yields `Unresolved(OVERLAPPING)`. Only real paths are compared, so a declared root that is a symlink alias of, or into, a bound directory overlaps.
+4. Otherwise the result is `Resolved(declaration.installation_root)`, the same value for every non-overlapping set of bound paths (cross-binding identity, spec witness 1).
+5. The result type is closed: consumers match `Resolved | Unresolved` exhaustively. Neither function takes a tenant scope, `PathBinding`, `PathClass`, workload class, deployment surface or environment input from which a root could be selected, and there is no default or STATE_LEDGER-derived root (spec witnesses 3 and 4).
+6. `PathClass` still has exactly four members and `PATH_CLASS_REGISTRY` is unchanged.
 
 **Tests (mutation-probed).**
 
 - `test_declaration_cardinality_and_shape_causes` (criteria 1–2; mutation: treating two equal declarations as one, or accepting a relative path, fails).
-- `test_overlap_with_any_bound_path_fails_closed` (criterion 3; equal, ancestor and descendant cases; mutation: checking only STATE_LEDGER paths fails).
-- `test_tenant_root_independent_of_bound_paths` (criterion 4; property over generated non-overlapping path sets).
-- `test_tenant_roots_are_distinct_and_redacted` (criterion 5).
-- `test_no_default_root` (criterion 6; mutation: returning a STATE_LEDGER-derived `pause-journal` path when unbound fails).
-- `test_path_class_registry_unchanged` (criterion 7).
+- `test_overlap_compares_real_paths` (criterion 3; equal, ancestor, descendant and symlink-alias fixtures; mutation: comparing the declared path instead of the observed real path, or checking only STATE_LEDGER paths, fails).
+- `test_root_independent_of_bound_paths` (criterion 4; property over generated non-overlapping path sets).
+- `test_no_default_root` (criterion 5; mutation: returning a STATE_LEDGER-derived `pause-journal` path when unbound fails).
+- `test_path_class_registry_unchanged` (criterion 6).
 
-**Consumed witnesses.** Cross-process identity (spec witness 2: CLI, MCP server and daemon resolve the same tenant root) and the fail-closed refusal of each cause (exit 6 `protocol-not-bound`, Runtime spec v1.137 Rule B7 item 3) need real Runtime processes. They run at Runtime plan v2.68 criterion 15, and the old-location cutover at criterion 17, on the bound root.
+**Consumed witnesses.** Spec witnesses 2 (cross-process identity), 4 (tenants: `None`, non-ASCII and lone-surrogate scopes in one root under the §14.14.8 key, wrong tenant absent) and 5 (`harness-inspect` inventory over a populated root), and the fail-closed refusal of each cause (exit 6 `protocol-not-bound`, Runtime spec v1.137 Rule B7 item 3), need real Runtime processes. They run at Runtime plan v2.68 criterion 15, and the old-location cutover at criterion 17, on the bound root.
 
-**Non-goals.** No Runtime resolver, journal I/O, declaration storage location, refusal mapping, placement verification (Runtime Rule B3 keeps it), migration (Runtime Rule B8) or provisioning.
+**Non-goals.** No Runtime resolver, journal I/O, journal key or tenant encoding, declaration storage location, refusal mapping, placement verification (Runtime Rule B3 keeps it), enumeration, migration (Runtime Rule B8) or provisioning.
 
 **Gate.** Implementation starts after IS spec v1.17 and this plan are ratified and applied. Accepting Runtime 160a and exposing `harness resume` also require the storage selection and its binding evidence (Runtime Rule B7 item 4).
 
@@ -102,7 +109,7 @@ All other coverage rows are unchanged from v2.10.
 | Field | Value |
 |---|---|
 | Plan version | v2.11 (delta over v2.10) |
-| Authority | IS spec v1.17 C-IS-01 §1.1; Runtime spec v1.137 Rules B3/B7/B8 and plan v2.68 U-RT-160 (criteria 15, 17); LIT `cmt-8b76cb48`, ratification `cmt-7cc5fc50` |
+| Authority | IS spec v1.17 C-IS-01 §1.1; Runtime spec v1.137 Rules B3/B7/B8 and plan v2.68 U-RT-160 (criteria 15, 17); Runtime spec v1 §13.7 and v1.108 §14.14.8; LIT `cmt-8b76cb48`, ratification `cmt-7cc5fc50`, review HOLD `cmt-8720af2b` |
 | Net delta | One new unit U-IS-21 and one DAG node; all earlier units, rows and criteria preserved |
-| Source grounding | `harness-is/src/harness_is/path_class_registry.py`, `path_binding.py` and `path_resolver.py`, and `harness-runtime/src/harness_runtime/lifecycle/journal_workflow_pause_store.py` at this branch's base |
+| Source grounding | `harness-is/src/harness_is/path_class_registry.py`, `path_binding.py` and `path_resolver.py`; `harness-runtime/src/harness_runtime/lifecycle/journal_workflow_pause_store.py` (key encoding) and `admin/inspect.py` (§13.7 enumeration) at this branch's base |
 | Clearance | Owed after independent review and Buford's decision; none filed here |

@@ -46,14 +46,14 @@
 | Revision date | 2026-09-24 |
 | Revision | v1.15 → v1.16 (B-104 Task 6a: C-IS-05 §5.7 claim-scoped `abandon` MUST carry the typed `QuiescenceAttestation`, matching the ratified B-104 first-release operator terms; the claim audit schema refuses an unattested claim abandon at INTENT and COMPLETE. No field, hash, JSONL shape, key recipe or C-IS-07 writer change; record-scoped rules unchanged. Status: author amendment pending independent review and clearance.) |
 | Revision date | 2026-09-25 |
-| Revision | v1.16 → v1.17 (C-IS-01 companion to Runtime spec v1.137 Rule B7: NEW §1.1 declares the one installation-scoped, per-tenant pause-journal root, outside the four workflow-canonical path classes, with its closed resolution result, ownership, placement, isolation and witnesses; §10.4 adds the Runtime consumer. Owner profile-coder under LIT `cmt-792618a5`, scope `cmt-8b76cb48`. No §1 class, binding schema, ledger, hash or JSONL change. Status: author amendment pending independent review and clearance.) |
+| Revision | v1.16 → v1.17 (C-IS-01 companion to Runtime spec v1.137 Rule B7: NEW §1.1 declares the one installation-scoped pause-journal root, outside the four workflow-canonical path classes, with tenants separated by the existing Runtime journal key, its closed resolution result, ownership, placement, isolation, admin enumeration and witnesses; §10.4 adds the Runtime consumer. Corrected after independent review HOLD `cmt-8720af2b` (F1–F3): flat keyed layout instead of tenant subdirectories, `harness-inspect` enumeration preserved, overlap compared by real path. Owner profile-coder under LIT `cmt-792618a5`, scope `cmt-8b76cb48`. No §1 class, binding schema, ledger, hash or JSONL change. Status: author amendment pending independent review and clearance.) |
 | Revision date | 2026-11-04 |
 
 ---
 
 ## Change-note (v1.16 → v1.17)
 
-Runtime spec v1.137 Rule B7 requires one pause-journal root that every process of a Runtime installation resolves identically, whatever a run's `path_bindings`. The four §1 classes cannot carry it: each is bound per (workflow class, deployment surface) cell by the run's own configuration. New §1.1 declares that root as a separate installation-scoped authority. It fixes the declaration's cardinality, content and readers, the per-tenant root, a closed resolution result whose every failure is fail-closed, and the witnesses. It does not select storage or a physical path; that prerequisite is Buford's (LIT `cmt-8b76cb48`). The Runtime refusal for an unresolved root is pinned in Runtime Rule B7 item 3, not here. IS plan v2.11 adds U-IS-21.
+Runtime spec v1.137 Rule B7 requires one pause-journal root that every process of a Runtime installation resolves identically, whatever a run's `path_bindings`. The four §1 classes cannot carry it: each is bound per (workflow class, deployment surface) cell by the run's own configuration. New §1.1 declares that root as a separate installation-scoped authority. It fixes the declaration's cardinality, content and readers, keeps tenant separation in the existing Runtime journal key and the flat layout `harness-inspect` enumerates, defines a closed resolution result whose every failure is fail-closed, and lists the witnesses. It does not select storage or a physical path; that prerequisite is Buford's (LIT `cmt-8b76cb48`). The Runtime refusal for an unresolved root is pinned in Runtime Rule B7 item 3, not here. IS plan v2.11 adds U-IS-21.
 
 ## Change-note (v1.14 → v1.15)
 
@@ -351,37 +351,40 @@ Four canonical artifact classes reside on the filesystem; each class declares it
 
 **Declaration.** Each Runtime installation has exactly one pause-journal root declaration in its installation state. The declaration names one absolute, normalized directory path, the installation root. Every process able to start or resume a root run of the installation (CLI, MCP server, daemon) reads that same declaration. No per-run configuration field, `path_bindings` entry, workload class, deployment surface, environment variable, working directory, CLI flag or MCP argument names, selects or overrides it. Where the declaration is stored and which retained storage backs the installation root are fixed by the storage-selection prerequisite (owner Buford, integration lead, LIT `cmt-8b76cb48`). This section fixes the declaration's cardinality, content and readers; it selects no physical path.
 
-**Per-tenant root.** The pause-journal root of (installation, tenant) is the child directory of the installation root whose name is the lowercase hex sha256 of the tenant scope, as normalized by the Runtime for its journal key (Runtime spec v1.108 §14.14.8). The resolution takes that normalized scope as input; IS does not normalize it. No raw tenant identifier appears in a path. A tenant root holds only that tenant's journal and lock files, named as Runtime spec v1.108 §14.14.8 names them. No process enumerates the installation root or a tenant root; each lookup opens one computed path. A wrong-tenant lookup reaches its own tenant root and reads absent, preserving Runtime Rule C3. An absent tenant root holds no journal file for any key.
+**Tenants in the root.** The root serves every tenant of the installation: Runtime Rule B7's root "per installation and tenant" is this one root for each tenant, and its per-tenant part is the journal key. Tenants are separated by the existing journal key, not by directory: each (tenant scope, workflow_id) has one journal file named by the sha256 of the pinned, total and injective key encoding of Runtime spec v1.108 §14.14.8, over the Runtime-normalized scope including its untenanted `None` branch. The root holds those journal files and their lock files flat, exactly as the §14.14.8 directory does today. No tenant identifier reaches a path, and the tenant-subdirectory layout that §14.14.8 forecloses is not used. Resolution takes no tenant input, so every tenant of an installation resolves the same root, and a wrong-tenant lookup opens its own key's file and reads absent (Runtime Rule C3).
 
-**Resolution result.** Resolution decides over the declaration as read from installation state, the normalized tenant scope, the run's bound §1 paths and the observed state of the declared directory. It returns exactly one of:
+**Enumeration.** The tenant-facing runtime read path opens one computed file and never enumerates the root. Admin-tier enumeration stays as Runtime spec v1 §13.7 term 7 permits: `harness-inspect` lists the root as its pause-journal directory, with the §13.7 terms and §13.7.1 classification unchanged (Runtime plan v2.68 portion 160a).
+
+**Resolution result.** Resolution decides over the declaration as read from installation state, the observed state of the declared directory including its real path, and the real paths of the directories the run binds for §1 classes. The Runtime effect boundary supplies the observations; the decision itself performs no I/O. It returns exactly one of:
 
 | Result | Meaning |
 |---|---|
-| `resolved(tenant_root)` | The tenant root of the one declared installation root |
+| `resolved(root)` | The one declared installation root |
 | `unresolved(unbound)` | The installation state holds no declaration |
 | `unresolved(malformed)` | The declaration is not exactly one absolute, normalized path |
 | `unresolved(conflicting)` | The installation state holds more than one declaration, even if they are equal |
 | `unresolved(missing)` | The declared installation root is not an existing directory |
-| `unresolved(overlapping)` | The installation root equals, contains or lies inside a directory the run binds for any §1 class |
+| `unresolved(overlapping)` | The real path of the installation root equals, contains or lies inside the real path of a directory the run binds for any §1 class |
 
-A run's bound paths can only make resolution fail; they never change which root is resolved. Two processes of one installation resolving for one tenant either obtain the same tenant root or fail. There is no default root, fallback location or STATE_LEDGER-derived location (Runtime Rule B8). The cause is diagnostic; the Runtime refusal value does not carry it.
+Comparing real paths makes a symlink alias of a bound directory `overlapping`, not separate. A run's bound paths can only make resolution fail; they never change which root is resolved. Two processes of one installation either obtain the same root or fail. There is no default root, fallback location or STATE_LEDGER-derived location (Runtime Rule B8). The cause is diagnostic; the Runtime refusal value does not carry it.
 
 **Consumption.** The one Runtime root resolver (Runtime Rule B3) consumes this result for every journal read, snapshot write, supersession append and claim. An `unresolved` result fails a fresh root run before its first step and refuses a resume before any claim or bootstrap, with the arm pinned in Runtime Rule B7 item 3. Ownership, mode and ancestor checks on the resolved root remain Runtime Rule B3's placement verification; this section adds no second placement check.
 
 **Ownership, placement and isolation.**
 
 - The installation operator provisions the installation root and its declaration. Runtime processes read both and never write, move or delete either.
-- Runtime owns everything inside a tenant root: the tenant-root directory it creates at its first journal write for that tenant, and the journal and lock files.
-- The installation root lies outside every directory a run binds for a §1 class (the `overlapping` cause). No STATE_LEDGER cell holds a journal, and no legacy `<state_ledger_dir>/pause-journal` directory can coincide with a tenant root.
+- Runtime owns the journal and lock files inside the root and creates no directory there.
+- The installation root lies outside every directory a run binds for a §1 class, compared by real path (the `overlapping` cause). No STATE_LEDGER cell holds a journal, and no legacy `<state_ledger_dir>/pause-journal` directory can coincide with the root.
 - Visibility follows §1: filesystem-readable to the operator during a run and to the maintainer after termination; never in-memory only.
 - Survival across restart, reset and restore is a property of the selected storage. Its binding and retention evidence proves it; this contract does not.
 
 **Required discriminating witnesses (after application).** Planned at IS plan v2.11 U-IS-21 and consumed by Runtime plan v2.68 criterion 15.
 
-1. Cross-binding identity: configurations differing in `path_bindings`, workload class and deployment surface resolve the same tenant root (same real path) for one tenant.
-2. Cross-process identity: CLI, MCP server and daemon processes of one installation resolve the same tenant root. A mutation that reads the root from per-run configuration or the process environment fails a test.
-3. Closed failure: each `unresolved` cause has its own fixture, and none of them yields `resolved`. A mutation that substitutes a default or STATE_LEDGER-derived root fails a test.
-4. Tenant isolation: two tenants resolve distinct roots, neither path contains the raw tenant identifier, and a wrong-tenant lookup reads absent.
+1. Cross-binding identity: configurations differing in `path_bindings`, workload class and deployment surface resolve the same root (same real path).
+2. Cross-process identity: CLI, MCP server and daemon processes of one installation resolve the same root. A mutation that reads the root from per-run configuration or the process environment fails a test.
+3. Closed failure: each `unresolved` cause has its own fixture, and none of them yields `resolved`. `overlapping` has equal, ancestor, descendant and symlink-alias fixtures on real paths. A mutation that substitutes a default or STATE_LEDGER-derived root, or compares declared instead of real paths, fails a test.
+4. Tenants: the untenanted `None` scope, a non-ASCII scope and a lone-surrogate scope resolve the same root; across CLI, MCP server and daemon processes each scope's journal is its own §14.14.8 file in that root, and a wrong-tenant lookup reads absent.
+5. Inventory: `harness-inspect` over a root populated with journals of several tenants lists every canonical journal file, excludes lock files and classifies each per §13.7.1; the runtime read path performs no directory listing.
 
 **Gate.** Runtime spec v1.137 Rule B7 item 4: no implementation of that contract is accepted and `harness resume` is not exposed until this section and the storage selection are ratified and applied.
 
