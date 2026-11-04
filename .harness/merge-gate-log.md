@@ -1497,3 +1497,7 @@ The only source change is the fake-procfs incomplete-observation fixture in `too
 | 2026-10-30T09:27:06Z | #1683 | 1405ccbf4d8f | merge-gate-witness-adequacy | BLOCK | 1 finding(s) | r1 |
 | 2026-10-30T09:44:24Z | #1683 | 6e072e842294 | merge-gate-witness-adequacy | APPROVE | 0 finding(s) | r2 |
 | 2026-10-30T09:48:31Z | #1683 | 6e072e842294 | merge-gate-witness-adequacy | APPROVE | 0 finding(s) | r3 |
+| 2026-11-04T07:31:49Z | #1689 | 46b5063ba034 | merge-gate-concurrency | APPROVE | 0 finding(s) | r1 |
+| 2026-11-04T07:31:49Z | #1689 | 46b5063ba034 | merge-gate-spec-conformance | APPROVE | 0 finding(s) | r1 |
+| 2026-11-04T07:31:49Z | #1689 | 46b5063ba034 | merge-gate-witness-adequacy | BLOCK | 4 finding(s) | r1 |
+| #1689 | 2026-11-04 | feat/a7-offline-examples-reconcile-20261104 | 46b5063ba034 | pass 1 (base origin/main 2bd66ed39db8, arc a7-pr1689): codex APPROVE; concurrency APPROVE; spec-conformance APPROVE; witness-adequacy BLOCK (3 P2, 1 P3) | BLOCK, split verdict. All four findings adjudicated accepted by claude_absorber; the 3 P2 fixes need test edits outside the gate-record release (cmt-7e9c7da7), so the fix round is held for Buford disposition. P3 goes to the arc follow-up row. blast-radius: NOT RUN (graft executable absent; grep floor of 6 example/doc consumers given to lenses 1-2). Lens reports: .harness/tmp/merge-gate-lens-*.txt; no merge. |
