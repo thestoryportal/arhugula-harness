@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `a297597f74c2` |
-| `last_refreshed` | 2026-10-30T00:00:00Z |
-| `git_head` | `55535e56` —  |
+| `workspace_state_hash` | `6661f9248995` |
+| `last_refreshed` | 2026-11-04T00:00:00Z |
+| `git_head` | `8234ecf4` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 125 |
 
@@ -22,7 +22,7 @@
 
 **Purpose.** Live pointer to the next Claude/Codex-executable frontier. Full round-by-round history (every prior round, verbatim, most-recent-first) lives in the archive below — grep it by PR/`B-`/`R-`-id/round, never read wholesale.
 
-**Current next action (post-#1683).** Finish only WO-U07 (LIT arhugula-harness-trial-193.7x7.2je) at its compatible inactive scope: verify this terminating refresh own-main CI, exact review/source/main proofs and current writer/process release, then close U07. Source PR1683 completes the original companion correction lineage and its accepted witness gap. Activation remains with U23/U24; current-final installed product acceptance is not claimed. Hold U08/U14/U19/U23/U24/U25 with repair_paused=true; no next ticket or destructive cleanup. After verified U07 closure the paired lanes preserve evidence and perform their own Memento once, then hold.
+**Current next action (post-#1689).** Continue the user-accepted Trial 193 release campaign under the canonical /home/robbo/Work/arhugula-omarchy/docs/orchestration/release-campaign.md and live LIT arhugula-harness-trial-193. PR #1689 delivers reviewed offline examples and discriminating tests; installed topology, provider and offline acceptance still require the exact integrated candidate and admitted scenarios. Preserve B-317 and its two pass-3 prose notes for the first commit of this arc's next substantive PR under B-298. Advance the eligible A4 owning-contract fold and independent definition decision, acceptance engineering and environment/recovery preparation through the existing registered pool. The specific pending A5 native-delivery decision and all actual denials remain held; the closed WO batch and its old reset instructions are historical. Qualify all 38 original rows and 122 criteria and obtain the independent six-category release decision on one exact candidate, then select the next eligible bounded campaign unit from current LIT.
 
 **Archive.** `.harness/roadmap-next-action-archive.md` (PRIOR rounds only, verbatim as each stood when superseded — the current round lives only in this head; the newest superseded round may lag there until the next content PR archives it, and is always losslessly recoverable from this file's own git history meanwhile).
 
@@ -43,6 +43,7 @@
 | PR | Branch | R-NNN | Posture |
 |---|---|---|---|
 | #1292 | `fix/codex-hook-contract-recovery` | — | — |
+| #1688 | `recon/a5-reconcile-20261103` | — | — |
 
 ---
 
@@ -50,11 +51,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #1689 | 2026-11-04 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1683 | 2026-10-30 | WO-U07 G1 inactive companion lineage and accepted witness correction landed; source own-main verified by merge door before this continuation. |
 | PR #1681 | 2026-10-29 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1677 | 2026-10-29 | U10 deadline and pipefail corrections landed; exact own-main CI 40916333255 passed all 23 jobs. Installed acceptance and full U10 closure remain pending. |
 | PR #1675 | 2026-10-29 | Empty diffs require the full CI path; U10 live acceptance remains pending. |
-| PR #1673 | 2026-10-29 | Terminating roadmap refresh after PR #1672. |
 
 ---
 
