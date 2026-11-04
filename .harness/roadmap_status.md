@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `bdc3c2bf1f2b` |
+| `workspace_state_hash` | `670efd7e6dab` |
 | `last_refreshed` | 2026-11-04T00:00:00Z |
-| `git_head` | `2f67da6b` —  |
+| `git_head` | `da917f35` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 125 |
 
@@ -22,7 +22,7 @@
 
 **Purpose.** Live pointer to the next Claude/Codex-executable frontier. Full round-by-round history (every prior round, verbatim, most-recent-first) lives in the archive below — grep it by PR/`B-`/`R-`-id/round, never read wholesale.
 
-**Current next action (post-#1691).** Continue the accepted Trial 193 release campaign under /home/robbo/Work/arhugula-omarchy/docs/orchestration/release-campaign.md and live LIT arhugula-harness-trial-193. PR #1691 reconciles the Proposed A4 lineage with cleared A3; A4 clearance, the actual A5 interface binding, returned-arm source and result_ref/real-leaf witnesses remain open. Carry the four pass-3 P3 notes into the first commit of the next A4 PR under B-298. Verify B-317 PR #1692's bounded review cycle and final-head CI, resolve B-313's native reviewer routing before treating the frozen proposal as delivered, and continue acceptance and environment/recovery preparation through the registered pool. Preserve A5's exact native-delivery hold, all denials and spent review passes. Qualify all 38 original rows and 122 criteria and obtain the independent six-category release decision on one exact integrated candidate, then select the next eligible bounded campaign unit from current LIT.
+**Current next action (post-#1692).** Continue the accepted Trial 193 release campaign under /home/robbo/Work/arhugula-omarchy/docs/orchestration/release-campaign.md and live LIT arhugula-harness-trial-193. B-317 PR #1692 lands the offline-example and profile witness follow-up; installed A7 examples, topologies, provider routes and offline assets remain open. Carry its two pass-3 P3 notes into the first commit of the next A7/B-317 PR under B-298. B-310 v4 definition is accepted at cmt-fe2c7b08; profile-coder owns the combined Runtime back-flow and implementation plan for B-313/B-314, with independent review before the affected implementation and installed resume/refusal witnesses. A4 clearance, actual A5 interface binding, returned-arm source and result_ref/real-leaf witnesses remain open. Preserve A5's exact native-delivery hold, all actual denials, protected work and spent review passes. Qualify all 38 original rows and 122 criteria and obtain the independent six-category release decision on one exact integrated candidate, then select the next eligible bounded campaign unit from current LIT.
 
 **Archive.** `.harness/roadmap-next-action-archive.md` (PRIOR rounds only, verbatim as each stood when superseded — the current round lives only in this head; the newest superseded round may lag there until the next content PR archives it, and is always losslessly recoverable from this file's own git history meanwhile).
 
@@ -44,7 +44,6 @@
 |---|---|---|---|
 | #1292 | `fix/codex-hook-contract-recovery` | — | — |
 | #1688 | `recon/a5-reconcile-20261103` | — | — |
-| #1692 | `test/a7-b317-followup-20261104` | — | — |
 
 ---
 
@@ -52,11 +51,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #1692 | 2026-11-04 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1691 | 2026-11-04 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1689 | 2026-11-04 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1683 | 2026-10-30 | WO-U07 G1 inactive companion lineage and accepted witness correction landed; source own-main verified by merge door before this continuation. |
 | PR #1681 | 2026-10-29 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
-| PR #1677 | 2026-10-29 | U10 deadline and pipefail corrections landed; exact own-main CI 40916333255 passed all 23 jobs. Installed acceptance and full U10 closure remain pending. |
 
 ---
 
