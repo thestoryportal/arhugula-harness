@@ -1,7 +1,8 @@
 """Codex CLI isolation slice C: a private cwd, and typed refusal when the JSONL shows tool use.
 
-Provider-free: the parser tests script `CLIProcessResult` stdout; the cwd tests run the DEFAULT
-Codex runner against a fake `codex` executable. The argv regression in test_external_cli_provider pins the installed CLI's tool-disable
+Provider-free: the parser tests script `CLIProcessResult` stdout; the cwd tests run the shared
+private-cwd runner machinery (injected: v1.135 leaves no unconfined default) against a fake
+`codex` executable. The argv regression in test_external_cli_provider pins the installed CLI's tool-disable
 switches. Parser refusal remains a second boundary for unexpected output.
 """
 
@@ -218,6 +219,24 @@ def _recorded(records: Path) -> dict[str, Any]:
     return json.loads(records.read_text().splitlines()[0])
 
 
+def _private_cwd_runner(root: Path) -> Any:
+    """A SOURCE DOUBLE of the shared private-cwd machinery the Codex read-boundary runner
+    inherits (Runtime v1.135 removed every unconfined production Codex runner, so these
+    cwd-lifecycle witnesses inject it explicitly; the confined runner's own scratch,
+    environment and group settle are witnessed in test_external_cli_codex_read_boundary)."""
+    import harness_runtime.lifecycle.external_cli_provider as provider
+
+    class _PrivateCwdDouble(provider._PrivateCwdSubprocessRunner):
+        _cwd_prefix = "codex-"
+        _scratch_uncertain = "Codex scratch directory removal failed"
+        _child_env = staticmethod(provider._scrubbed_child_env)
+
+        def _scratch_root(self) -> str:
+            return str(root)
+
+    return _PrivateCwdDouble()
+
+
 @pytest.mark.asyncio
 async def test_the_default_codex_runner_runs_in_a_fresh_empty_private_cwd_removed_afterwards(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -227,7 +246,9 @@ async def test_the_default_codex_runner_runs_in_a_fresh_empty_private_cwd_remove
     (workspace / "SECRET.txt").write_text("harness workspace content")
     monkeypatch.chdir(workspace)
     command, records = _fake_codex(tmp_path)
-    adapter = await construct_codex_cli_adapter(_config(command))
+    adapter = await construct_codex_cli_adapter(
+        _config(command), runner=_private_cwd_runner(tmp_path)
+    )
 
     result = await adapter.dispatch_text(model="gpt-5", prompt="p")
 
@@ -244,7 +265,9 @@ async def test_the_private_cwd_is_removed_after_a_timeout_settles_the_process(
     tmp_path: Path,
 ) -> None:
     command, records = _fake_codex(tmp_path, sleeper=True)
-    adapter = await construct_codex_cli_adapter(_config(command, timeout_seconds=1.0))
+    adapter = await construct_codex_cli_adapter(
+        _config(command, timeout_seconds=1.0), runner=_private_cwd_runner(tmp_path)
+    )
 
     with pytest.raises(ExternalCLIProcessTimeout):
         await adapter.dispatch_text(model="gpt-5", prompt="p")
@@ -266,7 +289,9 @@ async def test_a_failed_scratch_removal_is_reported_without_replacing_the_outcom
         raise OSError("secret-stderr-sentinel")
 
     monkeypatch.setattr(provider.shutil, "rmtree", failing_rmtree)
-    adapter = await construct_codex_cli_adapter(_config(command))
+    adapter = await construct_codex_cli_adapter(
+        _config(command), runner=_private_cwd_runner(tmp_path)
+    )
 
     with caplog.at_level(logging.WARNING):
         result = await adapter.dispatch_text(model="gpt-5", prompt="p")

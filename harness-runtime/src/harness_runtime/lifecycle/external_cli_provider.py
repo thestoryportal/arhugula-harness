@@ -19,13 +19,23 @@ import logging
 import os
 import shutil
 import signal
+import stat
 import sys
 import tempfile
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Protocol, cast
 
+from harness_runtime.lifecycle.cli_read_boundary import (
+    REFUSAL_EXIT,
+    build_ruleset_spec,
+    new_refusal_token,
+    refusal_reason,
+)
+from harness_runtime.lifecycle.cli_read_boundary import launcher_argv as boundary_launcher_argv
 from harness_runtime.types import (
+    CodexReadBoundaryConfig,
     ExternalCLIPromptTransport,
     ExternalCLIProviderConfig,
     ExternalCLIProviderKind,
@@ -105,6 +115,19 @@ class ExternalCLICommandError(ExternalCLIProviderError):
         if detail is None:
             detail = stderr.strip() or stdout.strip() or "no stderr/stdout"
         super().__init__(f"external CLI command {command!r} exited {exit_code}: {detail}")
+
+
+class ExternalCLIReadBoundaryError(ExternalCLICommandError):
+    """The Codex read boundary (Runtime v1.135) is unconfigured or could not be established.
+
+    No Codex process ran, or the launcher refused before executing it. A command error, so
+    provider construction maps it to `ProviderTransientError` and an optional Codex entry
+    degrades instead of ever running unconfined.
+    """
+
+    def __init__(self, reason: str) -> None:
+        self.reason = reason
+        super().__init__("codex", REFUSAL_EXIT, reason, detail=f"read boundary: {reason}")
 
 
 class ExternalCLIOutputError(ExternalCLIProviderError):
@@ -369,15 +392,48 @@ def _scrubbed_child_env() -> dict[str, str]:
 
 
 _CLEANUP_WAIT_SECONDS = 5.0
+_GROUP_POLL_SECONDS = 0.005
 _CLEANUP_UNCERTAIN = "External CLI process-group cleanup could not be confirmed"
 _SCRATCH_UNCERTAIN = "Claude scratch directory removal failed"
+_SCRATCH_RETAINED = "External CLI scratch directory retained: its process group did not settle"
 _LOG = logging.getLogger(__name__)
 
 
+@dataclass(slots=True)
+class _ChildGroup:
+    """Whether a spawned child's process group may still be using its cwd."""
+
+    # [LAW:no-ambient-temporal-coupling] Spawn sets it; only confirmed group settlement
+    # clears it. The cwd owner reads it, so no unconfirmed path can remove a cwd in use.
+    unsettled: bool = False
+
+
+async def _group_settled(pgid: int, deadline: float) -> bool:
+    """True once no process (zombies included) remains in ``pgid``; False past ``deadline``."""
+    # [LAW:no-ambient-temporal-coupling] The kernel announces no group exit, so the owner
+    # polls the group's own existence (never a guessed delay) up to the cleanup deadline.
+    # Signal 0 probes without signalling; a live group keeps its pgid from being reused.
+    loop = asyncio.get_running_loop()
+    while True:
+        try:
+            os.kill(-pgid, 0)
+        except ProcessLookupError:
+            return True
+        if loop.time() >= deadline:
+            return False
+        await asyncio.sleep(_GROUP_POLL_SECONDS)
+
+
 async def _terminate_group(process: asyncio.subprocess.Process) -> str | None:
-    """Signal the isolated process group, then bound direct-child reaping."""
+    """Kill the isolated process group, reap its leader, then await the whole group's end.
+
+    A member that outlives the leader still holds the group. Past the bounded wait the
+    result is the uncertainty note, which keeps the child's scratch in place.
+    """
+    deadline = asyncio.get_running_loop().time() + _CLEANUP_WAIT_SECONDS
     uncertain = False
-    if os.name == "posix" and process.pid != os.getpgrp():
+    owns_group = os.name == "posix" and process.pid != os.getpgrp()
+    if owns_group:
         try:
             # [LAW:single-enforcer] The runner owns the lifetime of every child in this group.
             os.killpg(process.pid, signal.SIGKILL)
@@ -400,11 +456,15 @@ async def _terminate_group(process: asyncio.subprocess.Process) -> str | None:
         await asyncio.wait_for(process.wait(), timeout=_CLEANUP_WAIT_SECONDS)
     except (OSError, TimeoutError):
         uncertain = True
+    if owns_group and not await _group_settled(process.pid, deadline):
+        uncertain = True
     return _CLEANUP_UNCERTAIN if uncertain else None
 
 
 async def _settle_process(
-    process: asyncio.subprocess.Process, original: BaseException | None = None
+    process: asyncio.subprocess.Process,
+    group: _ChildGroup,
+    original: BaseException | None = None,
 ) -> None:
     """Finish cleanup despite repeated caller cancellation; preserve the first outcome."""
     # [LAW:no-ambient-temporal-coupling] The cleanup task owns the exit boundary.
@@ -419,6 +479,7 @@ async def _settle_process(
         note = task.result()
     except Exception:
         note = _CLEANUP_UNCERTAIN
+    group.unsettled = note is not None
     if note is not None:
         _LOG.warning("%s", note)
         if original is not None:
@@ -445,6 +506,7 @@ class AsyncioSubprocessRunner:
             on_wire=on_wire,
             env=_scrubbed_child_env(),
             cwd=None,
+            group=_ChildGroup(),
         )
 
     async def _run_process(
@@ -456,6 +518,7 @@ class AsyncioSubprocessRunner:
         on_wire: Callable[[], None] | None,
         env: Mapping[str, str],
         cwd: str | None,
+        group: _ChildGroup,
     ) -> CLIProcessResult:
         if not argv:
             raise ExternalCLICommandError("", 127, "empty argv")
@@ -471,13 +534,14 @@ class AsyncioSubprocessRunner:
             )
         except FileNotFoundError as exc:
             raise ExternalCLICommandError(argv[0], 127, str(exc)) from exc
+        group.unsettled = True
 
         # The child exists before the wire notification. Every post-spawn outcome
         # settles its group before the caller can observe completion.
         try:
             _notify_wire(on_wire)
         except BaseException as exc:
-            await _settle_process(process, exc)
+            await _settle_process(process, group, exc)
             raise
 
         try:
@@ -486,18 +550,27 @@ class AsyncioSubprocessRunner:
             )
         except TimeoutError as exc:
             outcome = ExternalCLIProcessTimeout(argv[0], timeout_seconds)
-            await _settle_process(process, outcome)
+            await _settle_process(process, group, outcome)
             raise outcome from exc
         except BaseException as exc:
-            await _settle_process(process, exc)
+            await _settle_process(process, group, exc)
             raise
 
-        await _settle_process(process)
+        await _settle_process(process, group)
         return CLIProcessResult(
             exit_code=process.returncode or 0,
             stdout=stdout_bytes.decode("utf-8", errors="replace"),
             stderr=stderr_bytes.decode("utf-8", errors="replace"),
         )
+
+
+_ChildLaunch = tuple[tuple[str, ...], dict[str, str], Callable[[CLIProcessResult], None]]
+"""A prepared child: its argv, its environment and the check that raises its boundary's
+own refusal from the finished result."""
+
+
+def _no_refusal_channel(result: CLIProcessResult) -> None:
+    _ = result
 
 
 class _PrivateCwdSubprocessRunner(AsyncioSubprocessRunner):
@@ -507,6 +580,16 @@ class _PrivateCwdSubprocessRunner(AsyncioSubprocessRunner):
     _scratch_uncertain: str
     _child_env: Callable[[], dict[str, str]]
 
+    def _scratch_root(self) -> str:
+        return "/tmp"
+
+    def _preflight(self) -> None:
+        """Refuse before any directory or process exists (no-op unless a boundary needs it)."""
+
+    def _prepare(self, argv: tuple[str, ...], cwd: str) -> _ChildLaunch:
+        _ = cwd
+        return argv, self._child_env(), _no_refusal_channel
+
     async def run(
         self,
         argv: tuple[str, ...],
@@ -515,26 +598,42 @@ class _PrivateCwdSubprocessRunner(AsyncioSubprocessRunner):
         timeout_seconds: float,
         on_wire: Callable[[], None] | None = None,
     ) -> CLIProcessResult:
-        # [LAW:no-ambient-temporal-coupling] The process group settles before cwd removal.
-        cwd = tempfile.mkdtemp(prefix=self._cwd_prefix, dir="/tmp")
+        self._preflight()
+        group = _ChildGroup()
+        cwd = tempfile.mkdtemp(prefix=self._cwd_prefix, dir=self._scratch_root())
         try:
-            return await self._run_process(
-                argv,
+            child_argv, env, raise_refusal = self._prepare(argv, cwd)
+            result = await self._run_process(
+                child_argv,
                 stdin=stdin,
                 timeout_seconds=timeout_seconds,
                 on_wire=on_wire,
-                env=self._child_env(),
+                env=env,
                 cwd=cwd,
+                group=group,
             )
+            raise_refusal(result)
+            return result
         finally:
             outcome = sys.exc_info()[1]
-            try:
-                shutil.rmtree(cwd)
-            except Exception:
-                # [LAW:no-silent-failure] Removal cannot replace the call outcome.
-                _LOG.warning("%s", self._scratch_uncertain)
+            note = self._release_scratch(cwd, group)
+            if note is not None:
+                # [LAW:no-silent-failure] A kept or failed cwd cannot replace the call outcome.
+                _LOG.warning("%s", note)
                 if outcome is not None:
-                    outcome.add_note(self._scratch_uncertain)
+                    outcome.add_note(note)
+
+    def _release_scratch(self, cwd: str, group: _ChildGroup) -> str | None:
+        """Remove ``cwd`` once its group has settled; otherwise keep it and say where."""
+        # [LAW:no-ambient-temporal-coupling] Removal follows the whole group's end; past the
+        # bounded wait the cwd is reported, never deleted under a possibly running member.
+        if group.unsettled:
+            return f"{_SCRATCH_RETAINED}: {cwd}"
+        try:
+            shutil.rmtree(cwd)
+        except Exception:
+            return self._scratch_uncertain
+        return None
 
 
 class _ClaudeCodeSubprocessRunner(_PrivateCwdSubprocessRunner):
@@ -545,12 +644,99 @@ class _ClaudeCodeSubprocessRunner(_PrivateCwdSubprocessRunner):
     _child_env = staticmethod(_claude_child_env)
 
 
-class _CodexSubprocessRunner(_PrivateCwdSubprocessRunner):
-    """Production Codex boundary; one empty private cwd per child, credentials scrubbed."""
+class _CodexReadBoundaryRunner(_PrivateCwdSubprocessRunner):
+    """The only production Codex runner (Runtime v1.135): every process runs confined.
 
-    _cwd_prefix = "arhugula-codex-"
+    Each call gets a fresh private scratch under the configured root, an allow-listed
+    environment and the Landlock launcher in front of the pinned binary. A launcher
+    refusal surfaces as `ExternalCLIReadBoundaryError`; nothing ever runs unconfined.
+    """
+
+    _cwd_prefix = "codex-"
     _scratch_uncertain = "Codex scratch directory removal failed"
-    _child_env = staticmethod(_scrubbed_child_env)
+
+    def __init__(self, config: CodexReadBoundaryConfig) -> None:
+        self._config = config
+
+    def _scratch_root(self) -> str:
+        return str(self._config.scratch_root)
+
+    def _preflight(self) -> None:
+        for label, directory in (
+            ("codex_home", self._config.codex_home),
+            ("scratch_root", self._config.scratch_root),
+        ):
+            _require_private_directory(label, directory)
+        auth = self._config.codex_home / "auth.json"
+        try:
+            auth_stat = auth.lstat()  # metadata only: the credential is never read here
+        except OSError as exc:
+            raise ExternalCLIReadBoundaryError(
+                f"codex_home/auth.json unusable ({exc.strerror}): log in with this CODEX_HOME"
+            ) from None
+        if not stat.S_ISREG(auth_stat.st_mode):
+            raise ExternalCLIReadBoundaryError("codex_home/auth.json is not a regular file")
+
+    def launcher_argv(
+        self, argv: tuple[str, ...], *, scratch: Path, refusal_token: str
+    ) -> tuple[str, ...]:
+        """``argv`` (argv[0] is the configured command name) under this call's boundary.
+
+        Allowances are declared by their canonical targets (the launcher re-proves each on
+        the descriptor it grants). The executable stays as configured, so a moving symlink
+        pin refuses. This process's own HOME is protected and its interactive Codex home
+        (``$CODEX_HOME``, else ``~/.codex``) is sealed: neither is ever a dedicated home.
+        """
+        config = self._config
+        operator_home = Path.home()
+        interactive = os.environ.get("CODEX_HOME") or str(operator_home / ".codex")
+        spec = build_ruleset_spec(
+            executable=str(config.executable),
+            executable_sha256=config.executable_sha256,
+            read_write_dirs=_canonical((config.codex_home, scratch)),
+            read_only_paths=_canonical(config.read_only_paths),
+            refusal_token=refusal_token,
+            executable_paths=_canonical(config.executable_paths),
+            protected_roots=(str(operator_home),),
+            sealed_roots=(interactive,),
+        )
+        return boundary_launcher_argv(spec, (str(config.executable), *argv[1:]))
+
+    def _prepare(self, argv: tuple[str, ...], cwd: str) -> _ChildLaunch:
+        env = {
+            "HOME": cwd,
+            "TMPDIR": cwd,
+            "CODEX_HOME": str(self._config.codex_home),
+            "PATH": "/usr/bin:/bin",
+            "LANG": "C.UTF-8",
+        }
+        # [LAW:no-shared-mutable-globals] each call's token lives only in its own check.
+        token = new_refusal_token()
+
+        def raise_refusal(result: CLIProcessResult) -> None:
+            # Any other exit, even 125 with the marker, stays a result whose untrusted output
+            # the adapter withholds: the target that ran shares the launcher's stderr.
+            reason = refusal_reason(token, result.exit_code, result.stderr)
+            if reason is not None:
+                raise ExternalCLIReadBoundaryError(reason)
+
+        return self.launcher_argv(argv, scratch=Path(cwd), refusal_token=token), env, raise_refusal
+
+
+def _canonical(paths: Sequence[Path]) -> tuple[str, ...]:
+    return tuple(os.path.realpath(path) for path in paths)
+
+
+def _require_private_directory(label: str, directory: Path) -> None:
+    """A boundary directory must be a real 0700 directory owned by this user (no symlink)."""
+    try:
+        info = directory.lstat()
+    except OSError as exc:
+        raise ExternalCLIReadBoundaryError(f"{label} unusable: {exc.strerror}") from None
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+        raise ExternalCLIReadBoundaryError(f"{label} must be a directory, not a symlink")
+    if info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) != 0o700:
+        raise ExternalCLIReadBoundaryError(f"{label} must be owned by this user with mode 0700")
 
 
 class RecordingSubprocessRunner:
@@ -1277,7 +1463,16 @@ async def construct_codex_cli_adapter(
 ) -> CodexCLIAdapter:
     if config.kind is not ExternalCLIProviderKind.CODEX:
         raise ValueError(f"unsupported Codex adapter kind: {config.kind}")
-    process_runner = runner if runner is not None else _CodexSubprocessRunner()
+    # Runtime v1.135: the only production Codex runner is the read-boundary runner. An
+    # injected runner is a source/test double; without either, no Codex process may run.
+    if runner is not None:
+        process_runner: ExternalCLISubprocessRunner = runner
+    elif config.read_boundary is not None:
+        process_runner = _CodexReadBoundaryRunner(config.read_boundary)
+    else:
+        raise ExternalCLIReadBoundaryError(
+            "codex provider has no read_boundary configured; refusing to run Codex unconfined"
+        )
     if config.auth_check:
         await _assert_codex_authenticated(config, process_runner)
     return CodexCLIAdapter(
