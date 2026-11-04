@@ -142,3 +142,49 @@ def test_cli_refuses_arbitrary_verdict_file(tmp_path, monkeypatch):
     (tmp_path / "codex/sessions").mkdir(parents=True)
     monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex"))
     assert nr.main(["record", "--transcript", str(path), "--authors", AUTHOR]) == 3
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"reviewer_session": None},
+        {"author_sessions": None},
+        {"author_sessions": []},
+        {"author_sessions": [AUTHOR, AUTHOR]},
+        {"reviewer_session": "not-a-session"},
+        {"author_sessions": ["not-a-session"]},
+    ],
+)
+def test_native_provenance_cannot_be_partial_or_malformed(recording, change):
+    nr.record(recording, verdict(), BOUND, nr.participants(REVIEWER, [AUTHOR]))
+    (row,) = fr.read_rows()
+    with pytest.raises(fr.RecordError, match="schema"):
+        fr.validate({**row, **change})
+
+
+@pytest.mark.parametrize(
+    "change", [{"reviewer_session": CORRECTOR}, {"author_sessions": [CORRECTOR]}]
+)
+def test_adjudication_preserves_native_provenance(recording, change):
+    nr.record(
+        recording,
+        verdict(
+            verdict="BLOCK",
+            findings=[{"severity": "P2", "location": "tools/x.py:12", "message": "contract gap"}],
+        ),
+        BOUND,
+        nr.participants(REVIEWER, [AUTHOR]),
+    )
+    (row,) = fr.read_rows()
+    adj = {
+        **row,
+        "record_kind": "finding_adjudication",
+        "ts": "2099-01-01T00:00:00Z",
+        "disposition": "accepted",
+        "disposition_actor": "operator",
+    }
+    with pytest.raises(fr.RecordError, match="core field"):
+        fr.append_row({**adj, **change})
+    fr.append_row(adj)
+    assert fr.read_rows()[-1]["reviewer_session"] == REVIEWER
+    assert fr.read_rows()[-1]["author_sessions"] == [AUTHOR]
