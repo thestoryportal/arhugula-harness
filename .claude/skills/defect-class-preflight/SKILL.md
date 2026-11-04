@@ -293,7 +293,14 @@ claim, matched against the file with its whitespace flattened so a wrapped sente
 string (U-HE-39 r2: K7's "shadow mode only" clause sat outside a first-half needle). A
 standalone selector test is vacuous for a production composer that never calls it:
 removing the composer call must fail a producer-path test, even when the selector unit
-test remains green. Where feasible, actually run the mutation probe
+test remains green. For a state machine, exercise the consumer's REPORTED next action
+and submit that action to the gate on the same binding. A reducer-helper test can stay
+green while an approval consumer reports a different pass: delivery-throughput F1
+reported legacy `3` after a clean initial/correction review's head or digest changed,
+although admission required `correction`. When you think "the helper already covers
+that transition," change the binding after completion and test the consumer too;
+reverting only its continuation selection must red that witness with the helper intact.
+Where feasible, actually run the mutation probe
 (`just mutation-probe`) rather than reasoning it — and probe the fix
 BOTH ways (kill confirmed, then green restored).
 
