@@ -634,14 +634,21 @@ class JournalWorkflowPauseStore:
         )
 
     def supersede(self, workflow_id: str, run_id: str) -> None:
-        """Append a supersession record naming the superseding fresh run's ``run_id``.
+        """Supersede the workflow's journal for the fresh run ``run_id``: its admission point.
 
-        [LAW:single-enforcer] Runtime spec v1.137 Rule A2: the one writer path is
-        ``_append``, so the record gets the same lock and fsyncs as a snapshot.
+        Runtime spec v1.137 Rule B2: under the journal lock, a journal that exists and is
+        non-empty gets one supersession record naming ``run_id``; otherwise there is nothing to
+        supersede and no line is written (the lock file is created as for any journal
+        operation). [LAW:single-enforcer] Rule A2: the record goes through the same locked,
+        fsynced append as a snapshot.
         """
-        self._append(
-            workflow_id, {"kind": "supersession", "workflow_id": workflow_id, "run_id": run_id}
-        )
+        with self._locked_journal(workflow_id) as path:
+            # [LAW:no-ambient-temporal-coupling] Checked only while the lock is held, so a
+            # capture that creates the file is ordered wholly before or after this step.
+            if path.exists() and path.stat().st_size > 0:
+                self._append_locked(
+                    path, {"kind": "supersession", "workflow_id": workflow_id, "run_id": run_id}
+                )
 
     def read_latest(self, workflow_id: str) -> PauseSnapshot | None:
         """Return the workflow's latest journaled ``PauseSnapshot``, or ``None``.
@@ -890,33 +897,42 @@ class JournalWorkflowPauseStore:
         **The read path deliberately does NOT take this lock** — see
         :meth:`read_latest_attributed`.
         """
-        line = json.dumps(record, sort_keys=True)
+        with self._locked_journal(workflow_id) as path:
+            return self._append_locked(path, record)
+
+    @contextmanager
+    def _locked_journal(self, workflow_id: str) -> Generator[Path, None, None]:
+        """Hold the workflow's journal lock and yield its journal path (see :meth:`_append`)."""
         path = self._journal_file(workflow_id)
-        journal_dir = path.parent
-        journal_dir.mkdir(parents=True, exist_ok=True)
+        path.parent.mkdir(parents=True, exist_ok=True)
         # UNCONDITIONAL, and BEFORE the lock — so it precedes any statement that
         # could create a journal file. See the docstring's durability section:
         # both directory fsyncs are unconditional precisely because every
         # flag-gated form leaves a crash window that a later writer then skips
         # FOREVER.
-        self._fsync_dir(journal_dir.parent)
+        self._fsync_dir(path.parent.parent)
         with self._cross_process_append_lock(path):
-            is_new_file = not path.exists()
-            needs_leading_newline = (not is_new_file) and self._last_byte_is_not_newline(path)
-            with path.open("a", encoding="utf-8") as handle:
-                if needs_leading_newline:
-                    handle.write("\n")
-                handle.write(line + "\n")
-                handle.flush()
-                os.fsync(handle.fileno())
-            # UNCONDITIONAL, and AFTER the file exists — durably links this
-            # workflow's journal dirent into `pause-journal`.
-            self._fsync_dir(journal_dir)
-            # [LAW:no-ambient-temporal-coupling] Freeze identity before another writer can append.
-            lines, digest = _raw_journal_identity(path.read_bytes())
-            if not lines or lines[-1] != line.encode("utf-8") or digest is None:
-                raise OSError("journal append identity does not match the written record")
-            return len(lines), digest
+            yield path
+
+    def _append_locked(self, path: Path, record: dict[str, object]) -> tuple[int, str]:
+        """Append one record to ``path``, whose journal lock the caller holds."""
+        line = json.dumps(record, sort_keys=True)
+        is_new_file = not path.exists()
+        needs_leading_newline = (not is_new_file) and self._last_byte_is_not_newline(path)
+        with path.open("a", encoding="utf-8") as handle:
+            if needs_leading_newline:
+                handle.write("\n")
+            handle.write(line + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        # UNCONDITIONAL, and AFTER the file exists — durably links this
+        # workflow's journal dirent into `pause-journal`.
+        self._fsync_dir(path.parent)
+        # [LAW:no-ambient-temporal-coupling] Freeze identity before another writer can append.
+        lines, digest = _raw_journal_identity(path.read_bytes())
+        if not lines or lines[-1] != line.encode("utf-8") or digest is None:
+            raise OSError("journal append identity does not match the written record")
+        return len(lines), digest
 
     @staticmethod
     def _last_byte_is_not_newline(path: Path) -> bool:

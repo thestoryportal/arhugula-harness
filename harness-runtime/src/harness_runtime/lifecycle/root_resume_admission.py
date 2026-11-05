@@ -11,8 +11,10 @@ runs the workflow body with a `ClaimedChildAdmission` over the root's `StartedPr
 timeout: the API may return ``drained`` while the worker still owns the lease, which
 `run_started` releases only when the body returns.
 
-A fresh run or a caller-supplied snapshot is `UNCLAIMED`: no claim and no authority, so
-stage 5's refusing child admission stays the fallback there.
+A fresh root run is a `FreshRunAdmission` (Runtime spec v1.137 Rules B1/B2): before its body it
+supersedes the workflow's journal at its admission point, then runs with no authority. A
+caller-supplied snapshot is `UNCLAIMED`: no claim and no authority. Both leave stage 5's refusing
+child admission as the fallback.
 
 A refusal before the body — placement, a refused or busy claim, a start that is not durable —
 becomes a `ResumeClaimRefusedError` recorded on the request, because typed errors do not
@@ -29,12 +31,16 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Final
 
 from harness_core import JournalRecordRef
+from harness_core.cross_process_lock_deadline import CrossProcessLockTimeoutError
 from harness_cp.workflow_driver_types import ChildResumeAuthority
 
 from harness_runtime.config import state_placement
 from harness_runtime.config.state_placement import StateRootPlacementError, place_state_dir
 from harness_runtime.lifecycle.claimed_child_admission import ClaimedChildAdmission
-from harness_runtime.lifecycle.journal_workflow_pause_store import pause_journal_dir_for
+from harness_runtime.lifecycle.journal_workflow_pause_store import (
+    JournalWorkflowPauseStore,
+    pause_journal_dir_for,
+)
 from harness_runtime.lifecycle.resume_claim_store import (
     ClaimBusyError,
     ClaimRefusedError,
@@ -54,6 +60,8 @@ if TYPE_CHECKING:
 __all__ = [
     "UNCLAIMED",
     "DurableRootResume",
+    "FreshRunAdmission",
+    "FreshRunAdmissionError",
     "JournalDirectoryMismatchError",
     "ResumeAdmission",
     "ResumeClaimRefusedError",
@@ -189,5 +197,52 @@ class _Unclaimed:
 
 UNCLAIMED: Final = _Unclaimed()
 
+
+class FreshRunAdmissionError(Exception):
+    """A fresh root run failed at its admission point; its workflow body did not run.
+
+    The message names no path or identifier; the failed journal operation is the `__cause__`.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(
+            "the fresh run's supersession append failed and its workflow body did not run "
+            "(Runtime spec v1.137 Rule B3)"
+        )
+
+
+class FreshRunAdmission:
+    """One fresh depth-0 run's admission: supersede the workflow's journal, then run the body.
+
+    [LAW:single-enforcer] Runtime spec v1.137 Rule B1: the one place a supersession record is
+    written. Each `run_workflow` invocation builds its own, so neither `run_id` nor `failure`
+    is ever shared with a concurrent invocation. `failure` has one writer (`run`, before any
+    body) and stays `None` whenever the body was reached.
+
+    The journal directory is the capture derivation's, so the supersession lands in the file
+    this binding's snapshots are captured to; the Rule B3/B7 root resolver replaces it at every
+    journal site at once.
+    """
+
+    def __init__(self, *, workflow_id: str, run_id: str) -> None:
+        self.workflow_id: Final = workflow_id
+        self.run_id: Final = run_id
+        self.failure: FreshRunAdmissionError | None = None
+
+    def run[R](self, ctx: HarnessContext, body: Body[R]) -> R:
+        """Append the supersession record at the admission point, then run `body` unclaimed."""
+        store = JournalWorkflowPauseStore(
+            journal_dir=pause_journal_dir_for(ctx.ledger_writer.handle.canonical_path.parent),
+            tenant_id=ctx.config.tenant_id,
+        )
+        try:
+            store.supersede(self.workflow_id, self.run_id)
+        except (OSError, CrossProcessLockTimeoutError) as exc:
+            # [LAW:no-silent-failure] Rule B3: a failed append fails the run before its first step.
+            self.failure = FreshRunAdmissionError()
+            raise self.failure from exc
+        return body(None)
+
+
 type ResumeAdmission = DurableRootResume | _Unclaimed
-"""What the `run_workflow` worker runs its body through; the tool's default is `UNCLAIMED`."""
+"""What a resumed `run_workflow` body runs through; a fresh one runs through `FreshRunAdmission`."""

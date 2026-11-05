@@ -66,7 +66,7 @@ from harness_runtime.lifecycle.inter_step_output_channel import (
     InterStepOutputChannel,
 )
 from harness_runtime.lifecycle.root_resume_admission import (
-    UNCLAIMED,
+    FreshRunAdmission,
     ResumeAdmission,
     ResumeClaimRefusedError,
 )
@@ -132,12 +132,20 @@ _CURRENT_TOOL_CTX: contextvars.ContextVar[Context[Any, Any] | None] = contextvar
 
 @dataclass(frozen=True)
 class FreshEntry:
-    """A fresh run: a new `run_id`, outside the claim contract, no snapshot or resume context."""
+    """A fresh run: a new `run_id` and its own supersession admission, no snapshot or context."""
 
+    workflow_id: str
     run_id: str = field(default_factory=lambda: uuid.uuid4().hex)
     pause_snapshot: None = field(default=None, init=False)
     resume_context: None = field(default=None, init=False)
-    admission: ResumeAdmission = field(default=UNCLAIMED, init=False)
+    admission: FreshRunAdmission = field(init=False)
+
+    def __post_init__(self) -> None:
+        # [LAW:one-source-of-truth] Runtime spec v1.137 Rule B1: the admission is built from this
+        # entry's own `run_id`, once per invocation, so no invocation shares another's.
+        object.__setattr__(
+            self, "admission", FreshRunAdmission(workflow_id=self.workflow_id, run_id=self.run_id)
+        )
 
 
 @dataclass(frozen=True)
@@ -408,10 +416,10 @@ def materialize_mcp_server_stage(
         _resume_snapshot = entry.pause_snapshot
         run_id = entry.run_id
         # B-104 — how the worker admits its body: a durable handle's admission is a
-        # `DurableRootResume`; a fresh run or caller-supplied snapshot is UNCLAIMED. The
-        # entry is this invocation's own argument, so after a drain timeout the worker
-        # holds its own admission and nothing is read back from shared state.
-        _admission: ResumeAdmission = entry.admission
+        # `DurableRootResume`, a fresh run's a `FreshRunAdmission`, a caller-supplied
+        # snapshot's UNCLAIMED. The entry is this invocation's own argument, so after a drain
+        # timeout the worker holds its own admission and nothing is read back from shared state.
+        _admission: ResumeAdmission | FreshRunAdmission = entry.admission
         # B-39 impl leg Slice B (CP spec v1.106 §1) — the operator's resume payload,
         # threaded as the depth-0 `execute_workflow(resume_context=...)` argument
         # (below) rather than set into a ctx-level `ResumeContextHolder` singleton
@@ -611,7 +619,7 @@ def materialize_mcp_server_stage(
         # Track A: `api.resume` hands its resumed entry over its own per-call server's
         # `_state` while holding `_run_lock`; the daemon never writes it, so a daemon
         # `run_workflow` is always fresh (Runtime spec v1.141 §3.2-§3.3).
-        entry: RootEntry = state.get("_root_entry") or FreshEntry()
+        entry: RootEntry = state.get("_root_entry") or FreshEntry(workflow.workflow_id)
         return await _run_root(harness_ctx, workflow, entry, ctx)
 
     @fastmcp.tool()
