@@ -14,7 +14,7 @@ import json
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any, Final, Literal, assert_never, cast
+from typing import Any, Final, Literal, assert_never, cast, get_args
 
 from harness_runtime.api import (
     ResumeArgsError,
@@ -35,6 +35,7 @@ from harness_runtime.lifecycle.root_resume_admission import RootResumeRefusal
 
 __all__ = [
     "PROTOCOL",
+    "REFUSAL_ERRORS",
     "ClaimRefusal",
     "DepthRefusal",
     "HandleCause",
@@ -48,6 +49,7 @@ __all__ = [
     "parse",
     "project",
     "to_json",
+    "wire_fields",
 ]
 
 PROTOCOL: Final = "harness.resume-refusal.v1"
@@ -137,6 +139,10 @@ type ResumeRefusalError = (
 """The nine typed refusals a root `resume()` raises before its body runs. Bootstrap, invalid
 workflow, concurrent-run and transport failures are not among them and keep their own class."""
 
+# [LAW:one-source-of-truth] The catchable form of the alias above, derived from it, so a surface
+# that maps refusals catches exactly the nine and no list of them can drift.
+REFUSAL_ERRORS: Final[tuple[type[Exception], ...]] = get_args(ResumeRefusalError.__value__)
+
 
 # [LAW:one-source-of-truth] The kind -> fail_class pairing and each arm's extra wire fields are
 # stated once; the encoder and the strict parser both read these tables.
@@ -206,11 +212,16 @@ def project(error: ResumeRefusalError) -> ResumeRefusal:
             assert_never(error)
 
 
-def to_json(refusal: ResumeRefusal) -> str:
-    """The one serialized form: `{"protocol": ..., "refusal": {kind, fail_class, extras}}`."""
+def wire_fields(refusal: ResumeRefusal) -> dict[str, object]:
+    """The refusal's permitted facts, in wire order: kind, fail_class, then its arm's extras."""
     body: dict[str, object] = {"kind": refusal.kind, "fail_class": fail_class(refusal.kind)}
-    body |= {name: getattr(refusal, name) for name in _EXTRA_FIELDS[refusal.kind]}
-    return json.dumps({"protocol": PROTOCOL, "refusal": body}, separators=(",", ":"))
+    return body | {name: getattr(refusal, name) for name in _EXTRA_FIELDS[refusal.kind]}
+
+
+def to_json(refusal: ResumeRefusal) -> str:
+    """The one serialized form: `{"protocol": ..., "refusal": wire_fields(refusal)}`."""
+    envelope = {"protocol": PROTOCOL, "refusal": wire_fields(refusal)}
+    return json.dumps(envelope, separators=(",", ":"))
 
 
 class ResumeRefusalProtocolError(ValueError):
