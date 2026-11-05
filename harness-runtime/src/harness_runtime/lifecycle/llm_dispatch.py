@@ -136,6 +136,7 @@ from harness_runtime.lifecycle.skill_activation import (
     parse_skill_selection,
 )
 from harness_runtime.memory_context import (
+    PROMPT_PACKET_FALLBACK_RECORD_POLICY_DENIED,
     RenderedMemoryPromptPacket,
     RuntimeMemoryContext,
     append_rendered_memory_packet,
@@ -2328,16 +2329,19 @@ _DEGRADED_REASON_PROVIDER_FAMILY_SCOPE_MISMATCH: Final[str] = "provider_family_s
 #: reported a budget denial as an operator policy decision, which is a false
 #: accusation about a configuration the operator did not make.
 #:
-#: The VALUE DOMAIN of the real selector reasons, derived from the closed
-#: `MemoryAccessModeDenialReason` enum rather than spelled out here, so a new
-#: member is covered the day it is added. Membership is the discriminator for
-#: `_DegradedMemoryServe.policy_denial`: `prompt_packet_fallback_denial` carries
-#: EITHER a genuine selector reason (a resolver ran and decided) OR one of the
-#: two sentinels at `memory_context.py:48-52`, which are defined to be distinct
-#: from every enum value precisely so the two cases stay separable.
-_SELECTOR_DENIAL_REASON_VALUES: Final[frozenset[str]] = frozenset(
+#: The packet-denial reasons that are POLICY decisions: every real selector
+#: reason, derived from the closed `MemoryAccessModeDenialReason` enum rather
+#: than spelled out here so a new member is covered the day it is added, plus
+#: the C-MEM-05 record-policy sentinel (every mode gate admitted the packet, but
+#: a selected record's own `injection_policy` forbids prompt text). Membership
+#: is the discriminator for `_DegradedMemoryServe.policy_denial`: the only other
+#: values `prompt_packet_fallback_denial` carries are the two non-decision
+#: sentinels at `memory_context.py:48-52`, which are defined to be distinct from
+#: every enum value precisely so the two cases stay separable.
+# [LAW:one-source-of-truth] one set names which packet denials are policy denials.
+_POLICY_DENIAL_PACKET_REASON_VALUES: Final[frozenset[str]] = frozenset(
     reason.value for reason in MemoryAccessModeDenialReason
-)
+) | {PROMPT_PACKET_FALLBACK_RECORD_POLICY_DENIED}
 
 
 @dataclass(frozen=True, slots=True)
@@ -2364,9 +2368,11 @@ class _DegradedMemoryServe:
     #: outcomes where a policy determination was actually REACHED:
     #:
     #: * a `MemoryAccessModeDenialReason` the counterfactual selector actually
-    #:   returned (`_SELECTOR_DENIAL_REASON_VALUES`, the C-MEM-19
+    #:   returned (in `_POLICY_DENIAL_PACKET_REASON_VALUES`, the C-MEM-19
     #:   `POLICY_DENIAL` condition the primary DENIAL span already applies to
     #:   the SAME values, `memory_context.py:210-216`);
+    #: * the C-MEM-05 record-policy withhold, where a selected record's own
+    #:   `injection_policy` forbids prompt text;
     #: * a CONFIRMED cross-family withhold — both families RESOLVED and were
     #:   found unequal — whose withholding is MANDATED by C-MEM-13 (B-91 Q1,
     #:   decided 2026-07-29 — `Spec_Memory_Substrate_v1.md:511` records the
@@ -2808,11 +2814,10 @@ def _degraded_serve_disposition(
             selected_access_mode=memory_context.access_mode,
             reason=packet_denial,
             rendered=None,
-            # The ONLY report-only family a resolver actually decided: this
-            # value came back from a real `select_memory_access_mode` run
-            # (`memory_context.py:545-549`). Membership in the closed enum is
-            # what separates it from the two sentinels the same field can carry.
-            policy_denial=packet_denial in _SELECTOR_DENIAL_REASON_VALUES,
+            # A selector reason or the record-policy sentinel is a decision
+            # someone reached; membership separates both from the two
+            # non-decision sentinels the same field can carry.
+            policy_denial=packet_denial in _POLICY_DENIAL_PACKET_REASON_VALUES,
         )
     return _DegradedMemoryServe(
         selected_access_mode=memory_context.access_mode,
@@ -2936,6 +2941,10 @@ def _emit_degraded_memory_serve_span(
        `failure_class=POLICY_DENIAL` for exactly these values
        (`memory_context.py:210-216`). So does this span, per that precedent —
        the same decision reported by two emitters must not carry two classes.
+       The C-MEM-05 `record_injection_policy_denied` sentinel joins this
+       family: the composer's resolver admitted the packet mode, then a
+       selected record's own `injection_policy` forbade prompt text — a policy
+       decision about the packet's contents.
        Discriminated by `degraded.policy_denial`, carried as DATA from the site
        that knows the reason's provenance, never re-derived by string-matching
        a value domain that spans all three families.

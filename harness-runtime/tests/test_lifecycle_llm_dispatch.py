@@ -159,6 +159,7 @@ from harness_runtime.lifecycle.retry_breaker_fallback import (
 from harness_runtime.lifecycle.sync_dispatcher_facade import SyncDispatcherFacade
 from harness_runtime.memory_context import (
     PROMPT_PACKET_FALLBACK_NOT_DERIVED,
+    PROMPT_PACKET_FALLBACK_RECORD_POLICY_DENIED,
     RuntimeMemoryContext,
 )
 from harness_runtime.memory_tool_executor import (
@@ -4264,6 +4265,42 @@ async def test_b83_packet_mode_denied_context_is_reported_with_its_own_reason() 
     # exactly this value (`memory_context.py:210-216`). A resolver ran and
     # decided (`memory_context.py:545-549`); one decision reported by two
     # emitters must not carry two classes.
+    assert attrs["memory.failure_class"] == "policy_denial"
+
+
+@pytest.mark.asyncio
+async def test_b83_record_policy_denied_context_is_withheld_as_a_policy_denial() -> None:
+    """C-MEM-05 — every mode gate admits the packet, but a selected record's own
+    `injection_policy` forbids prompt text.
+
+    The composer reports that with the record-policy sentinel. It is a real
+    policy decision about the packet's contents, so the withhold carries the
+    C-MEM-19 `policy_denial` class, unlike the `not_derived` non-decision.
+    """
+    client = _AnthropicClient()
+    tp, exporter = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"anthropic": _AnthropicFakeAdapter(client)},
+        tracer_provider=tp,
+        memory_context=_b83_memory_context(
+            provider="anthropic",
+            prompt_packet_fallback_denial=PROMPT_PACKET_FALLBACK_RECORD_POLICY_DENIED,
+        ),
+        standard_memory_tool_executor=_FakeStandardMemoryToolExecutor(),
+    )
+
+    await dispatcher.dispatch(_binding("anthropic"), _step(), step_context=_step_context())
+
+    assert "system" not in client.messages.calls[0], (
+        "a packet holding a record that forbids prompt text must never reach the wire"
+    )
+    attrs = _one_degraded_serve_span(exporter)
+    assert attrs["memory.degraded_serve.reason"] == "record_injection_policy_denied"
+    assert attrs["memory.operation.name"] == "denial"
+    assert attrs["memory.access_mode"] == "no_memory_access"
+    assert attrs["memory.record_count"] == 0
+    assert "memory.packet_hash" not in attrs
+    assert attrs["memory.policy.decision"] == "record_injection_policy_denied"
     assert attrs["memory.failure_class"] == "policy_denial"
 
 

@@ -637,6 +637,7 @@ def _hash_json(payload: dict[str, object]) -> str:
 
 __all__ = [
     "PROMPT_PACKET_FALLBACK_NOT_DERIVED",
+    "PROMPT_PACKET_FALLBACK_RECORD_POLICY_DENIED",
     "PROMPT_PACKET_FALLBACK_UNDETERMINED",
     "MemoryContextCompositionRequest",
     "MemoryInjectionOperationStore",
