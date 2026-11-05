@@ -1062,6 +1062,48 @@ def test_timeout_reconcile_open_reissues_exactly_once(door):
     assert len(g.merge_calls) == 2
 
 
+def test_rejected_merge_preserves_github_error_and_does_not_retry(door):
+    g = FakeGround()
+
+    def rejected(pr, head, timeout):
+        g.merge_calls.append((pr, head))
+        return subprocess.CompletedProcess([], 1, "", "Required status check is expected")
+
+    g.gh_merge = rejected
+    with pytest.raises(md.DoorBlocked, match="Required status check is expected"):
+        _land(door, g)
+    assert len(g.merge_calls) == 1
+    assert "Required status check is expected" in md.read_lease()["blocked_reason"]
+
+
+def test_rejected_merge_preserves_error_when_reconciliation_fails(door):
+    g = FakeGround()
+
+    def rejected(pr, head, timeout):
+        g.merge_calls.append((pr, head))
+        g.states[pr]["state"] = "CLOSED"
+        return subprocess.CompletedProcess([], 1, "", "GitHub rejected merge")
+
+    g.gh_merge = rejected
+    with pytest.raises(md.DoorBlocked, match="GitHub rejected merge; reconciliation failed"):
+        _land(door, g)
+    assert len(g.merge_calls) == 1
+    assert "not reconcilable" in md.read_lease()["blocked_reason"]
+
+
+def test_rejected_merge_reconciles_a_server_side_merge(door):
+    g = FakeGround()
+
+    def rejected_after_merge(pr, head, timeout):
+        g.merge_calls.append((pr, head))
+        g.states[pr].update(state="MERGED", mergedAt="now", mergeCommit={"oid": "c" * 40})
+        return subprocess.CompletedProcess([], 1, "", "connection lost")
+
+    g.gh_merge = rejected_after_merge
+    assert _land(door, g) == "released"
+    assert len(g.merge_calls) == 1
+
+
 # mutation-probe: decide the post-attempt handler from the caller dict instead of read_lease()
 def test_failure_after_attempt_blocks_never_releases(door):
     """Both merge attempts time out and ground truth stays OPEN → reissue exhausted AFTER
