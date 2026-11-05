@@ -295,34 +295,46 @@ class EngineOutputStore:
         orchestrator file (including an unknown selection value) is surfaced by
         `orchestrator_present` so the caller fails closed (the symmetric of the per-branch
         corrupt-detection). A record without a selection predates CP v1.130 and reads as
-        `DECLARED_POOL`, the only selection that existed then. A torn (incomplete JSON) line
-        is skipped, but a complete record that is malformed (not an object, a bad
-        ``step_id``/``output``, or an unknown selection) makes the whole journal unreadable:
+        `DECLARED_POOL`, the only selection that existed then.
+
+        Only the unterminated final segment can be a torn append; it is skipped. A
+        newline-terminated line that is not JSON is tolerated only when a later readable
+        record supersedes it (the `_append_path` leading-newline self-heal of a torn line).
+        Otherwise it, or any JSON record that is malformed (not an object, a bad
+        ``step_id``/``output``, or an unknown selection), makes the whole journal unreadable:
         skipping it would resurrect an older record and a stale plan.
         """
         path = self._orchestrator_file(run_key)
         if not path.exists():
             return None
         try:
-            lines = path.read_text(encoding="utf-8").splitlines()
+            lines = path.read_text(encoding="utf-8").split("\n")
         except (OSError, UnicodeDecodeError):
             return None
         result: tuple[str, dict[str, Any], WorkerSelection] | None = None
-        for line in lines:
+        unsuperseded_garbage = False
+        for index, line in enumerate(lines):
+            terminated = index < len(lines) - 1
+            if not terminated and not line:
+                break  # nothing after the final newline
             try:
                 parsed = self._parse_orchestrator_record(line)
             except ValueError:
                 return None
             if parsed is not None:
                 result = parsed  # last readable record wins, as for branch files
-        return result
+                unsuperseded_garbage = False
+            elif terminated:
+                unsuperseded_garbage = True
+        return None if unsuperseded_garbage else result
 
     @classmethod
     def _parse_orchestrator_record(
         cls, line: str
     ) -> tuple[str, dict[str, Any], WorkerSelection] | None:
-        """Parse one orchestrator line; None for a torn line (not complete JSON), ValueError
-        for a complete record that is malformed or carries an unknown ``worker_selection``."""
+        """Parse one orchestrator line; None for a line that is not JSON (the caller decides
+        from its position whether it is torn), ValueError for a JSON record that is malformed
+        or carries an unknown ``worker_selection``."""
         try:
             loaded = json.loads(line)
         except json.JSONDecodeError:

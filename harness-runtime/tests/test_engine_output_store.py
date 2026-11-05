@@ -456,7 +456,7 @@ def test_orchestrator_malformed_record_appended_after_valid_is_unreadable(
     tmp_path: Path, later: object
 ) -> None:
     """A complete later record with a malformed shape must not be skipped in favour of an
-    older valid record (review F2, cmt-e1835f07); only an incomplete JSON line is torn."""
+    older valid record (review F2, cmt-e1835f07)."""
     store = EngineOutputStore(journal_dir=tmp_path / "eo")
     store.record_orchestrator(_RUN_KEY, "orch", {"plan": ["a"]}, WorkerSelection.LEAD_PLAN)
     path = next((tmp_path / "eo").rglob("orchestrator.jsonl"))
@@ -464,6 +464,47 @@ def test_orchestrator_malformed_record_appended_after_valid_is_unreadable(
         fh.write(json.dumps(later) + "\n")
     assert store.read_orchestrator_output(_RUN_KEY) is None
     assert store.orchestrator_present(_RUN_KEY) is True
+
+
+def test_orchestrator_newline_terminated_invalid_json_after_valid_is_unreadable(
+    tmp_path: Path,
+) -> None:
+    """A newline-terminated undecodable latest line is not a torn append: it must not
+    resurrect the older plan (review F2, cmt-0ee57f83)."""
+    store = EngineOutputStore(journal_dir=tmp_path / "eo")
+    store.record_orchestrator(
+        _RUN_KEY, "orch", {"worker_plan": [{"worker": "a"}]}, WorkerSelection.LEAD_PLAN
+    )
+    path = next((tmp_path / "eo").rglob("orchestrator.jsonl"))
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write('{"output": {"worker_plan": [}, "step_id": "orch"}\n')
+    assert store.read_orchestrator_output(_RUN_KEY) is None
+    assert store.orchestrator_present(_RUN_KEY) is True
+    # A torn tail after the unsuperseded garbage line does not make it readable either.
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write('{"step_id": "or')
+    assert store.read_orchestrator_output(_RUN_KEY) is None
+
+
+def test_orchestrator_torn_append_self_heals_on_next_record(tmp_path: Path) -> None:
+    """A torn trailing append is skipped, and once the next append's leading newline
+    terminates it, the later valid record supersedes it (existing self-heal)."""
+    store = EngineOutputStore(journal_dir=tmp_path / "eo")
+    store.record_orchestrator(_RUN_KEY, "orch", {"plan": ["a"]}, WorkerSelection.LEAD_PLAN)
+    path = next((tmp_path / "eo").rglob("orchestrator.jsonl"))
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write('{"step_id": "orch", "out')
+    assert store.read_orchestrator_output(_RUN_KEY) == (
+        "orch",
+        {"plan": ["a"]},
+        WorkerSelection.LEAD_PLAN,
+    )
+    store.record_orchestrator(_RUN_KEY, "orch", {"plan": ["c"]}, WorkerSelection.LEAD_PLAN)
+    assert store.read_orchestrator_output(_RUN_KEY) == (
+        "orch",
+        {"plan": ["c"]},
+        WorkerSelection.LEAD_PLAN,
+    )
 
 
 def test_branch_absent_run_returns_empty(tmp_path: Path) -> None:
