@@ -40,7 +40,7 @@ from __future__ import annotations
 from enum import StrEnum
 
 from harness_core import PersonaTier, StepID, WorkloadClass
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 
 from harness_cp.cp_shared_types import AgentRole, ModelBinding
 from harness_cp.cross_family_fallback_chain import FallbackChain
@@ -49,7 +49,7 @@ from harness_cp.gate_level_rule import GateLevel
 from harness_cp.hitl_placement import HITLPlacement, LoosenablePlacementKind
 from harness_cp.layer_budget import LayerBudget
 from harness_cp.sub_agent_brief import SubAgentBrief
-from harness_cp.topology_pattern import TopologyPattern
+from harness_cp.topology_pattern import TopologyPattern, WorkerSelection
 
 
 class FanoutTimeoutDisposition(StrEnum):
@@ -315,3 +315,21 @@ class WorkflowManifestEntry(BaseModel):
     multiplicative tunable (CP spec §25.15.1). §6.1 'additional per-workload fields'
     extension-clause growth (mirrors v1.20/v1.63/v1.87 additive-optional precedents).
     """
+
+    worker_selection: WorkerSelection = WorkerSelection.DECLARED_POOL
+    """CP v1.130 §25.11.1.1. Whether an orchestrator fan-out dispatches its whole declared
+    worker pool or the plan its orchestrator output carries (`worker_plan.derive_worker_plan`).
+    Default `DECLARED_POOL` is the pre-v1.130 fixed pipeline."""
+
+    @model_validator(mode="after")
+    def _lead_plan_needs_an_orchestrator(self) -> WorkflowManifestEntry:
+        # [LAW:single-enforcer] The one place a lead plan is tied to a topology with a lead.
+        if self.worker_selection is WorkerSelection.LEAD_PLAN and self.topology_pattern not in (
+            TopologyPattern.ORCHESTRATOR_WORKERS,
+            TopologyPattern.HIERARCHICAL_DELEGATION,
+        ):
+            raise ValueError(
+                f"worker_selection={self.worker_selection.value!r} requires an orchestrator "
+                f"topology; got topology_pattern={self.topology_pattern.value!r}"
+            )
+        return self

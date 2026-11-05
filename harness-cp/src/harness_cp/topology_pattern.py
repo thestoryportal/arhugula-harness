@@ -67,6 +67,19 @@ class CascadePolicy(StrEnum):
     CASCADE_CANCEL = "cascade-cancel"
 
 
+class WorkerSelection(StrEnum):
+    """Who chooses an orchestrator fan-out's workers (CP v1.130 §25.11.1.1).
+
+    [LAW:no-mode-explosion] A closed two-variant domain owned by C-CP-25: a fixed
+    declared pipeline or a lead-directed plan. Neither is transitional; a third
+    variant needs a new CP delta. It lives in this leaf module so the manifest, the
+    pause snapshot and `worker_plan` share it without an import cycle [LAW:one-way-deps].
+    """
+
+    DECLARED_POOL = "declared-pool"
+    LEAD_PLAN = "lead-plan"
+
+
 #: The C-CP-10 §10.3 cross-pattern admissibility set — the (pattern, workload)
 #: cells §10.3 annotates as admissible for a *non-primary* pattern. Transcribed
 #: verbatim from the §10.3 annotation block (per ADR-D4 v1.1 §1.2).

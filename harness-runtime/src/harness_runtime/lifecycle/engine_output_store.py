@@ -60,6 +60,8 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, cast
 
+from harness_cp.topology_pattern import WorkerSelection
+
 __all__ = [
     "ENGINE_OUTPUT_BRANCHES_SUFFIX",
     "ENGINE_OUTPUT_SUBDIR",
@@ -266,28 +268,63 @@ class EngineOutputStore:
         run_key: str,
         step_id: str,
         output: Mapping[str, Any],
+        worker_selection: WorkerSelection,
     ) -> None:
         """Capture the ORCHESTRATOR_WORKERS ``steps[0]`` output (not a branch).
 
         The orchestrator output rides the `FanOutResumeState.orchestrator_output`
         field on resume; captured to a dedicated ``orchestrator.jsonl`` under the
         branches dir so it does not collide with the ``branch-*`` worker files.
+        ``worker_selection`` is recorded with the output (CP v1.130 §25.11.1.5(6)): the
+        plan is a pure function of both, so crash resume re-derives it from this record.
         """
-        record = {"step_id": str(step_id), "output": dict(output)}
+        record = {
+            "step_id": str(step_id),
+            "output": dict(output),
+            "worker_selection": worker_selection.value,
+        }
         line = json.dumps(record, sort_keys=True)
         self._append_path(self._orchestrator_file(run_key), line)
 
-    def read_orchestrator_output(self, run_key: str) -> tuple[str, dict[str, Any]] | None:
-        """Return the captured ``(step_id, output)`` orchestrator record, or None.
+    def read_orchestrator_output(
+        self, run_key: str
+    ) -> tuple[str, dict[str, Any], WorkerSelection] | None:
+        """Return the captured ``(step_id, output, worker_selection)`` record, or None.
 
-        None means ABSENT (no orchestrator captured). A present-but-unreadable
-        orchestrator file is surfaced by `orchestrator_present` so the caller fails
-        closed (the symmetric of the per-branch corrupt-detection).
+        None means ABSENT (no orchestrator captured) or unreadable. A present-but-unreadable
+        orchestrator file (including an unknown selection value) is surfaced by
+        `orchestrator_present` so the caller fails closed (the symmetric of the per-branch
+        corrupt-detection). A record without a selection predates CP v1.130 and reads as
+        `DECLARED_POOL`, the only selection that existed then.
         """
         path = self._orchestrator_file(run_key)
         if not path.exists():
             return None
-        return self._read_last_branch_record(path)
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except (OSError, UnicodeDecodeError):
+            return None
+        result: tuple[str, dict[str, Any], WorkerSelection] | None = None
+        for line in lines:
+            parsed = self._parse_orchestrator_record(line)
+            if parsed is not None:
+                result = parsed  # last readable record wins, as for branch files
+        return result
+
+    @classmethod
+    def _parse_orchestrator_record(
+        cls, line: str
+    ) -> tuple[str, dict[str, Any], WorkerSelection] | None:
+        branch = cls._parse_branch_record(line)
+        if branch is None:
+            return None
+        raw = cast("dict[str, object]", json.loads(line)).get(
+            "worker_selection", WorkerSelection.DECLARED_POOL.value
+        )
+        try:
+            return (*branch, WorkerSelection(raw))
+        except ValueError:
+            return None
 
     def orchestrator_present(self, run_key: str) -> bool:
         """Whether an orchestrator journal FILE exists (regardless of readability)."""

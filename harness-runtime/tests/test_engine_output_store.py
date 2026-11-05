@@ -13,6 +13,7 @@ import json
 from pathlib import Path
 
 import pytest
+from harness_cp.topology_pattern import WorkerSelection
 from harness_runtime.lifecycle.engine_output_store import (
     EngineOutputStore,
     engine_output_dir_for,
@@ -354,12 +355,60 @@ def test_orchestrator_capture_and_read(tmp_path: Path) -> None:
     store = EngineOutputStore(journal_dir=tmp_path / "eo")
     assert store.read_orchestrator_output(_RUN_KEY) is None
     assert store.orchestrator_present(_RUN_KEY) is False
-    store.record_orchestrator(_RUN_KEY, "orch-step", {"plan": "delegate"})
-    assert store.read_orchestrator_output(_RUN_KEY) == ("orch-step", {"plan": "delegate"})
+    store.record_orchestrator(
+        _RUN_KEY, "orch-step", {"plan": "delegate"}, WorkerSelection.DECLARED_POOL
+    )
+    assert store.read_orchestrator_output(_RUN_KEY) == (
+        "orch-step",
+        {"plan": "delegate"},
+        WorkerSelection.DECLARED_POOL,
+    )
     assert store.orchestrator_present(_RUN_KEY) is True
     # The orchestrator record does NOT pollute the worker branch set.
     assert store.read_branch_records(_RUN_KEY) == {}
     assert store.present_branch_indexes(_RUN_KEY) == set()
+
+
+def test_orchestrator_record_carries_worker_selection(tmp_path: Path) -> None:
+    """CP v1.130 §25.11.1.5(6): the selection is recorded with the output and survives a
+    restart, so crash resume re-derives the plan from the same two inputs."""
+    store = EngineOutputStore(journal_dir=tmp_path / "eo")
+    store.record_orchestrator(
+        _RUN_KEY, "orch", {"worker_plan": [{"worker": "c"}]}, WorkerSelection.LEAD_PLAN
+    )
+    fresh = EngineOutputStore(journal_dir=tmp_path / "eo")
+    assert fresh.read_orchestrator_output(_RUN_KEY) == (
+        "orch",
+        {"worker_plan": [{"worker": "c"}]},
+        WorkerSelection.LEAD_PLAN,
+    )
+
+
+def test_orchestrator_record_without_selection_reads_as_declared_pool(tmp_path: Path) -> None:
+    """W6c store leg: a pre-v1.130 record (no `worker_selection`) reads as DECLARED_POOL,
+    never as LEAD_PLAN."""
+    store = EngineOutputStore(journal_dir=tmp_path / "eo")
+    store.record_orchestrator(_RUN_KEY, "orch", {"x": 1}, WorkerSelection.LEAD_PLAN)
+    path = next((tmp_path / "eo").rglob("orchestrator.jsonl"))
+    path.write_text(json.dumps({"step_id": "orch", "output": {"x": 1}}) + "\n")
+    assert store.read_orchestrator_output(_RUN_KEY) == (
+        "orch",
+        {"x": 1},
+        WorkerSelection.DECLARED_POOL,
+    )
+
+
+def test_orchestrator_record_with_unknown_selection_is_unreadable(tmp_path: Path) -> None:
+    """An unknown selection value is corruption: unreadable (None) while present, so the
+    driver's presence-vs-readability gate fails closed instead of guessing a selection."""
+    store = EngineOutputStore(journal_dir=tmp_path / "eo")
+    store.record_orchestrator(_RUN_KEY, "orch", {"x": 1}, WorkerSelection.LEAD_PLAN)
+    path = next((tmp_path / "eo").rglob("orchestrator.jsonl"))
+    path.write_text(
+        json.dumps({"step_id": "orch", "output": {"x": 1}, "worker_selection": "x"}) + "\n"
+    )
+    assert store.read_orchestrator_output(_RUN_KEY) is None
+    assert store.orchestrator_present(_RUN_KEY) is True
 
 
 def test_branch_absent_run_returns_empty(tmp_path: Path) -> None:
@@ -543,7 +592,9 @@ def test_orchestrator_dispatched_marker_distinct_from_capture(tmp_path: Path) ->
     store.record_orchestrator_dispatched(_RUN_KEY, "orch-step", "inference-step")
     assert store.orchestrator_dispatched(_RUN_KEY) is True
     assert store.orchestrator_present(_RUN_KEY) is False  # no terminal capture → maybe-ran
-    store.record_orchestrator(_RUN_KEY, "orch-step", {"plan": "delegate"})  # now captured
+    store.record_orchestrator(
+        _RUN_KEY, "orch-step", {"plan": "delegate"}, WorkerSelection.DECLARED_POOL
+    )  # now captured
     assert store.orchestrator_present(_RUN_KEY) is True
     assert store.orchestrator_dispatched(_RUN_KEY) is True  # both coexist
 

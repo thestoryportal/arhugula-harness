@@ -49,6 +49,7 @@ from harness_cp.pause_resume_protocol_types import (
     ResumeContext,
     require_ref_binds_snapshot,
 )
+from harness_cp.sub_agent_brief import SubAgentBrief
 from harness_cp.validator_framework_types import ValidatorRunBinding
 
 
@@ -452,6 +453,14 @@ class StepExecutionContext(BaseModel):
     [LAW:types-are-the-program] exception: defaults to `None` because a required field would
     change 60 out-of-slice test constructions; the Runtime v1.138 §14.13.9 nested witnesses
     and drop-the-field mutants enforce every driver site."""
+
+    lead_brief: SubAgentBrief | None = Field(default=None, exclude=True, repr=False)
+    """CP v1.130 §25.11.1.4(4) — this worker's lead-authored brief from its
+    `WorkerAssignment`: set for every `LEAD_PLAN` sub-agent worker, `None` for every other
+    context (all `DECLARED_POOL` workers, orchestrators, linear steps). Hash-inert and
+    non-persistent like `validator_run`; every resume re-derives it from the recorded
+    orchestrator output. Runtime's sub-agent composer is its only reader (Runtime v1.140
+    §14.7.2 step 1), which makes it the effective brief at every later reader."""
 
     child_resume: PausedChildCapture | None = None
     """B-HIERARCHICAL-PAUSE (R-FS-1) — on RESUME, the `PauseSnapshot` a recursive
