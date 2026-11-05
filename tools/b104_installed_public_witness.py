@@ -415,16 +415,17 @@ def _config(layout: Layout) -> Any:
     return RuntimeConfigSource.load(config_file=layout.config)
 
 
-def _record(layout: Layout, config: Any) -> dict[str, object]:
+def _record(config: Any) -> dict[str, object]:
     """The journal's latest record for the workflow, as its exact ref, via installed code."""
     from harness_core import JournalRecordRef
-    from harness_runtime.lifecycle.journal_workflow_pause_store import (
-        JournalWorkflowPauseStore,
-        pause_journal_dir_for,
-    )
+    from harness_runtime.lifecycle.journal_workflow_pause_store import JournalWorkflowPauseStore
+    from harness_runtime.lifecycle.pause_journal_root_resolver import resolve_pause_journal_root
     from harness_runtime.lifecycle.protected_result_store import normalize_tenant_scope
 
-    journal_dir = pause_journal_dir_for(layout.ledger_dir)
+    # [LAW:one-source-of-truth] The installed Runtime's one resolver names the journal root, and
+    # the claim store is placed at the same resolved directory (`_store(record["journal_dir"])`);
+    # an unbound or unresolved installation raises here, before any journal read.
+    journal_dir = resolve_pause_journal_root(config)
     read = JournalWorkflowPauseStore(
         journal_dir=journal_dir, tenant_id=config.tenant_id
     ).read_latest_attributed(WORKFLOW_ID)
@@ -523,7 +524,7 @@ def _resume_outcome(layout: Layout, marker: Path, *, hold: bool) -> dict[str, ob
         }
     else:
         outcome = {"outcome": "returned", "status": result.status}
-    record = _record(layout, config)
+    record = _record(config)
     _placement, store = _store(record["journal_dir"], config)
     outcome["ref"] = _ref_json(record["ref"])
     outcome["claim"] = _claim_view(store, record["ref"])
@@ -539,7 +540,7 @@ def phase_capture(layout: Layout) -> dict[str, object]:
     config = _config(layout)
     result = asyncio.run(api.run(_workflow(None), config=config))
     snapshot = result.pause_snapshot
-    record = _record(layout, config)
+    record = _record(config)
     _placement, store = _store(record["journal_dir"], config)
     journal_file = store.paths_for(record["ref"]).journal
     return {
@@ -561,7 +562,7 @@ def phase_resume_a(layout: Layout) -> dict[str, object]:
 
 def phase_observe_held(layout: Layout) -> dict[str, object]:
     config = _config(layout)
-    record = _record(layout, config)
+    record = _record(config)
     _placement, store = _store(record["journal_dir"], config)
     return {"ref": _ref_json(record["ref"]), "claim": _claim_view(store, record["ref"])}
 
@@ -594,7 +595,7 @@ def phase_recover(layout: Layout) -> dict[str, object]:
     from harness_runtime.lifecycle.resume_claim_store import parse_claim
 
     config = _config(layout)
-    record = _record(layout, config)
+    record = _record(config)
     ref = record["ref"]
     placement, store = _store(record["journal_dir"], config)
     claim = store.paths_for(ref).claim

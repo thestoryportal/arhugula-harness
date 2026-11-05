@@ -21,13 +21,32 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from harness_is.pause_journal_root import UnresolvedCause
+from harness_runtime.config import state_placement
+from harness_runtime.lifecycle import journal_workflow_pause_store as journal_module
+from harness_runtime.lifecycle.pause_journal_root_resolver import PauseJournalRootUnresolvedError
+from harness_runtime.lifecycle.resume_claim_store import ResumeClaimStore
+from harness_runtime.types import RuntimeConfig
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import installed_witness_provenance as prover
 import preaction_installed_witness as pw
-from test_b104_installed_public_witness import Alias, kernel_state, leader_reaped, settle_children
+from test_b104_installed_public_witness import (
+    UNRESOLVED_INSTALLATIONS,
+    Alias,
+    JournalUntouchable,
+    installation_declaring,
+    kernel_state,
+    leader_reaped,
+    seed_pause,
+    settle_children,
+    witness_config,
+)
 from test_b104_installed_public_witness import alias as alias  # the shared alias fixture
+from test_b104_installed_public_witness import (
+    declared_root as declared_root,
+)  # declared journal root
 from test_b104_installed_public_witness import orphans as orphans  # every test settles its orphans
 from test_installed_witness_provenance import Fixture
 
@@ -1663,3 +1682,56 @@ def test_verified_paths_come_only_from_a_record_the_prover_parses() -> None:
     for broken in broken_records:
         with pytest.raises(ValueError, match="not parseable provenance"):
             pw.verified_paths(broken)
+
+
+def test_latest_root_and_claim_view_read_one_declared_root(
+    declared_root: tuple[Path, RuntimeConfig],
+) -> None:
+    journal_root, config = declared_root
+    seed_pause(journal_root, pw.ROOT_ID)
+    record = pw._latest_root(config)  # pyright: ignore[reportPrivateUsage]
+    # The claim path as the installed claim store places it under the declared root itself.
+    claim = (
+        ResumeClaimStore(
+            placement=state_placement.place_state_dir(
+                journal_root, config, state_placement.probe_declared_state_root(config), what="test"
+            ),
+            tenant_id=config.tenant_id,
+        )
+        .paths_for(record.ref)
+        .claim
+    )
+
+    absent = pw._claim_view(config, record)  # pyright: ignore[reportPrivateUsage]
+    claim.parent.mkdir(parents=True, exist_ok=True)
+    claim.write_bytes(b"not a claim")
+
+    assert (record.journal_dir, record.ref.workflow_id) == (journal_root.resolve(), pw.ROOT_ID)
+    assert absent == {"phase": "absent", "claim_sha256": None}
+    invalid = pw._claim_view(config, record)  # pyright: ignore[reportPrivateUsage]
+    assert invalid == {
+        "phase": "invalid",
+        "claim_sha256": hashlib.sha256(b"not a claim").hexdigest(),
+    }
+
+
+@pytest.mark.parametrize(
+    ("cause", "roots"),
+    UNRESOLVED_INSTALLATIONS.items(),
+    ids=[c.value for c in UNRESOLVED_INSTALLATIONS],
+)
+def test_latest_root_refuses_an_unresolved_installation_before_any_journal_access(
+    cause: UnresolvedCause,
+    roots: Callable[[Path], tuple[Path, ...]],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(journal_module, "JournalWorkflowPauseStore", JournalUntouchable)
+
+    with (
+        installation_declaring(*roots(tmp_path)),
+        pytest.raises(PauseJournalRootUnresolvedError) as raised,
+    ):
+        pw._latest_root(witness_config(tmp_path))  # pyright: ignore[reportPrivateUsage]
+
+    assert raised.value.cause is cause
