@@ -51,6 +51,7 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import json
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -58,10 +59,16 @@ from typing import TYPE_CHECKING, Any, cast
 
 from mcp.server.fastmcp import Context, FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
+from mcp.types import CallToolResult, TextContent
 
 from harness_runtime.lifecycle.inter_step_output_channel import (
     INTER_STEP_CHANNEL_VAR,
     InterStepOutputChannel,
+)
+from harness_runtime.lifecycle.root_resume_admission import (
+    UNCLAIMED,
+    ResumeAdmission,
+    ResumeClaimRefusedError,
 )
 
 _MANIFEST_PATH_SUFFIXES: frozenset[str] = frozenset({".yaml", ".yml", ".toml"})
@@ -98,10 +105,16 @@ def _looks_like_manifest_path(workflow_id: str) -> bool:
 
 
 if TYPE_CHECKING:
+    from harness_cp.pause_resume_protocol_types import PauseSnapshot, ResumeContext
+
     from harness_runtime.api import WorkflowObject
+    from harness_runtime.resume_refusal import ResumeRefusalError
 
 __all__ = [
+    "FreshEntry",
     "HarnessMCPServer",
+    "ResumedEntry",
+    "RootEntry",
     "materialize_mcp_server_stage",
 ]
 
@@ -115,6 +128,35 @@ __all__ = [
 _CURRENT_TOOL_CTX: contextvars.ContextVar[Context[Any, Any] | None] = contextvars.ContextVar(
     "harness.current_tool_ctx", default=None
 )
+
+
+@dataclass(frozen=True)
+class FreshEntry:
+    """A fresh run: a new `run_id`, outside the claim contract, no snapshot or resume context."""
+
+    run_id: str = field(default_factory=lambda: uuid.uuid4().hex)
+    pause_snapshot: None = field(default=None, init=False)
+    resume_context: None = field(default=None, init=False)
+    admission: ResumeAdmission = field(default=UNCLAIMED, init=False)
+
+
+@dataclass(frozen=True)
+class ResumedEntry:
+    """A resume: the paused snapshot keeps its own `run_id`; the admission and one-shot
+    resume context come from the one root admission (`api.admit_root_resume`)."""
+
+    pause_snapshot: PauseSnapshot
+    admission: ResumeAdmission
+    resume_context: ResumeContext | None
+
+    @property
+    def run_id(self) -> str:
+        return self.pause_snapshot.run_id
+
+
+# [LAW:types-are-the-program] Runtime spec v1.141 §3.1: the body receives exactly one of these,
+# so a snapshot with a fresh `run_id`, or a durable admission without a snapshot, has no value.
+type RootEntry = FreshEntry | ResumedEntry
 
 # B-INTERSTEP-PERRUN-ISOLATION (runtime spec §14.21 C-RT-34 invariant 7;
 # B-INTERSTEP fork §3/§5) — SUPERSEDES B-INTERSTEP's per-loop single-flight
@@ -221,6 +263,24 @@ class HarnessMCPServer:
         _CURRENT_TOOL_CTX.reset(token)
 
 
+def _admission_refusals() -> tuple[type[ResumeRefusalError], ...]:
+    """Every typed refusal the root admission can raise, derived from the closed union."""
+    from typing import get_args
+
+    from harness_runtime.resume_refusal import ResumeRefusalError
+
+    return cast("tuple[type[ResumeRefusalError], ...]", get_args(ResumeRefusalError.__value__))
+
+
+def _refusal_reply(error: ResumeRefusalError) -> CallToolResult:
+    """The v1.137 §D.2 refusal reply: `isError` and exactly one closed refusal object."""
+    from harness_runtime.resume_refusal import project, to_json
+
+    return CallToolResult(
+        isError=True, content=[TextContent(type="text", text=to_json(project(error)))]
+    )
+
+
 def materialize_mcp_server_stage(
     *,
     drain_timeout_seconds: float,
@@ -266,8 +326,6 @@ def materialize_mcp_server_stage(
     from harness_cp.workflow_driver_types import ChildResumeAuthority
     from harness_cp.workflow_driver_types import RunResult as _CpRunResult
 
-    from harness_runtime.lifecycle.root_resume_admission import UNCLAIMED, ResumeAdmission
-
     _compute_hitl_fallback_eligible_run_id = (
         _workflow_driver.compute_hitl_uniform_fallback_eligible_run_id
     )
@@ -293,38 +351,7 @@ def materialize_mcp_server_stage(
     workflow_registry: dict[str, Any] = {}
     state: dict[str, Any] = {}
 
-    @fastmcp.tool()
-    async def run_workflow(  # pyright: ignore[reportUnusedFunction] — registered via @fastmcp.tool() decorator
-        workflow_id: str, ctx: Context[Any, Any]
-    ) -> dict[str, Any]:
-        """Execute one workflow per the v1.12 H_T-as-MCP-server topology.
-
-        The workflow body executes inside this tool handler's `ctx` per the
-        topology pin. The HITL gate composer (per U-RT-60) bridges back to
-        the main loop via `SyncDispatcherFacade.run_coroutine_threadsafe`
-        and reaches `await ctx.elicit(...)` through
-        `ServerCtxElicitCallback` (per AC #4) which reads this `ctx` from
-        the module-level `_CURRENT_TOOL_CTX` ContextVar bound below. Each
-        concurrent `run_workflow` invocation runs in its own asyncio task
-        and sees its own ContextVar value per spec v1.36 §14.18 chapeau
-        per-session ctx isolation.
-
-        Parameters
-        ----------
-        workflow_id
-            Key into `workflow_registry`; the operator-supplied
-            `WorkflowObject` was pre-registered by `api.run()` per AC #5.
-        ctx
-            In-flight FastMCP tool handler context; carries the active
-            server session for outbound `ctx.elicit(...)` calls.
-
-        Returns
-        -------
-        dict[str, Any]
-            JSON-serializable form of the CP driver's `RunResult`. The
-            `api.run()` caller per AC #5 re-parses into the CP model and
-            projects to the runtime-facing `RunResult` per C-RT-09.
-        """
+    def _bound_harness_ctx() -> Any:
         harness_ctx = state.get("_harness_ctx")
         if harness_ctx is None:
             raise RuntimeError(
@@ -333,7 +360,9 @@ def materialize_mcp_server_stage(
                 "The tool is intended for in-process invocation from `api.run()` "
                 "per spec v1.12 §14.8.3 topology pin (Reading α)."
             )
+        return harness_ctx
 
+    def _resolve_workflow(workflow_id: str) -> WorkflowObject:
         # workflow_id discriminator per `.harness/class_1_fork_u_rt_107_daemon_
         # run_workflow_signature_underspec.md` Reading (A) + Q2=(i) ratification
         # 2026-05-28. workflow_id is treated as a filesystem path iff it
@@ -364,28 +393,31 @@ def materialize_mcp_server_stage(
                     f"`WorkflowObject` keyed by `workflow.workflow_id` before "
                     f"invoking the `run_workflow` tool per AC #5."
                 )
+        return workflow
 
-        # C-RT-35 (R-CC-1 arc #3) resume path. `api.resume()` binds an
-        # in-process `_resume_pause_snapshot` on `_state` (NOT over the MCP
-        # wire — mirrors `_harness_ctx`). When present, this invocation is a
-        # resume: reuse the snapshot's `run_id` for audit/ledger coherence
+    async def _run_root(
+        harness_ctx: Any, workflow: WorkflowObject, entry: RootEntry, ctx: Context[Any, Any]
+    ) -> dict[str, Any]:
+        """The one workflow body both tools share; `entry` alone says fresh or resumed."""
+        # C-RT-35 (R-CC-1 arc #3) resume path. A resumed entry (Runtime spec v1.141
+        # §3) reuses the snapshot's `run_id` for audit/ledger coherence
         # (resume *position* comes from `snapshot.step_index` via the driver's
         # entry-point override, not from run_id) + thread the snapshot to the
         # driver as `pause_snapshot_input=` so entry-point resume detection
         # (`workflow_driver.py` C-RT-24 §14.14.3) fires.
-        _resume_snapshot = state.get("_resume_pause_snapshot")
-        run_id = _resume_snapshot.run_id if _resume_snapshot is not None else uuid.uuid4().hex
-        # B-104 — how the worker admits its body: `api.resume` binds a `DurableRootResume`
-        # for a `resume_handle` read; a fresh run or caller-supplied snapshot is UNCLAIMED.
-        # Read HERE, once, so after a drain timeout the worker holds its own admission and
-        # nothing is read back from `_state`.
-        _admission: ResumeAdmission = state.get("_resume_admission", UNCLAIMED)
+        _resume_snapshot = entry.pause_snapshot
+        run_id = entry.run_id
+        # B-104 — how the worker admits its body: a durable handle's admission is a
+        # `DurableRootResume`; a fresh run or caller-supplied snapshot is UNCLAIMED. The
+        # entry is this invocation's own argument, so after a drain timeout the worker
+        # holds its own admission and nothing is read back from shared state.
+        _admission: ResumeAdmission = entry.admission
         # B-39 impl leg Slice B (CP spec v1.106 §1) — the operator's resume payload,
         # threaded as the depth-0 `execute_workflow(resume_context=...)` argument
         # (below) rather than set into a ctx-level `ResumeContextHolder` singleton
         # (retired — see `StepExecutionContext.resume_context`'s docstring for the
         # full per-branch delivery mechanism this replaces).
-        _resume_context = state.get("_resume_context")
+        _resume_context = entry.resume_context
         # B-39 Slice B, codex round-2 [P1] fix (CP spec v1.106 §1.2 property 4) —
         # computed ONCE, HERE, at the true depth-0 root, against the operator's
         # ORIGINAL un-narrowed root `_resume_snapshot` (never recomputed at a
@@ -541,6 +573,87 @@ def materialize_mcp_server_stage(
                 INTER_STEP_CHANNEL_VAR.reset(_channel_token)
             if _cost_token is not None:
                 COST_ACCUM_VAR.reset(_cost_token)
+
+    @fastmcp.tool()
+    async def run_workflow(  # pyright: ignore[reportUnusedFunction] — registered via @fastmcp.tool() decorator
+        workflow_id: str, ctx: Context[Any, Any]
+    ) -> dict[str, Any]:
+        """Execute one workflow per the v1.12 H_T-as-MCP-server topology.
+
+        The workflow body executes inside this tool handler's `ctx` per the
+        topology pin. The HITL gate composer (per U-RT-60) bridges back to
+        the main loop via `SyncDispatcherFacade.run_coroutine_threadsafe`
+        and reaches `await ctx.elicit(...)` through
+        `ServerCtxElicitCallback` (per AC #4) which reads this `ctx` from
+        the module-level `_CURRENT_TOOL_CTX` ContextVar bound below. Each
+        concurrent `run_workflow` invocation runs in its own asyncio task
+        and sees its own ContextVar value per spec v1.36 §14.18 chapeau
+        per-session ctx isolation.
+
+        Parameters
+        ----------
+        workflow_id
+            Key into `workflow_registry`; the operator-supplied
+            `WorkflowObject` was pre-registered by `api.run()` per AC #5.
+        ctx
+            In-flight FastMCP tool handler context; carries the active
+            server session for outbound `ctx.elicit(...)` calls.
+
+        Returns
+        -------
+        dict[str, Any]
+            JSON-serializable form of the CP driver's `RunResult`. The
+            `api.run()` caller per AC #5 re-parses into the CP model and
+            projects to the runtime-facing `RunResult` per C-RT-09.
+        """
+        harness_ctx = _bound_harness_ctx()
+        workflow = _resolve_workflow(workflow_id)
+        # Track A: `api.resume` hands its resumed entry over its own per-call server's
+        # `_state` while holding `_run_lock`; the daemon never writes it, so a daemon
+        # `run_workflow` is always fresh (Runtime spec v1.141 §3.2-§3.3).
+        entry: RootEntry = state.get("_root_entry") or FreshEntry()
+        return await _run_root(harness_ctx, workflow, entry, ctx)
+
+    @fastmcp.tool()
+    async def resume_workflow(  # pyright: ignore[reportUnusedFunction] — registered via @fastmcp.tool() decorator
+        workflow_id: str, ctx: Context[Any, Any], resume_context: dict[str, Any] | None = None
+    ) -> CallToolResult:
+        """Resume the latest durable pause of one workflow (Runtime spec v1.141).
+
+        `workflow_id` resolves exactly as for `run_workflow` and is the resume handle; the
+        tenant and journal come from the daemon's own configuration. A recognized refusal
+        replies `isError` with one closed refusal object (`harness.resume-refusal.v1`);
+        any other outcome is the `run_workflow` RunResult JSON.
+        """
+        from harness_runtime.api import DurableHandle, admit_root_resume, parse_resume_context
+
+        harness_ctx = _bound_harness_ctx()
+        workflow = _resolve_workflow(workflow_id)
+        try:
+            entry = await admit_root_resume(
+                workflow,
+                DurableHandle(workflow.workflow_id),
+                parse_resume_context(resume_context),
+                harness_ctx.config,
+            )
+        except Exception as exc:
+            # `except` cannot narrow to a union alias; `isinstance` over the same tuple can.
+            if not isinstance(exc, _admission_refusals()):
+                raise
+            return _refusal_reply(exc)
+        try:
+            result = await _run_root(harness_ctx, workflow, entry, ctx)
+        except ResumeClaimRefusedError as exc:
+            # [LAW:single-enforcer] The claim at body admission is the daemon's only
+            # serializer (spec v1.141 §2.5). Only the admission's own recorded refusal is
+            # this resume's; a refusal raised inside the body stays the body's.
+            if exc is not entry.admission.refusal:
+                raise
+            return _refusal_reply(exc)
+        return CallToolResult(
+            content=[TextContent(type="text", text=json.dumps(result))],
+            structuredContent=result,
+        )
 
     return HarnessMCPServer(
         server=fastmcp,
