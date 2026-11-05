@@ -49,7 +49,7 @@ class WorkerSelection(StrEnum):
 class WorkerAssignment(BaseModel):    # frozen, extra="forbid"
     step: WorkflowStep                # a member of the declared worker pool
     declared_index: int               # the step's ordinal in `steps` (orchestrator = 0)
-    brief: SubAgentBrief | None       # None = the step's declared brief applies
+    brief: SubAgentBrief | None       # set iff LEAD_PLAN and step is SUB_AGENT_DISPATCH
 
 class WorkerPlan(BaseModel):          # frozen, extra="forbid"
     assignments: tuple[WorkerAssignment, ...]
@@ -85,11 +85,14 @@ change any of those properties.
 
 1. `DECLARED_POOL` returns one assignment per pool step, in pool order, each with `brief=None`. It
    does not read `orchestrator_output`. Every variant sets `declared_index` to the pool position
-   plus one, so it is fixed by the declaration and never by the plan. A `worker_plan` key in the output has no effect.
+   plus one, so it is fixed by the declaration and never by the plan. A `worker_plan` key in the
+   output has no effect.
 2. `LEAD_PLAN` reads `orchestrator_output["worker_plan"]`. The value MUST be a sequence (not a
-   string or mapping) of mappings, each with exactly the keys `worker` (a pool `step_id` string) and
-   optionally `brief`. Assignments keep the sequence order.
-3. `brief`, when present, holds exactly the four C-CP-13 §13.2 fields (`objective`,
+   string or mapping) of mappings. Each has the key `worker` (a pool `step_id` string). It has the key
+   `brief` if and only if that worker's `step_kind` is `SUB_AGENT_DISPATCH`. Assignments keep the
+   sequence order. Under `LEAD_PLAN` every sub-agent worker's brief is therefore lead-authored and
+   recorded in the orchestrator output. No assignment falls back to the declared payload brief.
+3. `brief` holds exactly the four C-CP-13 §13.2 fields (`objective`,
    `output_format`, `guidance`, `task_boundaries`). The parser computes `summary_hash` with
    `compute_brief_summary_hash` and builds the `SubAgentBrief`. A supplied `summary_hash` is an
    extra key and is rejected, so the hash has one source.
@@ -101,6 +104,7 @@ change any of those properties.
    - `unknown-worker:<id>`: the id names no pool member, including the orchestrator and a carved
      synthesis step;
    - `duplicate-worker:<id>`: an id appears twice;
+   - `missing-brief:<id>`: a `SUB_AGENT_DISPATCH` worker has no brief;
    - `brief-on-non-subagent:<id>`: a brief is attached to a worker whose `step_kind` is not
      `SUB_AGENT_DISPATCH`;
    - `malformed-brief:<id>`: the brief fails `SubAgentBrief` validation.
@@ -130,8 +134,8 @@ change any of those properties.
 4. **Brief carrier.** `StepExecutionContext` gains
    `lead_brief: SubAgentBrief | None = Field(default=None, exclude=True, repr=False)`, the same
    carrier shape as `validator_run` (v1.129 §28.11.5). The driver sets it from
-   `WorkerAssignment.brief` on each worker's context only. Under `DECLARED_POOL` it is always
-   `None`. It is absent from every `model_dump`, so it never enters a hash, ledger row or pause
+   `WorkerAssignment.brief` on each worker's context only. It is set for every `LEAD_PLAN`
+   sub-agent worker and is `None` for every other worker, including all `DECLARED_POOL` workers. It is absent from every `model_dump`, so it never enters a hash, ledger row or pause
    snapshot. It is re-derived from the recorded orchestrator output on every resume (§25.11.1.5).
    Runtime's sub-agent composer is the only reader (paired Runtime v1.140).
 5. **Empty plan.** Zero assignments drains zero workers. Without a synthesis step the strategy returns
@@ -199,9 +203,11 @@ change any of those properties.
    - Pause and crash resume compare the recorded selection with the resumed manifest's before
      deriving the plan. A difference returns `RunStatus.FAILED` with
      `fail_class = "orchestrator-workers-selection-mismatch"`, with no orchestrator or worker dispatch.
-   - Under `DECLARED_POOL` a worker's brief comes from its declared payload, which resume does not
-     compare. That is unchanged from v1.129. Under `LEAD_PLAN` every lead brief is re-derived from
-     the recorded output, so an unchanged selection reproduces the same briefs.
+   - Under `LEAD_PLAN` every sub-agent brief comes from the recorded output (§25.11.1.3(2)). An
+     unchanged selection therefore reproduces the same briefs, and a changed declared payload brief
+     has no effect on a resumed `LEAD_PLAN` run.
+   - Under `DECLARED_POOL` a worker's brief comes from its declared payload. Resume does not compare
+     step payloads under either selection; that is unchanged from v1.129 and is not widened here.
 
 ### §25.11.1.6 `HIERARCHICAL_DELEGATION`
 
@@ -234,6 +240,7 @@ discriminating mutant is listed for each, and the witness fails under it.
 | W5 | Empty plan: `SUCCESS` with `worker_outputs == {}`. With a synthesis step: `post-join-synthesis-no-siblings` | Empty plan treated as invalid, or as "all workers" |
 | W6 | `cascade_policy=pause`, plan `[c,a]`, a fails → `PAUSED`. Resume does not re-dispatch the orchestrator, keeps c's recorded output and re-dispatches only a. A resumed manifest whose plan differs fails with the existing identity mismatch | Resume deriving `worker_steps` from the declared pool |
 | W6b | Same worker list, changed selection: a `LEAD_PLAN` run over pool `[a,b]` with plan `[a,b]` and a lead brief on b pauses after a completes. Resuming under `DECLARED_POOL` returns `orchestrator-workers-selection-mismatch` with no dispatch. A `DECLARED_POOL` pause resumed under `LEAD_PLAN` gets the same result. The same check holds on crash resume through the store record | Selection not recorded; b re-dispatched with its declared brief beside a's lead-plan output |
+| W6d | Same selection, same worker list, changed declared brief: a `LEAD_PLAN` run over pool `[a,b]`, both `SUB_AGENT_DISPATCH`, plan `[a,b]` with lead briefs, pauses after a completes. On pause resume and crash resume, b's declared payload brief is changed. b re-dispatches with its recorded lead brief, and the changed declared brief reaches no reader | Optional lead brief falling back to the declared payload brief |
 | W6c | A pause snapshot and a store record written without `worker_selection` resume as `DECLARED_POOL`. A `LEAD_PLAN` run on a store whose `record_orchestrator` lacks the parameter fails `orchestrator-workers-plan-store-unsupported` before the orchestrator dispatches | Absent selection read as `LEAD_PLAN`; a `LEAD_PLAN` record written without its selection |
 | W7a | Completed-branch path: crash after the orchestrator record and c's completion (plan `[c,a]`, pool of 3). Resume succeeds with no `worker-count-mismatch`, dispatches only a with `step_index` 1, and never re-dispatches c | `_determine_fanout_resume` returning `worker_count = len(steps) - 1`; recovery contexts using `branch_index + 1` |
 | W7b | Cardinality-only and timeout path: same plan, no completed branch. A stale dispatch marker at planned ordinal 2 (inside the declared count, outside the planned count) fails closed at the driver gate. Under `RE_DISPATCH`, a timed-out marker at planned ordinal 2 is refire-unsafe. A resumed body with a changed pool size still fails the recorded-cardinality check | `_card_branch_count` or the timeout `_branch_count` sized from the pool; the cardinality check dropped or switched to plan length |

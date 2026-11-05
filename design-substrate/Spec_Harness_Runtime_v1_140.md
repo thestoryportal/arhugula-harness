@@ -33,9 +33,9 @@ cleared; no source, CI, landing or installed claim.**
    539-540), the dispatch `response_hash` (line 749) and the gate-level descent `sub_agent_brief`
    (line 933). All of them consume the effective payload, so the child's handoff, descent and audit
    join key agree on one brief.
-3. **Unchanged.** `SubAgentDispatchPayload` keeps `brief` required. A declared brief remains the
-   default for every worker that the lead plan does not re-brief, and for every
-   `DECLARED_POOL` run. Child identity (`child_workflow_id`), manifest and steps come only from the
+3. **Unchanged.** `SubAgentDispatchPayload` keeps `brief` required. The declared brief applies to
+   every `DECLARED_POOL` run. Under `LEAD_PLAN`, CP v1.130 §25.11.1.3(2) gives every sub-agent
+   worker a lead brief, so the declared brief reaches no reader. Child identity (`child_workflow_id`), manifest and steps come only from the
    declared payload.
 
 ## §2 Witnesses
