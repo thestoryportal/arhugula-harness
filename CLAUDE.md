@@ -67,7 +67,7 @@ Canonical spec heads — **one family per row, so each version stays bound to it
 | AS | `Spec_Action_Surface_v1.md` | **v1.14** (cleared 2026-07-15) |
 | CP | `Spec_Control_Plane_v1_130.md` | **v1.130** (cleared 2026-11-05) |
 | OD | `Spec_Operational_Discipline_v1_43.md` | **v1.43** (cleared 2026-11-04) |
-| Runtime | `Spec_Harness_Runtime_v1_140.md` | **v1.140** (cleared 2026-11-05) |
+| Runtime | `Spec_Harness_Runtime_v1_141.md` | **v1.141** (cleared 2026-11-05) |
 | Memory | `Spec_Memory_Substrate_v1.md` | **v1.3** (cleared 2026-08-06) |
 
 Full per-version change-note lineage lives at `.harness/artifact-pointers/spec-heads.md` and, per family, at `.harness/artifact-pointers/{is,as,cp,od,runtime,memory}.md` — **query, do not read wholesale** (`rg <term> .harness/artifact-pointers/*.md`).
@@ -83,7 +83,7 @@ Canonical plan heads — one family per row (same adjacency rule as §2.3):
 | AS | `Implementation_Plan_Action_Surface_v1_6.md` (v1.6, cleared 2026-07-15) |
 | CP | `Implementation_Plan_Control_Plane_v2_55.md` |
 | OD | `Implementation_Plan_Operational_Discipline_v2_37.md` |
-| Runtime | `Implementation_Plan_Harness_Runtime_v2_68.md` |
+| Runtime | `Implementation_Plan_Harness_Runtime_v2_69.md` |
 | CXA | `Cross_Axis_Composition_Document_v2_23.md` |
 | Memory | `Implementation_Plan_Memory_Substrate_v1.md` v1.3 (cleared 2026-08-06) |
 

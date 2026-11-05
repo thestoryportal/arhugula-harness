@@ -1,7 +1,7 @@
 # Implementation Plan: Harness Runtime — v2.69 (delta over v2.68)
 
-**Status: PROPOSED.** Not cleared. Implements Runtime spec v1.141 (PROPOSED). Independent review,
-integration-lead ratification and a clearance marker are owed before any source claims conformance.
+**Status: CLEARED 2026-11-05** — ratified with Runtime spec v1.141 at LIT `cmt-1a94786f-b490-4013-afc3-1131aaebdaf9` on the frozen reviewed
+body `903cbdd414c26e789dfd85f3cb582bad164c4228`; clearance `.harness/clearance/implementation-plan-harness-runtime-v2-69-cleared-2026-11-05.md`.
 Grounded on v2.68 (U-RT-160, cleared); plans v2.66 (A5, U-RT-158) and v2.67 (A4, U-RT-159) stay
 separately PROPOSED. This unit is U-RT-161; a unit-ID collision recheck is owed at landing. Spec v1.141
 amends no site v1.138, v1.139 or v1.140 amends. Fork: `.harness/class_1_fork_daemon_mcp_resume.md`.

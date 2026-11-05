@@ -25,7 +25,7 @@ before implementation claims conformance. Claim: LIT `arhugula-harness-trial-193
 
 ## Disposition
 
-- Runtime spec **v1.141** (PROPOSED; amends no site v1.138–v1.140 amends):
+- Runtime spec **v1.141** (CLEARED 2026-11-05; amends no site v1.138–v1.140 amends):
   - a second daemon tool `resume_workflow(workflow_id, resume_context)`; the handle is the resolved
     workflow's ID, and `resume_context` parses into the closed two-variant `ResumeContext`;
   - the pre-body admission extracted into one unit both `api.resume` and the daemon call, over a typed
@@ -47,6 +47,8 @@ before implementation claims conformance. Claim: LIT `arhugula-harness-trial-193
 
 ## Clearance
 
-Not cleared. Owed: independent review of the frozen candidate, integration-lead ratification, then the
-clearance markers for spec v1.141 and plan v2.69 and the derived head rows, and an integration
-collision check of the v1.141/v2.69 numbers and the U-RT-161 unit ID at landing.
+Cleared 2026-11-05: independent GREEN pass 1 `cmt-5f7251b4-f79f-4c0e-b221-192d5544bd39` and integration-lead ratification
+`cmt-1a94786f-b490-4013-afc3-1131aaebdaf9` on frozen `903cbdd414c26e789dfd85f3cb582bad164c4228`. Markers
+`.harness/clearance/spec-harness-runtime-v1-141-cleared-2026-11-05.md` and
+`.harness/clearance/implementation-plan-harness-runtime-v2-69-cleared-2026-11-05.md`. An integration
+collision check of the v1.141/v2.69 numbers and the U-RT-161 unit ID remains owed at landing.

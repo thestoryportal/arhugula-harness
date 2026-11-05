@@ -5,8 +5,10 @@ the daemon's MCP server. It defines the request, its binding to the C-RT-35 dura
 per-invocation resume binding. The refusal reply is v1.137 §D.2, adopted unchanged. Every other v1.140
 and earlier term remains in force.*
 
-**Status: PROPOSED.** Not cleared. Independent review, integration-lead ratification and a clearance
-marker are owed before any source claims conformance.
+**Status: CLEARED 2026-11-05 — ratified by the integration lead at LIT `cmt-1a94786f-b490-4013-afc3-1131aaebdaf9`
+on the frozen reviewed body `903cbdd414c26e789dfd85f3cb582bad164c4228` (independent contract GREEN
+`cmt-5f7251b4-f79f-4c0e-b221-192d5544bd39`); clearance `.harness/clearance/spec-harness-runtime-v1-141-cleared-2026-11-05.md`.
+Contract clearance only; source conformance, CI, landing and installed acceptance remain owed.**
 
 **Filed:** 2026-11-05
 
