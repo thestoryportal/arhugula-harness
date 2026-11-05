@@ -988,3 +988,23 @@ async def test_api_resume_handle_concurrency_guard_precedes_store_read(
     async with _run_lock:  # simulate an in-flight run/resume holding the lock
         with pytest.raises(ConcurrentRunNotSupported):
             await resume(_Workflow(), resume_handle="never-paused", config=config)
+
+
+@pytest.mark.asyncio
+async def test_api_resume_held_lock_precedes_the_protocol_bound_check(tmp_path: Path) -> None:
+    """Runtime spec v1.141 §2.4's one changed edge (W8): the protocol-bound check moved into
+    the admission unit, which runs inside `_run_lock`, so with the lock held a config lacking
+    the pause opt-in now meets `ConcurrentRunNotSupported`, not `ResumeProtocolNotBoundError`.
+    Unheld, the same call still refuses with `ResumeProtocolNotBoundError`."""
+    from harness_runtime.api import (
+        ConcurrentRunNotSupported,
+        ResumeProtocolNotBoundError,
+        _run_lock,
+    )
+
+    config = _config_durable(tmp_path).model_copy(update={"pause_resume_protocol_config": None})
+    async with _run_lock:
+        with pytest.raises(ConcurrentRunNotSupported):
+            await resume(_Workflow(), resume_handle="never-paused", config=config)
+    with pytest.raises(ResumeProtocolNotBoundError):
+        await resume(_Workflow(), resume_handle="never-paused", config=config)
