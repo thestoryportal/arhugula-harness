@@ -411,6 +411,38 @@ def test_orchestrator_record_with_unknown_selection_is_unreadable(tmp_path: Path
     assert store.orchestrator_present(_RUN_KEY) is True
 
 
+def test_orchestrator_unknown_selection_appended_after_valid_is_unreadable(
+    tmp_path: Path,
+) -> None:
+    """A complete later record with an unknown selection must not be skipped in favour of
+    an older valid record (that would re-derive a stale plan on crash resume); a torn
+    trailing line still is (review F1, cmt-a21a9ed0)."""
+    store = EngineOutputStore(journal_dir=tmp_path / "eo")
+    store.record_orchestrator(_RUN_KEY, "orch", {"plan": ["a"]}, WorkerSelection.LEAD_PLAN)
+    path = next((tmp_path / "eo").rglob("orchestrator.jsonl"))
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write('{"step_id": "orch", "out')
+    assert store.read_orchestrator_output(_RUN_KEY) == (
+        "orch",
+        {"plan": ["a"]},
+        WorkerSelection.LEAD_PLAN,
+    )
+    path.write_text(
+        json.dumps({"step_id": "orch", "output": {"plan": ["a"]}, "worker_selection": "lead-plan"})
+        + "\n"
+        + json.dumps(
+            {
+                "step_id": "orch",
+                "output": {"plan": ["b"]},
+                "worker_selection": "future-selection",
+            }
+        )
+        + "\n"
+    )
+    assert store.read_orchestrator_output(_RUN_KEY) is None
+    assert store.orchestrator_present(_RUN_KEY) is True
+
+
 def test_branch_absent_run_returns_empty(tmp_path: Path) -> None:
     """No fan-out journals (config flip / first run) → empty/None, no error."""
     store = EngineOutputStore(journal_dir=tmp_path / "eo")

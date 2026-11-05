@@ -295,7 +295,9 @@ class EngineOutputStore:
         orchestrator file (including an unknown selection value) is surfaced by
         `orchestrator_present` so the caller fails closed (the symmetric of the per-branch
         corrupt-detection). A record without a selection predates CP v1.130 and reads as
-        `DECLARED_POOL`, the only selection that existed then.
+        `DECLARED_POOL`, the only selection that existed then. A torn (incomplete) line is
+        skipped, but a complete record with an unknown selection makes the whole journal
+        unreadable: skipping it would resurrect an older record and a stale plan.
         """
         path = self._orchestrator_file(run_key)
         if not path.exists():
@@ -306,7 +308,10 @@ class EngineOutputStore:
             return None
         result: tuple[str, dict[str, Any], WorkerSelection] | None = None
         for line in lines:
-            parsed = self._parse_orchestrator_record(line)
+            try:
+                parsed = self._parse_orchestrator_record(line)
+            except ValueError:
+                return None
             if parsed is not None:
                 result = parsed  # last readable record wins, as for branch files
         return result
@@ -315,16 +320,15 @@ class EngineOutputStore:
     def _parse_orchestrator_record(
         cls, line: str
     ) -> tuple[str, dict[str, Any], WorkerSelection] | None:
+        """Parse one orchestrator line; None for a torn line, ValueError for a complete
+        record whose ``worker_selection`` is unknown."""
         branch = cls._parse_branch_record(line)
         if branch is None:
             return None
         raw = cast("dict[str, object]", json.loads(line)).get(
             "worker_selection", WorkerSelection.DECLARED_POOL.value
         )
-        try:
-            return (*branch, WorkerSelection(raw))
-        except ValueError:
-            return None
+        return (*branch, WorkerSelection(raw))
 
     def orchestrator_present(self, run_key: str) -> bool:
         """Whether an orchestrator journal FILE exists (regardless of readability)."""
