@@ -2474,6 +2474,7 @@ async def test_ac5_sigint_mid_multi_step_produces_drained_resumable_state(
 
 def test_ac6_daemon_concurrent_two_clients_complete_independently(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     """AC #6 — concurrent run_workflow invocations from distinct MCP client
     sessions complete independently per spec v1.36 §14.18 chapeau (line 65)
@@ -2565,7 +2566,13 @@ def test_ac6_daemon_concurrent_two_clients_complete_independently(
     monkeypatch.setattr("harness_cp.workflow_driver.execute_workflow", _fake_execute_workflow)
 
     server = materialize_mcp_server_stage(drain_timeout_seconds=30.0)
-    server._state["_harness_ctx"] = SimpleNamespace(step_dispatchers=None, validator_framework=None)
+    # Each fresh run's admission (Runtime spec v1.137 Rule B1) reads the ledger dir and tenant.
+    server._state["_harness_ctx"] = SimpleNamespace(
+        step_dispatchers=None,
+        validator_framework=None,
+        ledger_writer=SimpleNamespace(handle=SimpleNamespace(canonical_path=tmp_path / "s.jsonl")),
+        config=SimpleNamespace(tenant_id=None),
+    )
 
     def _fake_workflow(wf_id: str) -> SimpleNamespace:
         return SimpleNamespace(

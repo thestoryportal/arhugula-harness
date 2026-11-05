@@ -221,10 +221,9 @@ async def test_a_second_resume_inside_the_first_body_is_claim_refused_and_runs_n
     assert (harness.phase(ref), harness.lease(ref)) == ("started", "free")
 
 
-# --- W3: a fresh run admitted after the resume's reads supersedes its record (prepared) ---------
+# --- W3: a fresh run admitted after the resume's reads supersedes its record --------------------
 
 
-@pytest.mark.xfail(strict=True, reason="a fresh daemon run does not yet supersede the pause record")
 @pytest.mark.asyncio
 async def test_a_fresh_run_after_the_resume_reads_leaves_the_resume_refused(
     harness: Harness, monkeypatch: pytest.MonkeyPatch
