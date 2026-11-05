@@ -3,6 +3,20 @@ name: roadmap-continue
 description: Run one iteration of the workspace roadmap loop — the "continue" ritual — end to end. Use when the operator says "/roadmap-continue", "continue", "drive the roadmap", "next action", or otherwise asks the agent to pick up and advance the next roadmap item. Codifies the §12 loop (session-start audit → derive next action → ground empirically → implement with tests → PR) so it runs the same way every time. Do NOT use to merely report status (that is read-only) — use it to actually advance an item.
 ---
 
+**Delivery policy selection.** For the tracked
+`review_rules.delivery=single-independent-milestone-status-v1`, read
+`docs/delivery-policy.md` before work. It replaces contrary default
+review-stack, full-local-suite and per-merge status-PR requirements in the legacy
+procedure below. Continue independent isolated work during CI; retain candidate
+CI, acceptance, findings, budgets and in-flight legacy obligations.
+
+
+The direct instruction "Eliminate the gemini requirement" selects a separate
+independent reviewer session of any model family. Follow delivery-policy.md's
+native-session evidence route; author/correction-author self-approval remains
+forbidden. No mandatory Gemini, fallback or shadow step is owed, including when
+retaining legacy findings and spent passes. Preserve actual disclosure denials.
+
 # roadmap-continue — one turn of the roadmap loop (U-HK-23)
 
 The single-command form of the "continue" ritual. This skill does **not** re-state the

@@ -93,7 +93,7 @@ fi
 # landing none -- so this session owes no follow-on refresh.
 if RULE=$(hook_refresh_rule); then RULE_NOTE=""; else RULE_NOTE=" (refresh rule unreadable; legacy kept)"; fi
 if [ "$RULE" = trial ]; then
-  emit "[ROADMAP] substantive merge detected (origin/${DEFAULT_BRANCH} @ ${ORIGIN_HEAD}: \"${ORIGIN_TITLE}\"). The trial profile is active: the merge door rules on this landing's refresh, so no terminating refresh is owed by this session."
+  emit "[ROADMAP] substantive merge detected (origin/${DEFAULT_BRANCH} @ ${ORIGIN_HEAD}: \"${ORIGIN_TITLE}\"). The delivery policy delegates status: the merge door rules on this landing's refresh, so no terminating refresh is owed by this session."
 fi
 
 # --- Substantive merge confirmed: pre-compute the new anchor + remind. ---------

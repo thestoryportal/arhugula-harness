@@ -1,5 +1,16 @@
 # Governance pack — roadmap + drift-detection protocol
 
+**Delivery policy (user-approved 2026-11-04).** When the tracked
+`.harness/workflow-policy.json` selects `single-independent-milestone-status-v1`,
+`docs/delivery-policy.md` governs delivery: one independent review,
+correction delta, focused local checks with qualifying reuse, generated Git/LIT
+status or milestone refresh, and independent isolated work during CI. It replaces
+contrary default review-stack, duplicate full-local-suite, per-merge status-PR,
+cleanup and local-main-sync requirements below. Required exact-candidate CI,
+installed acceptance, recovery proof, findings, budgets and actual denials remain.
+Delivered legacy reviews and recorded refresh intents keep their original gates.
+
+
 *Relocated BYTE-VERBATIM from Root `CLAUDE.md` §12, §12.1, §12.2, §12.3, §12.5, §12.5.1, §12.5.2, §12.5.3, §12.5.4 by U-CTX-13 (R-CTX-1 Arc 5, 2026-08-11).*
 *The root file keeps every heading with its number and position, plus a resolving
 pointer to this file. Query this pack for the detail; do not preload it.*

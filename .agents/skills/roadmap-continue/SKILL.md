@@ -3,6 +3,20 @@ name: roadmap-continue
 description: Use when the operator says /roadmap-continue, continue, next action, drive the roadmap, or asks Codex to advance the next arhugula-v2 item end to end.
 ---
 
+**Delivery policy selection.** For the tracked
+`review_rules.delivery=single-independent-milestone-status-v1`, read
+`docs/delivery-policy.md` before work. It replaces contrary default
+review-stack, full-local-suite and per-merge status-PR requirements in the legacy
+procedure below. Continue independent isolated work during CI; retain candidate
+CI, acceptance, findings, budgets and in-flight legacy obligations.
+
+
+The direct instruction "Eliminate the gemini requirement" selects a separate
+independent reviewer session of any model family. Follow delivery-policy.md's
+native-session evidence route; author/correction-author self-approval remains
+forbidden. No mandatory Gemini, fallback or shadow step is owed, including when
+retaining legacy findings and spent passes. Preserve actual disclosure denials.
+
 # Roadmap Continue
 
 Run the live roadmap loop through a verified fixed point. The canonical authorities are

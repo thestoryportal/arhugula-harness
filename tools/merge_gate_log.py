@@ -885,6 +885,39 @@ def landing_proof(
     return LandingDelta(reviewed, final, tuple(sorted(changed)))
 
 
+def _review_chain_base(repo: Path, rows: list[dict], arc: str, done: rlg.PassRun, base: str) -> str:
+    runs = [r for r in rlg.pass_runs(rows, arc) if r.complete]
+    if runs[0].cycle_pass != "initial" or done.cycle_pass != "correction":
+        return base
+    base_commit = _commit(repo, base)
+    previous = None
+    review_base = base_commit
+    # [LAW:parse-dont-validate] a delta approval carries only a Git-verified chain
+    # from the full initial review; a forged earlier binding cannot be skipped.
+    for run in runs:
+        full_base = rw._git(repo, "merge-base", base_commit, run.head_sha)
+        allowed = {full_base} | ({previous} if run.cycle_pass == "correction" else set())
+        bases = {
+            r["base_sha"]
+            for r in rows
+            if r.get("arc_id") == arc
+            and (r.get("cycle_pass"), r.get("head_sha"), r.get("diff_digest"))
+            == (run.cycle_pass, run.head_sha, run.diff_digest)
+            and rlg._delivering_role(r) is not None
+        }
+        if len(bases) != 1 or not bases <= allowed:
+            raise rlg.TrialInputError("invalid_input", "review binding has an invalid chain base")
+        review_base = next(iter(bases))
+        if rw._git(repo, "merge-base", review_base, run.head_sha) != review_base or (
+            _binding_at(repo, review_base, run.head_sha) != (run.head_sha, run.diff_digest)
+        ):
+            raise rlg.TrialInputError("invalid_input", "review binding does not match Git")
+        if run == done:
+            return review_base
+        previous = run.head_sha
+    raise rlg.TrialInputError("invalid_input", "review binding has no completed chain")
+
+
 def trial_review_decision(
     *,
     policy: rlg.TrialPolicy,
@@ -902,6 +935,8 @@ def trial_review_decision(
     # [LAW:no-ambient-temporal-coupling] one resolved commit supplies both the rows and the
     # proof's final binding, so a moving ref cannot pair one head's log with another's diff
     final = _commit(repo, final_head)
+    base = _commit(repo, base)
+    initial_policy = rlg._streamlined_review(repo, final)
     # [LAW:single-enforcer] the reducer's one doc-only predicate over the Git diff, never a
     # caller label; the permitted gate-row appends are bookkeeping that land after review, so
     # they cannot turn a reviewed Markdown-only subject into a code subject
@@ -912,8 +947,11 @@ def trial_review_decision(
     corrections = rlg.parse_report_corrections(
         _blob(repo, final, _REPORT_CORRECTIONS).decode("utf-8"), rows
     )
-    done = rlg.replay(rows, arc, doc_only=doc_only).completed_by
-    proof = landing_proof(final if done is None else done.head_sha, final, base=base, repo=repo)
+    done = rlg.replay(rows, arc, doc_only=doc_only, initial_policy=initial_policy).completed_by
+    review_base = base if done is None else _review_chain_base(repo, rows, arc, done, base)
+    proof = landing_proof(
+        final if done is None else done.head_sha, final, base=review_base, repo=repo
+    )
     # [LAW:effects-at-boundaries] the pure reducer judges one exact binding; when Git proves
     # only gate rows follow the reviewed head, it judges that head's Git-derived binding, so an
     # approval lands on final only if the recorded review named exactly those bytes
@@ -923,7 +961,9 @@ def trial_review_decision(
         policy=policy,
         unit=unit,
         arc=arc,
-        binding=rlg.TrialBinding(*judged, authors=authors, doc_only=doc_only),
+        binding=rlg.TrialBinding(
+            *judged, authors=authors, doc_only=doc_only, initial_policy=initial_policy
+        ),
     )
 
 
