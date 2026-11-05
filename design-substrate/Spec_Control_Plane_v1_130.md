@@ -6,8 +6,10 @@ v1.32) gains NEW §25.11.1, which defines how the orchestrator's output selects 
 v1.129 and earlier C-CP-01 … C-CP-29 term remains in force. Proposed CP deltas, if any, are not
 amended here.*
 
-**Status: PROPOSED — contract text for independent review and integration-lead ratification. Not
-cleared; no source, CI, landing or installed claim.**
+**Status: CLEARED 2026-11-05 — ratified by the integration lead at LIT `cmt-35ae37ac-54fe-4706-9274-0219dfad7e2b`
+on the frozen reviewed body `78f6dcb7963411a1508794f2d96d6a45a650a021` (independent contract GREEN
+`cmt-1ced7828-9dc5-48ec-b0f0-39c800d46282`); clearance `.harness/clearance/Spec_Control_Plane-v1_130-cleared-2026-11-05.md`.
+Contract clearance only; source conformance, CI, landing and installed acceptance remain owed.**
 
 **Filed:** 2026-11-05
 
@@ -251,6 +253,5 @@ discriminating mutant is listed for each, and the witness fails under it.
 
 ## §3 Status
 
-PROPOSED. Clears only by independent review GREEN of the exact head and integration-lead
-ratification, followed by a clearance marker and an artifact-heads refresh. Source landing, CI and
-installed acceptance remain owed.
+CLEARED 2026-11-05 by independent review GREEN of the exact head and integration-lead ratification
+(see the status banner). Source landing, CI and installed acceptance remain owed.

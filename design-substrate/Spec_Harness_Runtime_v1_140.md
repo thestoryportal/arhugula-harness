@@ -1,22 +1,24 @@
-# Spec: Harness Runtime — v1.140 (delta over v1.138)
+# Spec: Harness Runtime — v1.140 (delta over v1.139)
 
 *Delta-only file. One contract amended: C-RT-17 §14.7.2 sub-agent dispatch composer, step 1 (payload
 parse), now resolves the effective brief from CP v1.130 §25.11.1.4(4) `lead_brief`. Every other
-v1.138 and earlier term remains in force. Proposed v1.139 (PR #1705, skill content at hook 2) is not
-a head and is not amended. The two deltas touch disjoint contracts.*
+v1.139 and earlier term remains in force, including v1.139's skill-content delivery
+(C-RT-27/C-RT-04/C-RT-16), which touches a disjoint contract.*
 
-**Status: PROPOSED — contract text for independent review and integration-lead ratification. Not
-cleared; no source, CI, landing or installed claim.**
+**Status: CLEARED 2026-11-05 — ratified by the integration lead at LIT `cmt-35ae37ac-54fe-4706-9274-0219dfad7e2b`
+on the frozen reviewed body `78f6dcb7963411a1508794f2d96d6a45a650a021` (independent contract GREEN
+`cmt-1ced7828-9dc5-48ec-b0f0-39c800d46282`); clearance `.harness/clearance/Spec_Harness_Runtime-v1_140-cleared-2026-11-05.md`.
+Contract clearance only; source conformance, CI, landing and installed acceptance remain owed.**
 
 **Filed:** 2026-11-05
 
 **Authority:** paired with `Spec_Control_Plane_v1_130.md` (LIT `arhugula-harness-trial-193.qrf`
 `cmt-9e26c9ad`).
 
-**Predecessor:** `Spec_Harness_Runtime_v1_138.md` (head). **Paired CP delta:**
+**Predecessor:** `Spec_Harness_Runtime_v1_139.md` (cleared head, landed `a44164ee`). **Paired CP delta:**
 `Spec_Control_Plane_v1_130.md`.
 
-## §0 Change-note (v1.138 → v1.140)
+## §0 Change-note (v1.139 → v1.140)
 
 | Site | Before | After |
 |---|---|---|
@@ -43,10 +45,10 @@ cleared; no source, CI, landing or installed claim.**
 | ID | Behavior | Mutant it kills |
 |---|---|---|
 | RW1 | A worker context with `lead_brief` set: the handoff context objective, `response_hash` and descent `sub_agent_brief` all derive from the lead brief (shared with CP v1.130 W3) | Any one reader left on the declared brief |
-| RW2 | `lead_brief=None`: all three readers derive from the declared brief, byte-identical to v1.138 behavior | Resolution that drops or rewrites the declared brief |
+| RW2 | `lead_brief=None`: all three readers derive from the declared brief, byte-identical to v1.139 behavior | Resolution that drops or rewrites the declared brief |
 
 ## §3 Status
 
-PROPOSED. Clears only together with CP v1.130, by independent review GREEN of the exact head and
+CLEARED 2026-11-05 together with CP v1.130, by independent review GREEN of the exact head and
 integration-lead ratification, followed by a clearance marker and an artifact-heads refresh. Source
 landing, CI and installed acceptance remain owed.
