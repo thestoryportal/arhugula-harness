@@ -16,6 +16,8 @@ import review_wrapper_common as rw
 AUTHOR = "00000000-0000-4000-8000-000000000001"
 REVIEWER = "00000000-0000-4000-8000-000000000002"
 CORRECTOR = "00000000-0000-4000-8000-000000000003"
+TURN = "00000000-0000-4000-8000-000000000004"
+LATER = "00000000-0000-4000-8000-000000000005"
 BOUND = {
     "head_sha": "a" * 40,
     "base_sha": "b" * 40,
@@ -81,6 +83,59 @@ def test_completed_answer_and_actual_identity(tmp_path):
         stream.write(json.dumps({"type": "session_meta", "payload": {"id": AUTHOR}}) + "\n")
     with pytest.raises(ValueError, match="conflicting"):
         nr.read_transcript(path)
+
+
+def native_turn(turn, answer, *, model="review-model", complete=True):
+    rows = [
+        {"type": "event_msg", "payload": {"type": "task_started", "turn_id": turn}},
+        {"type": "turn_context", "payload": {"turn_id": turn, "model": model}},
+        {
+            "type": "response_item",
+            "payload": {
+                "type": "message",
+                "role": "assistant",
+                "phase": "final_answer",
+                "content": [{"type": "output_text", "text": answer}],
+            },
+        },
+    ]
+    if complete:
+        rows.append({"type": "event_msg", "payload": {"type": "task_complete", "turn_id": turn}})
+    return rows
+
+
+def test_explicit_completed_turn_survives_unrelated_later_turn(tmp_path):
+    path = tmp_path / "native.jsonl"
+    rows = [{"type": "session_meta", "payload": {"id": REVIEWER}}]
+    rows += native_turn(TURN, verdict(), model="actual-review-model")
+    rows += native_turn(LATER, "Unrelated work", model="later-model", complete=False)
+    path.write_text("\n".join(map(json.dumps, rows)))
+    assert nr.read_transcript(path) == (REVIEWER, None)
+    assert nr.read_selected_turn(path, TURN, BOUND) == (REVIEWER, verdict(), "actual-review-model")
+
+
+@pytest.mark.parametrize(
+    "failure", ["incomplete", "missing", "wrong_completion", "superseding", "identity"]
+)
+def test_explicit_turn_refuses_invalid_or_superseded_evidence(tmp_path, failure):
+    path = tmp_path / "native.jsonl"
+    rows = [{"type": "session_meta", "payload": {"id": REVIEWER}}]
+    rows += native_turn(TURN, verdict(), complete=failure != "incomplete")
+    if failure == "wrong_completion":
+        rows[-1]["payload"]["turn_id"] = LATER
+    if failure == "superseding":
+        rows += native_turn(
+            LATER,
+            verdict(
+                verdict="BLOCK",
+                findings=[{"severity": "P2", "location": "x:1", "message": "new finding"}],
+            ),
+        )
+    if failure == "identity":
+        rows.append({"type": "session_meta", "payload": {"id": AUTHOR}})
+    path.write_text("\n".join(map(json.dumps, rows)))
+    with pytest.raises(ValueError):
+        nr.read_selected_turn(path, LATER if failure == "missing" else TURN, BOUND)
 
 
 @pytest.mark.parametrize("authors", [[AUTHOR, REVIEWER], [REVIEWER], []])
@@ -240,6 +295,33 @@ def test_nontrial_import_records_one_untagged_bound_row(nontrial):
     assert gate.completing_run([row], "native-arc") is None
     with pytest.raises(ValueError, match="already recorded"):
         untagged(nontrial, bound)
+    assert len(fr.read_rows()) == 1
+
+
+def test_cli_selected_turn_records_once_and_rejects_wrong_candidate(nontrial, monkeypatch):
+    bound = committed_policy(nontrial)
+    monkeypatch.chdir(nontrial)
+    store = nontrial / "codex" / "sessions"
+    store.mkdir(parents=True)
+    monkeypatch.setenv("CODEX_HOME", str(store.parent))
+    path = store / f"rollout-{REVIEWER}.jsonl"
+    rows = [{"type": "session_meta", "payload": {"id": REVIEWER}}]
+    rows += native_turn(TURN, verdict(**bound))
+    rows += native_turn(LATER, "Unrelated work", complete=False)
+    path.write_text("\n".join(map(json.dumps, rows)))
+    monkeypatch.setattr(nr, "binding", lambda *args: bound)
+    args = ["record", "--transcript", str(path), "--authors", AUTHOR, "--turn-id", TURN]
+    monkeypatch.setattr(nr, "binding", lambda *args: {**bound, "head_sha": "d" * 40})
+    assert nr.main(args) == 3
+    assert fr.read_rows() == []
+    monkeypatch.setattr(nr, "binding", lambda *args: bound)
+    assert (
+        nr.main(["record", "--transcript", str(path), "--authors", REVIEWER, "--turn-id", TURN])
+        == 3
+    )
+    assert fr.read_rows() == []
+    assert nr.main(args) == 0
+    assert nr.main(args) == 3
     assert len(fr.read_rows()) == 1
 
 

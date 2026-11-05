@@ -64,6 +64,9 @@ canonical §12 protocol** rather than re-stating it — the recipe lives in CLAU
   as `just leg-selfcheck` below, and for the same reason. `just codex-context-check` stays the
   checkpoint-bound local gate; what the two shapes may differ on is named in
   `tools/test_codex_context_guard.py::test_local_ci_parity`.
+- **Stacked PRs:** after the same final checks, use the retarget-before-push procedure in
+  `docs/delivery-policy.md`. Verify the resulting synchronize run and required PR checks;
+  the retarget's metadata event is not a substitute for candidate CI.
 - **Grounding pass (U-WT-01).** Before codex round 1: (a) re-read every `file:line` cite in
   the diff and PR body at HEAD — never from recall; (b) recompute every count/arithmetic
   claim from the actual source rather than restating it; (c) confirm every `#NNN` reference

@@ -1062,7 +1062,7 @@ def test_timeout_reconcile_open_reissues_exactly_once(door):
     assert len(g.merge_calls) == 2
 
 
-def test_rejected_merge_preserves_github_error_and_does_not_retry(door):
+def test_rejected_merge_preserves_github_error_after_bounded_retry(door):
     g = FakeGround()
 
     def rejected(pr, head, timeout):
@@ -1072,7 +1072,7 @@ def test_rejected_merge_preserves_github_error_and_does_not_retry(door):
     g.gh_merge = rejected
     with pytest.raises(md.DoorBlocked, match="Required status check is expected"):
         _land(door, g)
-    assert len(g.merge_calls) == 1
+    assert len(g.merge_calls) == 2
     assert "Required status check is expected" in md.read_lease()["blocked_reason"]
 
 
@@ -1102,6 +1102,21 @@ def test_rejected_merge_reconciles_a_server_side_merge(door):
     g.gh_merge = rejected_after_merge
     assert _land(door, g) == "released"
     assert len(g.merge_calls) == 1
+
+
+def test_nonzero_transport_failure_reconciles_and_retries(door):
+    g = FakeGround()
+
+    def transient(pr, head, timeout):
+        g.merge_calls.append((pr, head))
+        if len(g.merge_calls) == 1:
+            return subprocess.CompletedProcess([], 1, "", "connection reset")
+        g.states[pr].update(state="MERGED", mergedAt="now", mergeCommit={"oid": "c" * 40})
+        return subprocess.CompletedProcess([], 0, "", "")
+
+    g.gh_merge = transient
+    assert _land(door, g) == "released"
+    assert len(g.merge_calls) == 2
 
 
 # mutation-probe: decide the post-attempt handler from the caller dict instead of read_lease()

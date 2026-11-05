@@ -1544,30 +1544,29 @@ def _merge_once(
     True iff a reconcile pass was needed (the cycle is then not "clean" for §10)."""
     mark_attempted(lease, suffix=suffix)
     _kill_after("refresh-attempted" if suffix else "attempted")
+    failures = []
     for attempt in tuple(range(1, budget + 1)):
-        failure = None
         try:
             proc = ground.gh_merge(pr, head_sha, MERGE_TIMEOUT_S)
             _kill_after("merge")
             if proc.returncode == 0:
                 return attempt > 1
-            failure = f"gh merge exited {proc.returncode}: {proc.stderr or proc.stdout}"
+            failures.append(f"gh merge exited {proc.returncode}: {proc.stderr or proc.stdout}")
         except subprocess.TimeoutExpired:
-            pass
+            failures.append("gh merge timed out")
         try:
             state = reconcile_ground({**lease, "pr": pr}, ground)
         except Exception as exc:
-            if failure is not None:
-                raise DoorFailed(f"{failure}; reconciliation failed: {exc}") from exc
-            raise
+            raise DoorFailed(f"{'; '.join(failures)}; reconciliation failed: {exc}") from exc
         if state == "MERGED":
             return True  # invariant: NEVER re-invoke after MERGED
-        # [LAW:no-silent-failure] A definite rejection needs its actual diagnostic;
-        # retrying unchanged inputs cannot resolve it and consumes the recovery budget.
-        if failure is not None:
-            raise DoorFailed(failure)
         if attempt == budget:
-            raise DoorFailed("merge_reissue_exhausted (cause_attribution: merge_reissue_exhausted)")
+            # [LAW:no-silent-failure] Preserve each diagnostic even when a nonzero
+            # exit is an ambiguous transport failure rather than a rejection.
+            raise DoorFailed(
+                "merge_reissue_exhausted (cause_attribution: merge_reissue_exhausted): "
+                + "; ".join(failures)
+            )
     return True
 
 

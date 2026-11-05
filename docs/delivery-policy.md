@@ -69,6 +69,13 @@ producer provenance; do not label it Gemini to pass a family test. Correction
 review uses `HARNESS_CYCLE_PASS=correction` and the previous reviewed head as
 `--base`; add new material authors without dropping previous ones.
 
+If unrelated later activity has started in that session, `record` accepts
+`--turn-id <native-turn-uuid>` to select the actual completed review turn. The
+adapter reports that turn's own model, checks the same six bindings and author
+independence, and refuses a later verdict on the same candidate. Without the
+option the latest completed turn remains the only eligible final. Keep the native
+transcript and selected turn ID in the existing review evidence.
+
 An unreserved arc that no trial unit enrolls has no cycle to tag. Import its
 reviewer's final with the pass unset and the arc named explicitly:
 
@@ -120,6 +127,14 @@ Publish the owned feature branch/PR after the applicable frozen review. Preserve
 required final-head/base CI, the attested merge tree and the holder-bound safe
 merge wrapper. A gate-log-only commit may transfer review only through the
 existing landing-delta proof. Do not use raw `gh pr merge` or `--admin`.
+
+For an existing stacked PR, complete the normal final-head checks first, then
+use `uv run python tools/stacked_pr_publish.py <pr> --old-head <remote-sha>
+--final-head <checked-sha>` to retarget to main before publishing the final
+fast-forward head. The tool checks the live PR and refuses a changed head or a
+non-fast-forward update. A changed base still requires an exact matching CI
+binding; confirm the final synchronize run and required PR checks actually appear.
+The ordering does not establish GitHub's internal check-association behavior.
 
 The safe wrapper reads the tracked refresh posture. Under this setting it lands
 without a separate roadmap refresh PR, waits for the merge SHA's successful
