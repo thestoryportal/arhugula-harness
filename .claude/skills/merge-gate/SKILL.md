@@ -1,7 +1,27 @@
 ---
 name: merge-gate
-description: Decorrelated 3-lens review — the lens half of the bounded review cycle (spec v1.9 X9a). Launches Agent-tool subagents (concurrency/race-conditions, spec-conformance-against-ledgers, test-witness-adequacy) against a PR's diff, each returning a structured APPROVE/BLOCK verdict recorded per pass with `merge-gate-emit-pass`. Use as soon as the PR is pushed, concurrent with CI, in the /loop continue → ship-pr flow: pass 1 runs all three lenses beside codex, pass 2 the witness lens on the fix delta, the escalation repeats pass 1 at most once, pass 3 is one lens on the full diff. Doc-only PRs run pass 3 alone; skip only `ops: roadmap status refresh` PRs. Merge only when CI is green and pass 3 is clean; pass 3 raising an accepted P1 on two consecutive runs stops the arc and surfaces via AskUserQuestion.
+description: Review an exact candidate under the tracked delivery policy; use specialty lenses only for named risk or retained legacy cycles.
 ---
+
+## Delivery policy selection — read before the legacy procedure
+
+Read `.harness/workflow-policy.json`. When `review_rules.delivery` is
+`single-independent-milestone-status-v1`, follow
+`docs/delivery-policy.md` for new arcs and **stop here**. That procedure
+uses one independent review, delta correction review, focused local checks and
+milestone status. No default three-lens stack or separate roadmap-refresh PR is
+owed. Existing delivered legacy pass tags and refresh intents retain their
+obligations; use the legacy sections below only for that retained scope.
+
+The direct instruction "Eliminate the gemini requirement" selects a separate
+independent reviewer session of any model family. Follow delivery-policy.md's
+native-session evidence route; author/correction-author self-approval remains
+forbidden. No mandatory Gemini, fallback or shadow step is owed, including when
+retaining legacy findings and spent passes. Preserve actual disclosure denials.
+
+The remainder of this file is the legacy procedure. Do not combine its review
+stack or refresh cycle with the selected delivery procedure.
+
 
 # merge-gate — decorrelated 3-lens pre-merge review
 

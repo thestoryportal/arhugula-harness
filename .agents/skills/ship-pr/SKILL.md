@@ -1,7 +1,27 @@
 ---
 name: ship-pr
-description: Use when the operator says /ship-pr, ship it, open the PR, land this, or a completed arhugula-v2 arc must pass review, CI, merge, refresh, and cleanup.
+description: Ship a reviewed arc through required candidate CI and the safe merge door using the tracked delivery policy; retain in-flight legacy obligations.
 ---
+
+## Delivery policy selection — read before the legacy procedure
+
+Read `.harness/workflow-policy.json`. When `review_rules.delivery` is
+`single-independent-milestone-status-v1`, follow
+`docs/delivery-policy.md` for new arcs and **stop here**. That procedure
+uses one independent review, delta correction review, focused local checks and
+milestone status. No default three-lens stack or separate roadmap-refresh PR is
+owed. Existing delivered legacy pass tags and refresh intents retain their
+obligations; use the legacy sections below only for that retained scope.
+
+The direct instruction "Eliminate the gemini requirement" selects a separate
+independent reviewer session of any model family. Follow delivery-policy.md's
+native-session evidence route; author/correction-author self-approval remains
+forbidden. No mandatory Gemini, fallback or shadow step is owed, including when
+retaining legacy findings and spent passes. Preserve actual disclosure denials.
+
+The remainder of this file is the legacy procedure. Do not combine its review
+stack or refresh cycle with the selected delivery procedure.
+
 
 # Ship PR
 

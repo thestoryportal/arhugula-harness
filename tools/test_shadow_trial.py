@@ -930,3 +930,10 @@ def test_adjudicating_a_cycle_tagged_shadow_finding_keeps_its_pass(tmp_path: Pat
 def test_rows_without_a_cycle_pass_keep_the_per_round_unit():
     rows = [_row(1, LENS, "no_finding"), _row(2, LENS, "no_finding")]
     assert st.scored_rounds(rows, LENS) == {("pr-1", 1), ("pr-1", 2)}
+
+
+@pytest.mark.parametrize("cycle_pass", ["initial", "correction"])
+def test_single_review_rows_do_not_spend_a_legacy_shadow_experiment(cycle_pass):
+    row = {**_row(1, LENS, "no_finding"), "cycle_pass": cycle_pass}
+    fr.validate(row)
+    assert st.scored_rounds([row], LENS) == set()

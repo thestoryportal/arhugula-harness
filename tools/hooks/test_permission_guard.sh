@@ -220,14 +220,14 @@ done
 # ONE argument). No real merge/door/gh is reachable.
 SMWRAP="$SCRIPT_DIR/safe-merge.sh"
 SMDIR="$REPO/sm"; mkdir -p "$SMDIR/bin"; ( cd "$SMDIR" && git init -q . )
-# Stub uv: answers the door's `profile` selection (default legacy; override via SM_PROFILE
+# Stub uv: answers the door's profile/posture pair (default legacy refresh; override via SM_PROFILE
 # and its exit status via SM_PROFILE_RC) and the legacy pre-lease `--help` availability
 # probe (default: flag present; override via SM_HELP_OUT), and records any other
 # invocation's argv one-per-line.
 {
   printf '%s\n' '#!/usr/bin/env bash'
   printf '%s\n' 'case "$*" in'
-  printf '%s\n' '  *"merge_door.py profile"*) printf "%s\n" "${SM_PROFILE-legacy}"; exit "${SM_PROFILE_RC:-0}" ;;'
+  printf '%s\n' '  *"merge_door.py profile"*) printf "%s\n" "${SM_PROFILE-legacy refresh}"; exit "${SM_PROFILE_RC:-0}" ;;'
   printf '%s\n' '  *--help*) printf "%s\n" "${SM_HELP_OUT:---emit-refresh-pr-json}" ;;'
   printf '%s\n' '  *) printf "%s\n" "$@" > "$SM_ARGS_OUT" ;;'
   printf '%s\n' 'esac'
@@ -278,7 +278,7 @@ fi
 # WO-U08 trial routing: a trial selection delegates WITHOUT --refresh-cmd and never needs
 # the refresh producer — the probe's flag is absent here and delegation still proceeds.
 rm -f "$SMDIR/args"
-( cd "$SMDIR" && SM_ARGS_OUT="$SMDIR/args" SM_PROFILE=trial SM_HELP_OUT='no such flag here' \
+( cd "$SMDIR" && SM_ARGS_OUT="$SMDIR/args" SM_PROFILE='trial no-refresh' SM_HELP_OUT='no such flag here' \
   PATH="$SMDIR/bin:$PATH" HARNESS_LANE_ID=lane-1 HARNESS_ARC_ID=u-he-25 bash "$SMWRAP" 268 ) >/dev/null 2>&1
 RC=$?
 SM_TRIAL='run
@@ -295,9 +295,20 @@ if [ "$RC" -eq 0 ] && [ "$(cat "$SMDIR/args" 2>/dev/null)" = "$SM_TRIAL" ]; then
 else
   bad "safe-merge trial routing drifted (rc=$RC, args: $(cat "$SMDIR/args" 2>/dev/null | tr '\n' ' '))"
 fi
+# [LAW:behavior-not-structure] milestone delivery must reach the same land boundary
+# without a refresh producer, while retained legacy refresh still requires its probe.
+rm -f "$SMDIR/args"
+( cd "$SMDIR" && SM_ARGS_OUT="$SMDIR/args" SM_PROFILE='legacy no-refresh' SM_HELP_OUT='no such flag here' \
+  PATH="$SMDIR/bin:$PATH" HARNESS_LANE_ID=lane-1 HARNESS_ARC_ID=u-he-25 bash "$SMWRAP" 268 ) >/dev/null 2>&1
+RC=$?
+if [ "$RC" -eq 0 ] && [ "$(cat "$SMDIR/args" 2>/dev/null)" = "$SM_TRIAL" ]; then
+  ok "safe-merge: legacy no-refresh delegates land without the refresh producer"
+else
+  bad "safe-merge legacy no-refresh routing drifted (rc=$RC, args: $(cat "$SMDIR/args" 2>/dev/null | tr '\n' ' '))"
+fi
 # A held selection (`profile` exit 6) aborts with that status before any delegation, and
-# output that is neither trial nor legacy aborts exit 70 — no lease, no merge.
-for case_ in '6::' '70:0:bogus'; do
+# malformed or unsupported profile/posture pairs abort exit 70 — no lease, no merge.
+for case_ in '6::' '70:0:bogus' '70:0:legacy' '70:0:trial' '70:0:trial refresh' '70:0:legacy bogus'; do
   want="${case_%%:*}"; rest="${case_#*:}"; prc="${rest%%:*}"; pout="${rest#*:}"
   rm -f "$SMDIR/args"
   ( cd "$SMDIR" && SM_ARGS_OUT="$SMDIR/args" SM_PROFILE="$pout" SM_PROFILE_RC="${prc:-6}" \

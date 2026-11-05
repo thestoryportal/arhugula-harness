@@ -103,7 +103,7 @@ fi
 #     landing's refresh, so no refresh is owed; an unreadable rule keeps the reminder.
 TRIAL_HOOK=$(stub_hook 'print("trial")')
 OUT=$(printf '%s' "$MERGE_CMD" | CLAUDE_PROJECT_DIR="$REPO" POST_MERGE_REFRESH_REF="$C2" bash "$TRIAL_HOOK")
-if printf '%s' "$OUT" | grep -q "trial profile is active" && ! printf '%s' "$OUT" | grep -q "refresh is owed per"; then
+if printf '%s' "$OUT" | grep -q "delivery policy delegates status" && ! printf '%s' "$OUT" | grep -q "refresh is owed per"; then
   ok "trial rule: substantive merge owes no refresh"
 else
   bad "trial rule still owed a refresh: $OUT"
