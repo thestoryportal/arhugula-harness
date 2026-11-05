@@ -10,7 +10,7 @@ are criterion 8's live witnesses, owed by the `harness resume` subcommand (plan 
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, get_args
 
 import pytest
 from harness_runtime.api import (
@@ -25,7 +25,10 @@ from harness_runtime.api import (
     ResumeWorkflowMismatchError,
     RootResumeRefusal,
 )
-from harness_runtime.lifecycle.journal_workflow_pause_store import PauseJournalReadCause
+from harness_runtime.lifecycle.journal_workflow_pause_store import (
+    HandleUnknownCause,
+    PauseJournalReadCause,
+)
 from harness_runtime.resume_refusal import (
     HandleCause,
     ResumeRefusalError,
@@ -40,7 +43,7 @@ CANARY = "/srv/tenant-acme/secret-sk-CANARY-7f3a/pause-journal"
 
 
 def _handle(
-    cause: PauseJournalReadCause, *, retryable: bool, indeterminate: bool
+    cause: HandleUnknownCause, *, retryable: bool, indeterminate: bool
 ) -> ResumeHandleUnknownError:
     return ResumeHandleUnknownError(
         f"read failed at {CANARY}", cause=cause, retryable=retryable, indeterminate=indeterminate
@@ -134,11 +137,11 @@ def test_the_spec_example_value_parses() -> None:
     assert to_json(refusal) == text
 
 
-@pytest.mark.parametrize("cause", list(PauseJournalReadCause), ids=str)
+@pytest.mark.parametrize("cause", get_args(HandleUnknownCause), ids=str)
 @pytest.mark.parametrize("retryable", [True, False])
 @pytest.mark.parametrize("indeterminate", [True, False])
 def test_handle_flags_are_copied_from_the_typed_error_not_derived_from_the_cause(
-    cause: PauseJournalReadCause, retryable: bool, indeterminate: bool
+    cause: HandleUnknownCause, retryable: bool, indeterminate: bool
 ) -> None:
     body = _wire(_handle(cause, retryable=retryable, indeterminate=indeterminate))["refusal"]
     assert (body["cause"], body["retryable"], body["indeterminate"]) == (
