@@ -280,6 +280,7 @@ class _MockChildWorkflowRunner:
         child_resume: Any = None,
         child_run_id_seed: str | None = None,
         child_resume_authority: Any = None,
+        validator_run: Any,
         resume_context: Any = None,
         hitl_uniform_fallback_eligible_run_id: str | None = None,
         effect_fence_uniform_fallback_eligible_key: str | None = None,
@@ -302,6 +303,8 @@ class _MockChildWorkflowRunner:
                 # seed (None when the child is non-recoverable / a non-fanout dispatch).
                 "child_run_id_seed": child_run_id_seed,
                 "child_resume_authority": child_resume_authority,
+                # Runtime v1.138 §14.13.8(3) — the child execution's own validator binding.
+                "validator_run": validator_run,
                 # B-39 Slice B — the operator's resume payload, forwarded verbatim.
                 "resume_context": resume_context,
                 # B-39 Slice B, codex round-2 [P1] fix — the property-4-safe uniform-
@@ -923,6 +926,7 @@ def test_child_runner_resume_workflow_id_mismatch_fails_closed() -> None:
     # B-104 Task 4c correction: a typed, terminal refusal (was a generic ValueError).
     with pytest.raises(ChildResumeRefusedError, match="child resume workflow-id mismatch"):
         runner(
+            validator_run=None,
             workflow_id="a-different-child-wf",
             manifest_entry=cast(Any, None),
             steps=(),
@@ -964,6 +968,7 @@ def test_child_workflow_runner_opts_into_final_state_reconstruct(
         durable_admission=RefuseDurableChildAdmission(),
     )
     result = runner(
+        validator_run=None,
         workflow_id="child-wf",
         manifest_entry=cast(Any, None),
         steps=(),
@@ -1005,6 +1010,7 @@ def test_child_workflow_runner_forwards_the_numeric_depth_to_execute_workflow(
     # verbatim as parent_gate_floor, not just any non-crashing value.
     descent = _root_child_descent(child_gate_level=GateLevel.ASK)
     runner(
+        validator_run=None,
         workflow_id="child-wf",
         manifest_entry=cast(Any, None),
         steps=(),

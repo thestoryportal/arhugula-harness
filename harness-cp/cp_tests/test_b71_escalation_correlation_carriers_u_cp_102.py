@@ -218,7 +218,6 @@ class _CtxP:
         )
         self.ledger_reader = None
         self.tracer_provider = NoOpTracerProvider()
-        self.validator_framework = None
         self.tenant_id = None
 
 
@@ -959,7 +958,7 @@ def test_the_palette_is_preserved_and_not_suppressed() -> None:
 # ---------------------------------------------------------------------------
 
 
-class _EscalatingValidatorFramework:
+class _EscalatingValidator:
     """A validator that escalates with a HOSTILE `escalation_instance_id` set.
 
     `ValidatorResult.escalation_brief` is a second CONSTRUCTOR of the brief type but
@@ -971,13 +970,8 @@ class _EscalatingValidatorFramework:
         self.supplied = supplied
         self.seen: list[HITLEscalationBrief] = []
 
-    def evaluate(self, step: Any, step_result: Any, *, step_context: Any) -> Any:
-        from harness_cp.validator_framework_types import (
-            ValidatorEvaluation,
-            ValidatorNextAction,
-            ValidatorOutcome,
-            ValidatorResult,
-        )
+    async def validate(self, step: Any, step_result: Any, *, step_context: Any) -> Any:
+        from harness_cp.validator_framework_types import ValidatorOutcome, ValidatorResult
 
         brief = HITLEscalationBrief(
             parent_step_id=str(step.step_id),
@@ -986,18 +980,14 @@ class _EscalatingValidatorFramework:
             escalation_instance_id=self.supplied,
         )
         self.seen.append(brief)
-        return ValidatorEvaluation(
-            result=ValidatorResult(outcome=ValidatorOutcome.ESCALATE, escalation_brief=brief),
-            span_attributes={},
-            next_action=ValidatorNextAction.ESCALATE_HITL,
-            burden_count=1,
-        )
+        return ValidatorResult(outcome=ValidatorOutcome.ESCALATE, escalation_brief=brief)
 
 
 def _run_validator_escalation(
     supplied: str | None,
-) -> tuple[_EscalatingValidatorFramework, list[Any]]:
+) -> tuple[_EscalatingValidator, list[Any]]:
     """Drive one LINEAR run whose validator ESCALATES, capturing the exported spans."""
+    from harness_cp.validator_framework import ConcreteValidatorFramework, open_validator_run
     from opentelemetry.sdk.trace import TracerProvider
     from opentelemetry.sdk.trace.export import SimpleSpanProcessor
     from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
@@ -1006,9 +996,15 @@ def _run_validator_escalation(
     provider = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(exporter))
 
-    framework = _EscalatingValidatorFramework(supplied)
+    validator = _EscalatingValidator(supplied)
+    step = WorkflowStep(
+        step_id=StepID("linear-0"),
+        step_kind=StepKind.DECLARATIVE_STEP,
+        step_payload={"index": 0},
+    )
+    framework = ConcreteValidatorFramework(validator_registry={step.step_id: validator})
+
     ctx = cast(Any, _CtxP())
-    ctx.validator_framework = framework
     ctx.tracer_provider = provider
     # The composer is deliberately UNBOUND. The trust seam sits BEFORE it (§0.4(3):
     # "at the acceptance point, before the brief reaches any composer"), so a bound
@@ -1025,21 +1021,25 @@ def _run_validator_escalation(
         ) -> dict[str, Any]:
             return {"ok": True}
 
-    execute_workflow(
-        _manifest().model_copy(update={"topology_pattern": TopologyPattern.SINGLE_THREADED_LINEAR}),
-        [
-            WorkflowStep(
-                step_id=StepID("linear-0"),
-                step_kind=StepKind.DECLARATIVE_STEP,
-                step_payload={"index": 0},
-            )
-        ],
-        run_id=_RUN_ID,
-        ctx=cast(DriverContext, ctx),
-        default_model_binding=_DEFAULT_BINDING,
-        step_dispatchers=cast(StepDispatcherRegistry, _OkDispatcher()),
-    )
-    return framework, list(exporter.get_finished_spans())
+    async def _ingress() -> None:
+        # CP v1.129 §28.11.1: the root binding opens on the loop serving evaluations;
+        # the sync driver runs on a worker thread, as at Runtime ingress.
+        validator_run = open_validator_run(framework, result_timeout_seconds=10.0)
+        await asyncio.to_thread(
+            execute_workflow,
+            _manifest().model_copy(
+                update={"topology_pattern": TopologyPattern.SINGLE_THREADED_LINEAR}
+            ),
+            [step],
+            run_id=_RUN_ID,
+            ctx=cast(DriverContext, ctx),
+            default_model_binding=_DEFAULT_BINDING,
+            step_dispatchers=cast(StepDispatcherRegistry, _OkDispatcher()),
+            validator_run=validator_run,
+        )
+
+    asyncio.run(_ingress())
+    return validator, list(exporter.get_finished_spans())
 
 
 # mutation-probe: replace the `_diagnose_validator_supplied_token_overwritten(...)`
@@ -1063,9 +1063,9 @@ def test_the_validator_trust_seam_diagnoses_an_overwritten_token(
     """
     hostile = "HOSTILE-OPERATOR-SUPPLIED-TOKEN"
     with caplog.at_level(logging.WARNING, logger="harness_cp.workflow_driver"):
-        framework, spans = _run_validator_escalation(hostile)
-    assert framework.seen, "the validator must have run at all"
-    assert framework.seen[0].escalation_instance_id == hostile, (
+        validator, spans = _run_validator_escalation(hostile)
+    assert validator.seen, "the validator must have run at all"
+    assert validator.seen[0].escalation_instance_id == hostile, (
         "sanity: the validator really did supply a value — otherwise this is vacuous"
     )
     diagnostics = [r.getMessage() for r in caplog.records if "§0.4(3)" in r.getMessage()]
@@ -1096,8 +1096,8 @@ def test_an_ordinary_validator_escalation_raises_no_overwrite_diagnostic(
     functionally the same failure as not emitting it at all.
     """
     with caplog.at_level(logging.WARNING, logger="harness_cp.workflow_driver"):
-        framework, _spans = _run_validator_escalation(None)
-    assert framework.seen and framework.seen[0].escalation_instance_id is None
+        validator, _spans = _run_validator_escalation(None)
+    assert validator.seen and validator.seen[0].escalation_instance_id is None
     assert not [r for r in caplog.records if "§0.4(3)" in r.getMessage()]
 
 

@@ -97,6 +97,7 @@ def _runner_over(
 
 def _resume(runner: Any, capture: PausedChildCapture, *, depth: int) -> Any:
     return runner(
+        validator_run=None,
         workflow_id=capture.child_workflow_id,
         manifest_entry=cast(Any, None),
         steps=(),

@@ -27,6 +27,7 @@ fail forever or be quietly weakened to whatever passes.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 from collections.abc import Mapping, Sequence
 from typing import Any, cast
@@ -765,12 +766,8 @@ def test_a_validator_supplied_token_never_reaches_the_escalation_composer(
     )
     from harness_cp.engine_class import EngineClass
     from harness_cp.topology_pattern import TopologyPattern
-    from harness_cp.validator_framework_types import (
-        ValidatorEvaluation,
-        ValidatorNextAction,
-        ValidatorOutcome,
-        ValidatorResult,
-    )
+    from harness_cp.validator_framework import ConcreteValidatorFramework, open_validator_run
+    from harness_cp.validator_framework_types import ValidatorOutcome, ValidatorResult
     from harness_cp.workflow_manifest_entry import WorkflowManifestEntry
 
     hostile = "HOSTILE-OPERATOR-SUPPLIED-TOKEN"
@@ -790,33 +787,25 @@ def test_a_validator_supplied_token_never_reaches_the_escalation_composer(
 
     monkeypatch.setattr(vec, "compose_validator_escalation_gate", _capture)
 
-    class _Framework:
-        def evaluate(self, step: Any, step_result: Any, *, step_context: Any) -> Any:
-            return ValidatorEvaluation(
-                result=ValidatorResult(
-                    outcome=ValidatorOutcome.ESCALATE,
-                    escalation_brief=HITLEscalationBrief(
-                        parent_step_id=str(step.step_id),
-                        parent_action_id=str(step_context.parent_action_id),
-                        escalation_reason="operator-authored",
-                        escalation_instance_id=hostile,
-                    ),
+    class _Validator:
+        async def validate(self, step: Any, step_result: Any, *, step_context: Any) -> Any:
+            return ValidatorResult(
+                outcome=ValidatorOutcome.ESCALATE,
+                escalation_brief=HITLEscalationBrief(
+                    parent_step_id=str(step.step_id),
+                    parent_action_id=str(step_context.parent_action_id),
+                    escalation_reason="operator-authored",
+                    escalation_instance_id=hostile,
                 ),
-                span_attributes={},
-                next_action=ValidatorNextAction.ESCALATE_HITL,
-                burden_count=1,
             )
 
     class _Ctx:
         def __init__(self) -> None:
-            import asyncio
-
             from opentelemetry.trace import NoOpTracerProvider
 
             self.ledger_writer = _DriverLedger()
             self.lifecycle_emitter = _NullEmitter()
             self.tracer_provider = NoOpTracerProvider()
-            self.validator_framework = _Framework()
             self.ask_user_question_surface = object()
             self.tenant_id = None
             self.ledger_reader = None
@@ -871,20 +860,28 @@ def test_a_validator_supplied_token_never_reaches_the_escalation_composer(
         hitl_placements=(),
         per_step_overrides={},
     )
-    wd.execute_workflow(
-        manifest,
-        [
-            WorkflowStep(
-                step_id=StepID("linear-0"),
-                step_kind=StepKind.DECLARATIVE_STEP,
-                step_payload={"index": 0},
-            )
-        ],
-        run_id=_RUN_ID,
-        ctx=cast(Any, _Ctx()),
-        default_model_binding=ModelBinding(provider="anthropic", model="claude-haiku-4-5"),
-        step_dispatchers=cast(Any, _OkDispatcher()),
+    step = WorkflowStep(
+        step_id=StepID("linear-0"),
+        step_kind=StepKind.DECLARATIVE_STEP,
+        step_payload={"index": 0},
     )
+    framework = ConcreteValidatorFramework(validator_registry={step.step_id: _Validator()})
+
+    async def _ingress() -> None:
+        # Runtime v1.138 §14.13.8: ingress opens the run's binding on its loop and the
+        # sync driver evaluates through it from a worker thread.
+        await asyncio.to_thread(
+            wd.execute_workflow,
+            manifest,
+            [step],
+            run_id=_RUN_ID,
+            ctx=cast(Any, _Ctx()),
+            default_model_binding=ModelBinding(provider="anthropic", model="claude-haiku-4-5"),
+            step_dispatchers=cast(Any, _OkDispatcher()),
+            validator_run=open_validator_run(framework, result_timeout_seconds=10.0),
+        )
+
+    asyncio.run(_ingress())
     assert seen, "the escalation composer was never reached — the witness is vacuous"
     assert seen[0].escalation_instance_id is None, (
         "the validator-supplied token must be REPLACED with the harness-minted value "

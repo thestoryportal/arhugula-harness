@@ -47,6 +47,7 @@ from harness_cp.handoff_context import HandoffContext
 from harness_cp.hitl_placement import HITLPlacement
 from harness_cp.pause_resume_protocol_types import PausedChildCapture, ResumeContext
 from harness_cp.sub_agent_gate_level_descent import SubAgentGateLevelDescent
+from harness_cp.validator_framework_types import ValidatorRunBinding
 from harness_cp.workflow_driver import DriverContext as _CpDriverContext
 from harness_cp.workflow_driver import execute_workflow_at_depth
 from harness_cp.workflow_driver_types import (
@@ -104,6 +105,7 @@ class ChildWorkflowRunner(Protocol):
         effect_fence_uniform_fallback_eligible_key: str | None = None,
         effect_fence_tree_wide_abort_present: bool = False,
         child_resume_authority: ChildResumeAuthority | None = None,
+        validator_run: ValidatorRunBinding | None,
     ) -> RunResult:
         """Run the child sub-workflow and return its terminal `RunResult`.
 
@@ -178,6 +180,10 @@ class ChildWorkflowRunner(Protocol):
         Runtime's permission to run a durable paused child, read off the CP step context beside
         `child_resume`. It is used only when it is exactly a `ClaimedChildAdmission`; anything
         else keeps the injected `durable_admission` binding.
+
+        Runtime v1.138 §14.13.8(3): `validator_run` (required, no default) is THIS child
+        execution's own binding, opened by sub-agent dispatch with `open_child()` (or `None`
+        on opt-out) and forwarded verbatim to the child driver.
         """
         ...
 
@@ -234,6 +240,7 @@ def compose_child_workflow_runner(
         effect_fence_uniform_fallback_eligible_key: str | None = None,
         effect_fence_tree_wide_abort_present: bool = False,
         child_resume_authority: ChildResumeAuthority | None = None,
+        validator_run: ValidatorRunBinding | None,
     ) -> RunResult:
         # B-HIERARCHICAL-PAUSE — on a RESUME (pause_snapshot_input non-None), FAIL CLOSED
         # if the snapshot's workflow_id does not match the child being invoked (Codex
@@ -329,6 +336,7 @@ def compose_child_workflow_runner(
                 # B-104 Task 5b-1 — the child's OWN authority (never this dispatch's), so its
                 # grandchildren claim through the child's started claim, not the root's.
                 child_resume_authority=own_authority,
+                validator_run=validator_run,
             )
 
         # B-104 Task 4c — under a DURABLE protocol a resumed paused child must be the exact

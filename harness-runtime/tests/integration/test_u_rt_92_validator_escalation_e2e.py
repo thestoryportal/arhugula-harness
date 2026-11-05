@@ -51,12 +51,15 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from harness_core.identity import StepID
 from harness_cp.gate_level_rule import GateLevel
 from harness_cp.hitl_response_palette import HITLResponse
 from harness_cp.validator_fail_transient_staircase import CrossTrustBoundaryState
 from harness_cp.validator_framework_types import (
     HITLEscalationBrief,
     ValidatorFailClass,
+    ValidatorOutcome,
+    ValidatorResult,
 )
 from harness_runtime.bootstrap import run_bootstrap
 from harness_runtime.lifecycle.ask_user_question_surface import (
@@ -68,6 +71,7 @@ from harness_runtime.lifecycle.validator_escalation_composer import (
     compose_validator_escalation_gate,
 )
 from harness_runtime.lifecycle.validator_framework_types import (
+    ValidatorBinding,
     ValidatorFrameworkConfig,
 )
 from harness_runtime.types import HarnessContext, RuntimeConfig
@@ -94,10 +98,27 @@ def _real_tracer_provider() -> tuple[TracerProvider, InMemorySpanExporter]:
     return provider, exporter
 
 
+class _PassingValidator:
+    """Operator validator bound by the opt-in config; the composer is driven directly."""
+
+    async def validate(self, step: Any, step_result: Any, *, step_context: Any) -> ValidatorResult:
+        _ = step, step_result, step_context
+        return ValidatorResult(outcome=ValidatorOutcome.PASS)
+
+
 def _config_with_validator_opt_in(tmp_path: Path) -> RuntimeConfig:
     base = build_config(tmp_path)
     return base.model_copy(
-        update={"validator_framework_config": ValidatorFrameworkConfig.default()},
+        update={
+            "validator_framework_config": ValidatorFrameworkConfig(
+                bindings=(
+                    ValidatorBinding(
+                        step_id=StepID("step-0"),
+                        class_qualified_name=f"{__name__}:{_PassingValidator.__qualname__}",
+                    ),
+                )
+            )
+        },
     )
 
 

@@ -58,10 +58,7 @@ from harness_cp.cross_family_fallback_chain import (
 from harness_cp.engine_class import EngineClass
 from harness_cp.hitl_response_palette import HITLResponse
 from harness_cp.topology_pattern import TopologyPattern
-from harness_cp.validator_framework import (
-    ConcreteValidatorFramework,
-    materialize_sync_validator_framework_facade,
-)
+from harness_cp.validator_framework import ConcreteValidatorFramework, open_validator_run
 from harness_cp.validator_framework_types import (
     HITLEscalationBrief,
     ValidatorFailClass,
@@ -81,6 +78,7 @@ from harness_runtime.lifecycle.ask_user_question_surface import (
     AskUserQuestionSurface,
 )
 from harness_runtime.lifecycle.validator_framework_types import (
+    ValidatorBinding,
     ValidatorFrameworkConfig,
 )
 from harness_runtime.types import RuntimeConfig
@@ -91,7 +89,16 @@ from .conftest import WORKLOAD, build_config
 def _config_with_validator_opt_in(tmp_path: Path) -> RuntimeConfig:
     base = build_config(tmp_path)
     return base.model_copy(
-        update={"validator_framework_config": ValidatorFrameworkConfig.default()},
+        update={
+            "validator_framework_config": ValidatorFrameworkConfig(
+                bindings=(
+                    ValidatorBinding(
+                        step_id=StepID("step-0"),
+                        class_qualified_name=f"{__name__}:{_PassingValidator.__qualname__}",
+                    ),
+                )
+            )
+        },
     )
 
 
@@ -263,17 +270,10 @@ async def test_validator_escalation_e2e_through_execute_workflow(
     custom_framework_async = ConcreteValidatorFramework(
         validator_registry={step.step_id: _EscalatingValidator()}  # type: ignore[dict-item]
     )
-    # Workflow_driver invokes evaluate() sync from the worker thread;
-    # wrap async framework in SyncValidatorFrameworkFacade capturing the
-    # current event loop per U-CP-61 bridge pattern.
-    custom_framework = materialize_sync_validator_framework_facade(
-        inner=custom_framework_async,
-        result_timeout_seconds=30.0,  # type: ignore[arg-type]
-    )
     approving_surface = _ApprovingAskUserQuestionSurface()
     ctx = ctx_orig.model_copy(
         update={
-            "validator_framework": custom_framework,
+            "validator_framework": custom_framework_async,
             "ask_user_question_surface": approving_surface,
         }
     )
@@ -297,6 +297,9 @@ async def test_validator_escalation_e2e_through_execute_workflow(
             ctx=ctx,  # type: ignore[arg-type]
             default_model_binding=_DEFAULT_BINDING,
             step_dispatchers=dispatchers,  # type: ignore[arg-type]
+            # Runtime v1.138 §14.13.8(2): the run's own binding over the swapped-in framework,
+            # opened on this loop; the driver's worker thread evaluates through it.
+            validator_run=open_validator_run(custom_framework_async, result_timeout_seconds=30.0),
         )
     )
 
@@ -371,14 +374,10 @@ async def test_validator_pass_does_not_fire_composer_through_execute_workflow(
     custom_framework_async = ConcreteValidatorFramework(
         validator_registry={step.step_id: _PassingValidator()}  # type: ignore[dict-item]
     )
-    custom_framework = materialize_sync_validator_framework_facade(
-        inner=custom_framework_async,
-        result_timeout_seconds=30.0,  # type: ignore[arg-type]
-    )
     approving_surface = _ApprovingAskUserQuestionSurface()
     ctx = ctx_orig.model_copy(
         update={
-            "validator_framework": custom_framework,
+            "validator_framework": custom_framework_async,
             "ask_user_question_surface": approving_surface,
         }
     )
@@ -397,6 +396,9 @@ async def test_validator_pass_does_not_fire_composer_through_execute_workflow(
             ctx=ctx,  # type: ignore[arg-type]
             default_model_binding=_DEFAULT_BINDING,
             step_dispatchers=dispatchers,  # type: ignore[arg-type]
+            # Runtime v1.138 §14.13.8(2): the run's own binding over the swapped-in framework,
+            # opened on this loop; the driver's worker thread evaluates through it.
+            validator_run=open_validator_run(custom_framework_async, result_timeout_seconds=30.0),
         )
     )
 

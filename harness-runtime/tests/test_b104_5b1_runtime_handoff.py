@@ -279,6 +279,7 @@ def _runner(placed: Placed, admission: Any, spy: Any, monkeypatch: pytest.Monkey
 
 def _resume(runner: Any, capture: PausedChildCapture, depth: int, authority: Any) -> Any:
     return runner(
+        validator_run=None,
         workflow_id=capture.child_workflow_id,
         manifest_entry=cast(Any, None),
         steps=(),

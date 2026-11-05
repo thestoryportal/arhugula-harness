@@ -327,6 +327,7 @@ async def test_stage5_child_runner_reads_bound_ollama_verdict(
         cast(Any, builder), durable_admission=RefuseDurableChildAdmission()
     )
     runner(
+        validator_run=None,
         workflow_id="eo-child",
         manifest_entry=cast(Any, object()),
         steps=(),
