@@ -315,9 +315,7 @@ def test_w2_unreadable_content(tmp_path: Path) -> None:
     content_path = tmp_path / "skills" / "bad.SKILL.md"
     content_path.chmod(0)
     try:
-        _assert_content_invalid(
-            tmp_path / "skills", SkillContentInvalidReason.CONTENT_UNREADABLE
-        )
+        _assert_content_invalid(tmp_path / "skills", SkillContentInvalidReason.CONTENT_UNREADABLE)
     finally:
         content_path.chmod(0o600)
 
@@ -335,6 +333,4 @@ def test_w2_whitespace_only_content(tmp_path: Path) -> None:
 
 def test_w2_pinned_version_sha_mismatch(tmp_path: Path) -> None:
     _write_manifest(tmp_path / "skills", "bad", version_sha="0" * 40)
-    _assert_content_invalid(
-        tmp_path / "skills", SkillContentInvalidReason.VERSION_SHA_MISMATCH
-    )
+    _assert_content_invalid(tmp_path / "skills", SkillContentInvalidReason.VERSION_SHA_MISMATCH)

@@ -52,6 +52,7 @@ from __future__ import annotations
 
 import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -1573,6 +1574,13 @@ async def test_ac4_multi_step_real_llm_execution(
     assert result.workflow_id == "wf-ac4-multi-step"
 
 
+def _git_hash_object(path: Path) -> str:
+    """`git hash-object` of a file: the independent oracle for `version_sha`."""
+    return subprocess.run(
+        ["git", "hash-object", str(path)], check=True, capture_output=True, text=True
+    ).stdout.strip()
+
+
 @pytest.mark.e2e
 @pytest.mark.asyncio
 @pytest.mark.skipif(
@@ -1689,6 +1697,12 @@ async def test_ac7_skill_activation_emits_skill_namespace_span(
         '"description": "' + test_skill_description + '", '
         '"version": "' + test_skill_version + '"}'
     )
+    # Runtime v1.139 §14.17.8.1: every manifest loads with its `<stem>.SKILL.md` content.
+    skill_content_path = skills_dir / f"{test_skill_id}.SKILL.md"
+    skill_content_path.write_text(
+        "# AC7 Test Skill\n\nAnswer the operator in one short sentence.\n", encoding="utf-8"
+    )
+    skill_content_sha = _git_hash_object(skill_content_path)
 
     # ---------------- operator-supplied SkillActivationHook ----------------
     hook_invocations: list[tuple[str, int]] = []
@@ -1855,8 +1869,10 @@ async def test_ac7_skill_activation_emits_skill_namespace_span(
     assert span.attrs["skill.name"] == test_skill_name
     assert span.attrs["skill.activation_mode"] == "tool_search"
     assert span.attrs["skill.frontmatter.version"] == test_skill_version
-    assert "skill.version_sha" in span.attrs
-    assert "skill.body_tokens" in span.attrs
+    assert span.attrs["skill.version_sha"] == skill_content_sha
+    assert (
+        span.attrs["skill.body_tokens"] == len(skill_content_path.read_text(encoding="utf-8")) // 4
+    )
     assert span.attrs["workflow.id"] == "wf-ac7-skill-activation"
 
 

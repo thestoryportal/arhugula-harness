@@ -136,6 +136,13 @@ def _config_with_skill_activation_opt_in_and_hook(tmp_path: Path) -> RuntimeConf
 _FIXTURE_CONTENT = "# Fixture Skill\n\nFollow the AS-8d fixture procedure.\n"
 
 
+def _git_hash_object(path: Path) -> str:
+    """`git hash-object` of a file: the independent oracle for `version_sha`."""
+    return subprocess.run(
+        ["git", "hash-object", str(path)], check=True, capture_output=True, text=True
+    ).stdout.strip()
+
+
 def _seed_skills_dir(skills_dir: Path) -> SkillID:
     """Write a single fixture skill manifest + its SKILL.md content. Returns its skill_id."""
     skills_dir.mkdir(parents=True, exist_ok=True)
@@ -238,12 +245,7 @@ async def test_skill_activation_e2e_opt_in_with_hook_branch(
 
     # Verify the skill loaded with computed version_sha + body_tokens.
     skill = ctx.skills[skill_id]
-    content_sha = subprocess.run(
-        ["git", "hash-object", str(skills_dir / "fixture-skill.SKILL.md")],
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.strip()
+    content_sha = _git_hash_object(skills_dir / "fixture-skill.SKILL.md")
     assert skill.content == _FIXTURE_CONTENT
     assert skill.manifest.version_sha == content_sha
     assert skill.manifest.body_tokens == len(_FIXTURE_CONTENT) // 4
@@ -343,7 +345,9 @@ def _break_content(content_path: Path, reason: SkillContentInvalidReason) -> Non
             content_path.write_text("  \n")
         case SkillContentInvalidReason.VERSION_SHA_MISMATCH:
             manifest = content_path.with_name("fixture-skill.skill.json")
-            manifest.write_text(manifest.read_text().replace("}", ', "version_sha": "' + "0" * 40 + '"}'))
+            manifest.write_text(
+                manifest.read_text().replace("}", ', "version_sha": "' + "0" * 40 + '"}')
+            )
 
 
 @pytest.mark.asyncio
@@ -364,7 +368,9 @@ async def test_w2_invalid_skill_content_aborts_bootstrap_stage_2(
 
     try:
         with pytest.raises(BootstrapFailure) as exc_info:
-            await run_bootstrap(_config_with_skill_activation_opt_out(tmp_path), workload_class=WORKLOAD)
+            await run_bootstrap(
+                _config_with_skill_activation_opt_out(tmp_path), workload_class=WORKLOAD
+            )
     finally:
         if content_path.exists():
             content_path.chmod(0o600)
