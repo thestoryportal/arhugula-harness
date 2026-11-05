@@ -690,7 +690,7 @@ def derive(
         latest_retirement_batch=batch,
         lag_expected=_lag_expected(root),
         owed_lag=_owed_lag(root, trial_membership=trial_membership),
-        refresh_rule=observe_refresh_rule(),
+        refresh_rule=observe_refresh_rule(root),
     )
 
 
@@ -1605,15 +1605,16 @@ def validate(
         # "session-start/preflight, force the owed refresh first."
         ci_owed_lag = allow_roadmap_drift and state.owed_lag
         if state.refresh_rule == "trial":
-            # [LAW:single-enforcer] under an activation of the tracked policy the merge door
-            # rules on each landing's refresh (WS-11); the pinned hash no longer owes one.
+            # [LAW:single-enforcer] the tracked delivery policy or trial receipt delegates
+            # status posture to the door; an unpinned hash is not a CI waiver.
             findings.append(
                 Finding(
                     "warn",
-                    "ROADMAP_STATUS_TRIAL_UNPINNED",
-                    "roadmap_status.md hash differs, and the trial profile is active: the merge "
-                    "door gives each legacy landing its terminating refresh and a trial landing "
-                    "none, so no refresh is owed here.",
+                    "ROADMAP_STATUS_UNPINNED",
+                    "roadmap_status.md is a milestone snapshot under the delivery policy. "
+                    "The merge door rules on each landing; no status PR is owed here. "
+                    "Generate Git status with `just roadmap-status --state`; read live LIT "
+                    "for claims.",
                 )
             )
         elif state.branch == state.default_branch and not state.lag_expected and not ci_owed_lag:
@@ -1814,14 +1815,19 @@ def _workflow(argv: list[str]) -> int:
     return workflow_boundaries.main(argv)
 
 
-def observe_refresh_rule() -> str:
-    """[LAW:effects-at-boundaries] the tracked policy and canonical activation receipt,
-    judged by `workflow_policy.refresh_rule` alone (WO-U23)."""
+def observe_refresh_rule(root: Path) -> str:
+    """[LAW:effects-at-boundaries] read the inspected checkout's tracked policy,
+    independently of the worktree from which this guard was imported."""
     _tools_package()
-    from tools import workflow_boundaries, workflow_policy
+    from tools import workflow_policy
 
+    path = root / ".harness" / "workflow-policy.json"
+    try:
+        raw = path.read_bytes()
+    except FileNotFoundError:
+        raw = None
     return workflow_policy.refresh_rule(
-        workflow_boundaries.observe_policy(), workflow_policy.read_activation()
+        workflow_policy.load_policy(raw), workflow_policy.read_activation()
     )
 
 
@@ -1833,7 +1839,7 @@ def main(argv: list[str] | None = None) -> int:
         return _workflow(args[1:])
     if args == ["refresh-rule"]:
         # the shell hooks' one reading of the refresh rule (tools/hooks/lib.sh)
-        print(observe_refresh_rule())
+        print(observe_refresh_rule(repo_root(Path.cwd())))
         return 0
     parser = argparse.ArgumentParser(description="Codex deterministic context guard.")
     parser.add_argument(

@@ -31,6 +31,7 @@ import uuid
 from collections.abc import Callable
 from pathlib import Path
 
+import finding_record as fr
 import review_loop_gate as rlg
 import review_wrapper_common as rw
 from agy_review import (
@@ -67,7 +68,7 @@ def review_instructions(binding: dict[str, str], *, nonce: str = "") -> str:
     ignores the output contract (round 3); `codex exec` follows the brief and hands the final
     message back through `-o`."""
     return (
-        "You are an out-of-family code reviewer for an agent-harness monorepo. Review EXACTLY "
+        "You are an independent code reviewer for an agent-harness monorepo. Review EXACTLY "
         f"the committed diff in ./bound.diff (`git diff --binary {binding['base_sha']} "
         f"{binding['head_sha']}`); the full tree at that HEAD is exported read-only under "
         "./tree/ for context -- open nothing outside this directory. Look for real defects: "
@@ -660,7 +661,9 @@ def _reviewed_main(args: argparse.Namespace, invoke) -> int:
         _report(outcome, label="codex-review")
         return outcome
 
-    if not args.failover:
+    # [LAW:single-enforcer] the selected initial/correction procedure has one
+    # independent reviewer; unavailable evidence never launches another service.
+    if not args.failover or fr.cycle_pass_from_env() in ("initial", "correction"):
         return rw.exit_code(primary())
     first, fo = rw.run_with_failover(
         primary, lambda: _run_gemini_failover(Path.cwd(), args.base, chain.get("round"))

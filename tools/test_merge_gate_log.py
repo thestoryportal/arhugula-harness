@@ -463,6 +463,7 @@ def _observe(
     arc: str = _TRIAL_ARC,
     cycle_pass: str | None = None,
     severity: str | None = None,
+    base: str = B,
 ) -> dict:
     """One schema-valid observation as its writer records it: a `finding` at `severity`, else a
     clean `no_finding`."""
@@ -487,7 +488,7 @@ def _observe(
             arc_id=arc,
             lane_id="h-w-1",
             head_sha=head,
-            base_sha=B,
+            base_sha=base,
             diff_digest=digest,
             round_n=1,
             cycle_pass=cycle_pass,
@@ -509,7 +510,7 @@ def _adjudicate(jl: Path, finding: dict, disposition: str, ts: str) -> None:
     )
 
 
-def _landing_repo(tmp_path: Path, subject: str = "code.py"):
+def _landing_repo(tmp_path: Path, subject: str = "code.py", *, streamlined: bool = False):
     """A topic branch off `main`: a reviewed commit changing `subject`, then one appended
     verdict row and its structured md line."""
     repo = tmp_path / "r"
@@ -521,6 +522,10 @@ def _landing_repo(tmp_path: Path, subject: str = "code.py"):
     g("config", "user.email", "t@t")
     g("config", "user.name", "t")
     (repo / ".harness").mkdir()
+    if streamlined:
+        policy = json.loads((mgl.REPO / ".harness/workflow-policy.json").read_text())
+        policy["review_rules"]["delivery"] = "single-independent-milestone-status-v1"
+        (repo / ".harness/workflow-policy.json").write_text(json.dumps(policy))
     jl, md = repo / ".harness" / "merge-gate-log.jsonl", repo / ".harness" / "merge-gate-log.md"
     _observe(jl, H, D, LENS, arc="pr-1")
     # a release recorded before the review is history, not part of the landing delta
@@ -623,6 +628,82 @@ def _trial_decision(repo: Path, final_head: str = "HEAD") -> rlg.TrialReviewDeci
         base="main",
         repo=repo,
     )
+
+
+@pytest.mark.parametrize("subject", ["code.py", "README.md"])
+def test_first_review_approval_uses_the_pinned_delivery_policy(tmp_path: Path, subject):
+    repo, g, _, _ = _landing_repo(tmp_path, subject, streamlined=True)
+    decision = _trial_decision(repo)
+    assert decision.next_pass == "initial"
+    assert decision.missing_concerns == ("codex",)
+    head, digest = mgl._binding_at(repo, "main", "HEAD")
+    request = rlg.CycleRequest(
+        decision.next_pass,
+        "codex",
+        g("rev-parse", "main"),
+        g("rev-parse", "main"),
+        subject == "README.md",
+        initial_policy=True,
+    )
+    state = rlg.GateState(
+        preflights=(rlg.PreflightAttestation(_TRIAL_ARC, head, digest, (), "answers", "t"),)
+    )
+    result = rlg._decide_cycle(
+        state,
+        [],
+        arc_id=_TRIAL_ARC,
+        head_sha=head,
+        diff_digest=digest,
+        cycle=request,
+        pfx="",
+    )
+    assert isinstance(result, rlg.Allowed)
+    _trial_cycle(repo / ".harness/merge-gate-log.jsonl", head, digest)
+    g("commit", "-qam", "retained legacy cycle")
+    assert _trial_decision(repo).state == "approved"
+
+
+@pytest.mark.parametrize("defect", [None, "initial_digest", "delta_digest", "delta_base"])
+@pytest.mark.parametrize("full_correction", [False, True])
+def test_git_approval_carries_a_verified_correction_chain(tmp_path: Path, defect, full_correction):
+    repo, g, first, _ = _landing_repo(tmp_path)
+    jl = repo / ".harness/merge-gate-log.jsonl"
+    full_base = g("rev-parse", "main")
+    initial_digest = mgl._binding_at(repo, full_base, first)[1]
+    _observe(
+        jl,
+        first,
+        "d" * 64 if defect == "initial_digest" else initial_digest,
+        "codex_review_wrapper",
+        cycle_pass="initial",
+        base=full_base,
+    )
+    g("commit", "-qam", "initial review")
+    previous = first
+    for index in range(2):
+        (repo / "code.py").write_text(f"x = {index + 2}\n")
+        g("commit", "-qam", "correction")
+        correction_base = full_base if full_correction and index == 1 else previous
+        head, digest = mgl._binding_at(repo, correction_base, "HEAD")
+        _observe(
+            jl,
+            head,
+            "e" * 64 if defect == "delta_digest" and index == 0 else digest,
+            "codex_review_wrapper",
+            cycle_pass="correction",
+            base=B if defect == "delta_base" and index == 0 else correction_base,
+        )
+        g("commit", "-qam", "correction review")
+        previous = head
+    if defect:
+        with pytest.raises(rlg.TrialInputError, match="review binding"):
+            _trial_decision(repo)
+    else:
+        assert _trial_decision(repo, previous).state == "binding_stale"
+        assert _trial_decision(repo).state == "approved"
+        (repo / "code.py").write_text("x = 99\n")
+        g("commit", "-qam", "unreviewed source")
+        assert _trial_decision(repo).state == "binding_stale"
 
 
 def test_trial_approval_transfers_only_across_a_git_proven_gate_row_delta(tmp_path: Path):
