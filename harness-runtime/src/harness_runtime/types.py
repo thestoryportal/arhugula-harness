@@ -831,6 +831,20 @@ class CollectorConfig(BaseModel):
         return value
 
 
+class FullVMCarrier(StrEnum):
+    """Selected `TIER_4_FULL_VM` carrier (859, ADR-D2 Tier-4 cells).
+
+    Explicit operator selection — never a fallback chain: an unavailable selected
+    carrier refuses, it does not substitute the other carrier or a lower tier.
+    """
+
+    E2B = "e2b"
+    """E2B managed full-VM sandbox (the original R-412 carrier; the default)."""
+
+    KATA = "kata"
+    """Local Kata Containers hardware-virtualized microVM under Docker."""
+
+
 class SandboxDriverConfig(BaseModel):
     """Per-server tool-execution-driver config — runtime spec v1.43 §14.9.9 (FR-1).
 
@@ -856,7 +870,7 @@ class SandboxDriverConfig(BaseModel):
     image: str | None = None
     """Container image for `TIER_2_CONTAINER` / `TIER_3_MICROVM` drivers. Required
     for those tiers (absence → `RT-FAIL-SANDBOX-DRIVER-UNAVAILABLE`); ignored for
-    `TIER_4_FULL_VM` (E2B uses an env-configured template)."""
+    `TIER_4_FULL_VM` with the E2B carrier (E2B uses an env-configured template)."""
 
     network: str = "none"
     """Container network mode (`TIER_2`/`TIER_3`). Defaults to `"none"` (egress-off)."""
@@ -872,6 +886,14 @@ class SandboxDriverConfig(BaseModel):
 
     allow_internet_access: bool = False
     """`TIER_4_FULL_VM` (E2B) network-egress toggle. Defaults to egress-off."""
+
+    full_vm_carrier: FullVMCarrier = FullVMCarrier.E2B
+    """`TIER_4_FULL_VM` carrier. `kata` selects the local Kata microVM driver, which
+    requires `image` and uses `network` like the container tiers."""
+
+    full_vm_runtime: str = "kata"
+    """Docker runtime name registered for Kata (`full_vm_carrier=kata` only); its
+    `docker info` registration must carry a Kata identity or the call refuses."""
 
 
 class MCPClientConfig(BaseModel):

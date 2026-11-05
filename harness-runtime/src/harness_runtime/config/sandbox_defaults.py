@@ -66,6 +66,23 @@ _TIER_TECH_PROVIDER: dict[SandboxTier, tuple[str, str]] = {
 }
 
 
+#: `TIER_4_FULL_VM` labels when the local Kata carrier is selected (859) — ADR-D2 §1.7
+#: maps provider `kata` to tech `microvm`; the span must name the carrier that runs.
+_KATA_FULL_VM_TECH_PROVIDER: tuple[str, str] = ("microvm", "kata")
+
+
+def _tier_tech_provider(tier: SandboxTier, entry: MCPClientConfig) -> tuple[str, str]:
+    """Default (tech, provider) span labels for `tier`, following the selected Tier-4 carrier."""
+    driver = entry.sandbox_driver
+    if (
+        tier is SandboxTier.TIER_4_FULL_VM
+        and driver is not None
+        and driver.full_vm_carrier.value == "kata"
+    ):
+        return _KATA_FULL_VM_TECH_PROVIDER
+    return _TIER_TECH_PROVIDER[tier]
+
+
 #: Default `assigned_tier_reason` when the surface-aware per-server policy (not a
 #: transport floor) determines the tier.
 _PER_SERVER_DEFAULT_REASON = "per-server-default-sandbox-policy"
@@ -121,7 +138,7 @@ def resolve_effective_sandbox_defaults(
         entry.default_minimum_tier if entry.default_minimum_tier is not None else surface_tier
     )
 
-    default_tech, default_provider = _TIER_TECH_PROVIDER[sandbox_tier]
+    default_tech, default_provider = _tier_tech_provider(sandbox_tier, entry)
     sandbox_tech = (
         entry.default_sandbox_tech if entry.default_sandbox_tech is not None else default_tech
     )
@@ -192,7 +209,7 @@ def compose_transport_floor(
     if not raised:
         return effective
 
-    default_tech, default_provider = _TIER_TECH_PROVIDER[floor.tier]
+    default_tech, default_provider = _tier_tech_provider(floor.tier, entry)
     return EffectiveSandboxDefaults(
         minimum_tier=effective.minimum_tier,
         sandbox_tier=floor.tier,
@@ -268,7 +285,7 @@ def resolve_per_tool_sandbox_defaults(
     if is_tier_at_or_above(surface_default.sandbox_tier, floor.tier):
         return surface_default
 
-    default_tech, default_provider = _TIER_TECH_PROVIDER[floor.tier]
+    default_tech, default_provider = _tier_tech_provider(floor.tier, entry)
     return EffectiveSandboxDefaults(
         minimum_tier=surface_default.minimum_tier,
         sandbox_tier=floor.tier,
