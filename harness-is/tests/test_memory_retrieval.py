@@ -452,6 +452,7 @@ def test_hashes_match_packet_rejects_packet_hash_mismatch(tmp_path: Path) -> Non
             packet_hash=wrong_hash,
             ranking_trace=result.ranking_trace,
             packet=result.packet,
+            prompt_injectable=result.prompt_injectable,
         )
 
 
@@ -468,6 +469,7 @@ def test_hashes_match_packet_rejects_selected_refs_mismatch(tmp_path: Path) -> N
             packet_hash=result.packet_hash,
             ranking_trace=result.ranking_trace,
             packet=result.packet,
+            prompt_injectable=result.prompt_injectable,
         )
 
 
@@ -571,6 +573,7 @@ def test_prompt_packet_injects_only_records_whose_policy_allows_prompt_injection
         assert str(record.envelope.memory_id) not in "".join(
             section.text for section in result.packet.sections
         )
+    assert result.prompt_injectable
     ledger = store.read_memory_operations()
     assert [entry.memory_refs for entry in ledger] == [result.selected_refs]
 
@@ -584,3 +587,4 @@ def test_standard_tool_retrieval_keeps_records_restricted_from_prompt_injection(
     )
 
     assert set(result.selected_refs) == {record.envelope.memory_id for record in corpus.values()}
+    assert not result.prompt_injectable, "restricted records ride along for tools only"

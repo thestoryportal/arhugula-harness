@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
 from harness_core import DeploymentSurface
 from harness_cp.cp_shared_types import ModelBinding
 from harness_cp.cross_family_fallback_chain import FallbackChain, ProviderCandidate, ProviderFamily
@@ -40,6 +41,7 @@ from harness_is.memory_retrieval_index import DerivedRetrievalIndexStore
 from harness_is.memory_store import CanonicalMemoryStore, MemoryStoreRecord
 from harness_is.state_ledger_entry_schema import Actor, ActorClass
 from harness_runtime.memory_context import (
+    PROMPT_PACKET_FALLBACK_RECORD_POLICY_DENIED,
     MemoryContextCompositionRequest,
     RuntimeMemoryContextComposer,
     render_prompt_extension_packet,
@@ -99,6 +101,7 @@ def _record(
     kind: MemoryRecordKind = MemoryRecordKind.PREFERENCE,
     cli_profile: str = "codex",
     provider_family: str = ProviderFamily.OPENAI.value,
+    injection_policy: str = "prompt_packet_allowed",
 ) -> MemoryStoreRecord:
     content: dict[str, object] = {
         "semantic_kind": kind.value,
@@ -106,7 +109,7 @@ def _record(
         "confidence": "high",
         "source_authority": "operator_direct",
         "status": "active",
-        "injection_policy": "prompt_packet_allowed",
+        "injection_policy": injection_policy,
         "tags": ["codex", "memory", "workflow"],
         "pinned": True,
         "preference_subject": "operator_workflow",
@@ -553,6 +556,39 @@ def test_b83_prompt_packet_eligibility_is_false_when_the_token_budget_is_empty(
     assert context.prompt_packet_fallback_denial == "token_budget_empty", (
         "the BUDGET gate must be named as itself, not folded into a policy denial"
     )
+
+
+@pytest.mark.parametrize("injection_policy", ["never", "retrieval_only", "tool_allowed"])
+def test_b83_prompt_packet_fallback_is_withheld_for_records_restricted_from_prompts(
+    tmp_path: Path,
+    injection_policy: str,
+) -> None:
+    """C-MEM-05 - a record's own `injection_policy` also gates the degraded serve.
+
+    Every mode-level gate admits the prompt packet, so the selector alone would
+    authorize rendering the standard-tools packet as prompt text. That packet
+    still carries a record whose policy forbids prompt injection, so the
+    fallback must be withheld while tool retrieval keeps the record.
+    """
+    record = _record(
+        statement="Operator prefers terse status lines.", injection_policy=injection_policy
+    )
+    policy = _enabled_policy(
+        injection_access=AccessDecision.PROMPT_PACKET,
+        standard_tool_access=AccessDecision.STANDARD_TOOLS,
+    )
+    _, composer = _composer(tmp_path, policy=policy, record=record)
+
+    context = composer.compose_run_start(
+        _request(
+            workflow_policy=policy,
+            provider_capabilities=_capabilities(tools=True, prompt=True),
+        )
+    )
+
+    assert context.access_mode is MemoryAccessMode.STANDARD_MEMORY_TOOLS
+    assert context.selected_refs == (record.envelope.memory_id,)
+    assert context.prompt_packet_fallback_denial == PROMPT_PACKET_FALLBACK_RECORD_POLICY_DENIED
 
 
 def test_prompt_extension_packet_rendering_is_bounded_cited_and_stable(

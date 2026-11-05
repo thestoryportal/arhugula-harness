@@ -161,6 +161,10 @@ class MemoryRetrievalResult(BaseModel):
     packet_hash: str
     ranking_trace: tuple[RankingTraceEntry, ...]
     packet: MemoryPacket
+    #: Whether every selected record's own `injection_policy` admits prompt
+    #: text. Prompt-packet retrieval already excludes the rest, so this is
+    #: always true there; a tool packet may carry records restricted to tools.
+    prompt_injectable: bool
 
     @model_validator(mode="after")
     def _hashes_match_packet(self) -> Self:
@@ -259,6 +263,9 @@ class MemoryRetriever:
             packet_hash=packet.packet_hash,
             ranking_trace=ranking_trace,
             packet=packet,
+            prompt_injectable=all(
+                _record_permits_prompt_injection(item.record) for item in selected
+            ),
         )
         self._write_retrieval_event(
             result,
