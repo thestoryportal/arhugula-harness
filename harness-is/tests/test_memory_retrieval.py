@@ -89,6 +89,8 @@ def _content_for(
     source_authority: str = "operator_direct",
     status: str = "active",
     pinned: bool = False,
+    injection_policy: str | None = None,
+    omit_injection_policy: bool = False,
 ) -> dict[str, object]:
     common: dict[str, object] = {
         "semantic_kind": kind.value,
@@ -96,10 +98,12 @@ def _content_for(
         "confidence": confidence,
         "source_authority": source_authority,
         "status": status,
-        "injection_policy": "retrieval_only",
+        "injection_policy": injection_policy or "prompt_packet_allowed",
         "tags": list(tags),
         "pinned": pinned,
     }
+    if omit_injection_policy:
+        del common["injection_policy"]
     if kind is MemoryRecordKind.PREFERENCE:
         return {
             **common,
@@ -108,7 +112,7 @@ def _content_for(
             "confirmation_required": False,
         }
     if kind is MemoryRecordKind.PROCEDURAL_SNAPSHOT:
-        return {
+        procedural: dict[str, object] = {
             "snapshot_id": statement.lower().replace(" ", "-"),
             "workflow_id": "memory-substrate",
             "cli_profile": "codex",
@@ -116,6 +120,10 @@ def _content_for(
             "procedural_update": statement,
             "tags": list(tags),
         }
+        # Legacy snapshots carry no policy field; only an explicit one is written.
+        if injection_policy is not None:
+            procedural["injection_policy"] = injection_policy
+        return procedural
     return common
 
 
@@ -131,6 +139,8 @@ def _record(
     created_at: datetime = _NOW,
     scope: MemoryScope | None = None,
     redaction_state: RedactionState = RedactionState.ACTIVE,
+    injection_policy: str | None = None,
+    omit_injection_policy: bool = False,
 ) -> MemoryStoreRecord:
     tier = (
         MemoryTier.PROCEDURAL
@@ -145,6 +155,8 @@ def _record(
         source_authority=source_authority,
         status=status,
         pinned=pinned,
+        injection_policy=injection_policy,
+        omit_injection_policy=omit_injection_policy,
     )
     content_hash = compute_memory_content_hash(content)
     return MemoryStoreRecord(
@@ -471,3 +483,104 @@ def test_normalize_for_json_rejects_non_string_mapping_key() -> None:
     mapping keys."""
     with pytest.raises(TypeError, match="string mapping keys"):
         _normalize_for_json({1: "value"})
+
+
+def _restricted_policy_corpus() -> dict[str, MemoryStoreRecord]:
+    """One record per C-MEM-05 injection policy, all matching the same query."""
+
+    def semantic(
+        label: str,
+        *,
+        injection_policy: str | None = None,
+        omit_injection_policy: bool = False,
+    ) -> MemoryStoreRecord:
+        return _record(
+            kind=MemoryRecordKind.CONVENTION,
+            statement=f"Codex memory substrate workflow convention {label}.",
+            tags=("codex", "memory", "workflow"),
+            injection_policy=injection_policy,
+            omit_injection_policy=omit_injection_policy,
+        )
+
+    def procedural(label: str, *, injection_policy: str | None = None) -> MemoryStoreRecord:
+        return _record(
+            kind=MemoryRecordKind.PROCEDURAL_SNAPSHOT,
+            statement=f"Codex memory substrate workflow procedure {label}",
+            tags=("codex", "memory", "workflow"),
+            injection_policy=injection_policy,
+        )
+
+    return {
+        "semantic_prompt_allowed": semantic("prompt", injection_policy="prompt_packet_allowed"),
+        "semantic_never": semantic("never", injection_policy="never"),
+        "semantic_retrieval_only": semantic("retrieval", injection_policy="retrieval_only"),
+        "semantic_tool_allowed": semantic("tool", injection_policy="tool_allowed"),
+        "semantic_native_allowed": semantic("native", injection_policy="native_allowed"),
+        "semantic_malformed": semantic("malformed", injection_policy="PROMPT_PACKET_ALLOWED"),
+        "semantic_missing": semantic("missing", omit_injection_policy=True),
+        "procedural_prompt_allowed": procedural("prompt", injection_policy="prompt_packet_allowed"),
+        "procedural_never": procedural("never", injection_policy="never"),
+        "procedural_retrieval_only": procedural("retrieval", injection_policy="retrieval_only"),
+        "procedural_legacy": procedural("legacy"),
+    }
+
+
+def _retrieve_corpus(
+    tmp_path: Path,
+    access_mode: MemoryPacketAccessMode,
+) -> tuple[dict[str, MemoryStoreRecord], MemoryRetrievalResult, CanonicalMemoryStore]:
+    binding = _binding(tmp_path)
+    store = _store(binding)
+    corpus = _restricted_policy_corpus()
+    for record in corpus.values():
+        store.write_record(record)
+    index_store = _index_store(binding)
+    index_store.rebuild(indexed_at=_NOW)
+    result = _retriever(store=store, index_store=index_store).retrieve(
+        _request(token_budget=4000),
+        timestamp=_NOW,
+        actor=Actor(actor_class=ActorClass.AGENT, actor_id="codex"),
+        access_mode=access_mode,
+    )
+    return corpus, result, store
+
+
+def test_prompt_packet_injects_only_records_whose_policy_allows_prompt_injection(
+    tmp_path: Path,
+) -> None:
+    """C-MEM-05/C-MEM-12 - per-record `injection_policy` gates the prompt packet.
+
+    Semantic records must carry the explicit `prompt_packet_allowed` value; a
+    missing or malformed value fails closed. A procedural snapshot with an
+    explicit restrictive policy is withheld, while a legacy snapshot written
+    before the field existed keeps its prior prompt eligibility.
+    """
+    corpus, result, store = _retrieve_corpus(
+        tmp_path, MemoryPacketAccessMode.PROMPT_EXTENSION_PACKET
+    )
+    permitted = {"semantic_prompt_allowed", "procedural_prompt_allowed", "procedural_legacy"}
+    expected_refs = {corpus[name].envelope.memory_id for name in permitted}
+
+    assert set(result.selected_refs) == expected_refs
+    assert {section.memory_ref for section in result.packet.sections} == expected_refs
+    denied = {excluded.memory_ref: excluded.reason for excluded in result.excluded_refs}
+    for name, record in corpus.items():
+        if name in permitted:
+            continue
+        assert denied[record.envelope.memory_id] is RetrievalExclusionReason.POLICY_DENIED, name
+        assert str(record.envelope.memory_id) not in "".join(
+            section.text for section in result.packet.sections
+        )
+    ledger = store.read_memory_operations()
+    assert [entry.memory_refs for entry in ledger] == [result.selected_refs]
+
+
+def test_standard_tool_retrieval_keeps_records_restricted_from_prompt_injection(
+    tmp_path: Path,
+) -> None:
+    """The prompt-packet gate does not narrow ordinary tool retrieval."""
+    corpus, result, _store_ = _retrieve_corpus(
+        tmp_path, MemoryPacketAccessMode.STANDARD_MEMORY_TOOLS
+    )
+
+    assert set(result.selected_refs) == {record.envelope.memory_id for record in corpus.values()}
