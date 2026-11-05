@@ -1,7 +1,7 @@
 # Spec: Harness Runtime — v1.140 (delta over v1.138)
 
 *Delta-only file. One contract amended: C-RT-17 §14.7.2 sub-agent dispatch composer, step 1 (payload
-parse), now resolves the effective brief from CP v1.130 §25.11.1.4(3) `lead_brief`. Every other
+parse), now resolves the effective brief from CP v1.130 §25.11.1.4(4) `lead_brief`. Every other
 v1.138 and earlier term remains in force. Proposed v1.139 (PR #1705, skill content at hook 2) is not
 a head and is not amended. The two deltas touch disjoint contracts.*
 

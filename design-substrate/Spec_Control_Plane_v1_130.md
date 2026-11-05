@@ -29,7 +29,9 @@ feeds the aggregate fold. This delta specifies the missing selection seam. It is
 | `WorkflowManifestEntry` (C-CP-25 §25.2) | No worker-source field | Gains `worker_selection: WorkerSelection = WorkerSelection.DECLARED_POOL` (§25.11.1.1) |
 | `StepExecutionContext` (§25.3.3.4) | No plan field | Gains hash-inert, non-persistent `lead_brief: SubAgentBrief \| None` (§25.11.1.4) |
 | Worker ordinal (v1.42 §26.2, v1.94 §1(3)) | `branch_index` is the ordinal in `steps[1:]` | `branch_index` is the ordinal in the derived plan (§25.11.1.5). Under `DECLARED_POOL` the two are identical |
-| Fail classes | — | NEW `orchestrator-workers-plan-invalid: <reason>` and `orchestrator-workers-plan-unrecoverable` (§25.11.1.6) |
+| Worker `step_index` | `branch_index + 1` at every worker context | The worker's declared ordinal in `steps`, carried on its assignment (§25.11.1.4(2)). Under `DECLARED_POOL` it equals `branch_index + 1` |
+| `_determine_fanout_resume` and the driver crash gate | Worker domain sized from the declared pool | Worker domain sized from the plan derived from the recorded orchestrator output; the declared-body cardinality check is kept (§25.11.1.5(3)) |
+| Fail classes | — | NEW `orchestrator-workers-plan-invalid: <reason>` (§25.11.1.4(3)) |
 
 ## §1 NEW §25.11.1 — Lead-directed worker plan
 
@@ -44,6 +46,7 @@ class WorkerSelection(StrEnum):
 
 class WorkerAssignment(BaseModel):    # frozen, extra="forbid"
     step: WorkflowStep                # a member of the declared worker pool
+    declared_index: int               # the step's ordinal in `steps` (orchestrator = 0)
     brief: SubAgentBrief | None       # None = the step's declared brief applies
 
 class WorkerPlan(BaseModel):          # frozen, extra="forbid"
@@ -79,7 +82,8 @@ change any of those properties.
 `derive_worker_plan` is pure. It is the only unit that reads the plan from an orchestrator output.
 
 1. `DECLARED_POOL` returns one assignment per pool step, in pool order, each with `brief=None`. It
-   does not read `orchestrator_output`. A `worker_plan` key in the output has no effect.
+   does not read `orchestrator_output`. Every variant sets `declared_index` to the pool position
+   plus one, so it is fixed by the declaration and never by the plan. A `worker_plan` key in the output has no effect.
 2. `LEAD_PLAN` reads `orchestrator_output["worker_plan"]`. The value MUST be a sequence (not a
    string or mapping) of mappings, each with exactly the keys `worker` (a pool `step_id` string) and
    optionally `brief`. Assignments keep the sequence order.
@@ -105,21 +109,30 @@ change any of those properties.
 1. **One plan per fan-out.** The strategy derives the plan once, after `orchestrator_output` is
    available and before any consumer of a worker ordinal. This applies to a fresh dispatch, a pause
    resume (output recovered from `FanOutResumeState.orchestrator_output`) and a crash resume (output
-   recovered from the replay store). `worker_steps` becomes
+   recovered from the replay store). The pre-strategy crash units of §25.11.1.5(3) call the same
+   function on the same recorded output; no unit maps worker ordinals any other way. `worker_steps`
+   becomes
    `[a.step for a in plan.assignments]`. Every later strategy operation (warm-up split, dispatch
    markers, cascade, barrier, fold, resume carriers, synthesis) reads that list unchanged.
-2. **Failure.** `WorkerPlanInvalid` produces `RunStatus.FAILED` with
+2. **Declared step index.** Every site that composes a worker `StepExecutionContext` sets
+   `step_index = assignment.declared_index`. This covers fresh dispatch, the pause-resume and
+   crash-resume re-dispatch paths, paused-child and effect-fence recovery, and the warm-up split. At
+   `7c8f3af9` these sites write `branch_index + 1` (`workflow_driver.py` lines 13312, 13505, 13566
+   and 13784). Per-step policy, audit and Runtime skill activation key on `step_index`, so a worker
+   keeps its declared identity whatever its plan position. The synthesis step keeps its declared
+   ordinal (`branch_count=len(steps)` at the synthesis call sites), independent of plan size.
+3. **Failure.** `WorkerPlanInvalid` produces `RunStatus.FAILED` with
    `fail_class = "orchestrator-workers-plan-invalid: <reason>"`, before any worker dispatch or worker
    marker. The orchestrator ran, so its sequential ledger entry and replay record are kept, as for any
    post-orchestrator failure. `cascade_policy` does not apply, because no worker failed.
-3. **Brief carrier.** `StepExecutionContext` gains
+4. **Brief carrier.** `StepExecutionContext` gains
    `lead_brief: SubAgentBrief | None = Field(default=None, exclude=True, repr=False)`, the same
    carrier shape as `validator_run` (v1.129 §28.11.5). The driver sets it from
    `WorkerAssignment.brief` on each worker's context only. Under `DECLARED_POOL` it is always
    `None`. It is absent from every `model_dump`, so it never enters a hash, ledger row or pause
    snapshot. It is re-derived from the recorded orchestrator output on every resume (§25.11.1.5).
    Runtime's sub-agent composer is the only reader (paired Runtime v1.140).
-4. **Empty plan.** Zero assignments drains zero workers. Without a synthesis step the strategy returns
+5. **Empty plan.** Zero assignments drains zero workers. Without a synthesis step the strategy returns
    `SUCCESS` with `final_state = {"orchestrator": <output>, "worker_outputs": {}}`. With a synthesis
    step the existing v1.54 dispatch-time guard returns `post-join-synthesis-no-siblings`.
 
@@ -133,21 +146,29 @@ change any of those properties.
    manifest that yields a different plan fails closed through the existing mismatch classes.
 2. **Pause resume.** The orchestrator is not re-dispatched (unchanged). The plan is re-derived from
    the recovered `orchestrator_output` under the resumed manifest's `worker_selection` and pool.
-3. **Crash resume (driver reconstruct gate).** The gate that builds the crash `FanOutResumeState`
-   (`workflow_driver.py` lines 3873-4020 at `7c8f3af9`) currently sizes the worker domain from the
-   declared pool. It MUST size it from the plan derived from the replay store's recorded
-   orchestrator output, through the same `derive_worker_plan`. This includes the
-   out-of-range-marker bound `_card_branch_count` and the dispatched-kind comparison.
+3. **Crash resume (pre-strategy decisions).** Two pre-strategy units size the worker domain from
+   the declared pool at `7c8f3af9`: `_determine_fanout_resume` (`workflow_driver.py` line 7768) and
+   the driver crash gate that calls it (lines 3873-4020). For the orchestrator topologies, both MUST
+   derive the plan from the store's recorded orchestrator output, through the same
+   `derive_worker_plan`, before any worker-ordinal decision. Then:
+   - `FanOutResumeState.worker_count` is the plan length (was `len(steps) - 1` at line 8122), so the
+     strategy's `worker-count-mismatch` check (line 12455) compares plan to plan;
+   - the `RE_DISPATCH` timeout refire bound `_branch_count` (line 7853) and the driver gate's
+     out-of-range-marker bound `_card_branch_count` (line 4016) are the plan length;
+   - dispatched-kind and maybe-ran comparisons resolve an ordinal through the planned list.
+   The recorded fan-out cardinality check (line 7819) is a different fact and is kept: it compares the
+   store's capture-time `len(steps)` against the resumed declared body, so a changed pool still fails
+   closed even when the plan would fit.
 4. **Crash before the orchestrator record.** Workers are dispatched only after `record_orchestrator`
    (§25.12 reserve-before-commit). So a store with no orchestrator record holds no legitimate worker
    marker. The existing orchestrator maybe-ran classifier (v1.64, v1.86) decides between re-dispatch
    and fail-closed, unchanged. A re-dispatched orchestrator produces a new output, and its plan
-   governs the run, because no worker of any earlier plan ran.
-5. **Unrecoverable plan.** Under `LEAD_PLAN`, a store holding a worker marker or worker output but no
-   orchestrator record returns `RunStatus.FAILED` with
-   `fail_class = "orchestrator-workers-plan-unrecoverable"`. The planned list cannot be
-   reconstructed, so no ordinal can be attributed. A plan that fails derivation on resume returns
-   `orchestrator-workers-plan-invalid: <reason>`.
+   governs the run, because no worker of any earlier plan ran. A store that holds a worker
+   marker, worker output or cardinality marker without an orchestrator record already fails closed
+   (the lost-capture allowlist at line 7967 and `_FanOutStoreCorruptError` at line 8104). No plan is
+   derived and no new failure class is added.
+5. **Plan failure on resume.** A recorded orchestrator output whose plan fails derivation under the
+   resumed manifest returns `orchestrator-workers-plan-invalid: <reason>`.
 
 ### §25.11.1.6 `HIERARCHICAL_DELEGATION`
 
@@ -173,14 +194,15 @@ discriminating mutant is listed for each, and the witness fails under it.
 
 | ID | Behavior | Mutant it kills |
 |---|---|---|
-| W1 | `DECLARED_POOL` (default) with pool `[a,b,c]` and an orchestrator output containing `worker_plan: [{"worker":"c"}]` dispatches a, b and c in declared order with declared briefs | Reading `worker_plan` regardless of selection (a key-presence mode) |
-| W2 | `LEAD_PLAN` with pool `[a,b,c]` and plan `[c,a]` dispatches only c then a. `worker_outputs` keys are `c` then `a` (branch ordinals 0 and 1). b has no dispatch, marker or ledger entry | `worker_steps = steps[1:]` retained |
+| W1 | `DECLARED_POOL` (default) with pool `[a,b,c]` and an orchestrator output containing `worker_plan: [{"worker":"c"}]` dispatches a, b and c in declared order with declared briefs and `step_index` 1, 2, 3 | Reading `worker_plan` regardless of selection (a key-presence mode) |
+| W2 | `LEAD_PLAN` with pool `[a,b,c]` and plan `[c,a]` dispatches only c then a. `worker_outputs` keys are `c` then `a` (branch ordinals 0 and 1). b has no dispatch, marker or ledger entry. c's context has `step_index` 3 and a's has 1, and a per-step policy and skill-activation binding keyed on index 3 applies to c only | `worker_steps = steps[1:]` retained; `step_index = branch_index + 1` retained |
 | W3 | `LEAD_PLAN` with plan brief on a `SUB_AGENT_DISPATCH` worker: the handoff context, the gate-level-descent `sub_agent_brief` and the dispatch `response_hash` all reflect the planned brief, and `summary_hash` equals `compute_brief_summary_hash` of it | Runtime reading `payload.brief` at any reader site; parser trusting a supplied hash |
 | W4 | Each §25.11.1.3(4) reason gives `FAILED` with `orchestrator-workers-plan-invalid: <reason>`, zero worker dispatches and the orchestrator's ledger entry present. This includes a plan naming the carved synthesis step id | Silent skip of an invalid entry; fallback to the declared pool |
 | W5 | Empty plan: `SUCCESS` with `worker_outputs == {}`. With a synthesis step: `post-join-synthesis-no-siblings` | Empty plan treated as invalid, or as "all workers" |
 | W6 | `cascade_policy=pause`, plan `[c,a]`, a fails → `PAUSED`. Resume does not re-dispatch the orchestrator, keeps c's recorded output and re-dispatches only a. A resumed manifest whose plan differs fails with the existing identity mismatch | Resume deriving `worker_steps` from the declared pool |
-| W7 | Crash after the orchestrator record and c's completion (plan `[c,a]`, pool of 3): resume dispatches only a and never c. A stale marker at planned ordinal 2 (inside the declared count, outside the planned count) fails closed | Driver gate sizing `_card_branch_count` from the pool |
-| W8 | `LEAD_PLAN` store with a worker output but no orchestrator record → `orchestrator-workers-plan-unrecoverable` | Falling back to the declared pool when the record is missing |
+| W7a | Completed-branch path: crash after the orchestrator record and c's completion (plan `[c,a]`, pool of 3). Resume succeeds with no `worker-count-mismatch`, dispatches only a with `step_index` 1, and never re-dispatches c | `_determine_fanout_resume` returning `worker_count = len(steps) - 1`; recovery contexts using `branch_index + 1` |
+| W7b | Cardinality-only and timeout path: same plan, no completed branch. A stale dispatch marker at planned ordinal 2 (inside the declared count, outside the planned count) fails closed at the driver gate. Under `RE_DISPATCH`, a timed-out marker at planned ordinal 2 is refire-unsafe. A resumed body with a changed pool size still fails the recorded-cardinality check | `_card_branch_count` or the timeout `_branch_count` sized from the pool; the cardinality check dropped or switched to plan length |
+| W8 | `LEAD_PLAN` store with a worker output but no orchestrator record fails closed with the existing corrupt-store error, and no worker dispatches | Falling back to the declared pool when the record is missing |
 | W9 | `HIERARCHICAL_DELEGATION` with a `LEAD_PLAN` child level: the child's plan selects among the child's pool. A parent level with 4 declared children and a 2-entry plan is still refused by the cap before the orchestrator runs | Cap computed on the plan; child level using the parent's selection |
 | W10 | A `LEAD_PLAN` manifest on `PARALLELIZATION` fails manifest validation | Accepting the field on a topology without an orchestrator |
 
