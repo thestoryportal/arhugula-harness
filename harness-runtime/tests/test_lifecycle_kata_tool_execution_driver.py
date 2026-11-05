@@ -185,3 +185,10 @@ async def test_non_tier4_decision_refuses_without_any_subprocess(
 def test_runtime_must_be_named(runtime: str | None) -> None:
     with pytest.raises(ValueError, match="runtime must be non-empty"):
         _driver(runtime=runtime)
+
+
+@pytest.mark.parametrize("network", ["host", "bridge", ""])
+def test_network_must_stay_none(network: str) -> None:
+    """859 F1: the Kata microVM is egress-restricted; no other network mode constructs."""
+    with pytest.raises(ValueError, match="network must be 'none'"):
+        _driver(network=network)

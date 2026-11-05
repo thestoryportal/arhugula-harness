@@ -404,7 +404,7 @@ class KataMicroVMToolRunnerExecutionDriver(DockerToolRunnerExecutionDriver):
     ``runtimeType`` or ``path`` names kata). Otherwise the call is refused
     with zero container effects — never a fallback to runc, gVisor, E2B or
     in-process execution, which would lower the Tier-4 floor or add a paid
-    carrier.
+    carrier. The microVM is egress-restricted: ``network`` must stay ``none``.
     """
 
     runtime: str | None = "kata"
@@ -414,6 +414,8 @@ class KataMicroVMToolRunnerExecutionDriver(DockerToolRunnerExecutionDriver):
         super().__post_init__()
         if self.runtime is None or not self.runtime.strip():
             raise ValueError("KataMicroVMToolRunnerExecutionDriver.runtime must be non-empty")
+        if self.network != "none":
+            raise ValueError("KataMicroVMToolRunnerExecutionDriver.network must be 'none'")
 
     async def call_tool(
         self,

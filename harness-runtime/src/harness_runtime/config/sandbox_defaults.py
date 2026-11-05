@@ -71,8 +71,14 @@ _TIER_TECH_PROVIDER: dict[SandboxTier, tuple[str, str]] = {
 _KATA_FULL_VM_TECH_PROVIDER: tuple[str, str] = ("microvm", "kata")
 
 
-def _tier_tech_provider(tier: SandboxTier, entry: MCPClientConfig) -> tuple[str, str]:
-    """Default (tech, provider) span labels for `tier`, following the selected Tier-4 carrier."""
+def _span_labels(tier: SandboxTier, entry: MCPClientConfig) -> tuple[str, str]:
+    """(tech, provider) `sandbox.enter` span labels for the delivered `tier`.
+
+    Operator `default_sandbox_tech`/`default_sandbox_provider` overrides win, except
+    for a `TIER_4_FULL_VM` delivered by the selected local Kata carrier: there the
+    labels are BOUND to `microvm`/`kata` so an override cannot name a carrier that
+    did not run (859 — security telemetry honesty).
+    """
     driver = entry.sandbox_driver
     if (
         tier is SandboxTier.TIER_4_FULL_VM
@@ -80,7 +86,15 @@ def _tier_tech_provider(tier: SandboxTier, entry: MCPClientConfig) -> tuple[str,
         and driver.full_vm_carrier.value == "kata"
     ):
         return _KATA_FULL_VM_TECH_PROVIDER
-    return _TIER_TECH_PROVIDER[tier]
+    default_tech, default_provider = _TIER_TECH_PROVIDER[tier]
+    return (
+        entry.default_sandbox_tech if entry.default_sandbox_tech is not None else default_tech,
+        (
+            entry.default_sandbox_provider
+            if entry.default_sandbox_provider is not None
+            else default_provider
+        ),
+    )
 
 
 #: Default `assigned_tier_reason` when the surface-aware per-server policy (not a
@@ -138,15 +152,7 @@ def resolve_effective_sandbox_defaults(
         entry.default_minimum_tier if entry.default_minimum_tier is not None else surface_tier
     )
 
-    default_tech, default_provider = _tier_tech_provider(sandbox_tier, entry)
-    sandbox_tech = (
-        entry.default_sandbox_tech if entry.default_sandbox_tech is not None else default_tech
-    )
-    sandbox_provider = (
-        entry.default_sandbox_provider
-        if entry.default_sandbox_provider is not None
-        else default_provider
-    )
+    sandbox_tech, sandbox_provider = _span_labels(sandbox_tier, entry)
 
     return EffectiveSandboxDefaults(
         minimum_tier=minimum_tier,
@@ -209,18 +215,12 @@ def compose_transport_floor(
     if not raised:
         return effective
 
-    default_tech, default_provider = _tier_tech_provider(floor.tier, entry)
+    sandbox_tech, sandbox_provider = _span_labels(floor.tier, entry)
     return EffectiveSandboxDefaults(
         minimum_tier=effective.minimum_tier,
         sandbox_tier=floor.tier,
-        sandbox_tech=(
-            entry.default_sandbox_tech if entry.default_sandbox_tech is not None else default_tech
-        ),
-        sandbox_provider=(
-            entry.default_sandbox_provider
-            if entry.default_sandbox_provider is not None
-            else default_provider
-        ),
+        sandbox_tech=sandbox_tech,
+        sandbox_provider=sandbox_provider,
         # Security telemetry honesty: the `sandbox.enter` span records that the
         # per-MCP-transport floor (ADR-D2 §1.3) — not the per-server default — drove
         # the (raised) tier.
@@ -285,18 +285,12 @@ def resolve_per_tool_sandbox_defaults(
     if is_tier_at_or_above(surface_default.sandbox_tier, floor.tier):
         return surface_default
 
-    default_tech, default_provider = _tier_tech_provider(floor.tier, entry)
+    sandbox_tech, sandbox_provider = _span_labels(floor.tier, entry)
     return EffectiveSandboxDefaults(
         minimum_tier=surface_default.minimum_tier,
         sandbox_tier=floor.tier,
-        sandbox_tech=(
-            entry.default_sandbox_tech if entry.default_sandbox_tech is not None else default_tech
-        ),
-        sandbox_provider=(
-            entry.default_sandbox_provider
-            if entry.default_sandbox_provider is not None
-            else default_provider
-        ),
+        sandbox_tech=sandbox_tech,
+        sandbox_provider=sandbox_provider,
         assigned_tier_reason=(
             f"per-tool-sandbox-floor: {contract.name} → {floor.tier.value} (C-AS-02 §2.3)"
         ),

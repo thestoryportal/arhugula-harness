@@ -232,12 +232,18 @@ def _select_tool_execution_driver(
             raise SandboxDriverUnavailableError(
                 f"resolved tier {tier.value!r} (local Kata microVM) requires sandbox_driver.image"
             )
+        if driver_config.network != "none":
+            # The local Tier-4 carrier is egress-restricted (ADR-D2 Tier-4 cells):
+            # refuse any other network mode rather than run with egress.
+            raise SandboxDriverUnavailableError(
+                f"resolved tier {tier.value!r} (local Kata microVM) requires "
+                f"sandbox_driver.network='none', got {driver_config.network!r}"
+            )
         return KataMicroVMToolRunnerExecutionDriver(
             image=driver_config.image,
             command=driver_config.command,
             docker_binary=driver_config.docker_binary,
             timeout_seconds=driver_config.timeout_seconds,
-            network=driver_config.network,
             runtime=driver_config.full_vm_runtime,
         )
 

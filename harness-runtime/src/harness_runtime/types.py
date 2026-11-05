@@ -889,7 +889,7 @@ class SandboxDriverConfig(BaseModel):
 
     full_vm_carrier: FullVMCarrier = FullVMCarrier.E2B
     """`TIER_4_FULL_VM` carrier. `kata` selects the local Kata microVM driver, which
-    requires `image` and uses `network` like the container tiers."""
+    requires `image` and `network="none"` (any other mode refuses; egress-restricted)."""
 
     full_vm_runtime: str = "kata"
     """Docker runtime name registered for Kata (`full_vm_carrier=kata` only); its
