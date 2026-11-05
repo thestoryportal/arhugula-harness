@@ -117,7 +117,11 @@ from harness_runtime.lifecycle.audit_signing_errors import (
 from harness_runtime.lifecycle.cacheable_epoch import DEFAULT_CACHE_TTL, CacheTTL
 from harness_runtime.lifecycle.cost_record_sink import SupportsCostRecordAppend
 from harness_runtime.lifecycle.cross_family_cost_tag import provider_family_for_scope_check
-from harness_runtime.lifecycle.external_cli_provider import accepts_explicit_on_wire
+from harness_runtime.lifecycle.external_cli_provider import (
+    ExternalCLIReportedUsage,
+    accepts_explicit_on_wire,
+    external_cli_usage_evidence,
+)
 from harness_runtime.lifecycle.hitl_tool_loop import (
     HITLToolLoopCallResult,
     HITLToolLoopContext,
@@ -2064,6 +2068,8 @@ class RuntimeLLMDispatcher:
             if external_cli_attrs is not None:
                 span.set_attribute("external_cli.exit_code", external_cli_attrs.exit_code)
                 span.set_attribute("external_cli.provider.kind", external_cli_attrs.kind)
+                for key, value in (external_cli_attrs.usage_evidence or {}).items():
+                    span.set_attribute(f"external_cli.usage.{key}", value)
 
             # anthropic.* per C-AS-14 §14.2 — emitted ONLY when
             # provider == "anthropic" per AS-AL-3 cross-axis scope.
@@ -2298,6 +2304,7 @@ class _AnthropicRequestAttrs:
 class _ExternalCLIAttrs:
     exit_code: int
     kind: str
+    usage_evidence: Mapping[str, int | str] | None
 
 
 #: B-83 degraded-serve reasons. Span-attribute VALUES, deliberately not enum
@@ -5636,16 +5643,32 @@ async def _dispatch_external_cli(
     kind = getattr(adapter, "kind", "external-cli")
     if not isinstance(kind, str):
         kind = "external-cli"
+    usage_evidence = _external_cli_usage_evidence(result)
     response: Mapping[str, Any] = {
         "provider": provider,
         "model": model,
         "content": [{"type": "text", "text": text}],
+        "reported_usage": usage_evidence,
     }
     return (
         response,
+        # [LAW:one-source-of-truth] `_UsageAttrs` is the channel API cost attribution
+        # prices. A subscription CLI's counters are its own report, not an API-billed
+        # quantity, so they travel only as evidence and this channel stays unknown.
         _UsageAttrs(input_tokens=None, output_tokens=None, response_id=None),
-        _ExternalCLIAttrs(exit_code=exit_code, kind=kind),
+        _ExternalCLIAttrs(exit_code=exit_code, kind=kind, usage_evidence=usage_evidence),
     )
+
+
+def _external_cli_usage_evidence(result: Any) -> Mapping[str, int | str] | None:
+    """The adapter-parsed terminal usage as an evidence record, else unknown (`None`).
+
+    An adapter written before `reported_usage` existed reports none, which is unknown.
+    """
+    usage = getattr(result, "reported_usage", None)
+    if not isinstance(usage, ExternalCLIReportedUsage):
+        return None
+    return external_cli_usage_evidence(usage)
 
 
 def _response_to_mapping(response: Any) -> Mapping[str, Any]:
