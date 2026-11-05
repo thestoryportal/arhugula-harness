@@ -2,7 +2,8 @@
 
 The dispatcher remains responsible for trust, sandbox tier-floor enforcement,
 span emission, and schema validation. This module supplies the concrete
-TIER_2_CONTAINER and TIER_3_MICROVM mechanisms: run a tool-runner command in a
+TIER_2_CONTAINER and TIER_3_MICROVM mechanisms, plus the local Kata Containers
+TIER_4_FULL_VM carrier: run a tool-runner command in a
 local Docker-compatible runtime and exchange a single JSON request/response
 over stdin/stdout. The drivers are local-only: they resolve the configured
 image with ``docker inspect`` and run the immutable image ID so Docker never
@@ -33,6 +34,7 @@ from harness_runtime.lifecycle.runtime_tool_dispatcher import (
 __all__ = [
     "DockerToolRunnerExecutionDriver",
     "GVisorRunscToolRunnerExecutionDriver",
+    "KataMicroVMToolRunnerExecutionDriver",
     "ToolContainerCleanupError",
 ]
 
@@ -108,11 +110,7 @@ class DockerToolRunnerExecutionDriver:
     ) -> Mapping[str, Any]:
         """Run the configured tool runner in Docker and parse its JSON response."""
         _ = mcp_client_host
-        if sandbox_decision.tier is not self.required_tier:
-            raise ToolInvocationProtocolError(
-                f"{type(self).__name__} requires resolved "
-                f"{self.required_tier.value}, got {sandbox_decision.tier.value!r}"
-            )
+        self._require_tier(sandbox_decision)
 
         payload = {
             "tool_id": tool_id,
@@ -164,6 +162,13 @@ class DockerToolRunnerExecutionDriver:
         if not isinstance(parsed, dict):
             raise ToolInvocationProtocolError("Docker tool runner must return a JSON object")
         return cast(Mapping[str, Any], parsed)
+
+    def _require_tier(self, sandbox_decision: SandboxDispatchDecision) -> None:
+        if sandbox_decision.tier is not self.required_tier:
+            raise ToolInvocationProtocolError(
+                f"{type(self).__name__} requires resolved "
+                f"{self.required_tier.value}, got {sandbox_decision.tier.value!r}"
+            )
 
     async def _resolve_local_image_id(self) -> str:
         argv = [
@@ -383,3 +388,77 @@ class GVisorRunscToolRunnerExecutionDriver(DockerToolRunnerExecutionDriver):
 
     runtime: str | None = "runsc"
     required_tier: SandboxTier = SandboxTier.TIER_3_MICROVM
+
+
+@dataclass(frozen=True)
+class KataMicroVMToolRunnerExecutionDriver(DockerToolRunnerExecutionDriver):
+    """Execute a TOOL_STEP in a local Kata Containers hardware-virtualized microVM.
+
+    The local TIER_4_FULL_VM carrier (ADR-D2 local-development Tier-4 cell:
+    hardware-virt microVM on a KVM host; ADR-D2 §1.7 provider ``kata`` →
+    tech ``microvm``). Docker orchestrates the image, but the container body
+    runs inside a Kata guest kernel under the configured runtime.
+
+    Refusal witness: before any container is created, ``docker info`` must
+    register the configured runtime name with a Kata identity (its
+    ``runtimeType`` or ``path`` names kata). Otherwise the call is refused
+    with zero container effects — never a fallback to runc, gVisor, E2B or
+    in-process execution, which would lower the Tier-4 floor or add a paid
+    carrier. The microVM is egress-restricted: ``network`` must stay ``none``.
+    """
+
+    runtime: str | None = "kata"
+    required_tier: SandboxTier = SandboxTier.TIER_4_FULL_VM
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        if self.runtime is None or not self.runtime.strip():
+            raise ValueError("KataMicroVMToolRunnerExecutionDriver.runtime must be non-empty")
+        if self.network != "none":
+            raise ValueError("KataMicroVMToolRunnerExecutionDriver.network must be 'none'")
+
+    async def call_tool(
+        self,
+        *,
+        mcp_client_host: MCPClientHost,
+        sandbox_decision: SandboxDispatchDecision,
+        tool_id: str,
+        tool_args: Mapping[str, Any],
+        idempotency_key: str,
+    ) -> Mapping[str, Any]:
+        """Witness the Kata runtime, then run the tool runner under it."""
+        self._require_tier(sandbox_decision)
+        await self._witness_kata_runtime()
+        return await super().call_tool(
+            mcp_client_host=mcp_client_host,
+            sandbox_decision=sandbox_decision,
+            tool_id=tool_id,
+            tool_args=tool_args,
+            idempotency_key=idempotency_key,
+        )
+
+    async def _witness_kata_runtime(self) -> None:
+        refusal = (
+            f"RT-FAIL-SANDBOX-FULL-VM-CARRIER-UNWITNESSED: Docker runtime "
+            f"{self.runtime!r} is not a registered Kata Containers runtime"
+        )
+        stdout, stderr, returncode = await self._communicate(
+            argv=[*self._docker_command(), "info", "--format", "{{json .Runtimes}}"],
+            stdin=b"",
+            timeout_message=f"Docker runtime witness timed out after {self.timeout_seconds:.1f}s",
+        )
+        if returncode != 0:
+            err = stderr.decode("utf-8", errors="replace").strip()
+            raise ToolInvocationProtocolError(f"{refusal}: docker info exited {returncode}: {err}")
+        try:
+            runtimes = json.loads(stdout.decode("utf-8"))
+        except json.JSONDecodeError as exc:
+            raise ToolInvocationProtocolError(f"{refusal}: unreadable docker info output") from exc
+        registered = cast(dict[str, Any], runtimes) if isinstance(runtimes, dict) else {}
+        entry: object = registered.get(str(self.runtime))
+        if not isinstance(entry, dict):
+            raise ToolInvocationProtocolError(f"{refusal}: runtime not registered")
+        fields = cast(dict[str, Any], entry)
+        identity = f"{fields.get('runtimeType', '')} {fields.get('path', '')}".lower()
+        if "kata" not in identity:
+            raise ToolInvocationProtocolError(f"{refusal}: registered as {identity.strip()!r}")

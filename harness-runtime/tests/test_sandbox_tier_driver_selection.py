@@ -31,6 +31,7 @@ from harness_runtime.config.sandbox_defaults import (
 from harness_runtime.lifecycle.docker_tool_execution_driver import (
     DockerToolRunnerExecutionDriver,
     GVisorRunscToolRunnerExecutionDriver,
+    KataMicroVMToolRunnerExecutionDriver,
 )
 from harness_runtime.lifecycle.e2b_tool_execution_driver import (
     E2BManagedFullVMToolRunnerExecutionDriver,
@@ -39,7 +40,7 @@ from harness_runtime.lifecycle.runtime_tool_dispatcher import (
     MCPHostToolExecutionDriver,
     SandboxDriverUnavailableError,
 )
-from harness_runtime.types import MCPClientConfig, SandboxDriverConfig
+from harness_runtime.types import FullVMCarrier, MCPClientConfig, SandboxDriverConfig
 
 
 def _client(**overrides: object) -> MCPClientConfig:
@@ -224,6 +225,123 @@ def test_tier_4_selects_e2b_driver_when_configured() -> None:
     )
     assert isinstance(driver, E2BManagedFullVMToolRunnerExecutionDriver)
     assert driver.required_tier is SandboxTier.TIER_4_FULL_VM
+
+
+_KATA_CFG = SandboxDriverConfig(
+    command=("python", "runner.py"),
+    image="runner:local",
+    full_vm_carrier=FullVMCarrier.KATA,
+    full_vm_runtime="kata-fc",
+)
+
+
+def test_tier_4_selects_local_kata_driver_when_selected() -> None:
+    """859: an explicit `kata` carrier delivers TIER_4 locally (never via E2B)."""
+    driver = _select_tool_execution_driver(tier=SandboxTier.TIER_4_FULL_VM, driver_config=_KATA_CFG)
+    assert isinstance(driver, KataMicroVMToolRunnerExecutionDriver)
+    assert driver.required_tier is SandboxTier.TIER_4_FULL_VM
+    assert driver.image == "runner:local"
+    assert driver.runtime == "kata-fc"
+    assert driver.network == "none"
+
+
+def test_tier_4_kata_without_image_fails_loud_not_e2b() -> None:
+    """A selected-but-incomplete local carrier refuses; it never substitutes E2B."""
+    cfg = SandboxDriverConfig(command=("python", "runner.py"), full_vm_carrier=FullVMCarrier.KATA)
+    with pytest.raises(SandboxDriverUnavailableError, match="local Kata microVM"):
+        _select_tool_execution_driver(tier=SandboxTier.TIER_4_FULL_VM, driver_config=cfg)
+
+
+@pytest.mark.parametrize(
+    ("driver_config", "labels"),
+    [
+        (_KATA_CFG, ("microvm", "kata")),
+        (_DRIVER_CFG, ("firecracker", "e2b")),
+        (None, ("firecracker", "e2b")),
+    ],
+)
+def test_tier_4_span_labels_follow_selected_carrier(
+    driver_config: SandboxDriverConfig | None, labels: tuple[str, str]
+) -> None:
+    client = _client(sandbox_driver=driver_config)
+    surface = resolve_effective_sandbox_defaults(client, DeploymentSurface.LOCAL_DEVELOPMENT)
+    eff = resolve_per_tool_sandbox_defaults(
+        _contract(forces_code_execution=True), client, DeploymentSurface.LOCAL_DEVELOPMENT, surface
+    )
+    assert eff.sandbox_tier is SandboxTier.TIER_4_FULL_VM
+    assert (eff.sandbox_tech, eff.sandbox_provider) == labels
+
+
+def test_tier_4_kata_with_egress_network_fails_loud() -> None:
+    """859 F1: the local Tier-4 carrier is egress-restricted — a non-`none` network
+    mode refuses at selection instead of running the microVM with egress."""
+    cfg = _KATA_CFG.model_copy(update={"network": "host"})
+    with pytest.raises(SandboxDriverUnavailableError, match="network='none', got 'host'"):
+        _select_tool_execution_driver(tier=SandboxTier.TIER_4_FULL_VM, driver_config=cfg)
+
+
+_CONFLICTING_LABELS: dict[str, object] = dict(
+    default_sandbox_tech="firecracker", default_sandbox_provider="e2b"
+)
+
+
+def test_kata_labels_bound_over_overrides_on_direct_tier4() -> None:
+    """859 F2: an explicit TIER_4 with the Kata carrier labels microvm/kata even when
+    the operator overrides name another carrier."""
+    client = _client(
+        sandbox_driver=_KATA_CFG,
+        default_sandbox_tier=SandboxTier.TIER_4_FULL_VM,
+        **_CONFLICTING_LABELS,
+    )
+    eff = resolve_effective_sandbox_defaults(client, DeploymentSurface.LOCAL_DEVELOPMENT)
+    assert eff.sandbox_tier is SandboxTier.TIER_4_FULL_VM
+    assert (eff.sandbox_tech, eff.sandbox_provider) == ("microvm", "kata")
+
+
+def test_kata_labels_bound_over_overrides_on_per_tool_floor() -> None:
+    client = _client(sandbox_driver=_KATA_CFG, **_CONFLICTING_LABELS)
+    surface = resolve_effective_sandbox_defaults(client, DeploymentSurface.LOCAL_DEVELOPMENT)
+    eff = resolve_per_tool_sandbox_defaults(
+        _contract(forces_code_execution=True), client, DeploymentSurface.LOCAL_DEVELOPMENT, surface
+    )
+    assert eff.sandbox_tier is SandboxTier.TIER_4_FULL_VM
+    assert (eff.sandbox_tech, eff.sandbox_provider) == ("microvm", "kata")
+
+
+def test_kata_labels_bound_over_overrides_on_transport_floor() -> None:
+    client = _client(
+        transport=MCPTransport.STREAMABLE_HTTP_L2_SANDBOX,
+        trust_level=MCPServerTrustLevel.L2_SANDBOX_ALL,
+        sandbox_driver=_KATA_CFG,
+        **_CONFLICTING_LABELS,
+    )
+    eff = _composed(client, DeploymentSurface.LOCAL_DEVELOPMENT)
+    assert eff.sandbox_tier is SandboxTier.TIER_4_FULL_VM  # type: ignore[attr-defined]
+    assert (eff.sandbox_tech, eff.sandbox_provider) == ("microvm", "kata")  # type: ignore[attr-defined]
+
+
+def test_e2b_carrier_still_honors_tier4_label_overrides() -> None:
+    """Contrast: only the Kata carrier binds labels; E2B keeps operator overrides."""
+    client = _client(
+        sandbox_driver=_DRIVER_CFG,
+        default_sandbox_tech="microvm",
+        default_sandbox_provider="e2b_firecracker",
+    )
+    surface = resolve_effective_sandbox_defaults(client, DeploymentSurface.LOCAL_DEVELOPMENT)
+    eff = resolve_per_tool_sandbox_defaults(
+        _contract(forces_code_execution=True), client, DeploymentSurface.LOCAL_DEVELOPMENT, surface
+    )
+    assert (eff.sandbox_tech, eff.sandbox_provider) == ("microvm", "e2b_firecracker")
+
+
+def test_kata_carrier_does_not_relabel_lower_tiers() -> None:
+    client = _client(sandbox_driver=_KATA_CFG)  # STDIO → TIER_3 per-tool floor
+    surface = resolve_effective_sandbox_defaults(client, DeploymentSurface.LOCAL_DEVELOPMENT)
+    eff = resolve_per_tool_sandbox_defaults(
+        _contract(), client, DeploymentSurface.LOCAL_DEVELOPMENT, surface
+    )
+    assert eff.sandbox_tier is SandboxTier.TIER_3_MICROVM
+    assert (eff.sandbox_tech, eff.sandbox_provider) == ("gvisor", "runsc")
 
 
 # --- FR-2(i) fail-loud — the contrasting-baseline / discriminating-power test ---
