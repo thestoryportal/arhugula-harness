@@ -31,6 +31,9 @@ from harness_runtime.lifecycle.journal_workflow_pause_store import (
 )
 from harness_runtime.lifecycle.pre_bootstrap_pause_state_sink import pause_state_sink_for
 
+from .integration.test_r_cc_1_api_resume import (
+    _patched_runtime,  # noqa: F401  # pyright: ignore[reportPrivateUsage, reportUnusedImport]
+)
 from .test_b104_root_resume_facade import _WORKFLOW_ID as _ROOT_WORKFLOW_ID
 from .test_b104_root_resume_facade import (  # noqa: F401  (fixtures: harness, ext4 placement)
     Harness,
@@ -164,6 +167,8 @@ def test_a_supersession_record_for_another_workflow_is_a_workflow_mismatch(
 
 
 @pytest.mark.asyncio
+# [LAW:effects-at-boundaries] capture_root bootstraps for real; the providers stay faked, as in b104.
+@pytest.mark.usefixtures("_patched_runtime")
 async def test_resume_of_a_superseded_handle_refuses_before_bootstrap_and_claims_nothing(
     harness: Harness,  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
