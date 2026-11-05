@@ -4,22 +4,25 @@ Implements runtime spec v1.18 §14.13.1 factory signature + §14.13.2 per-factor
 invocation discipline + §14.13.3 stage-4 OD-bucket placement + §14.13.4
 failure-mode taxonomy + §14.13.5 invariants.
 
-Reading A scope (per fork doc
-`.harness/class_1_fork_validator_composer_arc_stage_4_absence.md` §3.1):
-
 - Opt-out branch (`config.validator_framework_config is None`) returns `None`
   unconditionally — preserves v1.17 production-default behavior; the
   workflow_driver.py:668 hook branch evaluates False.
-- Opt-in branch (non-None config) constructs an empty-registry
-  `ConcreteValidatorFramework` per spec §14.13.7 implementer-discretion
-  option (ii) minimal construction body (validator catalog mechanism deferred
-  to a follow-on arc per FM-2 no-extension; the empty-marker
-  `ValidatorFrameworkConfig` at v1.18 carries no operator-supplied validators).
-- `@runtime_checkable ValidatorFramework` Protocol-conformance enforced per
-  spec §14.13.5 invariant 3; failure raises
+- Opt-in branch (non-None config) builds the per-step validator registry from
+  the operator's `ValidatorBinding`s (spec §14.13.7 implementer-discretion
+  catalog): each class-qualified name resolves through the memory
+  OPERATOR_DEFINED introspection discipline (spec §14.13.1), is constructed
+  with its scalar params, and must satisfy the `Validator` Protocol with an
+  async `validate` before the populated registry reaches
+  `ConcreteValidatorFramework`. Any refusal raises
   `ValidatorFrameworkStageMaterializeError` (fail class
   `RT-FAIL-VALIDATOR-STAGE-MATERIALIZE`, permanent severity → bootstrap
-  rollback per C-RT-02).
+  rollback per C-RT-02), so no workflow dispatches against a validator that
+  could not run.
+- `@runtime_checkable ValidatorFramework` Protocol-conformance enforced per
+  spec §14.13.5 invariant 3.
+- The CP driver is sync and runs on a worker thread, so the bound value is
+  the CP `SyncValidatorFrameworkFacade` over that framework, capturing the
+  bootstrap event loop exactly as stage 5 does for step dispatchers.
 - U-RT-85 real-bootstrap ValidatorFramework e2e binds through this factory:
   opt-in config materializes the operator-supplied framework slot on the
   runtime context before the workflow-driver validator hook can fire.
@@ -27,20 +30,32 @@ Reading A scope (per fork doc
 
 from __future__ import annotations
 
+import inspect
 from typing import Any
 
-from harness_cp.validator_framework import ConcreteValidatorFramework
+from harness_core.identity import StepID
+from harness_cp.validator_framework import (
+    ConcreteValidatorFramework,
+    SyncValidatorFrameworkLike,
+    materialize_sync_validator_framework_facade,
+)
 from harness_cp.validator_framework_types import (
+    Validator,
     ValidatorFramework,
     ValidatorPostEvaluateHook,
 )
 from harness_od.rate_table_types import RateTable
 
+from harness_runtime.bootstrap.factories.memory_tool_registry_factory import (
+    _resolve_class_qualified_name,  # pyright: ignore[reportPrivateUsage]
+)
 from harness_runtime.lifecycle.audit_signing_errors import AUDIT_SIGNING_HARD_FAILURES
 from harness_runtime.lifecycle.cost_attribution_validator_dispatch import (
     CostAttributingValidatorHook,
 )
 from harness_runtime.lifecycle.cost_record_sink import SupportsCostRecordAppend
+from harness_runtime.lifecycle.memory_tool_types import MemoryBackendResolutionError
+from harness_runtime.lifecycle.validator_framework_types import ValidatorBinding
 from harness_runtime.types import AuditLedgerWriter, CostAttributionChain, RuntimeConfig
 
 
@@ -55,6 +70,41 @@ class ValidatorFrameworkStageMaterializeError(Exception):
     """
 
 
+def _instantiate_bound_validator(binding: ValidatorBinding) -> Validator:
+    """Resolve, construct and conformance-check one operator validator.
+
+    The returned instance is proof that the binding can be dispatched: its
+    class resolved, `cls(**params)` accepted the configured params, and it
+    exposes an async `validate` per the CP `Validator` Protocol.
+    """
+    subject = f"validator {binding.class_qualified_name!r} for step {binding.step_id!r}"
+    try:
+        # [LAW:one-source-of-truth] spec §14.13.1 requires the memory
+        # OPERATOR_DEFINED introspection discipline; reuse it, not a copy.
+        validator_cls = _resolve_class_qualified_name(binding.class_qualified_name)
+    except MemoryBackendResolutionError as exc:
+        raise ValidatorFrameworkStageMaterializeError(
+            f"RT-FAIL-VALIDATOR-STAGE-MATERIALIZE: {subject} did not resolve: {exc}"
+        ) from exc
+    try:
+        instance: object = validator_cls(**binding.params)
+    except Exception as exc:
+        # Mirrors the OPERATOR_DEFINED memory backend: params are not echoed;
+        # the operator's exception stays chained for traceback debugging.
+        raise ValidatorFrameworkStageMaterializeError(
+            f"RT-FAIL-VALIDATOR-STAGE-MATERIALIZE: {subject} raised "
+            f"{type(exc).__name__} during construction (params values are not echoed)"
+        ) from exc
+    # `isinstance` against a runtime_checkable Protocol only proves the
+    # attribute exists; the driver awaits `validate`, so it must be async.
+    if not isinstance(instance, Validator) or not inspect.iscoroutinefunction(instance.validate):
+        raise ValidatorFrameworkStageMaterializeError(
+            f"RT-FAIL-VALIDATOR-STAGE-MATERIALIZE: {subject} does not satisfy the "
+            "Validator Protocol (an async validate(step, step_result, *, step_context))"
+        )
+    return instance
+
+
 async def materialize_validator_framework_stage(
     config: RuntimeConfig,
     *,
@@ -66,7 +116,7 @@ async def materialize_validator_framework_stage(
     procedural_tier_snapshot_resolver: Any = None,
     signing_backend: Any = None,
     audit_signing_fail_closed: bool = False,
-) -> ValidatorFramework | None:
+) -> SyncValidatorFrameworkLike | None:
     """Construct the stage-4 `ValidatorFramework` instance from operator-supplied
     config, or return `None` when the operator has not opted in.
 
@@ -74,26 +124,26 @@ async def materialize_validator_framework_stage(
 
     Returns
     -------
-    ValidatorFramework | None
+    SyncValidatorFrameworkLike | None
         `None` when `config.validator_framework_config is None` — the
         operator has not opted in; `ctx.validator_framework` binds to `None`;
         the workflow_driver.py:668 hook branch evaluates False (the v1.17
         production-default state).
 
         Non-`None` when the operator has supplied a `ValidatorFrameworkConfig`
-        instance — Reading A scope returns an empty-registry
-        `ConcreteValidatorFramework` per spec §14.13.7 implementer-discretion
-        option (ii) minimal construction body. The empty-marker
-        `ValidatorFrameworkConfig` at v1.18 carries no operator-supplied
-        validators; richer construction (validator catalog, per-validator
-        config, discovery) lands at a follow-on arc per FM-2.
+        — the driver-facing sync facade over a `ConcreteValidatorFramework`
+        whose registry holds one constructed operator validator per bound
+        step. Must be awaited on the event loop that later hosts
+        `asyncio.to_thread(execute_workflow, ...)`.
 
     Raises
     ------
     ValidatorFrameworkStageMaterializeError
         Fail class `RT-FAIL-VALIDATOR-STAGE-MATERIALIZE` per spec §14.13.4 —
-        if the constructed instance fails `@runtime_checkable ValidatorFramework`
-        Protocol-conformance per spec §14.13.5 invariant 3.
+        if a binding's class does not resolve, construct or satisfy the
+        `Validator` Protocol, or if the constructed framework fails
+        `@runtime_checkable ValidatorFramework` Protocol-conformance per spec
+        §14.13.5 invariant 3.
     """
     if config.validator_framework_config is None:
         # Empty-sentinel branch. Operator opted out; ctx.validator_framework
@@ -102,15 +152,14 @@ async def materialize_validator_framework_stage(
         # behavior per spec §14.13.5 invariant 2.
         return None
 
-    # Operator opt-in branch (option (ii) minimal construction body per spec
-    # §14.13.7). v1.18 Reading A scope: the empty-marker
-    # ValidatorFrameworkConfig carries no operator-supplied validators, so
-    # the constructed framework has an empty validator registry. The
-    # workflow_driver.py:668 True-arm fires per C-CP-25 §25.3.3.4 but the
-    # framework's evaluate(...) method is invoked against an empty registry;
-    # richer construction (populating the registry from operator-supplied
-    # config) lands at a follow-on arc per §14.13.7.
-    #
+    # Operator opt-in branch: every binding becomes a dispatchable validator
+    # before stage 4 completes; the carrier already refused empty catalogs
+    # and duplicate step ids.
+    validator_registry: dict[StepID, Validator] = {
+        binding.step_id: _instantiate_bound_validator(binding)
+        for binding in config.validator_framework_config.bindings
+    }
+
     # U-OD-40 hook binding (CP spec v1.24 §28.10 + this factory's mechanism
     # (a) per §28.10.5): when all 3 cost-attribution substrates are bound
     # (rate_table + cost_chain + audit_writer), construct the
@@ -138,7 +187,7 @@ async def materialize_validator_framework_stage(
     # flag ON → the family raises through `evaluate()`'s hook swallow; flag
     # OFF → empty tuple, invariant 2's swallow unconditional (§2 row 3).
     framework: ValidatorFramework = ConcreteValidatorFramework(
-        validator_registry={},
+        validator_registry=validator_registry,
         post_evaluate_hook=post_evaluate_hook,
         audit_signing_raise_through=(
             AUDIT_SIGNING_HARD_FAILURES if audit_signing_fail_closed else ()
@@ -156,4 +205,9 @@ async def materialize_validator_framework_stage(
             "per spec v1.18 §14.13.5 invariant 3."
         )
 
-    return framework
+    # [LAW:one-source-of-truth] the per-step worker-thread blocking bound is
+    # the same one stage 5 gives every step dispatcher facade.
+    return materialize_sync_validator_framework_facade(
+        inner=framework,
+        result_timeout_seconds=config.step_dispatch_timeout_seconds,
+    )

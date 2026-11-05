@@ -81,6 +81,7 @@ from harness_runtime.lifecycle.ask_user_question_surface import (
     AskUserQuestionSurface,
 )
 from harness_runtime.lifecycle.validator_framework_types import (
+    ValidatorBinding,
     ValidatorFrameworkConfig,
 )
 from harness_runtime.types import RuntimeConfig
@@ -91,7 +92,16 @@ from .conftest import WORKLOAD, build_config
 def _config_with_validator_opt_in(tmp_path: Path) -> RuntimeConfig:
     base = build_config(tmp_path)
     return base.model_copy(
-        update={"validator_framework_config": ValidatorFrameworkConfig.default()},
+        update={
+            "validator_framework_config": ValidatorFrameworkConfig(
+                bindings=(
+                    ValidatorBinding(
+                        step_id=StepID("step-0"),
+                        class_qualified_name=f"{__name__}:{_PassingValidator.__qualname__}",
+                    ),
+                )
+            )
+        },
     )
 
 

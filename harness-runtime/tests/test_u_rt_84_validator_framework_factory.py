@@ -6,9 +6,12 @@ ACs per runtime plan v2.17 §1 U-RT-84:
    `async def materialize_validator_framework_stage(config) → ValidatorFramework | None`.
 2. Opt-out branch: `config.validator_framework_config is None` → factory
    returns `None` unconditionally.
-3. Opt-in branch: option (ii) minimal construction body — factory returns a
-   `ConcreteValidatorFramework` instance with empty validator_registry that
-   satisfies the `@runtime_checkable ValidatorFramework` Protocol.
+3. Opt-in branch (Trial193.4h4): every `ValidatorBinding` resolves to an
+   operator `Validator` constructed with its params; the factory returns the
+   driver-facing sync facade over a `ConcreteValidatorFramework` whose
+   registry dispatches those validators. Unresolvable, failing,
+   non-Protocol or sync-`validate` bindings raise
+   `ValidatorFrameworkStageMaterializeError` before any dispatch.
 4. Stage-4 OD-bucket wiring: factory invocation appended AFTER tracer +
    collector + cost + audit in `stage_4_od.py`; output bound to
    `ctx.validator_framework`.
@@ -26,20 +29,34 @@ ACs per runtime plan v2.17 §1 U-RT-84:
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 from pathlib import Path
 from typing import Any
 
 import pytest
 from harness_core.deployment_surface import DeploymentSurface
+from harness_core.identity import StepID
 from harness_cp.topology_pattern import TopologyPattern
-from harness_cp.validator_framework import ConcreteValidatorFramework
-from harness_cp.validator_framework_types import ValidatorFramework
+from harness_cp.validator_framework import (
+    ConcreteValidatorFramework,
+    SyncValidatorFrameworkFacade,
+)
+from harness_cp.validator_framework_types import (
+    ValidatorFailClass,
+    ValidatorFramework,
+    ValidatorNextAction,
+    ValidatorOutcome,
+    ValidatorResult,
+)
+from harness_cp.workflow_driver_types import StepKind, WorkflowStep
 from harness_runtime.bootstrap.factories.validator_framework_factory import (
     ValidatorFrameworkStageMaterializeError,
     materialize_validator_framework_stage,
 )
+from harness_runtime.config_source import RuntimeConfigLoadError, RuntimeConfigSource
 from harness_runtime.lifecycle.validator_framework_types import (
+    ValidatorBinding,
     ValidatorFrameworkConfig,
 )
 from harness_runtime.types import (
@@ -115,32 +132,212 @@ async def test_factory_returns_none_when_field_omitted(tmp_path: Path) -> None:
     assert await materialize_validator_framework_stage(config) is None
 
 
-# AC #3 — opt-in branch (option (ii) minimal construction).
+# AC #3 — opt-in branch: operator bindings become dispatchable validators.
 
 
-@pytest.mark.asyncio
-async def test_factory_returns_concrete_framework_on_opt_in(tmp_path: Path) -> None:
-    config = RuntimeConfig(
+class _ThresholdValidator:
+    """Passes a step whose output `score` reaches the configured threshold."""
+
+    def __init__(self, *, threshold: int) -> None:
+        self.threshold = threshold
+
+    async def validate(
+        self, step: WorkflowStep, step_result: Any, *, step_context: Any
+    ) -> ValidatorResult:
+        _ = step, step_context
+        if step_result["score"] >= self.threshold:
+            return ValidatorResult(outcome=ValidatorOutcome.PASS)
+        return ValidatorResult(
+            outcome=ValidatorOutcome.PERMANENT_FAIL,
+            fail_class=ValidatorFailClass.SCHEMA_VIOLATION,
+        )
+
+
+class _SyncValidateValidator:
+    def validate(self, step: Any, step_result: Any, *, step_context: Any) -> ValidatorResult:
+        _ = step, step_result, step_context
+        return ValidatorResult(outcome=ValidatorOutcome.PASS)
+
+
+class _NotAValidator:
+    pass
+
+
+class _ExplodingValidator:
+    def __init__(self, *, token: str) -> None:
+        raise RuntimeError(f"cannot use {token}")
+
+
+_NOT_A_CLASS = object()
+
+
+def _ref(name: str) -> str:
+    return f"{__name__}:{name}"
+
+
+def _opt_in_config(tmp_path: Path, *bindings: ValidatorBinding) -> RuntimeConfig:
+    return RuntimeConfig(
         **_minimal_runtime_config_kwargs(tmp_path),
-        validator_framework_config=ValidatorFrameworkConfig.default(),
+        validator_framework_config=ValidatorFrameworkConfig(bindings=bindings),
     )
-    result = await materialize_validator_framework_stage(config)
-    assert result is not None
-    assert isinstance(result, ConcreteValidatorFramework)
+
+
+def _step(step_id: str) -> WorkflowStep:
+    return WorkflowStep(step_id=StepID(step_id), step_kind=StepKind.INFERENCE_STEP, step_payload={})
 
 
 @pytest.mark.asyncio
-async def test_factory_opt_in_result_satisfies_validator_framework_protocol(
-    tmp_path: Path,
+async def test_factory_dispatches_bound_validator_on_step_output(tmp_path: Path) -> None:
+    """The configured class and params decide the outcome from the real output."""
+    config = _opt_in_config(
+        tmp_path,
+        ValidatorBinding(
+            step_id=StepID("score"),
+            class_qualified_name=_ref(_ThresholdValidator.__qualname__),
+            params={"threshold": 5},
+        ),
+    )
+    facade = await materialize_validator_framework_stage(config)
+
+    assert isinstance(facade, SyncValidatorFrameworkFacade)
+    assert isinstance(facade.inner, ConcreteValidatorFramework)
+    # §14.13.5 invariant 3 — the wrapped framework is the CP Protocol.
+    assert isinstance(facade.inner, ValidatorFramework)
+    passed = await facade.inner.evaluate(_step("score"), {"score": 7}, step_context=None)  # type: ignore[arg-type]
+    failed = await facade.inner.evaluate(_step("score"), {"score": 4}, step_context=None)  # type: ignore[arg-type]
+    assert passed.next_action is ValidatorNextAction.PROCEED
+    assert failed.next_action is ValidatorNextAction.ABORT
+
+
+@pytest.mark.asyncio
+async def test_facade_evaluates_from_driver_worker_thread(tmp_path: Path) -> None:
+    """The bound facade is what the sync driver calls from `asyncio.to_thread`."""
+    config = _opt_in_config(
+        tmp_path,
+        ValidatorBinding(
+            step_id=StepID("score"),
+            class_qualified_name=f"{__name__}.{_ThresholdValidator.__qualname__}",
+            params={"threshold": 1},
+        ),
+    )
+    facade = await materialize_validator_framework_stage(config)
+    assert facade is not None
+
+    evaluation = await asyncio.to_thread(
+        facade.evaluate,
+        _step("score"),
+        {"score": 1},
+        step_context=None,  # type: ignore[arg-type]
+    )
+    assert evaluation.result.outcome is ValidatorOutcome.PASS
+
+
+@pytest.mark.parametrize(
+    ("class_name", "params", "reason"),
+    [
+        ("_NoSuchValidator", {}, "did not resolve"),
+        ("_NOT_A_CLASS", {}, "did not resolve"),
+        (_ThresholdValidator.__qualname__, {}, "raised TypeError during construction"),
+        (_ThresholdValidator.__qualname__, {"threshold": 1, "extra": 2}, "raised TypeError"),
+        (_NotAValidator.__qualname__, {}, "does not satisfy the Validator Protocol"),
+        (_SyncValidateValidator.__qualname__, {}, "does not satisfy the Validator Protocol"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_factory_refuses_undispatchable_binding(
+    tmp_path: Path, class_name: str, params: dict[str, int], reason: str
 ) -> None:
-    """AC #3 + spec §14.13.5 invariant 3 — runtime_checkable Protocol conformance."""
-    config = RuntimeConfig(
-        **_minimal_runtime_config_kwargs(tmp_path),
-        validator_framework_config=ValidatorFrameworkConfig.default(),
+    config = _opt_in_config(
+        tmp_path,
+        ValidatorBinding(
+            step_id=StepID("step"), class_qualified_name=_ref(class_name), params=params
+        ),
     )
-    result = await materialize_validator_framework_stage(config)
-    assert result is not None
-    assert isinstance(result, ValidatorFramework)
+    with pytest.raises(ValidatorFrameworkStageMaterializeError) as excinfo:
+        await materialize_validator_framework_stage(config)
+    message = str(excinfo.value)
+    assert message.startswith("RT-FAIL-VALIDATOR-STAGE-MATERIALIZE:")
+    assert reason in message
+    assert "'step'" in message
+
+
+@pytest.mark.asyncio
+async def test_factory_construction_failure_does_not_echo_params(tmp_path: Path) -> None:
+    config = _opt_in_config(
+        tmp_path,
+        ValidatorBinding(
+            step_id=StepID("step"),
+            class_qualified_name=_ref(_ExplodingValidator.__qualname__),
+            params={"token": "s3cr3t-value"},
+        ),
+    )
+    with pytest.raises(ValidatorFrameworkStageMaterializeError) as excinfo:
+        await materialize_validator_framework_stage(config)
+    assert "RuntimeError" in str(excinfo.value)
+    assert "s3cr3t-value" not in str(excinfo.value)
+
+
+def test_config_refuses_empty_catalog() -> None:
+    with pytest.raises(ValueError, match="at least one validator"):
+        ValidatorFrameworkConfig(bindings=())
+
+
+def test_config_refuses_step_bound_twice() -> None:
+    with pytest.raises(ValueError, match=r"\['dup'\] more than once"):
+        ValidatorFrameworkConfig(
+            bindings=(
+                ValidatorBinding(step_id=StepID("dup"), class_qualified_name=_ref("A")),
+                ValidatorBinding(step_id=StepID("ok"), class_qualified_name=_ref("B")),
+                ValidatorBinding(step_id=StepID("dup"), class_qualified_name=_ref("C")),
+            )
+        )
+
+
+def test_toml_bindings_load_into_runtime_config(tmp_path: Path) -> None:
+    config_file = tmp_path / "harness.toml"
+    config_file.write_text(
+        "[[runtime.validator_framework_config.bindings]]\n"
+        'step_id = "score"\n'
+        'class_qualified_name = "pkg.mod:Check"\n'
+        'params = { threshold = 3, strict = true, ratio = 0.5, label = "x" }\n'
+    )
+    config = RuntimeConfigSource.load(
+        config_file=config_file, cli_overrides=_minimal_runtime_config_kwargs(tmp_path)
+    )
+    assert config.validator_framework_config == ValidatorFrameworkConfig(
+        bindings=(
+            ValidatorBinding(
+                step_id=StepID("score"),
+                class_qualified_name="pkg.mod:Check",
+                params={"threshold": 3, "strict": True, "ratio": 0.5, "label": "x"},
+            ),
+        )
+    )
+
+
+@pytest.mark.parametrize(
+    ("toml", "error"),
+    [
+        ("[runtime.validator_framework_config]\nbindings = []\n", "at least one validator"),
+        (
+            "[[runtime.validator_framework_config.bindings]]\n"
+            'step_id = "s"\nclass_qualified_name = "m:C"\nparms = {}\n',
+            "parms",
+        ),
+        (
+            "[[runtime.validator_framework_config.bindings]]\n"
+            'step_id = "s"\nclass_qualified_name = "m:C"\nparams = { n = [1] }\n',
+            "params",
+        ),
+    ],
+)
+def test_toml_refuses_malformed_catalog(tmp_path: Path, toml: str, error: str) -> None:
+    config_file = tmp_path / "harness.toml"
+    config_file.write_text(toml)
+    with pytest.raises(RuntimeConfigLoadError, match=error):
+        RuntimeConfigSource.load(
+            config_file=config_file, cli_overrides=_minimal_runtime_config_kwargs(tmp_path)
+        )
 
 
 # AC #4 — stage-4 wiring source-inspection.
@@ -177,16 +374,11 @@ def test_stage_4_od_invokes_factory_after_audit_writer() -> None:
 # AC #5 — HarnessContext field type narrowing.
 
 
-def test_harness_context_validator_framework_field_narrowed() -> None:
-    """AC #5 — schema-level field annotation is ValidatorFramework | None
-    (narrowed from v1.17-era `object | None`)."""
-    assert "validator_framework" in HarnessContext.model_fields
+def test_harness_context_validator_framework_field_is_driver_facing() -> None:
+    """AC #5 (Trial193.4h4) — the context carries what the sync CP driver
+    calls: the `SyncValidatorFrameworkLike` surface, or `None` at opt-out."""
     field = HarnessContext.model_fields["validator_framework"]
-    annotation_str = str(field.annotation)
-    assert "ValidatorFramework" in annotation_str, (
-        f"validator_framework field must narrow to ValidatorFramework | None per "
-        f"spec v1.18 §4 + plan U-RT-84 AC #5; got {annotation_str}"
-    )
+    assert "SyncValidatorFrameworkLike" in str(field.annotation)
 
 
 def test_freeze_signature_carries_validator_framework_kwarg() -> None:

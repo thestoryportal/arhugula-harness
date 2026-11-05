@@ -223,8 +223,9 @@ async def execute(
 
     # 8. Validator framework (U-RT-84) — final stage-4 binding per runtime
     # spec v1.18 §14.13.3. Operator-opt-in: `None` (default) preserves the
-    # v1.17 production-default state; non-`None` constructs an empty-registry
-    # ConcreteValidatorFramework per Reading A scope.
+    # v1.17 production-default state; non-`None` binds the driver-facing
+    # facade over a ConcreteValidatorFramework holding the operator's bound
+    # validators (this coroutine's loop is the one the facade bridges to).
     #
     # U-OD-40 cost-attribution hook wiring per CP spec v1.24 §28.10.5
     # mechanism (a): pass rate_table + cost_chain + audit_writer through to

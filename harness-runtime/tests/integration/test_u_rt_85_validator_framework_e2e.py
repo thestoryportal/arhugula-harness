@@ -1,75 +1,215 @@
-"""U-RT-85 — Real-bootstrap e2e: validator framework binding chain.
+"""U-RT-85 / Trial193.4h4 — Real-bootstrap e2e: configured validators decide workflow output.
 
-Implements runtime plan v2.17 §1 U-RT-85 + runtime spec v1.18 §14.13.6
-X-AL-2 retirement implication (operational-criterion-B exercise for
-H_T-CP-21 RETIRE-READY transition under the operator-opt-in pattern per
-fork doc `.harness/class_1_fork_validator_composer_arc_stage_4_absence.md`
-§3.1 Reading A).
+Exercises the operator path end-to-end with no framework substitution:
+a TOML `validator_framework_config` loaded by `RuntimeConfigSource` →
+`run_bootstrap` (stage-4 factory resolves and constructs the bound validator
+classes) → the bootstrapped `ctx.validator_framework` → the sync CP
+`execute_workflow` driver, run on a worker thread exactly as the MCP
+`run_workflow` tool runs it.
 
-## Mechanism α-lite (per cluster-open operator decision 2026-05-24)
+The fixture validator decides from the step's actual dispatched output, so a
+PASS, a PERMANENT_FAIL and an ESCALATE each come from what the step produced,
+not from a canned framework. Coverage:
 
-Exercises the binding chain end-to-end via the real bootstrap (no `_FakeCtx`
-or `_MutableHarnessContext` shortcut) — `run_bootstrap` runs against
-in-process fake providers/daemon/tracer (the standard integration-test
-substrate per `conftest.py::patched_runtime`); the stage-4 OD bucket invokes
-`materialize_validator_framework_stage` with the real factory; the test
-asserts the binding-chain post-conditions.
+- **Opt-out** (`validator_framework_config` unset): `ctx.validator_framework
+  is None`; spec §14.13.5 invariant 2.
+- **PASS** proceeds and the step output reaches `final_state`.
+- **PERMANENT_FAIL** returns a typed `CP-FAIL-VALIDATOR-PERMANENT` failure
+  with no `final_state`.
+- **ESCALATE** opens the AskUserQuestion surface offering only responses
+  inside the validator brief's proposed palette.
+- **Refusal**: a binding whose class cannot be resolved stops bootstrap
+  instead of materializing a framework that reports success.
 
-Coverage:
-
-- **Opt-out** (`RuntimeConfig.validator_framework_config = None`, the
-  production-default): `ctx.validator_framework is None`; the driver hook
-  False-arm at `workflow_driver.py:668` would evaluate False; backwards-
-  compatible behaviour preserved per spec §14.13.5 invariant 2.
-
-- **Opt-in** (`RuntimeConfig.validator_framework_config =
-  ValidatorFrameworkConfig.default()`): `ctx.validator_framework is not
-  None`; the bound instance is a `ConcreteValidatorFramework` satisfying
-  the `@runtime_checkable ValidatorFramework` Protocol per spec §14.13.5
-  invariant 3.
-
-The `.evaluate()` invocation path is NOT exercised at α-lite scope (the
-opt-in branch returns an empty-registry framework per option (ii) minimal
-construction body — there are no operator-supplied `Validator`
-implementations to exercise). Full True-arm `.evaluate()` exercise is
-deferred to mechanism β / γ at a follow-on arc per FM-2.
-
-## Verification-shape discipline
-
-Per `[[verification-shape-sharpened-grep-vs-e2e]]` (batch-16 §6): "driver
-invocation succeeds end-to-end against a real substrate" — this test uses
-the production `run_bootstrap` orchestrator (not `_FakeCtx` or
-`_MutableHarnessContext` test-local shortcuts) and verifies the full
-binding chain at the produced `HarnessContext`. The stage-4 factory IS
-empirically invoked (in the real `stage_4_od.execute` body) and the result
-IS empirically bound at `ctx.validator_framework`.
+Retained 4h4 gap (not attested here): the driver passes
+`CrossTrustBoundaryState.NONE` to the escalation composer, so inherited
+cross-trust palette restriction is not proven by the ESCALATE case.
 """
 
 from __future__ import annotations
 
+import asyncio
+from functools import partial
 from pathlib import Path
 from typing import Any
 
 import pytest
-from harness_cp.validator_framework import ConcreteValidatorFramework
-from harness_cp.validator_framework_types import ValidatorFramework
+from harness_core.identity import StepID
+from harness_core.persona_tier import PersonaTier
+from harness_cp.cp_shared_types import ModelBinding
+from harness_cp.cross_family_fallback_chain import (
+    FallbackChain,
+    ProviderCandidate,
+    ProviderFamily,
+)
+from harness_cp.engine_class import EngineClass
+from harness_cp.hitl_response_palette import HITLResponse
+from harness_cp.topology_pattern import TopologyPattern
+from harness_cp.validator_framework_types import (
+    HITLEscalationBrief,
+    ValidatorFailClass,
+    ValidatorOutcome,
+    ValidatorResult,
+)
+from harness_cp.workflow_driver import execute_workflow
+from harness_cp.workflow_driver_types import (
+    RunResult,
+    RunStatus,
+    StepKind,
+    WorkflowStep,
+)
+from harness_cp.workflow_manifest_entry import WorkflowManifestEntry
 from harness_runtime.bootstrap import run_bootstrap
+from harness_runtime.config_source import RuntimeConfigSource
+from harness_runtime.lifecycle.ask_user_question_surface import (
+    AskUserQuestionResult,
+    AskUserQuestionSurface,
+)
 from harness_runtime.lifecycle.validator_framework_types import (
+    ValidatorBinding,
     ValidatorFrameworkConfig,
 )
 from harness_runtime.types import HarnessContext, RuntimeConfig
 
 from .conftest import WORKLOAD, build_config
 
+_ESCALATION_PALETTE = frozenset({HITLResponse.APPROVE, HITLResponse.REJECT})
 
-def _config_with_validator_opt_in(tmp_path: Path) -> RuntimeConfig:
-    base = build_config(tmp_path)
-    return base.model_copy(
-        update={"validator_framework_config": ValidatorFrameworkConfig.default()},
+
+class _OutputVerdictValidator:
+    """Operator validator judging the `verdict` the step actually produced."""
+
+    def __init__(self, *, accept: str) -> None:
+        self._accept = accept
+
+    async def validate(
+        self,
+        step: WorkflowStep,
+        step_result: Any,
+        *,
+        step_context: Any,
+    ) -> ValidatorResult:
+        _ = step_context
+        verdict = step_result["verdict"]
+        if verdict == self._accept:
+            return ValidatorResult(outcome=ValidatorOutcome.PASS)
+        if verdict == "unsure":
+            return ValidatorResult(
+                outcome=ValidatorOutcome.ESCALATE,
+                fail_class=ValidatorFailClass.SCHEMA_VIOLATION,
+                escalation_brief=HITLEscalationBrief(
+                    parent_step_id=str(step.step_id),
+                    parent_action_id="validator-e2e",
+                    fail_class=ValidatorFailClass.SCHEMA_VIOLATION,
+                    escalation_reason=f"step produced verdict {verdict!r}",
+                    proposed_response_palette=_ESCALATION_PALETTE,
+                ),
+            )
+        return ValidatorResult(
+            outcome=ValidatorOutcome.PERMANENT_FAIL,
+            fail_class=ValidatorFailClass.SCHEMA_VIOLATION,
+        )
+
+
+class _VerdictDispatcher:
+    """Produces the step payload's verdict as the step output."""
+
+    def dispatch(
+        self, binding: Any, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        _ = binding, step_context
+        return {"verdict": step.step_payload["verdict"]}
+
+
+class _SingleKindRegistry:
+    def __init__(self, dispatcher: Any) -> None:
+        self._dispatcher = dispatcher
+
+    def lookup(self, step_kind: Any) -> Any:
+        _ = step_kind
+        return self._dispatcher
+
+
+class _RecordingSurface(AskUserQuestionSurface):
+    def __init__(self) -> None:
+        self.options: list[list[HITLResponse]] = []
+
+    async def ask(self, prompt: str, options: Any, timeout: float | None) -> AskUserQuestionResult:
+        _ = prompt, timeout
+        self.options.append(list(options))
+        return AskUserQuestionResult(response=HITLResponse.APPROVE, latency_ms=1.0)
+
+
+_STEPS = ("step-accepted", "step-rejected", "step-escalated")
+_VALIDATOR_REF = f"{__name__}:{_OutputVerdictValidator.__qualname__}"
+
+_TOML = "\n".join(
+    [
+        "[runtime.validator_framework_config]",
+        *(
+            f'[[runtime.validator_framework_config.bindings]]\nstep_id = "{step_id}"\n'
+            f'class_qualified_name = "{_VALIDATOR_REF}"\n'
+            'params = { accept = "ok" }'
+            for step_id in _STEPS
+        ),
+    ]
+)
+
+
+def _load_toml_config(tmp_path: Path) -> RuntimeConfig:
+    """Operator TOML for the validator catalog; the test substrate for the rest."""
+    config_file = tmp_path / "harness.toml"
+    config_file.write_text(_TOML)
+    substrate = {
+        name: value
+        for name, value in build_config(tmp_path)
+        if name != "validator_framework_config"
+    }
+    return RuntimeConfigSource.load(config_file=config_file, cli_overrides=substrate)
+
+
+def _manifest(workflow_id: str) -> WorkflowManifestEntry:
+    return WorkflowManifestEntry(
+        workflow_id=workflow_id,
+        workload_class=WORKLOAD,
+        persona_tier=PersonaTier.TEAM_BINDING,
+        engine_class=EngineClass.PURE_PATTERN_NO_ENGINE,
+        topology_pattern=TopologyPattern.SINGLE_THREADED_LINEAR,
+        layer_budgets=(),
+        fallback_chain=FallbackChain(
+            primary=ProviderCandidate(
+                provider="anthropic", model="claude-haiku-4-5", family=ProviderFamily.ANTHROPIC
+            ),
+            same_family=(),
+            cross_family=(),
+            terminal=None,
+        ),
+        hitl_placements=(),
+        per_step_overrides={},
     )
 
 
-# AC #2 — opt-out e2e branch.
+async def _run_single_step(ctx: HarnessContext, step_id: str, verdict: str) -> RunResult:
+    from opentelemetry.trace import NoOpTracer
+
+    # patched_runtime's fake tracer provider has no get_tracer; the driver needs one.
+    ctx.tracer_provider.get_tracer = lambda _name, /: NoOpTracer()  # type: ignore[attr-defined]
+    step = WorkflowStep(
+        step_id=StepID(step_id),
+        step_kind=StepKind.INFERENCE_STEP,
+        step_payload={"verdict": verdict},
+    )
+    return await asyncio.to_thread(
+        partial(
+            execute_workflow,
+            manifest_entry=_manifest(f"wf-{step_id}"),
+            steps=(step,),
+            run_id=f"run-{step_id}",
+            ctx=ctx,  # type: ignore[arg-type]
+            default_model_binding=ModelBinding(provider="anthropic", model="claude-haiku-4-5"),
+            step_dispatchers=_SingleKindRegistry(_VerdictDispatcher()),  # type: ignore[arg-type]
+        )
+    )
 
 
 @pytest.mark.asyncio
@@ -77,106 +217,74 @@ async def test_validator_framework_e2e_opt_out_branch(
     tmp_path: Path,
     patched_runtime: dict[str, Any],
 ) -> None:
-    """AC #2 — opt-out config → ctx.validator_framework is None; driver hook
-    False-arm; backwards-compatible behaviour."""
     _ = patched_runtime
     config = build_config(tmp_path)
-    # Production-default: validator_framework_config defaults to None.
     assert config.validator_framework_config is None
 
     ctx = await run_bootstrap(config, workload_class=WORKLOAD)
 
-    assert isinstance(ctx, HarnessContext)
-    assert ctx.validator_framework is None, (
-        "opt-out (default) config must yield ctx.validator_framework is None "
-        "per spec §14.13.5 invariant 2"
+    assert ctx.validator_framework is None
+
+
+@pytest.mark.asyncio
+async def test_toml_bound_validator_passes_rejects_and_escalates_real_output(
+    tmp_path: Path,
+    patched_runtime: dict[str, Any],
+) -> None:
+    _ = patched_runtime
+    config = _load_toml_config(tmp_path)
+    assert config.validator_framework_config == ValidatorFrameworkConfig(
+        bindings=tuple(
+            ValidatorBinding(
+                step_id=StepID(step_id),
+                class_qualified_name=_VALIDATOR_REF,
+                params={"accept": "ok"},
+            )
+            for step_id in _STEPS
+        )
+    )
+    surface = _RecordingSurface()
+    bootstrapped = await run_bootstrap(config, workload_class=WORKLOAD)
+    ctx = bootstrapped.model_copy(update={"ask_user_question_surface": surface})
+
+    accepted = await _run_single_step(ctx, "step-accepted", "ok")
+    assert accepted.status == RunStatus.SUCCESS, accepted.fail_class
+    assert accepted.final_state is not None
+    assert {"verdict": "ok"} in accepted.final_state.values()
+
+    rejected = await _run_single_step(ctx, "step-rejected", "wrong")
+    assert rejected.status == RunStatus.FAILED
+    assert rejected.final_state is None
+    assert rejected.fail_class is not None
+    assert rejected.fail_class.startswith("CP-FAIL-VALIDATOR-PERMANENT")
+
+    assert surface.options == []
+    escalated = await _run_single_step(ctx, "step-escalated", "unsure")
+    assert len(surface.options) == 1
+    offered = set(surface.options[0])
+    assert offered and offered <= _ESCALATION_PALETTE
+    # The recording surface approves, so the escalated step proceeds.
+    assert escalated.status == RunStatus.SUCCESS, escalated.fail_class
+
+
+@pytest.mark.asyncio
+async def test_unresolvable_binding_refuses_bootstrap(
+    tmp_path: Path,
+    patched_runtime: dict[str, Any],
+) -> None:
+    _ = patched_runtime
+    config = build_config(tmp_path).model_copy(
+        update={
+            "validator_framework_config": ValidatorFrameworkConfig(
+                bindings=(
+                    ValidatorBinding(
+                        step_id=StepID("step-accepted"),
+                        class_qualified_name=f"{__name__}:_NoSuchValidator",
+                    ),
+                )
+            )
+        }
     )
 
-
-# AC #1 + AC #3 — opt-in e2e branch (binding chain only).
-
-
-@pytest.mark.asyncio
-async def test_validator_framework_e2e_opt_in_binding_chain(
-    tmp_path: Path,
-    patched_runtime: dict[str, Any],
-) -> None:
-    """AC #1 + AC #3 — opt-in config → factory invoked → ctx.validator_framework
-    bound to a ConcreteValidatorFramework instance satisfying the CP-canonical
-    ValidatorFramework Protocol per spec §14.13.5 invariant 3."""
-    _ = patched_runtime
-    config = _config_with_validator_opt_in(tmp_path)
-    assert config.validator_framework_config is not None
-
-    ctx = await run_bootstrap(config, workload_class=WORKLOAD)
-
-    assert isinstance(ctx, HarnessContext)
-    assert ctx.validator_framework is not None, (
-        "opt-in config must yield a bound ValidatorFramework instance per "
-        "spec §14.13.1 + §14.13.5 invariant 3"
-    )
-    # Spec §14.13.5 invariant 3 — Protocol conformance.
-    assert isinstance(ctx.validator_framework, ValidatorFramework)
-    # Option (ii) minimal construction body — concrete shape is
-    # ConcreteValidatorFramework with empty registry.
-    assert isinstance(ctx.validator_framework, ConcreteValidatorFramework)
-
-
-# AC #5 — composer-depth parity: real bootstrap, not _FakeCtx.
-
-
-@pytest.mark.asyncio
-async def test_validator_framework_e2e_uses_real_bootstrap(
-    tmp_path: Path,
-    patched_runtime: dict[str, Any],
-) -> None:
-    """AC #5 — the test exercises the REAL bootstrap orchestrator
-    (`run_bootstrap`), NOT `_FakeCtx` or `_MutableHarnessContext`
-    short-circuits. Verification-shape discipline per batch-16 §6 sharpening:
-    "driver invocation succeeds end-to-end against a real substrate"."""
-    _ = patched_runtime
-    config = _config_with_validator_opt_in(tmp_path)
-
-    # The production bootstrap orchestrator is what's invoked.
-    ctx = await run_bootstrap(config, workload_class=WORKLOAD)
-
-    # If _MutableHarnessContext.freeze() bound it correctly, the production
-    # frozen-HarnessContext carries the value (not a test-local mutation).
-    assert isinstance(ctx, HarnessContext)
-    assert ctx.validator_framework is not None
-    # The frozen HarnessContext model is Pydantic v2 frozen (no post-freeze
-    # mutation); the field value materialised at stage-4 via the production
-    # factory.
-    from pydantic import ValidationError
-
-    with pytest.raises(ValidationError):
-        ctx.validator_framework = None  # type: ignore[misc]
-
-
-# AC #6 — stage-4 ordering empirically verified at full-bootstrap path.
-
-
-@pytest.mark.asyncio
-async def test_validator_framework_stage_4_ordering_empirical(
-    tmp_path: Path,
-    patched_runtime: dict[str, Any],
-) -> None:
-    """AC #6 — stage-4 OD-bucket ordering: validator framework binds AFTER
-    tracer_provider + audit_writer + cost_chain + collector_daemon per spec
-    §14.13.3. Verified empirically: a successful run_bootstrap with opt-in
-    config produces a context where (a) validator_framework is bound non-None
-    AND (b) all stage-4 OD prerequisites (tracer_provider + audit_writer +
-    cost_chain + collector_daemon) are also bound non-None at the frozen
-    HarnessContext (i.e., they were materialised prior to the validator
-    framework factory invocation per the stage-4 ordering invariant)."""
-    _ = patched_runtime
-    config = _config_with_validator_opt_in(tmp_path)
-    ctx = await run_bootstrap(config, workload_class=WORKLOAD)
-
-    # All four stage-4 prerequisites bound non-None at the frozen context.
-    assert ctx.tracer_provider is not None
-    assert ctx.audit_writer is not None
-    assert ctx.cost_chain is not None
-    assert ctx.collector_daemon is not None
-    # Validator framework bound non-None (factory ran after the four above).
-    assert ctx.validator_framework is not None
+    with pytest.raises(Exception, match="RT-FAIL-VALIDATOR-STAGE-MATERIALIZE"):
+        await run_bootstrap(config, workload_class=WORKLOAD)
