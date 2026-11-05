@@ -32,6 +32,7 @@ from harness_cp.pause_resume_protocol_types import PauseSnapshot, WorkflowPauseR
 from harness_is.pause_journal_root import UnresolvedCause
 from harness_is.state_ledger_entry_schema import Identifier
 from harness_runtime.lifecycle import journal_workflow_pause_store as journal_module
+from harness_runtime.lifecycle.durable_pause_resume_protocol import DurablePauseResumeProtocol
 from harness_runtime.lifecycle.journal_workflow_pause_store import (
     PAUSE_JOURNAL_LOCK_SUFFIX,
     JournalWorkflowPauseStore,
@@ -104,13 +105,14 @@ def _store(tmp_path: Path) -> JournalWorkflowPauseStore:
     return JournalWorkflowPauseStore(journal_dir=_journal_root(tmp_path), tenant_id=None)
 
 
-def _ctx(tmp_path: Path) -> Any:
-    """What the admission reads from a bootstrapped context: bindings, placement, stamp, tenant."""
+def _ctx(tmp_path: Path, pause_resume_protocol: object = None) -> Any:
+    """What the admission reads from a bootstrapped context: config, stamp and stage-5 protocol."""
     return SimpleNamespace(
         config=SimpleNamespace(
             tenant_id=None, path_bindings=PathBindingConfig(), state_placement=object()
         ),
         verified_state_root=SimpleNamespace(realpath=tmp_path.resolve()),
+        pause_resume_protocol=pause_resume_protocol,
     )
 
 
@@ -143,7 +145,7 @@ def _admit_in_another_process(tmp_path: Path, workflow_id: str, run_id: str) -> 
         "INSTALLATION_STATE.set(InstallationState(({'installation_root': journal_root},)))\n"
         "ctx = N(config=N(tenant_id=None, path_bindings=PathBindingConfig(),\n"
         "                 state_placement=object()),\n"
-        "        verified_state_root=N(realpath=Path(state_root)))\n"
+        "        verified_state_root=N(realpath=Path(state_root)), pause_resume_protocol=None)\n"
         "FreshRunAdmission(workflow_id=workflow_id, run_id=run_id).run(ctx, lambda _: None)\n"
     )
     subprocess.run(
@@ -240,6 +242,33 @@ def test_an_unresolved_root_fails_the_run_before_its_body_and_writes_nothing(
     assert cause.cause is UnresolvedCause.UNBOUND
     assert sorted(p.name for p in _journal_root(tmp_path).iterdir()) == before
     assert _order(_store(tmp_path), _W) == ["snapshot:run-paused"]
+
+
+def test_a_durable_run_supersedes_in_its_capture_directory_after_the_root_link_retargets(
+    tmp_path: Path,
+) -> None:
+    """Rule B3 (F1): the supersession lands in the file this run captures to.
+
+    The declaration now names another directory; re-resolving it would split the journal.
+    """
+    store = _store(tmp_path)  # bootstrap's capture directory
+    store.capture(_snapshot(_W, "run-paused"), depth=0)
+    durable = DurablePauseResumeProtocol(
+        state_ledger_writer=object(),
+        state_ledger_reader=object(),
+        pause_context_reader=lambda: (_snapshot(_W, "unused").state_summary, "0" * 64),
+        store=store,
+    )
+    retargeted = tmp_path.resolve() / "pause-journal-b"
+    retargeted.mkdir()
+    declare_pause_journal_root(tmp_path.resolve() / "pause-journal-link").symlink_to(retargeted)
+
+    FreshRunAdmission(workflow_id=_W, run_id="run-fresh").run(
+        _ctx(tmp_path, durable), lambda _: None
+    )
+
+    assert _order(store, _W) == ["snapshot:run-paused", "supersession:run-fresh"]
+    assert sorted(retargeted.iterdir()) == []
 
 
 # --- I.16 / criterion 18: overlapping root runs are ordered by journal position (cross-process) --

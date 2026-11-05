@@ -58,6 +58,7 @@ from harness_runtime.lifecycle.resume_claim_store import (
     UnstartedProof,
     parse_claim,
 )
+from harness_runtime.lifecycle.root_resume_admission import JournalDirectoryMismatchError
 from harness_runtime.shutdown import shutdown
 from harness_runtime.types import RuntimeConfig
 
@@ -536,6 +537,37 @@ async def test_a_ledger_binding_changed_between_read_and_bootstrap_still_claims_
     assert result.status == "completed", result
     assert dispatcher.steps == ["step-0"]
     assert (harness.phase(ref), harness.lease(ref)) == ("started", "free")
+
+
+@pytest.mark.asyncio
+async def test_a_declared_root_link_retargeted_between_read_and_bootstrap_is_refused_unclaimed(
+    world: Path,  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Rule B3 (F1): a record read in one directory is never claimed for captures in another."""
+    harness = Harness(world)
+    link = declare_pause_journal_root(harness.site.root / "pause-journal-link")
+    link.symlink_to(harness.journal_dir)
+    ref = await harness.capture_root()
+
+    def retarget(config: RuntimeConfig) -> RuntimeConfig:
+        (harness.site.root / "pause-journal-b").mkdir()
+        link.unlink()
+        link.symlink_to(harness.site.root / "pause-journal-b")  # same declaration, new target
+        return config
+
+    _changing_bootstrap(monkeypatch, retarget)
+    dispatcher = _Dispatcher()
+
+    outcome = await _outcome(
+        resume(_Workflow(dispatcher), resume_handle=_WORKFLOW_ID, config=harness.config)
+    )
+
+    assert dispatcher.steps == []
+    _assert_refused(outcome, "placement")
+    assert isinstance(getattr(outcome, "__cause__", None), JournalDirectoryMismatchError)
+    assert harness.claim_files() == []
+    assert harness.phase(ref) == "none"
 
 
 @pytest.mark.asyncio

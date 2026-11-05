@@ -77,7 +77,6 @@ poison the lock.
 from __future__ import annotations
 
 import asyncio
-import os
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -854,16 +853,16 @@ def _read_durable_pause_snapshot(config: RuntimeConfig, resume_handle: str) -> _
     )
 
     try:
-        root = resolve_pause_journal_root(config)
+        # [LAW:one-source-of-truth] Resolved ONCE, to the real directory, then read through: the
+        # directory this read opened is the value handed on, so a symlink retargeted later cannot
+        # re-address it.
+        journal_dir = resolve_pause_journal_root(config)
     except PauseJournalRootUnresolvedError as exc:
         # [LAW:single-enforcer] The one read authority refuses for every surface reading here.
         raise ResumeProtocolNotBoundError(
             "RT-FAIL-RESUME-PROTOCOL-NOT-BOUND: the installation's pause-journal root is "
             "unresolved, so no durable pause record can be read (Runtime spec v1.137 Rule B7)."
         ) from exc
-    # [LAW:one-source-of-truth] Resolved ONCE, then read through: the directory this read
-    # opened is the value handed on, so a symlink retargeted later cannot re-address it.
-    journal_dir = Path(os.path.realpath(root))
     # The tenant scope enters the KEY from `config` — Runtime spec v1.108
     # §14.14.9.1: keying is the §14.14.8 TENANT-COMPOSITE key, *"matching
     # `resume()` exactly"*, by that paragraph's OWN both-surfaces-or-neither

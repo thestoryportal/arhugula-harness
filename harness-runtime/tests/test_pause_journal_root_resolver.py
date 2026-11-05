@@ -127,16 +127,17 @@ def test_overlap_is_judged_on_real_paths_through_a_symlinked_root(tmp_path: Path
     assert _cause(_bound_at(ledger)) is UnresolvedCause.OVERLAPPING
 
 
-def test_a_symlinked_root_outside_every_binding_resolves_to_the_declared_path(
+def test_a_symlinked_root_outside_every_binding_resolves_to_its_real_target(
     tmp_path: Path,
 ) -> None:
+    """F1: the resolution is the directory observed, so a later retarget cannot re-address it."""
     target = tmp_path / "volume" / "journal"
     target.mkdir(parents=True)
     root = tmp_path / "pause-journal"
     root.symlink_to(target)
     declare_pause_journal_root(root)
 
-    assert resolve_pause_journal_root(_bound_at(tmp_path / "ledger")) == root
+    assert resolve_pause_journal_root(_bound_at(tmp_path / "ledger")) == target.resolve()
 
 
 def test_the_refusal_names_its_cause_and_never_the_path(tmp_path: Path) -> None:

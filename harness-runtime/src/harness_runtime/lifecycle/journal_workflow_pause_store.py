@@ -597,6 +597,11 @@ class JournalWorkflowPauseStore:
         # re-derivation — hence the import rather than a local copy.
         self._tenant_scope = normalize_tenant_scope(tenant_id)
 
+    @property
+    def journal_dir(self) -> Path:
+        """The one directory this store captures to and reads from."""
+        return self._journal_dir
+
     def capture(self, snapshot: PauseSnapshot, *, depth: int | None) -> JournalRecordRef:
         """Append a snapshot and return its exact identity under the journal lock."""
         if not _depth_is_wellformed(depth):

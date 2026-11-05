@@ -76,13 +76,8 @@ class PauseJournalRootUnresolvedError(Exception):
         self.cause: Final = cause
 
 
-def _observe(root: Path) -> ObservedRoot:
-    real_path = Path(os.path.realpath(root))
-    return ExistingDirectory(real_path) if real_path.is_dir() else NotADirectory()
-
-
 def resolve_pause_journal_root(config: RuntimeConfig) -> Path:
-    """The installation's declared pause-journal root, or `PauseJournalRootUnresolvedError`.
+    """The installation's pause-journal root as a real path, or `PauseJournalRootUnresolvedError`.
 
     `config` contributes only its bound path-binding directories, which can make resolution
     fail as overlapping but never choose the root.
@@ -96,8 +91,12 @@ def resolve_pause_journal_root(config: RuntimeConfig) -> Path:
         Path(os.path.realpath(entry.path))
         for entry in build_path_binding(config.path_bindings).entries
     )
-    match resolve_root(declaration, _observe(declaration.installation_root), bound_real_paths):
-        case Resolved(root=root):
-            return root
+    real_root = Path(os.path.realpath(declaration.installation_root))
+    observed: ObservedRoot = ExistingDirectory(real_root) if real_root.is_dir() else NotADirectory()
+    match resolve_root(declaration, observed, bound_real_paths):
+        case Resolved():
+            # [LAW:one-source-of-truth] The directory whose overlap was just judged, observed
+            # once: a declared symlink retargeted later cannot re-address this resolution.
+            return real_root
         case Unresolved(cause=cause):
             raise PauseJournalRootUnresolvedError(cause)

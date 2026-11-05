@@ -2568,7 +2568,7 @@ def test_ac6_daemon_concurrent_two_clients_complete_independently(
 
     server = materialize_mcp_server_stage(drain_timeout_seconds=30.0)
     # Each fresh run's admission (Runtime spec v1.137 Rules B1/B3) places the declared journal
-    # root under the verified state root and reads the tenant.
+    # root (no durable capture directory here) under the verified state root and reads the tenant.
     server._state["_harness_ctx"] = SimpleNamespace(
         step_dispatchers=None,
         validator_framework=None,
@@ -2577,6 +2577,7 @@ def test_ac6_daemon_concurrent_two_clients_complete_independently(
             tenant_id=None, path_bindings=PathBindingConfig(), state_placement=object()
         ),
         verified_state_root=SimpleNamespace(realpath=placed_root.resolve()),
+        pause_resume_protocol=None,
     )
 
     def _fake_workflow(wf_id: str) -> SimpleNamespace:
