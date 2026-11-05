@@ -1219,9 +1219,17 @@ def _auto_promote_allowed(
         return False
     if hint.confidence is PromotionCandidateConfidence.LOW:
         return False
-    if hint.proposed_kind is PromotionCandidateKind.PROCEDURAL_UPDATE:
-        return resolution.promotion_decision is PromotionDecision.PROMOTE_PROCEDURAL
-    return resolution.promotion_decision is PromotionDecision.PROMOTE_SEMANTIC
+    return resolution.promotion_decision is promote_decision_for_kind(hint.proposed_kind)
+
+
+def promote_decision_for_kind(kind: PromotionCandidateKind) -> PromotionDecision:
+    """Return the only ``PROMOTE_*`` decision that may auto-promote ``kind``."""
+    # [LAW:single-enforcer] the hint extractor and the explicit promote tool both
+    # read this one target->decision map, so neither can auto-promote a target
+    # its configured decision does not name.
+    if kind is PromotionCandidateKind.PROCEDURAL_UPDATE:
+        return PromotionDecision.PROMOTE_PROCEDURAL
+    return PromotionDecision.PROMOTE_SEMANTIC
 
 
 def _candidate_id(

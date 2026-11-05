@@ -574,6 +574,65 @@ def test_promotion_and_redaction_requests_create_reviewable_durable_entries(
     assert ledger_kinds.count(MemoryOperationKind.STANDARD_TOOL_CALL) == 3
 
 
+@pytest.mark.parametrize(
+    ("promotion_decision", "target_kind", "auto_promotes"),
+    [
+        (PromotionDecision.PROMOTE_SEMANTIC, "convention", True),
+        (PromotionDecision.PROMOTE_SEMANTIC, "procedural_update", False),
+        (PromotionDecision.PROMOTE_PROCEDURAL, "procedural_update", True),
+        (PromotionDecision.PROMOTE_PROCEDURAL, "convention", False),
+    ],
+)
+def test_automatic_promotion_requires_decision_matching_target_kind(
+    tmp_path: Path,
+    promotion_decision: PromotionDecision,
+    target_kind: str,
+    auto_promotes: bool,
+) -> None:
+    store, executor = _executor(
+        tmp_path,
+        policy=_policy(promotion_decision=promotion_decision, review_mode=ReviewMode.AUTOMATIC),
+    )
+    write_result = executor.execute(
+        _request(
+            MemoryToolName.WRITE_NOTE,
+            {
+                "note": "Run focused checks before freezing a review candidate.",
+                "scope_ref": _SCOPE_REF,
+                "policy_ref": _POLICY_REF,
+            },
+        )
+    )
+
+    promotion = executor.execute(
+        _request(
+            MemoryToolName.PROPOSE_PROMOTION,
+            {
+                "memory_ref": write_result["memory_ref"],
+                "target_kind": target_kind,
+                "evidence_ref": "tool-note:oxw",
+                "policy_ref": _POLICY_REF,
+            },
+        )
+    )
+
+    expected_kind = (
+        MemoryOperationKind.PROMOTE if auto_promotes else MemoryOperationKind.PROPOSE_PROMOTION
+    )
+    assert promotion["review_required"] is (not auto_promotes)
+    promotion_ref = str(promotion["promotion_ref"])
+    reopened = store.read_record(
+        MemoryID(promotion_ref), MemoryRecordKind(promotion_ref.split(":")[2])
+    )
+    assert reopened.content["status"] == ("active" if auto_promotes else "proposed")
+    candidate_id = reopened.content.get("candidate_id", reopened.content.get("snapshot_id"))
+    assert promotion["operation_ref"] == (
+        f"promotion:{expected_kind.value}:{candidate_id}:{promotion_ref}"
+    )
+    ledger_kinds = [entry.operation_kind for entry in store.read_memory_operations()]
+    assert expected_kind in ledger_kinds
+
+
 def test_standard_tool_policy_denial_fails_closed(tmp_path: Path) -> None:
     _, executor = _executor(
         tmp_path,

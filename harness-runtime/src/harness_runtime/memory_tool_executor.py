@@ -75,6 +75,7 @@ from harness_runtime.memory_promotion import (
     SemanticInjectionPolicy,
     SemanticRecordStatus,
     cross_family_capture_flagged,
+    promote_decision_for_kind,
 )
 from harness_runtime.memory_scope_family import (
     resolve_scope_family,
@@ -774,7 +775,11 @@ class StandardMemoryToolExecutor:
             policy_decision=promotion.promotion_decision,
             review_mode=promotion.review_mode,
             review_required=_promotion_review_required(promotion, risk_flags=risk_flags),
-            auto_promote_allowed=_promotion_auto_allowed(promotion, risk_flags=risk_flags),
+            auto_promote_allowed=_promotion_auto_allowed(
+                promotion,
+                target_kind=target_kind,
+                risk_flags=risk_flags,
+            ),
         )
         service = PromotionDecisionService(
             store=self._store,
@@ -804,7 +809,13 @@ class StandardMemoryToolExecutor:
             )
         return {
             "promotion_ref": str(result.memory_id),
-            "operation_ref": _promotion_operation_ref(result),
+            # [LAW:one-source-of-truth] the candidate carries its identity; the
+            # written record names it `candidate_id` (semantic) or `snapshot_id`
+            # (procedural), so it is never read back from record content.
+            "operation_ref": (
+                f"promotion:{result.operation_kind.value}:"
+                f"{candidate.candidate_id}:{result.memory_id}"
+            ),
             "policy_ref": context.policy_ref,
             "review_required": result.status is SemanticRecordStatus.PROPOSED,
         }
@@ -1319,19 +1330,14 @@ def _promotion_review_required(
 def _promotion_auto_allowed(
     promotion: Any,
     *,
+    target_kind: PromotionCandidateKind,
     risk_flags: Sequence[PromotionRiskFlag],
 ) -> bool:
-    # Note the asymmetry with the hint path's `_auto_promote_allowed`: this
-    # predicate has NO `proposed_kind` branch, so one gate covers both the
-    # semantic and the procedural decision here.
     if PromotionRiskFlag.CROSS_FAMILY_CAPTURE in risk_flags:
         return False
     if promotion.review_mode is not ReviewMode.AUTOMATIC:
         return False
-    return promotion.promotion_decision in {
-        PromotionDecision.PROMOTE_SEMANTIC,
-        PromotionDecision.PROMOTE_PROCEDURAL,
-    }
+    return promotion.promotion_decision is promote_decision_for_kind(target_kind)
 
 
 def _preference_details(candidate: PromotionCandidate) -> PreferencePromotionDetails | None:
@@ -1342,13 +1348,6 @@ def _preference_details(candidate: PromotionCandidate) -> PreferencePromotionDet
         preference_strength=PreferenceStrength.NORMAL,
         source_authority=PreferenceSourceAuthority.INFERRED_FROM_REPETITION,
         confirmation_required=True,
-    )
-
-
-def _promotion_operation_ref(result: Any) -> str:
-    return (
-        f"promotion:{result.operation_kind.value}:"
-        f"{result.record.content['candidate_id']}:{result.memory_id}"
     )
 
 
