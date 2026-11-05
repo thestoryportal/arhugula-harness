@@ -18,12 +18,11 @@ next_action) but NOT on next_actions (ESCALATE_HITL ← {ESCALATE,
 OPERATOR_BURDEN_EXCEEDED}); consumers disambiguate via `validator.outcome`
 span attribute per OD §C-OD-29.
 
-**Burden counter ownership (impl discretion per §25.4 invariant 5).** The
-framework owns a private monotonic `_BurdenCounter` shared across all
-`.evaluate()` invocations within a workflow lifetime. Increments on every
-non-PASS outcome. The §25.4 invariant 5 "reset only at workflow boundary"
-is preserved by framework lifetime ≡ workflow lifetime (framework
-instantiated at stage 5 LOOP_INIT per §25.3 + discarded at workflow close).
+**Burden counter ownership (CP v1.129 §1 / §28.11).** The framework is one
+shared bootstrap instance and holds no per-execution state. Each workflow
+execution owns a `ValidatorBurdenLedger` inside its `ValidatorRunBinding`
+(`open_validator_run` at root ingress, `open_child` per child execution);
+`.evaluate()` increments the ledger it is handed on every non-PASS outcome.
 
 **REVALIDATE budget-exhaustion conversion (AC #6 per F2-03).** Per §25.7
 invariant 3 ("REVALIDATE bounded by C-RT-16 retry policy"), when the retry
@@ -47,13 +46,13 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import Mapping
-from dataclasses import dataclass
-from typing import Any, Protocol, runtime_checkable
+from typing import Any
 
 from harness_core.identity import StepID
 
 from harness_cp.validator_framework_types import (
     Validator,
+    ValidatorBurdenLedger,
     ValidatorEvaluation,
     ValidatorFailClass,
     ValidatorFramework,
@@ -61,6 +60,7 @@ from harness_cp.validator_framework_types import (
     ValidatorOutcome,
     ValidatorPostEvaluateHook,
     ValidatorResult,
+    ValidatorRunBinding,
 )
 from harness_cp.workflow_driver_types import StepExecutionContext, WorkflowStep
 
@@ -180,19 +180,8 @@ class ConcreteValidatorFramework:
         (§2 row 3) and at every pre-v1.101 construction site.
         """
         self._validator_registry = validator_registry
-        self._burden_count: int = 0
         self._post_evaluate_hook = post_evaluate_hook
         self._audit_signing_raise_through = audit_signing_raise_through
-
-    @property
-    def burden_count(self) -> int:
-        """Current cumulative burden count for the workflow (§25.4 invariant 5).
-
-        Read-only public surface; incremented internally by `.evaluate()` on
-        every non-PASS outcome. Monotonic per workflow lifetime; resets only
-        at workflow boundary (≡ framework instance lifetime).
-        """
-        return self._burden_count
 
     async def evaluate(
         self,
@@ -200,13 +189,15 @@ class ConcreteValidatorFramework:
         step_result: Mapping[str, Any],
         *,
         step_context: StepExecutionContext,
+        burden: ValidatorBurdenLedger,
     ) -> ValidatorEvaluation:
         """Run the per-step Validator + wrap into ValidatorEvaluation.
 
         Per §25.4 invocation discipline:
         1. Look up Validator from `validator_registry` by `step.step_id`
         2. Run `.validate()` to get ValidatorResult
-        3. Increment burden_count on non-PASS outcomes (§25.4 invariant 5)
+        3. Increment the execution's `burden` ledger on non-PASS outcomes
+           (CP v1.129 §1 amended invariant 5; this instance holds no run state)
         4. Map outcome → next_action (§25.2 mapping table; AC #1)
         5. Build span_attributes for §25.5 emission (validator.* namespace)
         6. Return ValidatorEvaluation
@@ -230,22 +221,23 @@ class ConcreteValidatorFramework:
             step_context=step_context,
         )
 
-        if result.outcome != ValidatorOutcome.PASS:
-            self._burden_count += 1
+        # [LAW:no-ambient-temporal-coupling] increment and copy below run with
+        # no intervening await, on the binding's single loop (§1).
+        burden.count += int(result.outcome != ValidatorOutcome.PASS)
 
         next_action = _map_outcome_to_next_action(result.outcome)
         span_attributes = self._build_span_attributes(
             step=step,
             result=result,
             next_action=next_action,
-            burden_count=self._burden_count,
+            burden_count=burden.count,
         )
 
         evaluation = ValidatorEvaluation(
             result=result,
             span_attributes=span_attributes,
             next_action=next_action,
-            burden_count=self._burden_count,
+            burden_count=burden.count,
         )
 
         # CP spec v1.24 §28.10.3 post-evaluate hook firing (best-effort).
@@ -352,98 +344,18 @@ class ConcreteValidatorFramework:
         return attrs
 
 
-# ============================================================================
-# U-CP-61 — SyncValidatorFrameworkFacade (sync bridge over async framework)
-# ============================================================================
-#
-# Mirrors `harness_runtime.lifecycle.sync_dispatcher_facade.SyncDispatcherFacade`
-# (U-RT-59 precedent). The async/sync mismatch between spec §25.1
-# `async def evaluate` and the sync `execute_workflow` driver is bridged via
-# `asyncio.run_coroutine_threadsafe(coro, loop)` from the driver's
-# worker thread (per `asyncio.to_thread(execute_workflow, ...)` at
-# `harness_runtime/api.py`).
-
-
-@runtime_checkable
-class SyncValidatorFrameworkLike(Protocol):
-    """Sync-facing ValidatorFramework surface consumed by the workflow_driver hook.
-
-    The CP driver's `execute_workflow` is sync (per spec §25.3 + workflow_driver
-    surface); ValidatorFramework.evaluate is async (per spec §25.1). The driver
-    consumes the sync facade; the facade bridges to the async impl via the
-    captured async event loop. Pattern mirrors `SyncDispatcherFacade` at
-    `harness_runtime.lifecycle.sync_dispatcher_facade` (U-RT-59 precedent).
-    """
-
-    def evaluate(
-        self,
-        step: WorkflowStep,
-        step_result: Mapping[str, Any],
-        *,
-        step_context: StepExecutionContext,
-    ) -> ValidatorEvaluation: ...
-
-
-@dataclass(frozen=True)
-class SyncValidatorFrameworkFacade:
-    """Sync ValidatorFramework facade over an async ConcreteValidatorFramework.
-
-    Construction MUST occur on the event loop that will host the eventual
-    `asyncio.to_thread(execute_workflow, ...)` invocation. Use
-    `materialize_sync_validator_framework_facade` rather than constructing
-    directly so the loop is captured uniformly.
-
-    Mirrors `SyncDispatcherFacade` from `harness_runtime.lifecycle.sync_dispatcher_facade`
-    per U-RT-59 precedent for the same async/sync bridge pattern.
-    """
-
-    inner: ValidatorFramework
-    loop: asyncio.AbstractEventLoop
-    result_timeout_seconds: float
-
-    def evaluate(
-        self,
-        step: WorkflowStep,
-        step_result: Mapping[str, Any],
-        *,
-        step_context: StepExecutionContext,
-    ) -> ValidatorEvaluation:
-        """Sync `evaluate`; bridges to captured async loop.
-
-        Invoked from the CP driver's worker thread. Schedules
-        `self.inner.evaluate(...)` onto `self.loop` via
-        `asyncio.run_coroutine_threadsafe` and blocks on
-        `future.result(timeout=self.result_timeout_seconds)`.
-
-        Exception propagation: `future.result()` re-raises any exception
-        raised by the inner coroutine verbatim (no wrapping).
-        """
-        coro = self.inner.evaluate(step, step_result, step_context=step_context)
-        future = asyncio.run_coroutine_threadsafe(coro, self.loop)
-        return future.result(timeout=self.result_timeout_seconds)
-
-
-def materialize_sync_validator_framework_facade(
-    inner: ValidatorFramework,
+def open_validator_run(
+    framework: ValidatorFramework,
     *,
     result_timeout_seconds: float,
-) -> SyncValidatorFrameworkFacade:
-    """Construct `SyncValidatorFrameworkFacade` capturing the running event loop.
+) -> ValidatorRunBinding:
+    """Open one root execution's binding on the running loop (CP v1.129 §28.11.1).
 
-    MUST be invoked from a coroutine running on the event loop that hosts
-    the subsequent worker-thread `evaluate(...)` invocations. Bootstrap
-    stage 5 (when wired) satisfies this — until then, operator-populated
-    integration uses this factory directly.
-
-    Raises
-    ------
-    RuntimeError
-        If called from sync code or a non-loop-owning thread —
-        `asyncio.get_running_loop()` propagates verbatim.
+    MUST be awaited-context code on the loop that serves the run's evaluations;
+    `asyncio.get_running_loop()` raises `RuntimeError` otherwise.
     """
-    loop = asyncio.get_running_loop()
-    return SyncValidatorFrameworkFacade(
-        inner=inner,
-        loop=loop,
+    return ValidatorRunBinding(
+        framework=framework,
+        loop=asyncio.get_running_loop(),
         result_timeout_seconds=result_timeout_seconds,
     )

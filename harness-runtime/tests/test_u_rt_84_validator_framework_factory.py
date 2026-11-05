@@ -8,8 +8,9 @@ ACs per runtime plan v2.17 §1 U-RT-84:
    returns `None` unconditionally.
 3. Opt-in branch (Trial193.4h4): every `ValidatorBinding` resolves to an
    operator `Validator` constructed with its params; the factory returns the
-   driver-facing sync facade over a `ConcreteValidatorFramework` whose
-   registry dispatches those validators. Unresolvable, failing,
+   async-Protocol `ConcreteValidatorFramework` itself (Runtime v1.138
+   §14.13.2/.5), whose registry dispatches those validators; each run's sync
+   `ValidatorRunBinding` is opened over it (§14.13.8). Unresolvable, failing,
    non-Protocol or sync-`validate` bindings raise
    `ValidatorFrameworkStageMaterializeError` before any dispatch.
 4. Stage-4 OD-bucket wiring: factory invocation appended AFTER tracer +
@@ -38,11 +39,9 @@ import pytest
 from harness_core.deployment_surface import DeploymentSurface
 from harness_core.identity import StepID
 from harness_cp.topology_pattern import TopologyPattern
-from harness_cp.validator_framework import (
-    ConcreteValidatorFramework,
-    SyncValidatorFrameworkFacade,
-)
+from harness_cp.validator_framework import ConcreteValidatorFramework, open_validator_run
 from harness_cp.validator_framework_types import (
+    ValidatorBurdenLedger,
     ValidatorFailClass,
     ValidatorFramework,
     ValidatorNextAction,
@@ -197,21 +196,33 @@ async def test_factory_dispatches_bound_validator_on_step_output(tmp_path: Path)
             params={"threshold": 5},
         ),
     )
-    facade = await materialize_validator_framework_stage(config)
+    framework = await materialize_validator_framework_stage(config)
 
-    assert isinstance(facade, SyncValidatorFrameworkFacade)
-    assert isinstance(facade.inner, ConcreteValidatorFramework)
-    # §14.13.5 invariant 3 — the wrapped framework is the CP Protocol.
-    assert isinstance(facade.inner, ValidatorFramework)
-    passed = await facade.inner.evaluate(_step("score"), {"score": 7}, step_context=None)  # type: ignore[arg-type]
-    failed = await facade.inner.evaluate(_step("score"), {"score": 4}, step_context=None)  # type: ignore[arg-type]
+    assert isinstance(framework, ConcreteValidatorFramework)
+    # §14.13.5 invariant 3 — the returned value itself is the async CP Protocol.
+    assert isinstance(framework, ValidatorFramework)
+    assert inspect.iscoroutinefunction(framework.evaluate)
+    burden = ValidatorBurdenLedger()
+    passed = await framework.evaluate(
+        _step("score"),
+        {"score": 7},
+        step_context=None,
+        burden=burden,  # type: ignore[arg-type]
+    )
+    failed = await framework.evaluate(
+        _step("score"),
+        {"score": 4},
+        step_context=None,
+        burden=burden,  # type: ignore[arg-type]
+    )
     assert passed.next_action is ValidatorNextAction.PROCEED
     assert failed.next_action is ValidatorNextAction.ABORT
 
 
 @pytest.mark.asyncio
-async def test_facade_evaluates_from_driver_worker_thread(tmp_path: Path) -> None:
-    """The bound facade is what the sync driver calls from `asyncio.to_thread`."""
+async def test_run_binding_evaluates_from_driver_worker_thread(tmp_path: Path) -> None:
+    """§14.13.8 — a binding opened over the factory's framework is what the sync
+    driver calls from `asyncio.to_thread`."""
     config = _opt_in_config(
         tmp_path,
         ValidatorBinding(
@@ -220,11 +231,12 @@ async def test_facade_evaluates_from_driver_worker_thread(tmp_path: Path) -> Non
             params={"threshold": 1},
         ),
     )
-    facade = await materialize_validator_framework_stage(config)
-    assert facade is not None
+    framework = await materialize_validator_framework_stage(config)
+    assert framework is not None
+    binding = open_validator_run(framework, result_timeout_seconds=5.0)
 
     evaluation = await asyncio.to_thread(
-        facade.evaluate,
+        binding.evaluate,
         _step("score"),
         {"score": 1},
         step_context=None,  # type: ignore[arg-type]
@@ -374,11 +386,11 @@ def test_stage_4_od_invokes_factory_after_audit_writer() -> None:
 # AC #5 — HarnessContext field type narrowing.
 
 
-def test_harness_context_validator_framework_field_is_driver_facing() -> None:
-    """AC #5 (Trial193.4h4) — the context carries what the sync CP driver
-    calls: the `SyncValidatorFrameworkLike` surface, or `None` at opt-out."""
+def test_harness_context_validator_framework_field_is_the_async_protocol() -> None:
+    """AC #5 (Runtime v1.138 §14.13.2) — the context carries the shared async CP
+    `ValidatorFramework`, or `None` at opt-out; sync bindings live per run."""
     field = HarnessContext.model_fields["validator_framework"]
-    assert "SyncValidatorFrameworkLike" in str(field.annotation)
+    assert field.annotation == ValidatorFramework | None
 
 
 def test_freeze_signature_carries_validator_framework_kwarg() -> None:

@@ -261,6 +261,7 @@ def materialize_mcp_server_stage(
     # not yet exercised; the import resolves on first tool invocation via
     # the closure lookup).
     from harness_cp import workflow_driver as _workflow_driver
+    from harness_cp.validator_framework import open_validator_run as _open_validator_run
     from harness_cp.workflow_driver import execute_workflow as _execute_workflow
     from harness_cp.workflow_driver_types import ChildResumeAuthority
     from harness_cp.workflow_driver_types import RunResult as _CpRunResult
@@ -463,6 +464,18 @@ def materialize_mcp_server_stage(
             else getattr(harness_ctx, "step_dispatchers", None)
         )
 
+        # Runtime v1.138 §14.13.8(2)/(4)/(5): this invocation (fresh run or resume)
+        # opens its own validator binding on this loop, ledger at zero; the driver's
+        # worker thread evaluates through it. Opt-out (`None` framework) → `None`.
+        validator_run = (
+            None
+            if harness_ctx.validator_framework is None
+            else _open_validator_run(
+                harness_ctx.validator_framework,
+                result_timeout_seconds=harness_ctx.config.step_dispatch_timeout_seconds,
+            )
+        )
+
         def _execute(child_resume_authority: ChildResumeAuthority | None) -> _CpRunResult:
             return _execute_workflow(
                 workflow.manifest_entry,
@@ -474,6 +487,7 @@ def materialize_mcp_server_stage(
                 pause_snapshot_input=_resume_snapshot,
                 resume_context=_resume_context,
                 child_resume_authority=child_resume_authority,
+                validator_run=validator_run,
                 hitl_uniform_fallback_eligible_run_id=(_hitl_uniform_fallback_eligible_run_id),
                 effect_fence_uniform_fallback_eligible_key=(
                     _effect_fence_uniform_fallback_eligible_key

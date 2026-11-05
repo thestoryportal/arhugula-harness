@@ -1816,8 +1816,8 @@ async def test_u_rt_136_bootstrap_wires_resolved_flag_into_every_composer(
             "bare sub-agent (stage-5)": hitl_sub_agent.inner.audit_signing_fail_closed,
             "bare tool (factory)": bare_tool._audit_signing_fail_closed,
             "webhook (factory)": webhook._audit_signing_fail_closed,
-            "validator hook (stage-4)": framework.inner._post_evaluate_hook._audit_signing_fail_closed,
-            "cp carve-out tuple (stage-4)": framework.inner._audit_signing_raise_through,
+            "validator hook (stage-4)": framework._post_evaluate_hook._audit_signing_fail_closed,
+            "cp carve-out tuple (stage-4)": framework._audit_signing_raise_through,
         }
 
     _patch_providers(monkeypatch)

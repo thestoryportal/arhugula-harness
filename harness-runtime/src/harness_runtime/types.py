@@ -90,7 +90,7 @@ from harness_cp.validator_fail_transient_staircase import (
     StaircaseStage,
     StaircaseTransition,
 )
-from harness_cp.validator_framework import SyncValidatorFrameworkLike
+from harness_cp.validator_framework_types import ValidatorFramework
 from harness_cp.workflow_driver import StepDispatcherRegistry as _CpStepDispatcherRegistry
 from harness_cp.workflow_driver_types import StepExecutionContext, WorkflowStep
 from harness_cp.workflow_manifest_entry import WorkflowManifestEntry
@@ -2831,14 +2831,12 @@ class HarnessContext(BaseModel):
     collector_daemon: CollectorDaemonHandle
     cost_chain: CostAttributionChain
     audit_writer: AuditLedgerWriter
-    # U-RT-84 / Trial193.4h4 — the driver-facing validator binding per
-    # runtime spec v1.18 §4 + §14.13. The sync CP driver calls `.evaluate`
-    # from its worker thread, so this is the CP `SyncValidatorFrameworkLike`
-    # surface (the facade bridging to the async §25.1 framework), not the
-    # async Protocol itself. Stage 4 OD-bucket factory
-    # `materialize_validator_framework_stage` produces this; `None` is the
-    # production-default (operator opt-out → driver hook False arm).
-    validator_framework: SyncValidatorFrameworkLike | None = None
+    # U-RT-84 / Trial193.4h4 — the one stage-4 CP async `ValidatorFramework`
+    # per bootstrap (runtime spec v1.138 §14.13.2/.5). It holds no per-run
+    # state: each `run_workflow` invocation opens its own synchronous
+    # `ValidatorRunBinding` over it (§14.13.8). `None` is the production
+    # default (operator opt-out → no binding → driver hook False arm).
+    validator_framework: ValidatorFramework | None = None
 
     # U-RT-87 — PauseResumeProtocol carrier per runtime spec v1.21 §4 +
     # §14.14 (CP spec v1.13 §26 carrier from harness_cp.pause_resume_protocol).

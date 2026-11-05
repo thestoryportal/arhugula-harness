@@ -109,6 +109,7 @@ def _capture_child_run_id(
         cast(Any, _Ctx()), durable_admission=RefuseDurableChildAdmission()
     )
     runner(
+        validator_run=None,
         workflow_id=_WF,
         manifest_entry=cast(Any, object()),
         steps=cast(Any, ()),
@@ -195,6 +196,7 @@ def test_child_runner_forwards_recorded_gate_floor(
         cast(Any, _Ctx()), durable_admission=RefuseDurableChildAdmission()
     )
     runner(
+        validator_run=None,
         workflow_id=_WF,
         manifest_entry=cast(Any, object()),
         steps=(),

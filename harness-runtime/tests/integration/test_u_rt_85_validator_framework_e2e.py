@@ -45,6 +45,7 @@ from harness_cp.cross_family_fallback_chain import (
 from harness_cp.engine_class import EngineClass
 from harness_cp.hitl_response_palette import HITLResponse
 from harness_cp.topology_pattern import TopologyPattern
+from harness_cp.validator_framework import open_validator_run
 from harness_cp.validator_framework_types import (
     HITLEscalationBrief,
     ValidatorFailClass,
@@ -199,6 +200,13 @@ async def _run_single_step(ctx: HarnessContext, step_id: str, verdict: str) -> R
         step_kind=StepKind.INFERENCE_STEP,
         step_payload={"verdict": verdict},
     )
+    assert ctx.validator_framework is not None
+    # Runtime v1.138 §14.13.8(2): each run opens its own binding over the bootstrap
+    # framework on this loop, as `run_workflow` ingress does.
+    validator_run = open_validator_run(
+        ctx.validator_framework,
+        result_timeout_seconds=ctx.config.step_dispatch_timeout_seconds,
+    )
     return await asyncio.to_thread(
         partial(
             execute_workflow,
@@ -208,6 +216,7 @@ async def _run_single_step(ctx: HarnessContext, step_id: str, verdict: str) -> R
             ctx=ctx,  # type: ignore[arg-type]
             default_model_binding=ModelBinding(provider="anthropic", model="claude-haiku-4-5"),
             step_dispatchers=_SingleKindRegistry(_VerdictDispatcher()),  # type: ignore[arg-type]
+            validator_run=validator_run,
         )
     )
 

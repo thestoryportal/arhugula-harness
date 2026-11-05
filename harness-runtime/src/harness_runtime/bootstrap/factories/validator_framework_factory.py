@@ -20,9 +20,9 @@ failure-mode taxonomy + §14.13.5 invariants.
   could not run.
 - `@runtime_checkable ValidatorFramework` Protocol-conformance enforced per
   spec §14.13.5 invariant 3.
-- The CP driver is sync and runs on a worker thread, so the bound value is
-  the CP `SyncValidatorFrameworkFacade` over that framework, capturing the
-  bootstrap event loop exactly as stage 5 does for step dispatchers.
+- The return value is the CP async Protocol instance itself (Runtime v1.138
+  §14.13.2/.5); it holds no per-run state. Each `run_workflow` invocation
+  opens its own synchronous `ValidatorRunBinding` over it (§14.13.8).
 - U-RT-85 real-bootstrap ValidatorFramework e2e binds through this factory:
   opt-in config materializes the operator-supplied framework slot on the
   runtime context before the workflow-driver validator hook can fire.
@@ -34,11 +34,7 @@ import inspect
 from typing import Any
 
 from harness_core.identity import StepID
-from harness_cp.validator_framework import (
-    ConcreteValidatorFramework,
-    SyncValidatorFrameworkLike,
-    materialize_sync_validator_framework_facade,
-)
+from harness_cp.validator_framework import ConcreteValidatorFramework
 from harness_cp.validator_framework_types import (
     Validator,
     ValidatorFramework,
@@ -116,7 +112,7 @@ async def materialize_validator_framework_stage(
     procedural_tier_snapshot_resolver: Any = None,
     signing_backend: Any = None,
     audit_signing_fail_closed: bool = False,
-) -> SyncValidatorFrameworkLike | None:
+) -> ValidatorFramework | None:
     """Construct the stage-4 `ValidatorFramework` instance from operator-supplied
     config, or return `None` when the operator has not opted in.
 
@@ -124,7 +120,7 @@ async def materialize_validator_framework_stage(
 
     Returns
     -------
-    SyncValidatorFrameworkLike | None
+    ValidatorFramework | None
         `None` when `config.validator_framework_config is None` — the
         operator has not opted in; `ctx.validator_framework` binds to `None`;
         the workflow_driver.py:668 hook branch evaluates False (the v1.17
@@ -205,9 +201,4 @@ async def materialize_validator_framework_stage(
             "per spec v1.18 §14.13.5 invariant 3."
         )
 
-    # [LAW:one-source-of-truth] the per-step worker-thread blocking bound is
-    # the same one stage 5 gives every step dispatcher facade.
-    return materialize_sync_validator_framework_facade(
-        inner=framework,
-        result_timeout_seconds=config.step_dispatch_timeout_seconds,
-    )
+    return framework
