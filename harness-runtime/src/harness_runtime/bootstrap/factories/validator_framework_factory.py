@@ -1,6 +1,6 @@
 """U-RT-84 — ValidatorFramework stage-4 factory.
 
-Implements runtime spec v1.18 §14.13.1 factory signature + §14.13.2 per-factory
+Implements C-RT-23: runtime spec v1.18 §14.13.1 factory signature + §14.13.2 per-factory
 invocation discipline + §14.13.3 stage-4 OD-bucket placement + §14.13.4
 failure-mode taxonomy + §14.13.5 invariants.
 
