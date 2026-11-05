@@ -480,13 +480,17 @@ break causal-pair reconstruction at exactly the rate it drops either one.
 
 
 class PauseStateCauseAttribution(StrEnum):
-    """The FIVE stable identifiers a failed §14.14.9 read reports (Runtime v1.107 §30).
+    """The SIX stable identifiers a failed §14.14.9 read reports (OD spec v1.43
+    C-OD-30.5.1): the five Runtime v1.107 §30 declares, plus `superseded` from
+    Runtime v1.137 Rule A4.
 
     Declared here so the audit row's `cause_attribution` carries a CLOSED domain
     rather than an inherited `str`. `harness-od` must not import `harness-runtime`
     (the axis direction runs the other way), so the vocabulary is re-declared, not
     re-derived — and any divergence from the Runtime-side enum fails the
-    cross-surface identity witness the §30 contract term requires.
+    cross-surface identity witness the §30 contract term requires. This member
+    set leads the Runtime side by `superseded` until U-RT-160 portion 160a adds it
+    there (OD plan v2.37 U-OD-62: lands no later than that change).
 
     Cause class ONLY — never exception text, never a resolved filesystem path.
     """
@@ -496,6 +500,9 @@ class PauseStateCauseAttribution(StrEnum):
     READ_ERROR = "read-error"
     CORRUPT_LATEST = "corrupt-latest"
     WORKFLOW_MISMATCH = "workflow-mismatch"
+    SUPERSEDED = "superseded"
+    """A later fresh root run of the workflow appended a supersession record after
+    the read's pause record (Runtime v1.137 Rule A4)."""
 
 
 class PauseStateEventKind(StrEnum):
@@ -564,7 +571,7 @@ class PauseStateAuditPayload(BaseModel):
     read, where no token exists by construction."""
 
     cause_attribution: PauseStateCauseAttribution | None = None
-    """One of the FIVE stable identifiers Runtime v1.107 §30 declares — on an
+    """One of the SIX stable identifiers OD spec v1.43 C-OD-30.5.1 declares — on an
     UNSUCCESSFUL read only. Cause class ONLY.
 
     The domain is DECLARED here rather than inherited as `str`: a free `str` would
@@ -573,8 +580,9 @@ class PauseStateAuditPayload(BaseModel):
     refinement exists to enable. *(Out-of-family review [P2] at the impl leg.)*
     The vocabulary is re-declared rather than imported because `harness-od` must
     not depend on `harness-runtime` (the axis direction runs the other way); the
-    five values are byte-identical to the Runtime-side enum, and a divergence
-    would fail the cross-surface identity witness."""
+    six values must equal the Runtime accessor's failure causes, which gain
+    `superseded` at U-RT-160 portion 160a, where the cross-surface identity
+    witness compares the two sets."""
 
     hitl_addressable_count: int | None = None
     effect_fence_addressable_count: int | None = None

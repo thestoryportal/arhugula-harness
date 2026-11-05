@@ -387,7 +387,7 @@ def decide(
         pfx = f"HARNESS_ARC_ID={arc_id} HARNESS_LANE_ID={lane_id} "
     else:
         pfx = "HARNESS_ARC_ID=<arc-id> HARNESS_LANE_ID=<lane-id> "
-    if cycle is not None:
+    if cycle is not None and cycle.cycle_pass not in ("initial", "correction"):
         return _decide_cycle(
             state,
             rows,
@@ -419,6 +419,16 @@ def decide(
                 ".harness/session-audit-2026-08-22-u-he-29.md §4) — extension exists "
                 "exactly so that evidence is never silently lost."
             ),
+        )
+    if cycle is not None:
+        return _decide_cycle(
+            state,
+            rows,
+            arc_id=arc_id,
+            head_sha=head_sha,
+            diff_digest=diff_digest,
+            cycle=cycle,
+            pfx=pfx,
         )
     try:
         unanswered = unanswered_findings(state, rows, arc_id)
@@ -517,6 +527,8 @@ _PASS_REVIEWERS: dict[str, frozenset[str]] = {
     "2": frozenset({_CODEX, _WITNESS_LENS}),
     "esc": frozenset({_CODEX, *_LENSES}),
     "3": _LENSES,
+    "initial": frozenset({_CODEX}),
+    "correction": frozenset({_CODEX}),
 }
 
 #: The passes with a codex half; pass 3 is one merge-gate lens.
@@ -571,6 +583,7 @@ def _delivering_role(row: Mapping) -> str | None:
         cycle_pass in _PASS_REVIEWERS
         and role in _PASS_REVIEWERS[cycle_pass]
         and row.get("record_kind") in ("finding", "no_finding")
+        and (row.get("reviewer_session") is None or fr.independent_session(dict(row)))
     )
     return role if delivers else None
 
@@ -620,6 +633,15 @@ def _successor(run: PassRun, disposed: dict[str, str | None]) -> str | None:
     """The pass X9a requires after `run` under the current dispositions; None when `run`
     completes the cycle."""
     p1 = [f["finding_id"] for f in run.findings if f["severity"] == "P1"]
+    if run.cycle_pass in ("initial", "correction"):
+        # [LAW:one-type-per-behavior] the same independent judgment verifies the
+        # initial candidate and each correction; no automatic specialty stack.
+        open_or_accepted = any(
+            f["severity"] in ("P1", "P2")
+            and disposed.get(f["finding_id"]) not in ("rejected", "suppressed")
+            for f in run.findings
+        )
+        return "correction" if open_or_accepted else None
     if run.cycle_pass == "1":
         return "2"
     if run.cycle_pass == "2":
@@ -641,26 +663,45 @@ class CycleReplay:
     completed_by: PassRun | None
     last: PassRun | None
 
+    @property
+    def pending_pass(self) -> str:
+        # [LAW:one-source-of-truth] approval reports and write-time admission share
+        # the selected cycle's continuation after an already reviewed binding changes.
+        return self.expected or (
+            "correction" if self.last and self.last.cycle_pass in ("initial", "correction") else "3"
+        )
 
-def replay(rows: list[dict], arc_id: str, *, doc_only: bool) -> CycleReplay:
+
+def replay(
+    rows: list[dict], arc_id: str, *, doc_only: bool, initial_policy: bool = False
+) -> CycleReplay:
     """Walk the completed runs in log order against the pass X9a requires under the
     CURRENT dispositions. A run that departs from it was superseded by a later
     disposition (a pass-2 P1 rejected, then accepted after a clean pass 3) and does not
     count: the walk skips it, so the escalation it now demands is required next and,
     once it runs, the cycle carries on from there.
 
-    The cycle's start is its own history — the first completed run — so a doc-only cycle
-    that later gains a code commit keeps its shape; the current diff (`doc_only`)
-    decides only for an arc with no completed run yet."""
+    The first delivered verdict fixes the cycle's policy, including an incomplete
+    legacy pass. A policy change cannot erase that delivery or its spent budget."""
     # [LAW:effects-at-boundaries] pure: rows in, state out — admit() reads the log
     disposed = _last_dispositions(rows)
+    # [LAW:no-ambient-temporal-coupling] retain the first delivered policy even
+    # while its remaining legacy reviewers have not returned their verdicts.
+    first = next(
+        (
+            r["cycle_pass"]
+            for r in rows
+            if r.get("arc_id") == arc_id and _delivering_role(r) is not None
+        ),
+        None,
+    )
     runs = [r for r in pass_runs(rows, arc_id) if r.complete]
-    history = runs[0].cycle_pass if runs and runs[0].cycle_pass in ("1", "3") else None
-    expected: str | None = history or ("3" if doc_only else "1")
+    history = first if first in ("1", "3", "initial") else None
+    expected: str | None = history or ("initial" if initial_policy else "3" if doc_only else "1")
     completed_by: PassRun | None = None
     last: PassRun | None = None
     for run in runs:
-        want = expected or "3"  # after completion, a new commit gets one pass 3
+        want = expected or ("correction" if history == "initial" else "3")
         if run.cycle_pass != want:
             continue
         expected = _successor(run, disposed)
@@ -670,15 +711,21 @@ def replay(rows: list[dict], arc_id: str, *, doc_only: bool) -> CycleReplay:
 
 
 def next_pass(
-    rows: list[dict], arc_id: str, *, doc_only: bool, head_sha: str, diff_digest: str
+    rows: list[dict],
+    arc_id: str,
+    *,
+    doc_only: bool,
+    head_sha: str,
+    diff_digest: str,
+    initial_policy: bool = False,
 ) -> str | None:
     """The pass the cycle admits next on the binding (`head_sha`, `diff_digest`); None when
     the cycle is complete on exactly that binding."""
-    state = replay(rows, arc_id, doc_only=doc_only)
+    state = replay(rows, arc_id, doc_only=doc_only, initial_policy=initial_policy)
     done = state.completed_by
     if done is not None and (head_sha, diff_digest) == (done.head_sha, done.diff_digest):
         return None
-    return state.expected or "3"
+    return state.pending_pass
 
 
 def completing_run(rows: list[dict], arc_id: str) -> PassRun | None:
@@ -693,7 +740,7 @@ def unfixed_after_pass_3(rows: list[dict], arc_id: str) -> int:
     disposed = _last_dispositions(rows)
     n = 0
     for run in reversed([r for r in pass_runs(rows, arc_id) if r.complete]):
-        if run.cycle_pass != "3" or not _accepted(run, ("P1",), disposed):
+        if run.cycle_pass not in ("3", "correction") or not _accepted(run, ("P1",), disposed):
             break
         n += 1
     return n
@@ -708,9 +755,9 @@ def unfixed_after_pass_3(rows: list[dict], arc_id: str) -> int:
 TRIAL_MAX_ROUNDS = 5
 #: Consecutive correction rounds raising an accepted P1 that quarantine the unit.
 TRIAL_P1_STOP = 2
-#: The authoring route each loop producer's judgment comes from; a lens has no route of
-#: its own. A route that materially authored the subject cannot judge it.
-_PRODUCER_ROUTE = {"codex_review_wrapper": "codex", "gemini_review_wrapper": "gemini"}
+#: Historical rows without session provenance keep their original conservative routing.
+#: Native session evidence proves independence without a model-family restriction.
+_LEGACY_PRODUCER_ROUTE = {"codex_review_wrapper": "codex", "gemini_review_wrapper": "gemini"}
 _NEXT_ACTION = {
     "unreviewed": "launch one complete independent judgment covering the concern map",
     "correction_review": "independently verify the frozen correction and affected concerns",
@@ -755,8 +802,9 @@ class TrialPolicy:
 class TrialBinding:
     head_sha: str
     diff_digest: str
-    authors: frozenset[str]  # routes that materially authored the subject or a correction
+    authors: frozenset[str]  # author session IDs; historical rows may name legacy routes
     doc_only: bool
+    initial_policy: bool = False
 
 
 @dataclass(frozen=True)
@@ -834,7 +882,7 @@ def trial_review_decision(
     spent = [(a, r) for a in members for r in pass_runs(rows, a) if r.complete]
     streak = legacy.p1_streak
     for _, run in spent:
-        if run.cycle_pass != "1":
+        if run.cycle_pass not in ("1", "initial"):
             streak = streak + 1 if _accepted(run, ("P1",), disposed) else 0
     completed = legacy.rounds + tuple(_round_id(a, r) for a, r in spent)
     undisposed = sorted(
@@ -849,10 +897,18 @@ def trial_review_decision(
     # [LAW:single-enforcer] independence is decided here once. The cycle's shape comes
     # from every run; a judgment from an authoring route delivers nothing toward approval,
     # so each completed run must also complete on the eligible rows alone.
-    eligible = [r for r in rows if _PRODUCER_ROUTE.get(r.get("producer")) not in binding.authors]
-    cycle = replay(rows, arc, doc_only=binding.doc_only)
+    eligible = [
+        r
+        for r in rows
+        if (
+            fr.independent_session(r, binding.authors)
+            if r.get("reviewer_session") is not None
+            else _LEGACY_PRODUCER_ROUTE.get(r.get("producer")) not in binding.authors
+        )
+    ]
+    cycle = replay(rows, arc, doc_only=binding.doc_only, initial_policy=binding.initial_policy)
     done = cycle.completed_by
-    expected = cycle.expected or "3"
+    expected = cycle.pending_pass
     runs = pass_runs(rows, arc)
     judged = {(r.cycle_pass, r.head_sha, r.diff_digest): r for r in pass_runs(eligible, arc)}
     unjudged = {(r.cycle_pass, r.head_sha, r.diff_digest) for r in runs if r.complete} - {
@@ -1057,6 +1113,7 @@ class CycleRequest:
     base_sha: str  # the base of the diff this reviewer reads
     full_diff_base: str  # merge-base(FULL_DIFF_REF, head): the base of the PR's whole diff
     doc_only: bool
+    initial_policy: bool = False
 
 
 def _decide_cycle(
@@ -1111,13 +1168,18 @@ def _decide_cycle(
             ),
         )
     expected = next_pass(
-        rows, arc_id, doc_only=cycle.doc_only, head_sha=head_sha, diff_digest=diff_digest
+        rows,
+        arc_id,
+        doc_only=cycle.doc_only,
+        head_sha=head_sha,
+        diff_digest=diff_digest,
+        initial_policy=cycle.initial_policy,
     )
     if expected is None:
         return Refused(
             code="CYCLE_COMPLETE",
-            detail=f"{arc_id}'s cycle is complete at {head_sha[:12]}: pass 3 was clean",
-            recipe="nothing to review; a new commit gets one pass 3 (a merge-gate lens)",
+            detail=f"{arc_id}'s cycle is complete at {head_sha[:12]}",
+            recipe="nothing to review on this binding; changed code needs correction review",
         )
     if cycle_pass != expected:
         return Refused(
@@ -1164,8 +1226,15 @@ def _decide_cycle(
     # other pass reviews the full diff. The order check above guarantees pass 2 follows
     # a counted run.
     last = replay(rows, arc_id, doc_only=cycle.doc_only).last
-    base = last.head_sha if cycle_pass == "2" and last is not None else cycle.full_diff_base
-    if cycle.base_sha != base:
+    base = (
+        last.head_sha
+        if cycle_pass in ("2", "correction") and last is not None
+        else cycle.full_diff_base
+    )
+    # A material scope change may deliberately request a full correction review;
+    # the normal correction binding remains the previous reviewed head's delta.
+    full_correction = cycle_pass == "correction" and cycle.base_sha == cycle.full_diff_base
+    if cycle.base_sha != base and not full_correction:
         return Refused(
             code="WRONG_BASE",
             detail=(
@@ -1182,6 +1251,8 @@ def _decide_cycle(
 
 
 def _pass_recipe(cycle_pass: str) -> str:
+    if cycle_pass in ("initial", "correction"):
+        return f"run one independent `just review-cycle-pass {cycle_pass} <log> <base>`"
     codex = (
         f"`just review-cycle-pass {cycle_pass} <log> <base>` for its codex half, and "
         if cycle_pass in CODEX_PASSES
@@ -1217,7 +1288,7 @@ def admit(repo: Path, base: str, arc_id: str) -> Decision:
         return Refused(
             code="STATE_UNREADABLE",
             detail=str(exc),
-            recipe="set HARNESS_CYCLE_PASS to one of 1, 2, esc, 3 — or unset it for a legacy round",
+            recipe="set HARNESS_CYCLE_PASS to initial/correction (legacy: 1, 2, esc, 3)",
         )
     state = _gate_state_in_force(repo, arc_id)
     if not isinstance(state, GateState):
@@ -1431,7 +1502,23 @@ def _cycle_request(
         base_sha=binding["base_sha"],
         full_diff_base=full_diff_base,
         doc_only=_doc_only(repo, binding),
+        initial_policy=_streamlined_review(repo, head_sha),
     )
+
+
+def _streamlined_review(repo: Path, head_sha: str) -> bool:
+    import workflow_policy as policy
+
+    # [LAW:one-source-of-truth] the reviewed commit supplies its tracked rules;
+    # uncommitted policy edits cannot change which review cycle approves it.
+    path = ".harness/workflow-policy.json"
+    if not rw._git(repo, "ls-tree", "--name-only", head_sha, "--", path):
+        return False
+    raw = rw._git(repo, "show", f"{head_sha}:{path}").encode()
+    parsed = policy.load_policy(raw)
+    if isinstance(parsed, policy.PolicyDefect):
+        raise GateError(parsed.reason)
+    return policy.streamlined_delivery(parsed)
 
 
 def diff_names(repo: Path, base_sha: str, head_sha: str) -> list[bytes]:

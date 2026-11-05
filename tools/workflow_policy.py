@@ -257,6 +257,11 @@ def parse_policy(raw: bytes) -> WorkflowPolicy:
     _equal(doc["lit_project"], LIT_PROJECT, "lit_project")
     _equal(doc["trial_root"], TRIAL_ROOT, "trial_root")
     rules = {field: MappingProxyType(_object(doc[field], field)) for field in _RULE_FIELDS}
+    delivery = rules["review_rules"].get("delivery")
+    if "delivery" in rules["review_rules"]:
+        # [LAW:parse-dont-validate] the approved delivery mode is one closed value;
+        # a misspelled setting cannot silently waive either review or CI.
+        _equal(delivery, "single-independent-milestone-status-v1", "review_rules.delivery")
     return WorkflowPolicy(
         policy_id=PROFILE_ID,
         policy_version=POLICY_VERSION,
@@ -328,15 +333,27 @@ def activation_binds(policy: WorkflowPolicy, activation: ActivationState) -> boo
 
 
 def refresh_rule(policy: WorkflowPolicy | PolicyDefect, activation: ActivationState) -> RefreshRule:
-    """Which rule governs the post-merge terminating refresh (WS-11, WS-17 §19.1).
+    """Refresh posture, independent of trial unit activation.
 
-    `legacy` until a receipt activates the tracked policy: every substantive merge owes a
-    terminating refresh and the roadmap-status enforcers keep requiring it. `trial` once
-    one does: the merge door applies `select_profile` to each landing, driving a legacy
-    landing's refresh PR before it releases and giving a trial landing none, so the
-    status enforcers stop demanding a refresh the door has already ruled on."""
-    bound = isinstance(policy, WorkflowPolicy) and activation_binds(policy, activation)
+    The historical `trial` value means unpinned/milestone status. Either the
+    user-approved tracked delivery setting or a bound trial receipt selects it.
+    It grants no review, candidate CI, admission or installed acceptance credit.
+    """
+    bound = streamlined_delivery(policy) or (
+        isinstance(policy, WorkflowPolicy) and activation_binds(policy, activation)
+    )
     return "trial" if bound else "legacy"
+
+
+def streamlined_delivery(policy: WorkflowPolicy | PolicyDefect) -> bool:
+    """User-approved delivery rule, distinct from activation of a trial work unit.
+
+    The tracked policy selects independent initial/correction review and milestone
+    status. It grants no LIT admission, trial activation, CI or product acceptance.
+    """
+    return isinstance(policy, WorkflowPolicy) and policy.rules["review_rules"].get("delivery") == (
+        "single-independent-milestone-status-v1"
+    )
 
 
 def tracked_trial_landing(policy: WorkflowPolicy | PolicyDefect, arcs: frozenset[str]) -> bool:

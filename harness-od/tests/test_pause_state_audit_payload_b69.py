@@ -18,6 +18,7 @@ from harness_od.pause_resume_namespace import (
     PAUSE_STATE_EVENT_HEAD_SAMPLING_RATE,
     PauseResumeAuditPayload,
     PauseStateAuditPayload,
+    PauseStateCauseAttribution,
     PauseStateEventKind,
 )
 from pydantic import ValidationError
@@ -176,3 +177,64 @@ def test_both_event_kinds_take_the_same_declared_head_sampling_rate() -> None:
     it drops either one."""
     assert PAUSE_STATE_EVENT_HEAD_SAMPLING_RATE == 1.0
     assert len(PauseStateEventKind) == 2
+
+
+def test_superseded_failed_read_carries_workflow_id_and_cause_but_no_token_or_counts() -> None:
+    """U-OD-62 criterion 3 / OD spec v1.43 §1 — a `superseded` failed read has the
+    same shape as every other failed read, and a successful read carries no cause."""
+    row = PauseStateAuditPayload(
+        event_kind=PauseStateEventKind.ACCESSOR_READ,
+        workflow_id=_WF,
+        succeeded=False,
+        cause_attribution="superseded",
+    )
+    assert row.workflow_id == _WF
+    assert row.cause_attribution is PauseStateCauseAttribution.SUPERSEDED
+    assert row.staleness_token is None
+    assert (
+        row.hitl_addressable_count,
+        row.effect_fence_addressable_count,
+        row.uniform_fallback_only_count,
+        row.transitively_paused_count,
+    ) == (None, None, None, None)
+    with pytest.raises(ValidationError):  # a superseded read never minted a token
+        PauseStateAuditPayload(
+            event_kind=PauseStateEventKind.ACCESSOR_READ,
+            workflow_id=_WF,
+            succeeded=False,
+            cause_attribution="superseded",
+            staleness_token="tok",
+        )
+    with pytest.raises(ValidationError):  # witness 4: success never carries a cause
+        PauseStateAuditPayload.model_validate(
+            _successful_read().model_dump() | {"cause_attribution": "superseded"}
+        )
+
+
+@pytest.mark.parametrize(
+    "cause",
+    ["absent", "empty-journal", "read-error", "corrupt-latest", "workflow-mismatch"],
+)
+def test_each_prior_cause_still_yields_its_own_identifier(cause: str) -> None:
+    """U-OD-62 criterion 5 / OD spec v1.43 witness 5 — the five prior causes keep
+    their own identifiers; none collapses into `superseded`."""
+    row = PauseStateAuditPayload(
+        event_kind=PauseStateEventKind.ACCESSOR_READ,
+        workflow_id=_WF,
+        succeeded=False,
+        cause_attribution=cause,
+    )
+    assert row.cause_attribution == cause
+    assert row.cause_attribution is not PauseStateCauseAttribution.SUPERSEDED
+
+
+def test_failed_read_rejects_a_cause_outside_the_six() -> None:
+    """U-OD-62 criterion 4 at the payload — an unknown identifier is refused, not
+    persisted as an unrouteable row."""
+    with pytest.raises(ValidationError):
+        PauseStateAuditPayload(
+            event_kind=PauseStateEventKind.ACCESSOR_READ,
+            workflow_id=_WF,
+            succeeded=False,
+            cause_attribution="stale",
+        )

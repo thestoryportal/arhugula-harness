@@ -1,5 +1,17 @@
 # Deterministic Codex Context Workflow
 
+**Delivery policy (user-approved 2026-11-04).** When the tracked
+`.harness/workflow-policy.json` selects `single-independent-milestone-status-v1`,
+`docs/delivery-policy.md` governs delivery: one independent reviewer session of any model family,
+no author/correction-author self-approval or mandatory Gemini/fallback/shadow,
+correction delta, focused local checks with qualifying reuse, generated Git/LIT
+status or milestone refresh, and independent isolated work during CI. It replaces
+contrary default review-stack, duplicate full-local-suite, per-merge status-PR,
+cleanup and local-main-sync requirements below. Required exact-candidate CI,
+installed acceptance, recovery proof, findings, budgets and actual denials remain.
+Delivered legacy reviews and recorded refresh intents keep their original gates.
+
+
 Codex must not rely on remembered workflow state for load-bearing claims. This
 note is the source of truth for preventing context rot, drift, and hallucinated
 closeout in Codex sessions for this repository.

@@ -732,6 +732,10 @@ jobs:
       - name: Review-loop admission gate tests (B-215)
         run: uv run python -m pytest tools/test_review_loop_gate.py -q
 
+      # [LAW:verifiable-goals] Native transcript provenance must run in required CI.
+      - name: Native independent review provenance tests
+        run: uv run python -m pytest tools/test_native_review.py -q
+
   q1-review-gate:
     needs: changes
     if: ${{ !cancelled() }}

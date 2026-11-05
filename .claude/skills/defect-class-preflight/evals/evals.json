@@ -381,6 +381,20 @@
     "names the missing composer call and the wrong extra prompts for overlapping placements",
     "proposes a producer-path test that goes red if the composer call is removed and distinguishes fs.write ancestor priority from http.get child gap-fill"
    ]
+  },
+  {
+   "id": 23,
+   "eval_name": "approval-consumer-next-action-after-completion",
+   "skill": "defect-class-preflight",
+   "prompt": "Review this proposed review-cycle change with defect-class-preflight. The reducer replay has expected=None after a clean completed initial or correction review and retains last_pass. Candidate freshness is checked separately using head and diff digest. The launch gate uses next_pass below. The approval report uses reported_pass below when a candidate is stale. The only new test asserts next_pass(None, \"initial\") == \"correction\". Identify any missed behavior and propose a discriminating witness, including the mutation it must catch. Do not modify files or invoke external services.\n\ndef next_pass(expected, last_pass):\n    return expected or (\"correction\" if last_pass in (\"initial\", \"correction\") else \"3\")\n\ndef reported_pass(expected, last_pass):\n    return expected or \"3\"\n",
+   "expected_output": "Identifies class 4: the helper test does not exercise the approval consumer, which reports legacy 3 after a clean reviewed binding changes while launch admission requires correction. Proposes consumer-path coverage after clean initial and correction reviews, varying head and digest, asserting the reported correction and submitting that exact action to the gate on the changed binding. Reverting only the consumer selection must fail while helper tests remain green.",
+   "files": [],
+   "assertions": [
+    "names the mismatch between reported legacy 3 and gate-required correction, rather than treating the helper test as proof of the approval consumer",
+    "covers changed head and changed digest after both a clean initial and a clean correction review",
+    "proposes asserting the consumer-reported action and admitting that same action on the same changed binding",
+    "requires a mutation of the approval consumer alone to fail the witness while the reducer helper remains correct"
+   ]
   }
  ]
 }

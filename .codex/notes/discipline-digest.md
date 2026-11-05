@@ -1,5 +1,17 @@
 # Discipline digest — distilled from Claude-side memory (2026-08-01)
 
+**Delivery policy (user-approved 2026-11-04).** When the tracked
+`.harness/workflow-policy.json` selects `single-independent-milestone-status-v1`,
+`docs/delivery-policy.md` governs delivery: one independent reviewer session of any model family,
+no author/correction-author self-approval or mandatory Gemini/fallback/shadow,
+correction delta, focused local checks with qualifying reuse, generated Git/LIT
+status or milestone refresh, and independent isolated work during CI. It replaces
+contrary default review-stack, duplicate full-local-suite, per-merge status-PR,
+cleanup and local-main-sync requirements below. Required exact-candidate CI,
+installed acceptance, recovery proof, findings, budgets and actual denials remain.
+Delivered legacy reviews and recorded refresh intents keep their original gates.
+
+
 Runner-agnostic distillation of the operative disciplines that live in Claude's memory store and are NOT already carried by CLAUDE.md/AGENTS.md prose. Read at session start alongside `AGENTS.md`. Each entry earned its place by catching (or causing) a real defect in this workspace.
 
 ## Verification shapes
@@ -38,7 +50,7 @@ Runner-agnostic distillation of the operative disciplines that live in Claude's 
 - **Use worktree `workdir`, not `git -C`, for approved Git prefixes.** Codex evaluates command prefixes from the actual argv; run `git add <explicit paths>`, `git commit`, and `git push` with the isolated worktree as the command working directory. Leaving the worktree is not the durable permission fix.
 - **Refresh must be the immediate next commit after a substantive legacy merge** (a non-refresh follow-up hard-fails the CI drift check). Merge-gate log row lands BEFORE the merge; refresh right after. A unit that `tools/workflow_policy.py` selects `trial` under a published activation lands without a terminating refresh (WS-11); until that receipt exists every unit is legacy and this rule governs.
 - **CI is a two-branch fixed point.** Final PR-head CI and current base-main CI must both be green before merge; first inventory and reconcile any stale prior CI branch without losing work. Then the merge SHA's own `main` push CI must be green before refresh or forward work. If a terminating refresh is owed, its own `main` CI must also be green before the next arc.
-- **Review decorrelation flips with authorship.** Claude-authored diff → `just codex-review`; Codex-authored diff → Antigravity through `just gemini-review`. Every substantive code PR still takes the three fresh-context Codex merge-gate lenses; neither artifact review nor the three lenses replaces the other.
+- **Review independence follows actual sessions.** One separate reviewer may use the author's model family. Record material author/correction-author UUIDs and actual reviewer provenance; never self-approve. Gemini, automatic fallback, shadow and specialty lenses are optional, with a named risk for extra review; retain historical passes and findings.
 - **Invoke behavioral skills in fresh dedicated contexts.** Reading a skill as reference is not adoption. Council/review/merge-gate legs receive the full brief and genuinely follow the skill; the controller validates their artifact or diff rather than trusting self-report.
 - **Arc close means reflection plus context-save-lean.** At each completed arc, record reusable learning and run the `context-save-lean` workflow (the workspace copy of the gstack save flow, U-SR-08/WR-15 — the gstack-level `context-save` re-injects ~54 KB of preamble per call). Checkpoint "remaining work" is advisory on restore and must be re-grounded against HEAD.
 - **Squash-merge branch prune** via `gh pr list --state merged` head-ref cross-ref, never `--is-ancestor`.

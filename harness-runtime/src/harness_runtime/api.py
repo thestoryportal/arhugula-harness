@@ -321,6 +321,17 @@ class ResumePauseStateStaleError(Exception):
         self.claimed_token: str = claimed_token
 
 
+class ResumePauseRecordSupersededError(Exception):
+    """`RT-FAIL-RESUME-PAUSE-RECORD-SUPERSEDED` (Runtime spec v1.137 §D.5) — the latest durable
+    record for the supplied `resume_handle` is a supersession record: a later fresh run of the
+    workflow was admitted after this pause was captured, so the pause is no longer resumable.
+
+    A pre-bootstrap refusal of its own, never a `ResumeHandleUnknownError` cause, a claim refusal
+    or an argument error. It carries no fields; the message names no path, tenant or run.
+    Raised by the durable handle read once that read reports supersession (U-RT-160 portion 160a).
+    """
+
+
 # ---------------------------------------------------------------------------
 # `WorkflowObject` runtime-local Protocol (Option C per spec §8 Risk surface).
 # ---------------------------------------------------------------------------

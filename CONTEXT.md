@@ -1,5 +1,15 @@
 # CONTEXT.md — workspace task router
 
+**Delivery policy selection.** For the tracked
+`review_rules.delivery=single-independent-milestone-status-v1`, read
+`docs/delivery-policy.md` before work. It replaces contrary default
+review-stack, full-local-suite and per-merge status-PR requirements in the legacy
+procedure below. Continue independent isolated work during CI; retain candidate
+CI, acceptance, findings, budgets and in-flight legacy obligations. One separate
+reviewer session may use any model family; author/correction-author self-approval
+remains forbidden. No mandatory Gemini, fallback or shadow review.
+
+
 Router only. Every rule traces to root `CLAUDE.md` (§ cited inline); read it for the rest.
 
 ## Route by posture (§11.1–§11.2)
