@@ -79,7 +79,7 @@ from collections.abc import Generator
 from contextlib import contextmanager
 from enum import StrEnum
 from pathlib import Path
-from typing import NamedTuple, cast
+from typing import Literal, NamedTuple, cast
 
 from harness_core.cross_process_lock_deadline import (
     CrossProcessLockDeadline,
@@ -187,6 +187,23 @@ class PauseJournalReadCause(StrEnum):
 
     WORKFLOW_MISMATCH = "workflow-mismatch"
     """The latest record's ``workflow_id`` does not match — permanent."""
+
+    SUPERSEDED = "superseded"
+    """The latest record is a well-formed supersession record for this workflow: a later
+    fresh run was admitted after the pause was captured (Runtime spec v1.137 Rule A3).
+    Not a failure of the read and never a handle-unknown cause — permanent, decisive."""
+
+
+#: The five causes a ``ResumeHandleUnknownError`` may carry (Runtime spec v1.137 Rule A3).
+#: [LAW:types-are-the-program] ``superseded`` is excluded here, so a handle refusal
+#: carrying it does not type-check.
+HandleUnknownCause = Literal[
+    PauseJournalReadCause.ABSENT,
+    PauseJournalReadCause.EMPTY_JOURNAL,
+    PauseJournalReadCause.READ_ERROR,
+    PauseJournalReadCause.CORRUPT_LATEST,
+    PauseJournalReadCause.WORKFLOW_MISMATCH,
+]
 
 
 #: errnos whose failure is PERMANENT despite arriving as an ``OSError``. Routing
@@ -597,7 +614,34 @@ class JournalWorkflowPauseStore:
 
     def capture(self, snapshot: PauseSnapshot, *, depth: int | None) -> JournalRecordRef:
         """Append a snapshot and return its exact identity under the journal lock."""
-        return self._append(snapshot, depth=depth)
+        if not _depth_is_wellformed(depth):
+            raise ValueError("journal depth must be a nonnegative integer or None")
+        record_count, digest = self._append(
+            snapshot.workflow_id,
+            {
+                "workflow_id": snapshot.workflow_id,
+                "pause_snapshot": snapshot.model_dump(mode="json"),
+                "depth": depth,
+            },
+        )
+        return JournalRecordRef(
+            tenant=self._tenant_scope,
+            workflow_id=snapshot.workflow_id,
+            run_id=snapshot.run_id,
+            record_count=record_count,
+            latest_digest=digest,
+            snapshot_hash=snapshot.snapshot_hash,
+        )
+
+    def supersede(self, workflow_id: str, run_id: str) -> None:
+        """Append a supersession record naming the superseding fresh run's ``run_id``.
+
+        [LAW:single-enforcer] Runtime spec v1.137 Rule A2: the one writer path is
+        ``_append``, so the record gets the same lock and fsyncs as a snapshot.
+        """
+        self._append(
+            workflow_id, {"kind": "supersession", "workflow_id": workflow_id, "run_id": run_id}
+        )
 
     def read_latest(self, workflow_id: str) -> PauseSnapshot | None:
         """Return the workflow's latest journaled ``PauseSnapshot``, or ``None``.
@@ -760,8 +804,10 @@ class JournalWorkflowPauseStore:
         with cross_process_journal_lock(journal_path):
             yield
 
-    def _append(self, snapshot: PauseSnapshot, *, depth: int | None) -> JournalRecordRef:
-        """Append one JSONL record to the workflow's file, durably.
+    def _append(self, workflow_id: str, record: dict[str, object]) -> tuple[int, str]:
+        """Append one JSONL record (either kind) and return its ``(record_count, digest)``.
+
+        Append one JSONL record to the workflow's file, durably.
 
         The record is ``fsync``-ed to stable storage before returning so a host
         crash / power loss immediately after ``capture`` cannot lose an
@@ -844,15 +890,8 @@ class JournalWorkflowPauseStore:
         **The read path deliberately does NOT take this lock** — see
         :meth:`read_latest_attributed`.
         """
-        if not _depth_is_wellformed(depth):
-            raise ValueError("journal depth must be a nonnegative integer or None")
-        record = {
-            "workflow_id": snapshot.workflow_id,
-            "pause_snapshot": snapshot.model_dump(mode="json"),
-            "depth": depth,
-        }
         line = json.dumps(record, sort_keys=True)
-        path = self._journal_file(snapshot.workflow_id)
+        path = self._journal_file(workflow_id)
         journal_dir = path.parent
         journal_dir.mkdir(parents=True, exist_ok=True)
         # UNCONDITIONAL, and BEFORE the lock — so it precedes any statement that
@@ -877,14 +916,7 @@ class JournalWorkflowPauseStore:
             lines, digest = _raw_journal_identity(path.read_bytes())
             if not lines or lines[-1] != line.encode("utf-8") or digest is None:
                 raise OSError("journal append identity does not match the written record")
-            return JournalRecordRef(
-                tenant=self._tenant_scope,
-                workflow_id=snapshot.workflow_id,
-                run_id=snapshot.run_id,
-                record_count=len(lines),
-                latest_digest=digest,
-                snapshot_hash=snapshot.snapshot_hash,
-            )
+            return len(lines), digest
 
     @staticmethod
     def _last_byte_is_not_newline(path: Path) -> bool:
@@ -943,6 +975,8 @@ class JournalWorkflowPauseStore:
             if not isinstance(loaded, dict):
                 return None, PauseJournalReadCause.CORRUPT_LATEST
             record = cast("dict[str, object]", loaded)
+            if "kind" in record:
+                return None, _supersession_cause(record, expected_workflow_id)
             if record.get("workflow_id") != expected_workflow_id:
                 return None, PauseJournalReadCause.WORKFLOW_MISMATCH
             snapshot = PauseSnapshot.model_validate(record["pause_snapshot"])
@@ -960,3 +994,23 @@ class JournalWorkflowPauseStore:
             # ValueError covers json.JSONDecodeError; any value-level failure
             # means a corrupt record → fail closed.
             return None, PauseJournalReadCause.CORRUPT_LATEST
+
+
+def _supersession_cause(
+    record: dict[str, object], expected_workflow_id: str
+) -> PauseJournalReadCause:
+    """Classify a line carrying ``kind`` (Runtime spec v1.137 Rule A1).
+
+    Only the exact ``{kind: "supersession", workflow_id, run_id}`` shape is a
+    supersession record; any other ``kind`` or field set is an undecodable line.
+    """
+    if (
+        record.keys() != {"kind", "workflow_id", "run_id"}
+        or record["kind"] != "supersession"
+        or not isinstance(record["workflow_id"], str)
+        or not isinstance(record["run_id"], str)
+    ):
+        return PauseJournalReadCause.CORRUPT_LATEST
+    if record["workflow_id"] != expected_workflow_id:
+        return PauseJournalReadCause.WORKFLOW_MISMATCH
+    return PauseJournalReadCause.SUPERSEDED
