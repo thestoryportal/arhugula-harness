@@ -1737,24 +1737,77 @@ def _codex_usage(**overrides: Any) -> dict[str, Any]:
     return {**_CODEX_TERMINAL_USAGE, **overrides}
 
 
+_CODEX_PARTIAL_USAGE = {
+    "absent cache counter": (
+        {"input_tokens": 31, "output_tokens": 7},
+        CodexTurnCompletedUsage(input_tokens=31, cached_input_tokens=None, output_tokens=7),
+    ),
+    "null cache counter": (
+        _codex_usage(cached_input_tokens=None),
+        CodexTurnCompletedUsage(input_tokens=31, cached_input_tokens=None, output_tokens=7),
+    ),
+    "string cache counter": (
+        _codex_usage(cached_input_tokens="11"),
+        CodexTurnCompletedUsage(input_tokens=31, cached_input_tokens=None, output_tokens=7),
+    ),
+    "bool output counter": (
+        _codex_usage(output_tokens=True),
+        CodexTurnCompletedUsage(input_tokens=31, cached_input_tokens=11, output_tokens=None),
+    ),
+    "float input counter": (
+        _codex_usage(input_tokens=31.0),
+        CodexTurnCompletedUsage(input_tokens=None, cached_input_tokens=11, output_tokens=7),
+    ),
+    "negative input counter": (
+        _codex_usage(input_tokens=-31),
+        CodexTurnCompletedUsage(input_tokens=None, cached_input_tokens=11, output_tokens=7),
+    ),
+    "cached share exceeds input": (
+        _codex_usage(input_tokens=31, cached_input_tokens=32),
+        CodexTurnCompletedUsage(input_tokens=None, cached_input_tokens=None, output_tokens=7),
+    ),
+    "cached share equals input": (
+        _codex_usage(input_tokens=31, cached_input_tokens=31),
+        CodexTurnCompletedUsage(input_tokens=31, cached_input_tokens=31, output_tokens=7),
+    ),
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", sorted(_CODEX_PARTIAL_USAGE))
+async def test_codex_partial_usage_keeps_known_counters_and_leaves_the_rest_unknown(
+    case: str,
+) -> None:
+    usage, expected = _CODEX_PARTIAL_USAGE[case]
+    stdout = _codex_usage_stream({"type": "turn.completed", "usage": usage})
+
+    for result in (
+        await _dedicated_codex_result(stdout),
+        await _generic_result(stdout, "jsonl"),
+    ):
+        assert result.text == "OK"
+        assert result.reported_usage == expected
+
+
+def test_usage_evidence_omits_unknown_counters_rather_than_zeroing_them() -> None:
+    usage = CodexTurnCompletedUsage(input_tokens=31, cached_input_tokens=None, output_tokens=7)
+
+    assert external_cli_usage_evidence(usage) == {
+        "source": "codex.turn.completed.usage",
+        "input_tokens": 31,
+        "output_tokens": 7,
+    }
+
+
 _CODEX_UNKNOWN_USAGE_STREAMS = {
-    "bool count": _codex_usage_stream(
-        {"type": "turn.completed", "usage": _codex_usage(output_tokens=True)}
+    "no known counter": _codex_usage_stream(
+        {
+            "type": "turn.completed",
+            "usage": {"input_tokens": "31", "cached_input_tokens": -1, "output_tokens": 7.0},
+        }
     ),
-    "negative count": _codex_usage_stream(
-        {"type": "turn.completed", "usage": _codex_usage(input_tokens=-31)}
-    ),
-    "float count": _codex_usage_stream(
-        {"type": "turn.completed", "usage": _codex_usage(input_tokens=31.0)}
-    ),
-    "string count": _codex_usage_stream(
-        {"type": "turn.completed", "usage": _codex_usage(output_tokens="7")}
-    ),
-    "null count": _codex_usage_stream(
-        {"type": "turn.completed", "usage": _codex_usage(cached_input_tokens=None)}
-    ),
-    "partial usage": _codex_usage_stream(
-        {"type": "turn.completed", "usage": {"input_tokens": 31, "output_tokens": 7}}
+    "inconsistent pair and no other counter": _codex_usage_stream(
+        {"type": "turn.completed", "usage": {"input_tokens": 31, "cached_input_tokens": 32}}
     ),
     "usage not an object": _codex_usage_stream({"type": "turn.completed", "usage": [31, 11, 7]}),
     "terminal without usage": _codex_usage_stream({"type": "turn.completed"}),
@@ -1808,12 +1861,76 @@ def _claude_usage(**overrides: Any) -> dict[str, Any]:
     return {**_CLAUDE_TERMINAL_RESULT["usage"], **overrides}
 
 
+_CLAUDE_PARTIAL_USAGE = {
+    "absent cache counters": (
+        {"input_tokens": 31, "output_tokens": 7},
+        ClaudeCodeResultUsage(
+            input_tokens=31,
+            cache_creation_input_tokens=None,
+            cache_read_input_tokens=None,
+            output_tokens=7,
+        ),
+    ),
+    "negative cache read counter": (
+        _claude_usage(cache_read_input_tokens=-1),
+        ClaudeCodeResultUsage(
+            input_tokens=31,
+            cache_creation_input_tokens=5,
+            cache_read_input_tokens=None,
+            output_tokens=7,
+        ),
+    ),
+    "bool output counter": (
+        _claude_usage(output_tokens=False),
+        ClaudeCodeResultUsage(
+            input_tokens=31,
+            cache_creation_input_tokens=5,
+            cache_read_input_tokens=11,
+            output_tokens=None,
+        ),
+    ),
+    "string input counter": (
+        _claude_usage(input_tokens="31"),
+        ClaudeCodeResultUsage(
+            input_tokens=None,
+            cache_creation_input_tokens=5,
+            cache_read_input_tokens=11,
+            output_tokens=7,
+        ),
+    ),
+    # Claude reports cache counters beside input, not as its shares: no cross-counter cap.
+    "cache read larger than input": (
+        _claude_usage(input_tokens=3, cache_read_input_tokens=11),
+        ClaudeCodeResultUsage(
+            input_tokens=3,
+            cache_creation_input_tokens=5,
+            cache_read_input_tokens=11,
+            output_tokens=7,
+        ),
+    ),
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", sorted(_CLAUDE_PARTIAL_USAGE))
+async def test_claude_partial_usage_keeps_known_counters_and_leaves_the_rest_unknown(
+    case: str,
+) -> None:
+    usage, expected = _CLAUDE_PARTIAL_USAGE[case]
+    stdout = _claude_result(usage=usage)
+
+    for result in (
+        await _dedicated_claude_result(stdout),
+        await _generic_result(stdout, "json"),
+    ):
+        assert result.text == "OK"
+        assert result.reported_usage == expected
+
+
 _CLAUDE_UNKNOWN_USAGE_OUTPUTS = {
-    "bool count": _claude_result(usage=_claude_usage(output_tokens=False)),
-    "negative count": _claude_result(usage=_claude_usage(cache_read_input_tokens=-1)),
-    "float count": _claude_result(usage=_claude_usage(input_tokens=31.5)),
-    "string count": _claude_result(usage=_claude_usage(input_tokens="31")),
-    "partial usage": _claude_result(usage={"input_tokens": 31, "output_tokens": 7}),
+    "no known counter": _claude_result(
+        usage={"input_tokens": 31.5, "output_tokens": False, "cache_read_input_tokens": "11"}
+    ),
     "usage not an object": _claude_result(usage="31/7"),
     "model-level usage only": json.dumps(
         {k: v for k, v in _CLAUDE_TERMINAL_RESULT.items() if k != "usage"}

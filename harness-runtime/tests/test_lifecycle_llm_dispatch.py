@@ -8738,11 +8738,11 @@ async def test_external_cli_terminal_usage_reaches_evidence_and_telemetry(route:
     [
         lambda: _codex_usage_cli(_CODEX_USAGE_STDOUT + _CODEX_USAGE_STDOUT.splitlines()[-1]),
         lambda: _claude_usage_cli(
-            _CLAUDE_USAGE_STDOUT.replace('"output_tokens": 7', '"output_tokens": -7')
+            _CLAUDE_USAGE_STDOUT.replace('"is_error": false', '"is_error": true')
         ),
         lambda: _ExternalCLIFakeAdapter(calls=[]),
     ],
-    ids=["ambiguous codex terminal", "invalid claude counter", "adapter without usage"],
+    ids=["ambiguous codex terminal", "claude error result", "adapter without usage"],
 )
 async def test_external_cli_unknown_usage_is_explicit_and_keeps_answer(
     make_adapter: Callable[[], Any],
@@ -8752,6 +8752,20 @@ async def test_external_cli_unknown_usage_is_explicit_and_keeps_answer(
     assert result["content"] == [{"type": "text", "text": "OK"}]
     assert result["reported_usage"] is None
     assert _usage_span_attrs(attrs) == {}
+
+
+@pytest.mark.asyncio
+async def test_external_cli_partial_usage_carries_only_known_counters() -> None:
+    stdout = _CLAUDE_USAGE_STDOUT.replace('"output_tokens": 7', '"output_tokens": -7')
+    evidence = {k: v for k, v in _CLAUDE_USAGE_EVIDENCE.items() if k != "output_tokens"}
+
+    result, attrs = await _dispatch_usage_cli(_claude_usage_cli(stdout))
+
+    assert result["content"] == [{"type": "text", "text": "OK"}]
+    assert result["reported_usage"] == evidence
+    assert _usage_span_attrs(attrs) == {
+        f"external_cli.usage.{key}": value for key, value in evidence.items()
+    }
 
 
 @pytest.mark.asyncio

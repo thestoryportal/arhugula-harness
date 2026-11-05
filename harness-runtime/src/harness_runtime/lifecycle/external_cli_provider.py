@@ -74,38 +74,47 @@ class CLIProcessResult:
 class CodexTurnCompletedUsage:
     """The counters Codex's single terminal `turn.completed` event reported for its run.
 
-    `cached_input_tokens` is the cached share of `input_tokens`, kept beside it, never
-    added to it.
+    Each counter is its own fact; `None` is unknown, never zero. `cached_input_tokens`
+    is the cached share of `input_tokens`, kept beside it, never added to it.
     """
 
     source: ClassVar[str] = "codex.turn.completed.usage"
-    input_tokens: int
-    cached_input_tokens: int
-    output_tokens: int
+    shares: ClassVar[Mapping[str, str]] = {"cached_input_tokens": "input_tokens"}
+    input_tokens: int | None
+    cached_input_tokens: int | None
+    output_tokens: int | None
 
 
 @dataclass(frozen=True, slots=True)
 class ClaudeCodeResultUsage:
     """The top-level `usage` of Claude Code's successful terminal `result` object.
 
-    The per-model `modelUsage` breakdown is a second view of the same run and is never read.
+    Each counter is its own fact; `None` is unknown, never zero. The cache counters are
+    reported beside `input_tokens`, not as shares of it. The per-model `modelUsage`
+    breakdown is a second view of the same run and is never read.
     """
 
     source: ClassVar[str] = "claude-code.result.usage"
-    input_tokens: int
-    cache_creation_input_tokens: int
-    cache_read_input_tokens: int
-    output_tokens: int
+    shares: ClassVar[Mapping[str, str]] = {}
+    input_tokens: int | None
+    cache_creation_input_tokens: int | None
+    cache_read_input_tokens: int | None
+    output_tokens: int | None
 
 
 ExternalCLIReportedUsage = CodexTurnCompletedUsage | ClaudeCodeResultUsage
 """What a subscription CLI said about its own run: evidence, never an API-priced quantity.
-Each schema owns its counter names, so no counter is renamed into another schema's."""
+Each schema owns its counter names, so no counter is renamed into another schema's.
+`shares` maps a counter to the counter it is a part of, so neither can exceed its whole."""
 
 
 def external_cli_usage_evidence(usage: ExternalCLIReportedUsage) -> Mapping[str, int | str]:
-    """The flat evidence record: the schema `source` beside that schema's own counters."""
-    return {"source": usage.source, **asdict(usage)}
+    """The flat evidence record: the schema `source` beside the counters it knows.
+
+    An unknown counter is absent from the record, never written as zero.
+    """
+    counts = {name: count for name, count in asdict(usage).items() if count is not None}
+    return {"source": usage.source, **counts}
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,7 +123,8 @@ class ExternalCLITextResult:
     exit_code: int
     raw_response: Mapping[str, Any]
     reported_usage: ExternalCLIReportedUsage | None
-    """`None` is unknown: absent, invalid or ambiguous counters are never read as zero."""
+    """`None` is no observation: absent, ambiguous, or without one known counter. A known
+    observation can still hold unknown counters; none is ever read as zero."""
 
 
 class ExternalCLIProviderError(Exception):
@@ -1186,22 +1196,30 @@ def _codex_answer_text(events: Sequence[Mapping[str, Any]], label: str) -> str:
 def _reported_usage[UsageT: ExternalCLIReportedUsage](
     schema: type[UsageT], usage: Any
 ) -> UsageT | None:
-    """Every counter `schema` names, each a non-negative JSON integer, or unknown.
+    """Every counter `schema` names, each read on its own: a missing or malformed counter
+    is unknown and leaves its independently valid neighbours known.
 
-    `type(...) is int` refuses `bool` (an `int` subclass) along with floats and strings;
-    one bad or missing counter makes the whole observation unknown, never partly zero.
+    A part larger than its whole (`schema.shares`) proves one of the pair false without
+    saying which, so both become unknown. No known counter at all is no observation.
     [LAW:parse-dont-validate]
     """
     if not isinstance(usage, Mapping):
         return None
     reported = cast(Mapping[str, Any], usage)
-    counts: dict[str, int] = {}
-    for field in fields(schema):
-        count = reported.get(field.name)
-        if type(count) is not int or count < 0:
-            return None
-        counts[field.name] = count
+    counts = {field.name: _reported_count(reported.get(field.name)) for field in fields(schema)}
+    for part, whole in schema.shares.items():
+        part_count, whole_count = counts[part], counts[whole]
+        if part_count is not None and whole_count is not None and part_count > whole_count:
+            counts[part] = counts[whole] = None
+    if all(count is None for count in counts.values()):
+        return None
     return schema(**counts)
+
+
+def _reported_count(count: Any) -> int | None:
+    """A non-negative JSON integer, else unknown; `type(...) is int` refuses `bool` (an
+    `int` subclass) along with floats and strings."""
+    return count if type(count) is int and count >= 0 else None
 
 
 def _codex_turn_usage(events: Sequence[Mapping[str, Any]]) -> CodexTurnCompletedUsage | None:
