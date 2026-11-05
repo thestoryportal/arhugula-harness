@@ -6,8 +6,10 @@ skill-content delivery. It amends §4 C-RT-04 `skills` load (via §14.17.5 invar
 per-candidate attempt loop (one propagation arm), and adds NEW §14.17.8. Hooks 1 and 3 are unchanged. Every other v1.138 and earlier term remains in force.
 Proposed v1.135/v1.136 deltas are not amended. Cleared predecessor files are not edited.*
 
-**Status: PROPOSED — contract text for independent review and integration-lead ratification. Not
-cleared; no source, CI, landing or installed claim.**
+**Status: CLEARED 2026-11-05 — ratified by the integration lead at LIT `cmt-e4d23545-c62a-42a3-89cb-89a186846f10`
+on the frozen reviewed body `68eb98a343f7d4c7d0b8ff74a45365b4287dfd76` (independent contract GREEN
+`cmt-d0bb3182-ae11-4af2-947d-c2242214cc59`); clearance `.harness/clearance/Spec_Harness_Runtime-v1_139-cleared-2026-11-05.md`.
+Contract clearance only; source conformance (W1–W8, W4b), CI, landing and installed acceptance remain owed.**
 
 **Filed:** 2026-11-05
 
