@@ -66,6 +66,7 @@ from harness_runtime.memory_capture import (
     MemoryCaptureStatus,
     SummaryProvenance,
     SummarySource,
+    TurnTokenUsage,
     capture_operation_action_id,
     stored_capture_event_type,
 )
@@ -285,7 +286,9 @@ class LocalAutomaticMemoryRuntime:
             tool_event_refs=(),
             failure_observations=(),
             promotion_candidates=(),
-            token_usage=_token_usage(input_tokens=input_tokens, output_tokens=output_tokens),
+            token_usage=_turn_token_usage(
+                input_tokens=input_tokens, output_tokens=output_tokens, response=response
+            ),
             timestamp=datetime.now(UTC),
             provider=provider,
             model=model,
@@ -640,17 +643,32 @@ def _response_summary(response: Mapping[str, Any]) -> str:
     return _compact_json(response)
 
 
-def _token_usage(
+def _turn_token_usage(
     *,
     input_tokens: int | None,
     output_tokens: int | None,
-) -> dict[str, int] | None:
-    usage: dict[str, int] = {}
-    if input_tokens is not None:
-        usage["input_tokens"] = int(input_tokens)
-    if output_tokens is not None:
-        usage["output_tokens"] = int(output_tokens)
-    return usage or None
+    response: Mapping[str, Any],
+) -> TurnTokenUsage | None:
+    """The dispatcher's own counts, else what a subscription CLI reported about its run.
+
+    The dispatcher leaves its priced count channel unknown for an external CLI and
+    carries that CLI's report as `reported_usage` evidence instead, so the two never
+    both describe one turn. The report's known counters keep their schema `source`.
+    """
+    sdk_counts = {
+        name: count
+        for name, count in (("input_tokens", input_tokens), ("output_tokens", output_tokens))
+        if count is not None
+    }
+    if sdk_counts:
+        return TurnTokenUsage(counts=sdk_counts, source=None)
+    # [LAW:parse-dont-validate] the dispatcher's flat evidence record becomes the turn's
+    # typed usage here; a malformed record fails loudly instead of being stored.
+    evidence = response.get("reported_usage")
+    if evidence is None:
+        return None
+    counts = dict(evidence)
+    return TurnTokenUsage.model_validate({"source": counts.pop("source"), "counts": counts})
 
 
 def _provider_route(fallback_chain: FallbackChain) -> tuple[str, ...]:

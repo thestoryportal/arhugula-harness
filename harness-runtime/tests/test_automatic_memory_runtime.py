@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -41,6 +42,12 @@ from harness_is.memory_retrieval_index import (
 from harness_is.memory_store import CanonicalMemoryStore, MemoryStoreRecord
 from harness_is.state_ledger_entry_schema import Actor, ActorClass
 from harness_runtime.automatic_memory import materialize_automatic_memory_runtime
+from harness_runtime.lifecycle.external_cli_provider import (
+    ClaudeCodeResultUsage,
+    CodexTurnCompletedUsage,
+    ExternalCLIReportedUsage,
+    ExternalCLITextResult,
+)
 from harness_runtime.lifecycle.llm_dispatch import RuntimeLLMDispatcher
 from harness_runtime.types import OTelConfig, RuntimeConfig
 from opentelemetry.sdk.trace import TracerProvider
@@ -477,6 +484,10 @@ async def test_default_local_init_normal_inference_exposes_and_persists_memory(
         run_id="run-memory-step-0",
     )
     assert captured.content["capture_mode"] == "summarized"
+    # The dispatcher's own counts over both round trips keep their shape; only a CLI
+    # report names a source.
+    assert captured.content["token_usage"] == {"input_tokens": 26, "output_tokens": 8}
+    assert captured.content["token_usage_source"] is None
 
 
 # ---------------------------------------------------------------------------
@@ -692,3 +703,100 @@ def test_u_mem_26_request_boundary_binds_through_the_production_wiring(
     assert all(entry.memory_id != legacy.envelope.memory_id for entry in index_result.entries), (
         "neither the ref NOR the entry metadata may leak"
     )
+
+
+# ---------------------------------------------------------------------------
+# pq2 — what a subscription CLI reported about its run reaches the durable turn.
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class _ReportingExternalCLIAdapter:
+    reported_usage: ExternalCLIReportedUsage | None
+
+    async def dispatch_text(
+        self,
+        *,
+        model: str,
+        prompt: str,
+        on_wire: Callable[[], None] | None = None,
+    ) -> ExternalCLITextResult:
+        if on_wire is not None:
+            on_wire()
+        return ExternalCLITextResult(
+            text="OK", exit_code=0, raw_response={}, reported_usage=self.reported_usage
+        )
+
+    async def aclose(self) -> None:
+        return None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("provider", "family", "reported_usage", "stored_counts", "stored_source"),
+    [
+        (
+            "codex",
+            ProviderFamily.OPENAI,
+            CodexTurnCompletedUsage(input_tokens=31, cached_input_tokens=5, output_tokens=7),
+            {"input_tokens": 31, "cached_input_tokens": 5, "output_tokens": 7},
+            "codex.turn.completed.usage",
+        ),
+        (
+            "claude_code",
+            ProviderFamily.ANTHROPIC,
+            ClaudeCodeResultUsage(
+                input_tokens=31,
+                cache_creation_input_tokens=None,
+                cache_read_input_tokens=11,
+                output_tokens=None,
+            ),
+            {"input_tokens": 31, "cache_read_input_tokens": 11},
+            "claude-code.result.usage",
+        ),
+        ("claude_code", ProviderFamily.ANTHROPIC, None, None, None),
+    ],
+    ids=["codex-reported", "claude-partially-known", "no-observation"],
+)
+async def test_external_cli_reported_usage_reaches_the_durable_captured_turn(
+    tmp_path: Path,
+    provider: str,
+    family: ProviderFamily,
+    reported_usage: ExternalCLIReportedUsage | None,
+    stored_counts: dict[str, int] | None,
+    stored_source: str | None,
+) -> None:
+    """The durable turn keeps the CLI's known counters beside their schema source.
+
+    An unknown counter stays absent (never zero), nothing is summed, and the
+    dispatcher's priced SDK channel stays unknown for the external CLI.
+    """
+    runtime = materialize_automatic_memory_runtime(_config(tmp_path))
+    dispatcher = RuntimeLLMDispatcher(
+        providers={provider: _ReportingExternalCLIAdapter(reported_usage)},
+        tracer_provider=TracerProvider(),
+        memory_runtime=runtime,
+        fallback_chain=FallbackChain(
+            primary=ProviderCandidate(provider=provider, model="cli-model", family=family),
+            same_family=(),
+            cross_family=(),
+        ),
+    )
+
+    await dispatcher.dispatch(
+        _binding(provider=provider, model="cli-model"), _step(), step_context=_step_context()
+    )
+
+    store = _memory_store(tmp_path)
+    captured_refs = [
+        ref
+        for entry in store.read_memory_operations()
+        if entry.operation_kind is MemoryOperationKind.CAPTURE
+        for ref in entry.memory_refs
+    ]
+    turn = store.read_record(
+        captured_refs[-1], MemoryRecordKind.EPISODIC_TURN, run_id="run-memory-step-0"
+    )
+    assert turn.content["event_type"] == "turn_completion"
+    assert turn.content["token_usage"] == stored_counts
+    assert turn.content["token_usage_source"] == stored_source
