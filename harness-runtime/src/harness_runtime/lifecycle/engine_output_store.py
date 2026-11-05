@@ -295,9 +295,10 @@ class EngineOutputStore:
         orchestrator file (including an unknown selection value) is surfaced by
         `orchestrator_present` so the caller fails closed (the symmetric of the per-branch
         corrupt-detection). A record without a selection predates CP v1.130 and reads as
-        `DECLARED_POOL`, the only selection that existed then. A torn (incomplete) line is
-        skipped, but a complete record with an unknown selection makes the whole journal
-        unreadable: skipping it would resurrect an older record and a stale plan.
+        `DECLARED_POOL`, the only selection that existed then. A torn (incomplete JSON) line
+        is skipped, but a complete record that is malformed (not an object, a bad
+        ``step_id``/``output``, or an unknown selection) makes the whole journal unreadable:
+        skipping it would resurrect an older record and a stale plan.
         """
         path = self._orchestrator_file(run_key)
         if not path.exists():
@@ -320,15 +321,21 @@ class EngineOutputStore:
     def _parse_orchestrator_record(
         cls, line: str
     ) -> tuple[str, dict[str, Any], WorkerSelection] | None:
-        """Parse one orchestrator line; None for a torn line, ValueError for a complete
-        record whose ``worker_selection`` is unknown."""
-        branch = cls._parse_branch_record(line)
-        if branch is None:
+        """Parse one orchestrator line; None for a torn line (not complete JSON), ValueError
+        for a complete record that is malformed or carries an unknown ``worker_selection``."""
+        try:
+            loaded = json.loads(line)
+        except json.JSONDecodeError:
             return None
-        raw = cast("dict[str, object]", json.loads(line)).get(
-            "worker_selection", WorkerSelection.DECLARED_POOL.value
-        )
-        return (*branch, WorkerSelection(raw))
+        if not isinstance(loaded, dict):
+            raise ValueError("orchestrator record is not a JSON object")
+        record = cast("dict[str, object]", loaded)
+        step_id = record.get("step_id")
+        output = record.get("output")
+        if not isinstance(step_id, str) or not isinstance(output, dict):
+            raise ValueError("orchestrator record has a malformed step_id or output")
+        raw = record.get("worker_selection", WorkerSelection.DECLARED_POOL.value)
+        return (step_id, cast("dict[str, Any]", output), WorkerSelection(raw))
 
     def orchestrator_present(self, run_key: str) -> bool:
         """Whether an orchestrator journal FILE exists (regardless of readability)."""

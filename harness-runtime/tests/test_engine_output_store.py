@@ -443,6 +443,29 @@ def test_orchestrator_unknown_selection_appended_after_valid_is_unreadable(
     assert store.orchestrator_present(_RUN_KEY) is True
 
 
+@pytest.mark.parametrize(
+    "later",
+    [
+        {"step_id": "orch", "output": ["not-a-mapping"], "worker_selection": "lead-plan"},
+        {"step_id": 7, "output": {"plan": ["b"]}, "worker_selection": "lead-plan"},
+        {"output": {"plan": ["b"]}, "worker_selection": "lead-plan"},
+        ["not", "an", "object"],
+    ],
+)
+def test_orchestrator_malformed_record_appended_after_valid_is_unreadable(
+    tmp_path: Path, later: object
+) -> None:
+    """A complete later record with a malformed shape must not be skipped in favour of an
+    older valid record (review F2, cmt-e1835f07); only an incomplete JSON line is torn."""
+    store = EngineOutputStore(journal_dir=tmp_path / "eo")
+    store.record_orchestrator(_RUN_KEY, "orch", {"plan": ["a"]}, WorkerSelection.LEAD_PLAN)
+    path = next((tmp_path / "eo").rglob("orchestrator.jsonl"))
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(later) + "\n")
+    assert store.read_orchestrator_output(_RUN_KEY) is None
+    assert store.orchestrator_present(_RUN_KEY) is True
+
+
 def test_branch_absent_run_returns_empty(tmp_path: Path) -> None:
     """No fan-out journals (config flip / first run) → empty/None, no error."""
     store = EngineOutputStore(journal_dir=tmp_path / "eo")
