@@ -113,9 +113,10 @@ beside the existing audit-signing and post-tool-effect arms. It sets `retry.dela
 - No same-candidate retry and no candidate advance occur. No `fallback.exhausted` event is emitted
   and no `RetryBreakerFallbackExhaustedError` is raised.
 - The breaker is not charged: `breaker.record_failure` is never called, because a selection fault
-  says nothing about `{provider, model}` health (the §14.6.3 test). A half-open trial is released
-  without an outcome by the existing outer `BaseException` arm (`_release_half_open_trial`, §14.6.4
-  cells 6-8 class).
+  says nothing about `{provider, model}` health (the §14.6.3 test). A half-open trial is inconclusive:
+  the existing outer `BaseException` arm (`_release_half_open_trial`, §14.6.4 cells 6-8 class)
+  returns it to `open` with a fresh cooldown and an unchanged `fail_count`
+  (`re_arm_half_open_trial`).
 - The type is not added to `_classify_provider_exception`'s fail-fast set or to
   `_BREAKER_CHARGE_WAIVED_TYPES`. Those govern the candidate-advancing arm, which this error never
   reaches.
@@ -157,8 +158,10 @@ required.
   observes zero `skill.activation` spans, zero provider calls on every candidate, one attempt span
   with `retry.terminal = "skill-selection-invalid"` and no `fallback.exhausted` event. The primary
   candidate's breaker records no failure: its state and failure count are unchanged.
-- **W4b half-open trial.** With the primary breaker half-open, the same selection failure leaves
-  the breaker half-open with its trial re-armed, not opened.
+- **W4b half-open trial.** With the primary breaker in a half-open trial, the same selection
+  failure returns the breaker to `open` with `opened_at` renewed to the failure time and
+  `fail_count` unchanged. The emitted `half_open → open` transition has `trigger_count = 0`, the
+  non-charging re-arm, not a charging re-trip.
 - **W5 opt-out and empty.** With no hook, and with a hook returning `[]`, the provider sees the
   pre-v1.139 payload byte-for-byte and zero spans are emitted.
 - **W6 conflict.** Skills selected while the payload carries its own system source raise the
