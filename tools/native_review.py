@@ -11,13 +11,18 @@ import argparse
 import hashlib
 import json
 import os
+import subprocess
 import sys
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from uuid import UUID
 
 import finding_record as fr
 import review_loop_gate as gate
 import review_wrapper_common as rw
+import workflow_policy as wp
+
+PRODUCER = "codex_review_wrapper"
 
 
 def session_id(value: str) -> str:
@@ -86,15 +91,65 @@ def participants(reviewer: str, authors: list[str]) -> rw.ReviewParticipants:
     return result
 
 
+def nontrial_admission(
+    repo: Path, bound: Mapping[str, str], reviewer: str, arc: str
+) -> Callable[[list[dict]], None]:
+    """An untagged import: identity-bound evidence of one independent review for an arc
+    outside every review cycle. It completes no cycle pass. Reservation, policy and git are
+    read now; the returned check is pure over the log as it stands under the append lock."""
+    # [LAW:single-enforcer] reservation scope comes from the gate's own reader; a reserved
+    # arc keeps its bounded cycle and cannot be recorded around it with an unset pass.
+    state = gate._gate_state_in_force(repo, arc)
+    if isinstance(state, gate.Refused):
+        raise gate.CycleRefusedError(state)
+    if not isinstance(state, gate.Inactive):
+        raise ValueError(f"{arc} is reserved: record its initial or correction pass")
+    # [LAW:one-source-of-truth] the reviewed commit's tracked policy decides, as for cycle
+    # passes; an uncommitted edit or a trial enrollment cannot select this route.
+    policy = wp.load_policy(
+        rw._git(repo, "show", f"{bound['head_sha']}:.harness/workflow-policy.json").encode()
+    )
+    if not wp.streamlined_delivery(policy) or wp.arc_unit(policy, arc) is not None:
+        raise ValueError(f"{arc} is not nontrial work under the reviewed head's delivery policy")
+    review = (bound["head_sha"], bound["diff_digest"], reviewer)
+
+    def check(rows: list[dict]) -> None:
+        arc_rows = [r for r in rows if r.get("arc_id") == arc]
+        if any(r.get("cycle_pass") is not None for r in arc_rows):
+            raise ValueError(f"{arc} has cycle history: record its next tagged pass")
+        if any(
+            r.get("producer") == PRODUCER
+            and (r.get("head_sha"), r.get("diff_digest"), r.get("reviewer_session")) == review
+            for r in arc_rows
+        ):
+            raise ValueError("this native review is already recorded")
+
+    return check
+
+
+def pass_admission(
+    repo: Path, outcome: rw.ReviewOutcome, people: rw.ReviewParticipants, arc: str, lane: str
+) -> Callable[[list[dict]], None]:
+    # [LAW:dataflow-not-control-flow] the cycle pass is the one discriminator: a tagged pass
+    # keeps the existing bounded-cycle admission, an unset pass is the nontrial import.
+    cycle_pass = fr.cycle_pass_from_env()
+    if cycle_pass is None:
+        return nontrial_admission(repo, outcome.binding, people.reviewer_session, arc)
+    if cycle_pass not in ("initial", "correction"):
+        raise ValueError("native delivery requires initial, correction or an unset nontrial pass")
+    return gate.delivery_admission(repo, outcome, producer=PRODUCER, arc_id=arc, lane_id=lane)
+
+
 def record(repo: Path, text: str, expected: dict[str, str], people: rw.ReviewParticipants) -> int:
     outcome = rw.parse_verdict("codex", text, expected, source="native-session")
     if outcome.terminal == "REVIEWER_UNAVAILABLE":
         raise ValueError(outcome.reason)
     outcome.participants = people
+    if not os.environ.get("HARNESS_ARC_ID"):
+        # the branch fallback arc would bind the review to an arc nobody claimed
+        raise ValueError("native delivery requires an explicit HARNESS_ARC_ID")
     arc, lane = rw.env_arc_and_lane()
-    admit_cycle = gate.delivery_admission(
-        repo, outcome, producer="codex_review_wrapper", arc_id=arc, lane_id=lane
-    )
+    admit_pass = pass_admission(repo, outcome, people, arc, lane)
 
     def admit(rows: list[dict]) -> None:
         # [LAW:no-ambient-temporal-coupling] correction authors accumulate across
@@ -102,11 +157,11 @@ def record(repo: Path, text: str, expected: dict[str, str], people: rw.ReviewPar
         prior = {a for r in rows if r.get("arc_id") == arc for a in r.get("author_sessions") or ()}
         if not prior <= set(people.author_sessions):
             raise ValueError("material author sessions omitted from correction")
-        admit_cycle(rows)
+        admit_pass(rows)
 
     written = rw.emit_outcome(
         outcome,
-        producer="codex_review_wrapper",
+        producer=PRODUCER,
         arc_id=arc,
         lane_id=lane,
         round_n=None,
@@ -150,10 +205,8 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if text is None:
             raise ValueError("latest native turn has no completed final answer")
-        if fr.cycle_pass_from_env() not in ("initial", "correction"):
-            raise ValueError("native delivery requires initial or correction cycle pass")
         return record(Path.cwd(), text, expected, people)
-    except (ValueError, OSError, gate.CycleRefusedError) as exc:
+    except (ValueError, OSError, subprocess.CalledProcessError, gate.CycleRefusedError) as exc:
         print(f"native-review: GATE_REFUSED: {exc}", file=sys.stderr)
         return 3
 

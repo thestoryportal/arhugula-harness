@@ -1,6 +1,7 @@
 """Native evidence, immutable bindings and session independence; no live reviewer calls."""
 
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -188,3 +189,109 @@ def test_adjudication_preserves_native_provenance(recording, change):
     fr.append_row(adj)
     assert fr.read_rows()[-1]["reviewer_session"] == REVIEWER
     assert fr.read_rows()[-1]["author_sessions"] == [AUTHOR]
+
+
+POLICY = json.loads(
+    (Path(__file__).resolve().parent.parent / ".harness/workflow-policy.json").read_text()
+)
+
+
+def committed_policy(repo, **changes):
+    """A real commit whose tracked policy the untagged route must read: the head binds it."""
+    (repo / ".harness").mkdir(parents=True)
+    (repo / ".harness/workflow-policy.json").write_text(json.dumps({**POLICY, **changes}))
+    for args in (["init", "-q"], ["add", "."], ["commit", "-qm", "policy"]):
+        subprocess.run(
+            ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t", *args],
+            check=True,
+        )
+    head = subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "HEAD"], check=True, capture_output=True, text=True
+    ).stdout.strip()
+    return {**BOUND, "head_sha": head}
+
+
+@pytest.fixture
+def nontrial(recording, monkeypatch):
+    monkeypatch.delenv("HARNESS_CYCLE_PASS")
+    monkeypatch.setattr(gate, "_reservation_exists", lambda arc: False)
+    return recording / "repo"
+
+
+def untagged(repo, bound, authors=(AUTHOR, CORRECTOR)):
+    return nr.record(repo, verdict(**bound), bound, nr.participants(REVIEWER, list(authors)))
+
+
+def test_nontrial_import_records_one_untagged_bound_row(nontrial):
+    bound = committed_policy(nontrial)
+    assert untagged(nontrial, bound) == 0
+    (row,) = fr.read_rows()
+    assert (row["cycle_pass"], row["record_kind"], row["producer"]) == (
+        None,
+        "no_finding",
+        "codex_review_wrapper",
+    )
+    assert (row["head_sha"], row["reviewer_session"], row["author_sessions"]) == (
+        bound["head_sha"],
+        REVIEWER,
+        [AUTHOR, CORRECTOR],
+    )
+    # evidence of a review, never a completed cycle pass
+    assert gate.completing_run([row], "native-arc") is None
+    with pytest.raises(ValueError, match="already recorded"):
+        untagged(nontrial, bound)
+    assert len(fr.read_rows()) == 1
+
+
+@pytest.mark.parametrize(
+    "policy",
+    [
+        {"eligible_units": [{"unit": "arhugula-harness-trial-193.qrf", "arc": "native-arc"}]},
+        {"review_rules": {}},
+    ],
+)
+def test_nontrial_import_refuses_trial_or_undelegated_head(nontrial, policy):
+    bound = committed_policy(nontrial, **policy)
+    with pytest.raises(ValueError, match="not nontrial"):
+        untagged(nontrial, bound)
+    assert fr.read_rows() == []
+
+
+def test_unset_pass_cannot_bypass_a_reserved_cycle(nontrial, monkeypatch):
+    bound = committed_policy(nontrial)
+    monkeypatch.setattr(gate, "_gate_state_in_force", lambda repo, arc: gate.GateState())
+    with pytest.raises(ValueError, match="reserved"):
+        untagged(nontrial, bound)
+    assert fr.read_rows() == []
+
+
+@pytest.mark.parametrize("cycle_pass", ["initial", "1"])
+def test_unset_pass_cannot_follow_cycle_history(nontrial, monkeypatch, cycle_pass):
+    bound = committed_policy(nontrial)
+    monkeypatch.setenv("HARNESS_CYCLE_PASS", cycle_pass)
+    tagged = rw.parse_verdict("codex", verdict(**bound), bound, source="native-session")
+    tagged.participants = nr.participants(REVIEWER, [AUTHOR])
+    rw.emit_outcome(
+        tagged,
+        producer="codex_review_wrapper",
+        arc_id="native-arc",
+        lane_id="native-lane",
+        round_n=None,
+        admit=lambda rows: None,
+    )
+    monkeypatch.delenv("HARNESS_CYCLE_PASS")
+    with pytest.raises(ValueError, match="cycle history"):
+        untagged(nontrial, {**bound, "diff_digest": "e" * 64})
+    assert len(fr.read_rows()) == 1
+
+
+def test_native_delivery_refuses_legacy_pass_and_fallback_arc(recording, monkeypatch):
+    people = nr.participants(REVIEWER, [AUTHOR])
+    monkeypatch.setenv("HARNESS_CYCLE_PASS", "1")
+    with pytest.raises(ValueError, match="unset nontrial pass"):
+        nr.record(recording, verdict(), BOUND, people)
+    monkeypatch.setenv("HARNESS_CYCLE_PASS", "initial")
+    monkeypatch.delenv("HARNESS_ARC_ID")
+    with pytest.raises(ValueError, match="HARNESS_ARC_ID"):
+        nr.record(recording, verdict(), BOUND, people)
+    assert fr.read_rows() == []
