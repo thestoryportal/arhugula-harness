@@ -3,7 +3,7 @@
 *Delta-only file. Two amendment sites in C-CP-28: the per-workflow burden counter moves from the
 shared framework instance into a run-owned ledger (amending v1.10 §25.4 invariant 5, renumbered §28 at
 v1.13), and NEW §28.11 defines the run-owned evaluation binding that is the driver's synchronous
-adapter. Every other v1.124 and earlier C-CP-01 … C-CP-29 term remains in force, including §28.10
+adapter and its explicit driver-to-child pass-through on `StepExecutionContext` (C-CP-25 §25.3.3.4). Every other v1.124 and earlier C-CP-01 … C-CP-29 term remains in force, including §28.10
 post-evaluate hook semantics. Proposed v1.125–v1.128 are not heads and are not amended here.*
 
 **Status: PROPOSED — contract text for independent review and integration-lead ratification. Not
@@ -26,6 +26,7 @@ cleared; no source, CI, landing or installed claim.**
 | NEW §28.11 | — | `ValidatorBurdenLedger`, `ValidatorRunBinding`, `open_validator_run`, `ValidatorRunBinding.open_child` |
 | Driver input | Driver reads `ctx.validator_framework` and casts it to `SyncValidatorFrameworkFacade` | Driver takes `validator_run: ValidatorRunBinding \| None` as an explicit argument of `execute_workflow` and `execute_workflow_at_depth`; the driver context Protocol no longer declares `validator_framework` |
 | Sync bridge | `SyncValidatorFrameworkFacade`, `materialize_sync_validator_framework_facade` | Retired; `ValidatorRunBinding` is the only synchronous adapter |
+| `StepExecutionContext` (C-CP-25 §25.3.3.4) | No validator field | Gains hash-inert, non-persistent `validator_run: ValidatorRunBinding \| None`, composed by the driver from its `validator_run` argument (§28.11.5). `StepDispatcher.dispatch` is unchanged |
 
 ## §1 Amended invariant — burden count per workflow execution
 
@@ -50,7 +51,8 @@ copy happen with no intervening `await`, on the binding's event loop.
 - `open_validator_run(framework, *, result_timeout_seconds) -> ValidatorRunBinding` — MUST be called
   from a coroutine on the loop that will serve the run's evaluations; captures that running loop.
 - `ValidatorRunBinding.open_child() -> ValidatorRunBinding` — same framework, loop and timeout; new
-  ledger at zero. Callable from the driver's worker thread.
+  ledger at zero. Callable from any dispatch worker thread: it constructs a new ledger and mutates no
+  existing state.
 
 ### §28.11.2 Synchronous evaluation
 
@@ -63,19 +65,49 @@ Exceptions raised by the coroutine, including post-evaluate hook and audit-signi
 
 ### §28.11.3 Lifetime
 
-1. One binding per workflow execution. A binding is never stored on the context, a module global or
-   a `ContextVar`; it travels only as the explicit `validator_run` argument.
+1. One binding per workflow execution. A binding is never stored on `HarnessContext`, a module
+   global or a `ContextVar`. It travels as the explicit `validator_run` argument of the driver entry
+   points, and from the driver to sub-agent dispatch only as the driver-composed
+   `StepExecutionContext.validator_run` field of §28.11.5.
 2. `validator_run is None` exactly when the bootstrap framework is `None` (operator opt-out). The
    driver's post-dispatch hook (§28.3.3.4) runs when `validator_run is not None` and calls
    `validator_run.evaluate(...)`; 5-class outcome routing is unchanged.
-3. A child workflow execution receives `parent.open_child()`: each child is its own workflow
-   boundary and starts at zero. The parent's ledger is not changed by the child.
+3. A child workflow execution receives `parent.open_child()`, opened by sub-agent dispatch once per
+   child execution (Runtime v1.138 §14.13.8(3)): each child is its own workflow boundary and starts
+   at zero, at every depth. The parent's ledger is not changed by the child, and sibling children
+   never share a ledger.
 4. No reset operation exists. Two executions never share a ledger unless they are the same execution.
 
 ### §28.11.4 Failure modes
 
 No new fail class. A timeout on the blocking result surfaces as the existing
 `CP-FAIL-VALIDATOR-EXECUTION`; a missing registry entry stays `CP-FAIL-VALIDATOR-CATALOG-MISSING`.
+
+### §28.11.5 Driver-to-child pass-through
+
+1. **Field.** `StepExecutionContext` (`harness_cp/workflow_driver_types.py`) gains
+   `validator_run: ValidatorRunBinding | None = Field(default=None, exclude=True, repr=False)`, the
+   same carrier shape as the existing `child_resume_authority`. It is absent from every `model_dump`,
+   so it never enters a hash, audit entry, ledger row or pause snapshot.
+2. **Single composer.** The driver sets `validator_run=<the execution's validator_run argument>` at
+   every `StepExecutionContext` it constructs, beside `child_resume_authority`. At the frozen source
+   head `4a5ce5e2` these are the five `workflow_driver.py` sites at lines 5618 (linear step), 8562
+   (fan-out parent), 11458 (step dispatch), 12804 (orchestrator) and 16128 (spawning stage). Branch
+   and worker contexts inherit the value through `compose_branch_child_context`'s `model_copy`; they
+   belong to the same execution and share its ledger (§28.11.2). A new driver construction site sets
+   the field explicitly.
+3. **Readers.** Runtime sub-agent dispatch is the only reader (Runtime v1.138 §14.13.8(3)).
+   `ValidatorFramework.evaluate` MUST NOT read `step_context.validator_run`; it receives the ledger
+   only as its `burden` argument. Inner LLM, retry/fallback and sandbox dispatchers ignore the field.
+4. **Capability, not identity.** The field holds the execution's binding object. It carries no run
+   identifier, and no shared map is keyed by it. Option B (a run identity on `StepExecutionContext`
+   resolved against shared framework state) remains not selected.
+5. **Default.** `[LAW:types-are-the-program] exception`: the field defaults to `None`, as
+   `child_resume_authority` does, because making it required would change 60 test constructions in
+   53 files outside this slice. Non-driver constructions keep `None`; at base the only one is the
+   Runtime model-tool loop (`r_cxa_2_producer_loop_factory.py`), which dispatches model tool calls
+   to `ctx.tool_dispatcher` and cannot reach sub-agent dispatch. The Runtime v1.138 §14.13.9 nested
+   witnesses and their drop-the-field mutants are the enforcement for every driver site.
 
 ## §3 Status
 
