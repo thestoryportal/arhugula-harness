@@ -16,11 +16,17 @@ from typing import Any
 import pytest
 from harness_runtime.lifecycle.external_cli_provider import (
     AsyncioSubprocessRunner,
+    ClaudeCodeCLIAdapter,
+    ClaudeCodeResultUsage,
     CLIProcessResult,
+    CodexCLIAdapter,
+    CodexTurnCompletedUsage,
     ExternalCLICommandError,
     ExternalCLINotAuthenticatedError,
     ExternalCLIOutputError,
     ExternalCLIProcessTimeout,
+    ExternalCLITextResult,
+    GenericCommandCLIAdapter,
     RecordingSubprocessRunner,
     _ClaudeCodeSubprocessRunner,
     construct_antigravity_cli_adapter,
@@ -28,8 +34,13 @@ from harness_runtime.lifecycle.external_cli_provider import (
     construct_codex_cli_adapter,
     construct_gemini_cli_adapter,
     construct_generic_command_cli_adapter,
+    external_cli_usage_evidence,
 )
-from harness_runtime.types import ExternalCLIProviderConfig
+from harness_runtime.types import (
+    ExternalCLIPromptTransport,
+    ExternalCLIProviderConfig,
+    ExternalCLIResponseFormat,
+)
 
 
 @dataclass
@@ -1585,3 +1596,256 @@ async def test_observer_timeout_error_remains_the_observer_error(
         )
     assert caught.value is failure
     await _assert_group_stopped(await _recorded_group(records))
+
+
+# ---------------------------------------------------------------------------
+# pq2 — subscription CLI terminal accounting. Each supported schema has ONE
+# terminal usage envelope; the dedicated adapter and the equivalent generic route
+# read it identically, and any fact that is missing, invalid or ambiguous stays
+# unknown (None) — never zero, never summed — while the answer is still returned.
+# ---------------------------------------------------------------------------
+
+
+def _codex_stream(*lines: dict[str, Any]) -> str:
+    return "".join(json.dumps(line) + "\n" for line in lines)
+
+
+_CODEX_TERMINAL_USAGE = {
+    "input_tokens": 31,
+    "cached_input_tokens": 11,
+    "output_tokens": 7,
+    "reasoning_output_tokens": 3,
+}
+
+_CODEX_ANSWER = {"type": "item.completed", "item": {"type": "agent_message", "text": "OK"}}
+
+
+def _codex_usage_stream(*terminal: dict[str, Any]) -> str:
+    """A Codex run whose nonterminal events carry misleading usage-shaped counters."""
+    return _codex_stream(
+        {"type": "thread.started", "thread_id": "t"},
+        {"type": "turn.started", "usage": {"input_tokens": 500, "output_tokens": 500}},
+        {
+            "type": "item.updated",
+            "item": {"type": "agent_message", "text": "O"},
+            "usage": {"input_tokens": 99, "cached_input_tokens": 99, "output_tokens": 99},
+        },
+        _CODEX_ANSWER,
+        *terminal,
+    )
+
+
+_CLAUDE_TERMINAL_RESULT: dict[str, Any] = {
+    "type": "result",
+    "subtype": "success",
+    "is_error": False,
+    "result": "OK",
+    "usage": {
+        "input_tokens": 31,
+        "cache_creation_input_tokens": 5,
+        "cache_read_input_tokens": 11,
+        "output_tokens": 7,
+        "server_tool_use": {"web_search_requests": 0},
+    },
+    "modelUsage": {
+        "claude-sonnet": {
+            "inputTokens": 62,
+            "outputTokens": 14,
+            "cacheReadInputTokens": 22,
+            "cacheCreationInputTokens": 10,
+        }
+    },
+}
+
+
+async def _dedicated_codex_result(stdout: str) -> ExternalCLITextResult:
+    adapter = CodexCLIAdapter(
+        provider_name="codex",
+        command="codex",
+        timeout_seconds=5.0,
+        runner=RecordingSubprocessRunner([CLIProcessResult(0, stdout, "")]),
+    )
+    return await adapter.dispatch_text(model="gpt-5", prompt="Reply OK")
+
+
+async def _dedicated_claude_result(stdout: str) -> ExternalCLITextResult:
+    adapter = ClaudeCodeCLIAdapter(
+        provider_name="claude_code",
+        command="claude",
+        timeout_seconds=5.0,
+        runner=RecordingSubprocessRunner([CLIProcessResult(0, stdout, "")]),
+    )
+    return await adapter.dispatch_text(model="sonnet", prompt="Reply OK")
+
+
+async def _generic_result(stdout: str, response_format: str) -> ExternalCLITextResult:
+    adapter = GenericCommandCLIAdapter(
+        provider_name="local_cli",
+        command="my-llm",
+        args=("--model", "{model}"),
+        response_format=ExternalCLIResponseFormat(response_format),
+        prompt_transport=ExternalCLIPromptTransport.STDIN,
+        timeout_seconds=5.0,
+        runner=RecordingSubprocessRunner([CLIProcessResult(0, stdout, "")]),
+    )
+    return await adapter.dispatch_text(model="demo", prompt="Reply OK")
+
+
+@pytest.mark.asyncio
+async def test_codex_terminal_usage_is_read_once_identically_on_both_routes() -> None:
+    stdout = _codex_usage_stream({"type": "turn.completed", "usage": _CODEX_TERMINAL_USAGE})
+
+    dedicated = await _dedicated_codex_result(stdout)
+    generic = await _generic_result(stdout, "jsonl")
+
+    expected = CodexTurnCompletedUsage(input_tokens=31, cached_input_tokens=11, output_tokens=7)
+    assert dedicated.text == generic.text == "OK"
+    assert dedicated.reported_usage == generic.reported_usage == expected
+    assert external_cli_usage_evidence(expected) == {
+        "source": "codex.turn.completed.usage",
+        "input_tokens": 31,
+        "cached_input_tokens": 11,
+        "output_tokens": 7,
+    }
+
+
+@pytest.mark.asyncio
+async def test_claude_terminal_usage_is_read_once_identically_on_both_routes() -> None:
+    stdout = json.dumps(_CLAUDE_TERMINAL_RESULT)
+
+    dedicated = await _dedicated_claude_result(stdout)
+    generic = await _generic_result(stdout, "json")
+
+    expected = ClaudeCodeResultUsage(
+        input_tokens=31,
+        cache_creation_input_tokens=5,
+        cache_read_input_tokens=11,
+        output_tokens=7,
+    )
+    assert dedicated.text == generic.text == "OK"
+    assert dedicated.reported_usage == generic.reported_usage == expected
+    assert external_cli_usage_evidence(expected) == {
+        "source": "claude-code.result.usage",
+        "input_tokens": 31,
+        "cache_creation_input_tokens": 5,
+        "cache_read_input_tokens": 11,
+        "output_tokens": 7,
+    }
+
+
+def _codex_usage(**overrides: Any) -> dict[str, Any]:
+    return {**_CODEX_TERMINAL_USAGE, **overrides}
+
+
+_CODEX_UNKNOWN_USAGE_STREAMS = {
+    "bool count": _codex_usage_stream(
+        {"type": "turn.completed", "usage": _codex_usage(output_tokens=True)}
+    ),
+    "negative count": _codex_usage_stream(
+        {"type": "turn.completed", "usage": _codex_usage(input_tokens=-31)}
+    ),
+    "float count": _codex_usage_stream(
+        {"type": "turn.completed", "usage": _codex_usage(input_tokens=31.0)}
+    ),
+    "string count": _codex_usage_stream(
+        {"type": "turn.completed", "usage": _codex_usage(output_tokens="7")}
+    ),
+    "null count": _codex_usage_stream(
+        {"type": "turn.completed", "usage": _codex_usage(cached_input_tokens=None)}
+    ),
+    "partial usage": _codex_usage_stream(
+        {"type": "turn.completed", "usage": {"input_tokens": 31, "output_tokens": 7}}
+    ),
+    "usage not an object": _codex_usage_stream({"type": "turn.completed", "usage": [31, 11, 7]}),
+    "terminal without usage": _codex_usage_stream({"type": "turn.completed"}),
+    "nonterminal usage only": _codex_usage_stream(),
+    "duplicate terminal": _codex_usage_stream(
+        {"type": "turn.completed", "usage": _CODEX_TERMINAL_USAGE},
+        {"type": "turn.completed", "usage": _CODEX_TERMINAL_USAGE},
+    ),
+    "conflicting terminal": _codex_usage_stream(
+        {"type": "turn.completed", "usage": _CODEX_TERMINAL_USAGE},
+        {"type": "turn.completed", "usage": _codex_usage(input_tokens=62)},
+    ),
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", sorted(_CODEX_UNKNOWN_USAGE_STREAMS))
+async def test_codex_invalid_or_ambiguous_usage_stays_unknown_and_keeps_answer(case: str) -> None:
+    stdout = _CODEX_UNKNOWN_USAGE_STREAMS[case]
+
+    for result in (
+        await _dedicated_codex_result(stdout),
+        await _generic_result(stdout, "jsonl"),
+    ):
+        assert result.text == "OK"
+        assert result.reported_usage is None
+
+
+@pytest.mark.asyncio
+async def test_generic_jsonl_duplicate_usage_key_is_unknown_not_last_wins() -> None:
+    """The generic JSONL reader keeps the last duplicate key for the ANSWER; usage is
+    read only from a strict parse, so a conflicting duplicate `usage` key is unknown."""
+    terminal = (
+        '{"type":"turn.completed","usage":{"input_tokens":31,"cached_input_tokens":11,'
+        '"output_tokens":7},"usage":{"input_tokens":1,"cached_input_tokens":0,'
+        '"output_tokens":1}}\n'
+    )
+    stdout = _codex_usage_stream() + terminal
+
+    result = await _generic_result(stdout, "jsonl")
+
+    assert result.text == "OK"
+    assert result.reported_usage is None
+
+
+def _claude_result(**overrides: Any) -> str:
+    return json.dumps({**_CLAUDE_TERMINAL_RESULT, **overrides})
+
+
+def _claude_usage(**overrides: Any) -> dict[str, Any]:
+    return {**_CLAUDE_TERMINAL_RESULT["usage"], **overrides}
+
+
+_CLAUDE_UNKNOWN_USAGE_OUTPUTS = {
+    "bool count": _claude_result(usage=_claude_usage(output_tokens=False)),
+    "negative count": _claude_result(usage=_claude_usage(cache_read_input_tokens=-1)),
+    "float count": _claude_result(usage=_claude_usage(input_tokens=31.5)),
+    "string count": _claude_result(usage=_claude_usage(input_tokens="31")),
+    "partial usage": _claude_result(usage={"input_tokens": 31, "output_tokens": 7}),
+    "usage not an object": _claude_result(usage="31/7"),
+    "model-level usage only": json.dumps(
+        {k: v for k, v in _CLAUDE_TERMINAL_RESULT.items() if k != "usage"}
+    ),
+    "not a terminal result": _claude_result(type="assistant"),
+    "unsuccessful subtype": _claude_result(subtype="error_max_turns"),
+    "error result": _claude_result(is_error=True),
+    "conflicting duplicate usage key": (
+        _claude_result()[:-1] + ', "usage": {"input_tokens": 1, "output_tokens": 1,'
+        ' "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}}'
+    ),
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", sorted(_CLAUDE_UNKNOWN_USAGE_OUTPUTS))
+async def test_claude_invalid_or_ambiguous_usage_stays_unknown_and_keeps_answer(case: str) -> None:
+    stdout = _CLAUDE_UNKNOWN_USAGE_OUTPUTS[case]
+
+    for result in (
+        await _dedicated_claude_result(stdout),
+        await _generic_result(stdout, "json"),
+    ):
+        assert result.text == "OK"
+        assert result.reported_usage is None
+
+
+@pytest.mark.asyncio
+async def test_text_routes_report_no_usage() -> None:
+    stdout = json.dumps(_CLAUDE_TERMINAL_RESULT)
+
+    result = await _generic_result(stdout, "text")
+
+    assert result.text == stdout
+    assert result.reported_usage is None

@@ -122,10 +122,13 @@ from harness_runtime.lifecycle.cross_family_cost_tag import provider_family_for_
 from harness_runtime.lifecycle.engine_output_store import EngineOutputStore
 from harness_runtime.lifecycle.external_cli_provider import (
     AsyncioSubprocessRunner,
+    ClaudeCodeCLIAdapter,
     CLIProcessResult,
+    CodexCLIAdapter,
     ExternalCLICommandError,
     ExternalCLIOutputError,
     GenericCommandCLIAdapter,
+    RecordingSubprocessRunner,
 )
 from harness_runtime.lifecycle.hitl_gate_composer import RuntimeHITLGateComposer
 from harness_runtime.lifecycle.hitl_tool_loop import HITLToolLoopContext, ModelToolCall
@@ -8601,3 +8604,216 @@ def test_payload_shape_raise_site_partition_is_three_pre_flight_and_25_response(
     assert len(internal_sites) == 3, f"pre-flight raise sites: {len(internal_sites)}"
     assert len(charging_sites) == 25, f"response-parsing raise sites: {len(charging_sites)}"
     assert len(internal_sites) + len(charging_sites) == 28
+
+
+# ---------------------------------------------------------------------------
+# pq2 — subscription CLI terminal accounting at the dispatch boundary. The
+# adapter-parsed terminal usage reaches the workflow evidence (`reported_usage`)
+# and the dispatch span (`external_cli.usage.*`) as the same record, on the
+# dedicated and generic routes alike; it never enters API cost attribution.
+# ---------------------------------------------------------------------------
+
+_CODEX_USAGE_STDOUT = (
+    '{"type":"thread.started","thread_id":"t"}\n'
+    '{"type":"item.updated","item":{"type":"agent_message","text":"O"},'
+    '"usage":{"input_tokens":99,"cached_input_tokens":99,"output_tokens":99}}\n'
+    '{"type":"item.completed","item":{"type":"agent_message","text":"OK"}}\n'
+    '{"type":"turn.completed","usage":{"input_tokens":31,"cached_input_tokens":11,'
+    '"output_tokens":7}}\n'
+)
+_CODEX_USAGE_EVIDENCE = {
+    "source": "codex.turn.completed.usage",
+    "input_tokens": 31,
+    "cached_input_tokens": 11,
+    "output_tokens": 7,
+}
+_CLAUDE_USAGE_STDOUT = json.dumps(
+    {
+        "type": "result",
+        "subtype": "success",
+        "is_error": False,
+        "result": "OK",
+        "usage": {
+            "input_tokens": 31,
+            "cache_creation_input_tokens": 5,
+            "cache_read_input_tokens": 11,
+            "output_tokens": 7,
+        },
+        "modelUsage": {"claude-sonnet": {"inputTokens": 62, "outputTokens": 14}},
+    }
+)
+_CLAUDE_USAGE_EVIDENCE = {
+    "source": "claude-code.result.usage",
+    "input_tokens": 31,
+    "cache_creation_input_tokens": 5,
+    "cache_read_input_tokens": 11,
+    "output_tokens": 7,
+}
+
+
+def _usage_runner(stdout: str) -> RecordingSubprocessRunner:
+    return RecordingSubprocessRunner([CLIProcessResult(exit_code=0, stdout=stdout, stderr="")])
+
+
+def _codex_usage_cli(stdout: str = _CODEX_USAGE_STDOUT) -> CodexCLIAdapter:
+    return CodexCLIAdapter(
+        provider_name="codex", command="codex", timeout_seconds=5.0, runner=_usage_runner(stdout)
+    )
+
+
+def _claude_usage_cli(stdout: str = _CLAUDE_USAGE_STDOUT) -> ClaudeCodeCLIAdapter:
+    return ClaudeCodeCLIAdapter(
+        provider_name="claude_code",
+        command="claude",
+        timeout_seconds=5.0,
+        runner=_usage_runner(stdout),
+    )
+
+
+def _generic_usage_cli(stdout: str, response_format: ExternalCLIResponseFormat) -> Any:
+    return GenericCommandCLIAdapter(
+        provider_name="local_cli",
+        command="my-llm",
+        args=("--model", "{model}"),
+        response_format=response_format,
+        prompt_transport=ExternalCLIPromptTransport.STDIN,
+        timeout_seconds=5.0,
+        runner=_usage_runner(stdout),
+    )
+
+
+async def _dispatch_usage_cli(
+    adapter: Any, **dispatcher_kwargs: Any
+) -> tuple[Mapping[str, Any], dict[str, Any]]:
+    tp, exporter = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"subscription_cli": adapter}, tracer_provider=tp, **dispatcher_kwargs
+    )
+    result = await dispatcher.dispatch(
+        _binding("subscription_cli", model="cli-model"),
+        _step(),
+        step_context=_step_context(),
+    )
+    return result, dict(exporter.get_finished_spans()[0].attributes or {})
+
+
+def _usage_span_attrs(attrs: Mapping[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in attrs.items() if key.startswith("external_cli.usage.")}
+
+
+_USAGE_ROUTES = {
+    "codex dedicated": (lambda: _codex_usage_cli(), _CODEX_USAGE_EVIDENCE),
+    "codex via generic jsonl": (
+        lambda: _generic_usage_cli(_CODEX_USAGE_STDOUT, ExternalCLIResponseFormat.JSONL),
+        _CODEX_USAGE_EVIDENCE,
+    ),
+    "claude dedicated": (lambda: _claude_usage_cli(), _CLAUDE_USAGE_EVIDENCE),
+    "claude via generic json": (
+        lambda: _generic_usage_cli(_CLAUDE_USAGE_STDOUT, ExternalCLIResponseFormat.JSON),
+        _CLAUDE_USAGE_EVIDENCE,
+    ),
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", sorted(_USAGE_ROUTES))
+async def test_external_cli_terminal_usage_reaches_evidence_and_telemetry(route: str) -> None:
+    make_adapter, evidence = _USAGE_ROUTES[route]
+
+    result, attrs = await _dispatch_usage_cli(make_adapter())
+
+    assert result["content"] == [{"type": "text", "text": "OK"}]
+    assert result["reported_usage"] == evidence
+    assert _usage_span_attrs(attrs) == {
+        f"external_cli.usage.{key}": value for key, value in evidence.items()
+    }
+    # The provider-neutral usage channel feeds API cost attribution; it stays unknown.
+    assert "gen_ai.usage.input_tokens" not in attrs
+    assert "gen_ai.usage.output_tokens" not in attrs
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "make_adapter",
+    [
+        lambda: _codex_usage_cli(_CODEX_USAGE_STDOUT + _CODEX_USAGE_STDOUT.splitlines()[-1]),
+        lambda: _claude_usage_cli(
+            _CLAUDE_USAGE_STDOUT.replace('"output_tokens": 7', '"output_tokens": -7')
+        ),
+        lambda: _ExternalCLIFakeAdapter(calls=[]),
+    ],
+    ids=["ambiguous codex terminal", "invalid claude counter", "adapter without usage"],
+)
+async def test_external_cli_unknown_usage_is_explicit_and_keeps_answer(
+    make_adapter: Callable[[], Any],
+) -> None:
+    result, attrs = await _dispatch_usage_cli(make_adapter())
+
+    assert result["content"] == [{"type": "text", "text": "OK"}]
+    assert result["reported_usage"] is None
+    assert _usage_span_attrs(attrs) == {}
+
+
+@pytest.mark.asyncio
+async def test_external_cli_usage_creates_no_api_priced_cost_records(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The real cost chain, audit writer, rate table and record sink are bound; the
+    subscription CLI counts are reported yet never priced, while an SDK dispatch through
+    the same spies still is — so the spies are live, not vacuous."""
+    from harness_od.cost_record_otel_serializer import COST_ATTRIBUTED_DECIMAL_ATTR
+    from harness_od.rate_table_v1 import RATE_TABLE_V1
+    from harness_runtime.lifecycle import cost_attribution_llm_dispatch
+    from harness_runtime.lifecycle.cost_attribution import RuntimeCostAttributionChain
+
+    real_attribute = cost_attribution_llm_dispatch.attribute_llm_dispatch_cost
+    priced_providers: list[str] = []
+
+    def spy_attribute(**kwargs: Any) -> Any:
+        priced_providers.append(kwargs["provider_name"])
+        return real_attribute(**kwargs)
+
+    monkeypatch.setattr(cost_attribution_llm_dispatch, "attribute_llm_dispatch_cost", spy_attribute)
+
+    def cost_substrate() -> tuple[_CostRecordingAuditWriter, list[Any], dict[str, Any]]:
+        audit_writer = _CostRecordingAuditWriter()
+        sink: list[Any] = []
+        return (
+            audit_writer,
+            sink,
+            {
+                "cost_chain": RuntimeCostAttributionChain(),
+                "audit_writer": audit_writer,
+                "rate_table": RATE_TABLE_V1,
+                "cost_record_sink": sink,
+            },
+        )
+
+    for make_adapter, evidence in _USAGE_ROUTES.values():
+        audit_writer, sink, substrate = cost_substrate()
+        result, attrs = await _dispatch_usage_cli(make_adapter(), **substrate)
+
+        assert result["reported_usage"] == evidence
+        assert audit_writer.appended == []
+        assert sink == []
+        assert COST_ATTRIBUTED_DECIMAL_ATTR not in attrs
+    assert priced_providers == []
+
+    audit_writer, sink, substrate = cost_substrate()
+    tp, exporter = _tracer_provider_with_exporter()
+    sdk_dispatcher = RuntimeLLMDispatcher(
+        providers={"anthropic": _AnthropicFakeAdapter(_AnthropicClient())},
+        tracer_provider=tp,
+        **substrate,
+    )
+    sdk_result = await sdk_dispatcher.dispatch(
+        _binding("anthropic", model="claude-haiku-4-5"),
+        _step(),
+        step_context=_step_context(),
+    )
+
+    assert "reported_usage" not in sdk_result
+    assert priced_providers == ["anthropic"]
+    assert len(audit_writer.appended) == 1
+    assert len(sink) == 1
+    assert COST_ATTRIBUTED_DECIMAL_ATTR in (exporter.get_finished_spans()[0].attributes or {})
