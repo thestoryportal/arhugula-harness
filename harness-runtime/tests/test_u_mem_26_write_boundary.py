@@ -194,7 +194,7 @@ def _semantic_record(
         "confidence": "high",
         "source_authority": "operator_direct",
         "status": "active",
-        "injection_policy": "tool_allowed",
+        "injection_policy": "prompt_packet_allowed",
         "tags": ["memory", "scope"],
     }
     content_hash = compute_memory_content_hash(content)

@@ -118,7 +118,7 @@ def _record(*, statement: str, scope: MemoryScope) -> MemoryStoreRecord:
         "confidence": "high",
         "source_authority": "operator_direct",
         "status": "active",
-        "injection_policy": "retrieval_only",
+        "injection_policy": "prompt_packet_allowed",
         "tags": [],
     }
     content_hash = compute_memory_content_hash(content)
