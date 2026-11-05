@@ -43,6 +43,7 @@ def test_harness_top_help_lists_all_flat_subcommands() -> None:
     # under a distinct name; that pre-existing gap is NOT absorbed here.
     for subcommand in (
         "run",
+        "resume",
         "daemon",
         "inspect",
         "shutdown",
@@ -56,6 +57,7 @@ def test_harness_top_help_lists_all_flat_subcommands() -> None:
     registered = {command.name for command in app.registered_commands}
     assert registered == {
         "run",
+        "resume",
         "daemon",
         "inspect",
         "shutdown",
