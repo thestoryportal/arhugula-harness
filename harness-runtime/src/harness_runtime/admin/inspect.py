@@ -158,7 +158,8 @@ def _add_pause_journal_arguments(parser: argparse.ArgumentParser) -> None:
         default=None,
         help=(
             "Path to the durable pause-journal directory (Runtime spec v1.108 "
-            "§13.7). Default: <ledger dir>/pause-journal, the §14.14.8 residence. "
+            "§13.7). Default: the installation's pause-journal root; while that "
+            "root is unbound, <ledger dir>/pause-journal (Runtime spec v1.137 Rule B8). "
             "Enumeration ENGAGES ONLY when the directory exists; output is "
             "byte-unchanged otherwise."
         ),
@@ -737,9 +738,16 @@ def main(argv: list[str] | None = None) -> int:
     # engagement-predicate shape). Like §13.5 the report COMPOSES with the
     # established summary; it never replaces a section and never governs the
     # exit code (enumeration is a read, not a verdict).
+    from harness_runtime.config_source import RuntimeConfigLoadError
+    from harness_runtime.lifecycle.pause_journal_root_resolver import (
+        PauseJournalRootUnresolvedError,
+    )
+
     try:
         journals = _enumerate_pause_journals_if_engaged(args, ledger_path)
-    except OSError as exc:
+    # [LAW:no-silent-failure] Rule B8: a root that is declared but cannot be resolved is
+    # an unreadable directory, never a fallback to the legacy default.
+    except (OSError, PauseJournalRootUnresolvedError, RuntimeConfigLoadError) as exc:
         # An unreadable journal directory is a PATH ERROR, never an empty
         # listing. Swallowing it would render `pause journals: 0` and present
         # UNKNOWN exposure as a proven zero — on the pre-flight surface whose
@@ -1032,13 +1040,8 @@ def _enumerate_pause_journals_if_engaged(
     than silently assumed to be the untenanted branch.
     """
     from harness_runtime.admin.pause_journal_enumeration import enumerate_pause_journals
-    from harness_runtime.lifecycle.journal_workflow_pause_store import PAUSE_JOURNAL_SUBDIR
 
-    journal_dir: Path = (
-        args.pause_journal_dir
-        if args.pause_journal_dir is not None
-        else ledger_path.parent / PAUSE_JOURNAL_SUBDIR
-    )
+    journal_dir = _pause_journal_inventory_dir(args, ledger_path)
     if not journal_dir.is_dir():
         return None
     tenant_scope, scope_known = _authoritative_tenant_scope(args)
@@ -1054,6 +1057,44 @@ def _enumerate_pause_journals_if_engaged(
         ),
         scope_known=scope_known,
     )
+
+
+def _pause_journal_inventory_dir(args: argparse.Namespace, ledger_path: Path) -> Path:
+    """The one directory this invocation inventories (Runtime spec v1.137 Rule B8).
+
+    The explicit `--pause-journal-dir`; otherwise the installation's resolved root;
+    otherwise, only while that root is `unresolved(unbound)`, the pre-root
+    `<ledger dir>/pause-journal` default. Any other unresolved cause raises
+    `PauseJournalRootUnresolvedError`, and a declared root with no usable
+    `RuntimeConfig` to resolve it raises `RuntimeConfigLoadError`; the caller reports
+    both as an unreadable pause-journal directory. The result is a diagnostic read,
+    never a journal location.
+    """
+    from harness_is.pause_journal_root import Unresolved, UnresolvedCause, parse_declarations
+
+    from harness_runtime.config_source import RuntimeConfigSource
+    from harness_runtime.lifecycle.journal_workflow_pause_store import PAUSE_JOURNAL_SUBDIR
+    from harness_runtime.lifecycle.pause_journal_root_resolver import (
+        INSTALLATION_STATE,
+        PauseJournalRootUnresolvedError,
+        resolve_pause_journal_root,
+    )
+
+    if args.pause_journal_dir is not None:
+        return args.pause_journal_dir
+    # [LAW:one-source-of-truth] Unbound, malformed and conflicting are facts of the
+    # declarations alone, judged by the one IS parser the resolver also uses. Config is
+    # loaded only to resolve one well-formed declaration, so an unbound installation
+    # inventories the legacy default without config and a malformed one reports its own cause.
+    match parse_declarations(INSTALLATION_STATE.get().pause_journal_root_declarations):
+        case Unresolved(cause=UnresolvedCause.UNBOUND):
+            return ledger_path.parent / PAUSE_JOURNAL_SUBDIR
+        case Unresolved(cause=cause):
+            raise PauseJournalRootUnresolvedError(cause)
+        case _:
+            return resolve_pause_journal_root(
+                RuntimeConfigSource.load(config_file=args.runtime_config)
+            )
 
 
 def _authoritative_tenant_scope(args: argparse.Namespace) -> tuple[str | None, bool]:
