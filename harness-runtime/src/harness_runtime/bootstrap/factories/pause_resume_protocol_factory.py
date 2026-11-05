@@ -39,9 +39,10 @@ from harness_is.state_ledger_entry_schema import Identifier
 from harness_runtime.lifecycle.durable_pause_resume_protocol import (
     DurablePauseResumeProtocol,
 )
-from harness_runtime.lifecycle.journal_workflow_pause_store import (
-    JournalWorkflowPauseStore,
-    pause_journal_dir_for,
+from harness_runtime.lifecycle.journal_workflow_pause_store import JournalWorkflowPauseStore
+from harness_runtime.lifecycle.pause_journal_root_resolver import (
+    PauseJournalRootUnresolvedError,
+    resolve_pause_journal_root,
 )
 from harness_runtime.types import RuntimeConfig
 
@@ -189,25 +190,28 @@ async def materialize_pause_resume_protocol_stage(
     )
 
     # Durable opt-in (runtime spec v1.46 §14.14, R-CC-1 arc #3 cascade step 2):
-    # return the DURABLE subclass so captured snapshots persist to a harness-owned
-    # journal co-located under the resolved STATE_LEDGER dir (design §7b D2-bis
-    # — `<state_ledger_dir>/pause-journal`). The STATE_LEDGER directory is
-    # `ctx.ledger_writer.handle.canonical_path.parent` (the parent of the resolved
-    # `state.jsonl` file). `DurablePauseResumeProtocol` IS-A `PauseResumeProtocol`,
-    # so the frozen HarnessContext + the driver consume it unchanged. Non-durable
-    # opt-in returns the bare CP protocol (v1.21 behavior preserved).
+    # return the DURABLE subclass so captured snapshots persist to the installation's
+    # pause-journal root (Runtime spec v1.137 Rule B3), the one directory every journal
+    # site resolves. `DurablePauseResumeProtocol` IS-A `PauseResumeProtocol`, so the
+    # frozen HarnessContext + the driver consume it unchanged. Non-durable opt-in
+    # returns the bare CP protocol (v1.21 behavior preserved).
     if config.pause_resume_protocol_config.durable:
-        state_ledger_dir = ctx.ledger_writer.handle.canonical_path.parent
+        try:
+            journal_dir = resolve_pause_journal_root(config)
+        except PauseJournalRootUnresolvedError as exc:
+            # [LAW:no-silent-failure] Rule B7: an unresolved root fails bootstrap, so a
+            # durable run never starts without a journal its snapshots can reach.
+            raise PauseResumeStageMaterializeError(
+                "RT-FAIL-PAUSE-RESUME-STAGE-MATERIALIZE: the durable opt-in has no "
+                "resolved pause-journal root (Runtime spec v1.137 Rule B7)."
+            ) from exc
         # The tenant scope enters the KEY from `config`, which this factory
         # already holds — Runtime spec v1.108 §14.14.8: *"no new config field, no
         # operator data entry, and no new caller burden is introduced by this
         # amendment."* Capture-side and read-side (`api._read_durable_pause_snapshot`)
         # therefore compute the SAME tenant-composite filename for the same
         # `(config.tenant_id, workflow_id)`, preserving restart-survival.
-        store = JournalWorkflowPauseStore(
-            journal_dir=pause_journal_dir_for(state_ledger_dir),
-            tenant_id=config.tenant_id,
-        )
+        store = JournalWorkflowPauseStore(journal_dir=journal_dir, tenant_id=config.tenant_id)
         return DurablePauseResumeProtocol(
             state_ledger_writer=ctx.ledger_writer,
             state_ledger_reader=ctx.ledger_reader,

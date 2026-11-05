@@ -77,7 +77,6 @@ poison the lock.
 from __future__ import annotations
 
 import asyncio
-import os
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -832,18 +831,14 @@ class _LocatedPauseRead(NamedTuple):
     result: PauseJournalReadResult
 
 
-def _read_durable_pause_snapshot(
-    config: RuntimeConfig,
-    workflow: WorkflowObject,
-    resume_handle: str,
-) -> _LocatedPauseRead:
+def _read_durable_pause_snapshot(config: RuntimeConfig, resume_handle: str) -> _LocatedPauseRead:
     """Read the latest durably-journaled `PauseSnapshot` for the handle (C-RT-35).
 
-    Resolves the pause-journal directory the SAME way the stage-5 factory does at
-    capture — `<STATE_LEDGER resolved dir>/pause-journal` for this workflow's
-    `(workload_class, deployment_surface)` — and reads the latest record. Pure
-    (no bootstrap side effects); `PathResolver.resolve_path` does not create the
-    directory.
+    Reads the latest record from the installation's pause-journal root, the one
+    directory the stage-5 factory captures to (Runtime spec v1.137 Rule B3). Pure
+    (no bootstrap side effects); resolution creates no directory. An unresolved
+    root refuses `ResumeProtocolNotBoundError` (Rule B7), so every surface reading
+    through here refuses before any claim and never reports a handle or absence.
 
     Returns the CAUSE-ATTRIBUTED result (spec v1.107 §30): fail-closed exactly as
     before, but with the five causes distinguished instead of collapsed into one
@@ -851,24 +846,23 @@ def _read_durable_pause_snapshot(
     carried so the token needs no second read. B-104: the result travels with the
     real directory it was read from, so a claim never re-derives a record's address.
     """
-    from harness_is.path_class_registry import PathClass
-    from harness_is.path_resolver import PathResolver
-
-    from harness_runtime.config.path_bindings import build_path_binding
-    from harness_runtime.lifecycle.journal_workflow_pause_store import (
-        JournalWorkflowPauseStore,
-        pause_journal_dir_for,
+    from harness_runtime.lifecycle.journal_workflow_pause_store import JournalWorkflowPauseStore
+    from harness_runtime.lifecycle.pause_journal_root_resolver import (
+        PauseJournalRootUnresolvedError,
+        resolve_pause_journal_root,
     )
 
-    resolver = PathResolver(build_path_binding(config.path_bindings))
-    state_ledger_dir = resolver.resolve_path(
-        PathClass.STATE_LEDGER,
-        workflow.workload_class,
-        config.deployment_surface,
-    )
-    # [LAW:one-source-of-truth] Resolved ONCE, then read through: the directory this read
-    # opened is the value handed on, so a symlink retargeted later cannot re-address it.
-    journal_dir = Path(os.path.realpath(pause_journal_dir_for(state_ledger_dir)))
+    try:
+        # [LAW:one-source-of-truth] Resolved ONCE, to the real directory, then read through: the
+        # directory this read opened is the value handed on, so a symlink retargeted later cannot
+        # re-address it.
+        journal_dir = resolve_pause_journal_root(config)
+    except PauseJournalRootUnresolvedError as exc:
+        # [LAW:single-enforcer] The one read authority refuses for every surface reading here.
+        raise ResumeProtocolNotBoundError(
+            "RT-FAIL-RESUME-PROTOCOL-NOT-BOUND: the installation's pause-journal root is "
+            "unresolved, so no durable pause record can be read (Runtime spec v1.137 Rule B7)."
+        ) from exc
     # The tenant scope enters the KEY from `config` — Runtime spec v1.108
     # §14.14.9.1: keying is the §14.14.8 TENANT-COMPOSITE key, *"matching
     # `resume()` exactly"*, by that paragraph's OWN both-surfaces-or-neither
@@ -922,9 +916,7 @@ async def _enforce_pause_state_staleness_precondition(
     # the journal cannot be written concurrently while the comparison runs.
     # *(Out-of-family review [P2], round 2.)*
     current_read = (
-        await asyncio.to_thread(
-            _read_durable_pause_snapshot, config, workflow, workflow.workflow_id
-        )
+        await asyncio.to_thread(_read_durable_pause_snapshot, config, workflow.workflow_id)
     ).result
     current = mint_staleness_token(current_read)
     # THREE conditions, all required. The token match alone is NOT sufficient on
@@ -1116,9 +1108,7 @@ async def read_paused_workflow_state(
     # *(out-of-family review [P2] at the impl leg)*. `resume()`'s own long-standing
     # synchronous read is UNCHANGED — narrowing that is out of this arc's scope.
     read = (
-        await asyncio.to_thread(
-            _read_durable_pause_snapshot, resolved_config, workflow, resume_handle
-        )
+        await asyncio.to_thread(_read_durable_pause_snapshot, resolved_config, resume_handle)
     ).result
     snapshot = read.snapshot
     # The WORKFLOW-MATCH guard runs HERE, before any projection is returned
@@ -1341,7 +1331,7 @@ async def admit_root_resume(
                 "(pause_resume_protocol_config.durable=True); without it the "
                 "harness owns no snapshot store to read (C-RT-35)."
             )
-        _located = _read_durable_pause_snapshot(config, workflow, source.workflow_id)
+        _located = _read_durable_pause_snapshot(config, source.workflow_id)
         _read = _located.result
         if _read.snapshot is None:
             # spec v1.107 §30: the cause attribution is carried as a STABLE

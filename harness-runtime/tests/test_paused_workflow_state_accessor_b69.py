@@ -84,7 +84,6 @@ from harness_runtime.lifecycle.durable_pause_resume_protocol import DurablePause
 from harness_runtime.lifecycle.journal_workflow_pause_store import (
     JournalWorkflowPauseStore,
     PauseJournalReadCause,
-    pause_journal_dir_for,
 )
 from harness_runtime.lifecycle.pause_resume_protocol_types import PauseResumeProtocolConfig
 from harness_runtime.lifecycle.pause_state_staleness import mint_staleness_token
@@ -97,6 +96,8 @@ from harness_runtime.types import (
     RuntimeConfig,
 )
 from pydantic import ValidationError
+
+from .pause_journal_roots import declare_pause_journal_root
 
 _WORKLOAD = WorkloadClass.SOFTWARE_ENGINEERING
 _SURFACE = DeploymentSurface.LOCAL_DEVELOPMENT
@@ -199,9 +200,15 @@ def _summary() -> StateSummary:
     )
 
 
+def _declared_root(tmp_path: Path) -> Path:
+    """The installation's declared pause-journal root (Runtime spec v1.137 Rule B3)."""
+    root = tmp_path / "pause-journal"
+    root.mkdir(exist_ok=True)
+    return declare_pause_journal_root(root)
+
+
 def _store(tmp_path: Path) -> JournalWorkflowPauseStore:
-    resolved = tmp_path / PathClass.STATE_LEDGER.value.lower()
-    return JournalWorkflowPauseStore(journal_dir=pause_journal_dir_for(resolved), tenant_id=None)
+    return JournalWorkflowPauseStore(journal_dir=_declared_root(tmp_path), tenant_id=None)
 
 
 def _protocol(tmp_path: Path) -> DurablePauseResumeProtocol:
@@ -775,6 +782,7 @@ async def test_ac8_failure_is_typed_and_discloses_no_path_or_exception_text(
     The attribution names the CAUSE CLASS ONLY — no exception text, no resolved
     filesystem path.
     """
+    _declared_root(tmp_path)  # an empty declared root: the handle is unknown, not unbound
     config = _config(tmp_path)
     with pytest.raises(PausedWorkflowStateUnavailableError) as excinfo:
         await read_paused_workflow_state(
@@ -797,6 +805,7 @@ async def test_ac8_resume_side_cause_attribution_uses_the_same_vocabulary(
     """AC #8 — the SAME five identifiers are carried by BOTH surfaces, so the
     operator never receives two names for one state. `resume()`'s EXISTING fail
     class is refined, not replaced by a peer class."""
+    _declared_root(tmp_path)  # an empty declared root: the handle is unknown, not unbound
     config = _config(tmp_path)
     with pytest.raises(ResumeHandleUnknownError) as excinfo:
         await resume(
@@ -1129,6 +1138,7 @@ async def test_ac13b_failed_read_still_emits_with_cause_and_no_token(tmp_path: P
     """AC #13(b) — a failed read MUST still emit; silence is not the failure
     disposition. It carries `workflow_id` + the cause, and NO token and NO count,
     because §14.14.9.4 returns no projection and mints no token on this path."""
+    _declared_root(tmp_path)  # an empty declared root: the handle is unknown, not unbound
     config = _config(tmp_path)
     with pytest.raises(PausedWorkflowStateUnavailableError):
         await read_paused_workflow_state(

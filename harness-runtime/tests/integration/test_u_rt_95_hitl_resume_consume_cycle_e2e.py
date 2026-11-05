@@ -160,6 +160,8 @@ from harness_runtime.types import (
     RuntimeConfig,
 )
 
+from ..pause_journal_roots import placed_config
+
 _WORKLOAD = WorkloadClass.SOFTWARE_ENGINEERING
 _SURFACE = DeploymentSurface.LOCAL_DEVELOPMENT
 _WORKFLOW_ID = "wf-u-rt-95-hitl-resume-consume-cycle-e2e"
@@ -520,6 +522,7 @@ def _resolved_hitl_result(*, entry_suffix: str) -> HITLResult:
 @pytest.mark.asyncio
 async def test_hitl_resume_consume_cycle_reaches_composer_and_continues_past_gate(
     tmp_path: Path,
+    placed_root: Path,
     monkeypatch: pytest.MonkeyPatch,
     _captured_webhook_requests: list[httpx.Request],
 ) -> None:
@@ -535,7 +538,7 @@ async def test_hitl_resume_consume_cycle_reaches_composer_and_continues_past_gat
     _install_fake_od_stage4(monkeypatch)
     _install_fake_webhook_composer_factory(monkeypatch, _captured_webhook_requests)
 
-    config = _config(tmp_path)
+    config = placed_config(_config(placed_root), placed_root)
     workflow = _Workflow()
 
     # ---- "Pause" — a real run through api.run() hits the DURABLE_ASYNC cell,
@@ -587,6 +590,7 @@ async def test_hitl_resume_consume_cycle_reaches_composer_and_continues_past_gat
 @pytest.mark.asyncio
 async def test_hitl_resume_consume_cycle_dispatches_inner_exactly_once(
     tmp_path: Path,
+    placed_root: Path,
     monkeypatch: pytest.MonkeyPatch,
     _captured_webhook_requests: list[httpx.Request],
 ) -> None:
@@ -602,7 +606,7 @@ async def test_hitl_resume_consume_cycle_dispatches_inner_exactly_once(
     _install_fake_od_stage4(monkeypatch)
     _install_fake_webhook_composer_factory(monkeypatch, _captured_webhook_requests)
 
-    config = _config(tmp_path)
+    config = placed_config(_config(placed_root), placed_root)
     workflow = _Workflow()
 
     paused = await api_run(workflow, config=config)
@@ -652,6 +656,7 @@ async def test_hitl_resume_consume_cycle_dispatches_inner_exactly_once(
 @pytest.mark.asyncio
 async def test_hitl_resume_without_resolved_response_repauses(
     tmp_path: Path,
+    placed_root: Path,
     monkeypatch: pytest.MonkeyPatch,
     _captured_webhook_requests: list[httpx.Request],
 ) -> None:
@@ -666,7 +671,7 @@ async def test_hitl_resume_without_resolved_response_repauses(
     _install_fake_od_stage4(monkeypatch)
     _install_fake_webhook_composer_factory(monkeypatch, _captured_webhook_requests)
 
-    config = _config(tmp_path)
+    config = placed_config(_config(placed_root), placed_root)
     workflow = _Workflow()
 
     paused = await api_run(workflow, config=config)
@@ -701,6 +706,7 @@ async def test_hitl_resume_without_resolved_response_repauses(
 @pytest.mark.asyncio
 async def test_hitl_resume_same_cycle_retry_does_not_resupply_resolved_value(
     tmp_path: Path,
+    placed_root: Path,
     monkeypatch: pytest.MonkeyPatch,
     _captured_webhook_requests: list[httpx.Request],
 ) -> None:
@@ -732,7 +738,7 @@ async def test_hitl_resume_same_cycle_retry_does_not_resupply_resolved_value(
     _install_fake_od_stage4(monkeypatch)
     _install_fake_webhook_composer_factory(monkeypatch, _captured_webhook_requests)
 
-    config = _config(tmp_path)
+    config = placed_config(_config(placed_root), placed_root)
     workflow = _Workflow()
 
     paused = await api_run(workflow, config=config)

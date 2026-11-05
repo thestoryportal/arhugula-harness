@@ -92,6 +92,8 @@ _MEMBER = "hitl.gate.evaluated"
 _SANDBOX = "sandbox.violation"
 _REPO = pathlib.Path(__file__).resolve().parents[3]
 
+from ..pause_journal_roots import placed_config
+
 #: The §9.2 members that have a `start_as_current_span` site in `src/` — 12 of the 20
 #: since OD spec v1.42 added `workflow.envelope` as row 20 (11 of 19 as the row was written).
 #: The register cites this exact count to scope and price B-137's step (3), so the
@@ -123,7 +125,8 @@ def _b72() -> Any:
     path = pathlib.Path(__file__).with_name(
         "test_b72_fanout_sub_agent_dispatch_hitl_gate_resume.py"
     )
-    name = "_b137_b72_harness"
+    # Inside this package, so the harness's own relative imports resolve.
+    name = f"{__package__}._b137_b72_harness"
     if name in sys.modules:
         return sys.modules[name]
     spec = importlib.util.spec_from_file_location(name, path)
@@ -186,7 +189,7 @@ def _production_provider(config: Any, *, base_rate: float) -> TracerProvider:
     return stage.provider
 
 
-async def _run_the_real_workflow(*, base_rate: float) -> list[str]:
+async def _run_the_real_workflow(placed_root: pathlib.Path, *, base_rate: float) -> list[str]:
     """Drive the shipped `api.run` path; return the span names that were EXPORTED."""
     harness = _b72()
     exporter = InMemorySpanExporter()
@@ -205,11 +208,10 @@ async def _run_the_real_workflow(*, base_rate: float) -> list[str]:
         harness._install_fake_providers(mp, harness._SucceedingAnthropicClient())
         harness._install_fake_od_stage4(mp)
         harness._install_fake_webhook_composer_factory(mp, [])
-        with tempfile.TemporaryDirectory() as tmp:
-            result = await harness.api_run(
-                harness._FanOutSubAgentDispatchWorkflow(),
-                config=harness._config(pathlib.Path(tmp)),
-            )
+        result = await harness.api_run(
+            harness._FanOutSubAgentDispatchWorkflow(),
+            config=placed_config(harness._config(placed_root), placed_root),
+        )
     assert result.status == "paused", f"the B-72 venue did not reach its gate: {result.status}"
     return sorted(s.name for s in exporter.get_finished_spans())
 
@@ -477,7 +479,9 @@ def test_control_the_membership_patch_reaches_the_sampler() -> None:
 
 
 @pytest.mark.asyncio
-async def test_the_real_run_emits_the_member_as_a_child_of_the_envelope() -> None:
+async def test_the_real_run_emits_the_member_as_a_child_of_the_envelope(
+    placed_root: pathlib.Path,
+) -> None:
     """Establish the production SHAPE by execution, not by reading the driver.
 
     With an always-on provider the shipped `api.run` path records exactly the envelope and
@@ -498,11 +502,10 @@ async def test_the_real_run_emits_the_member_as_a_child_of_the_envelope() -> Non
         harness._install_fake_providers(mp, harness._SucceedingAnthropicClient())
         harness._install_fake_od_stage4(mp)
         harness._install_fake_webhook_composer_factory(mp, [])
-        with tempfile.TemporaryDirectory() as tmp:
-            await harness.api_run(
-                harness._FanOutSubAgentDispatchWorkflow(),
-                config=harness._config(pathlib.Path(tmp)),
-            )
+        await harness.api_run(
+            harness._FanOutSubAgentDispatchWorkflow(),
+            config=placed_config(harness._config(placed_root), placed_root),
+        )
 
     spans = {s.name: s for s in exporter.get_finished_spans()}
     assert _ENVELOPE in spans and _MEMBER in spans, (
@@ -520,7 +523,9 @@ async def test_the_real_run_emits_the_member_as_a_child_of_the_envelope() -> Non
 
 
 @pytest.mark.asyncio
-async def test_the_floor_does_not_survive_the_real_run_at_a_starving_base_rate() -> None:
+async def test_the_floor_does_not_survive_the_real_run_at_a_starving_base_rate(
+    placed_root: pathlib.Path,
+) -> None:
     """**The finding.** A §9.2 member is dropped by the shipped path despite its floor.
 
     At `base_rate=0.0` the root loses unconditionally, and `hitl.gate.evaluated` — whose
@@ -528,7 +533,7 @@ async def test_the_floor_does_not_survive_the_real_run_at_a_starving_base_rate()
     own name is ever consulted.
     """
     with _pre_c1():
-        exported = await _run_the_real_workflow(base_rate=0.0)
+        exported = await _run_the_real_workflow(placed_root, base_rate=0.0)
     assert exported == [], (
         f"spans survived a base_rate=0.0 run ({exported}) — the head composition changed "
         "and B-137 must be RE-MEASURED, which its close-out step (2) requires over "
@@ -537,7 +542,9 @@ async def test_the_floor_does_not_survive_the_real_run_at_a_starving_base_rate()
 
 
 @pytest.mark.asyncio
-async def test_admitting_the_root_delivers_the_floor_candidate_c1() -> None:
+async def test_admitting_the_root_delivers_the_floor_candidate_c1(
+    placed_root: pathlib.Path,
+) -> None:
     """**AS-BUILT since OD spec v1.42** — the repair, at the same venue as the finding.
 
     Formerly the counterfactual that priced step (3); C1 is now shipped, so this runs at
@@ -552,7 +559,7 @@ async def test_admitting_the_root_delivers_the_floor_candidate_c1() -> None:
     draft of this arc called C1 "whole traces" on the strength of this test alone, which
     out-of-family Codex round 3 correctly rejected.
     """
-    exported = await _run_the_real_workflow(base_rate=0.0)
+    exported = await _run_the_real_workflow(placed_root, base_rate=0.0)
     # `pause.captured` joined this set when B-162 wired the driver-side emission — the
     # B-72 venue really does pause, so the span is now live on this path.
     assert exported == sorted([_MEMBER, "pause.captured", _ENVELOPE]), (
@@ -705,7 +712,9 @@ def test_candidate_c1_no_longer_evicts_under_production_bounds() -> None:
 
 
 @pytest.mark.asyncio
-async def test_the_tail_processor_never_sees_what_the_head_dropped() -> None:
+async def test_the_tail_processor_never_sees_what_the_head_dropped(
+    placed_root: pathlib.Path,
+) -> None:
     """Executed rather than asserted — the row's step (2) names this processor.
 
     `TailKeepSpanProcessor` honours §9.2 too (always-sampled spans bypass its buffer), so
@@ -757,11 +766,10 @@ async def test_the_tail_processor_never_sees_what_the_head_dropped() -> None:
             harness._install_fake_providers(mp, harness._SucceedingAnthropicClient())
             harness._install_fake_od_stage4(mp)
             harness._install_fake_webhook_composer_factory(mp, [])
-            with tempfile.TemporaryDirectory() as tmp:
-                await harness.api_run(
-                    harness._FanOutSubAgentDispatchWorkflow(),
-                    config=harness._config(pathlib.Path(tmp)),
-                )
+            await harness.api_run(
+                harness._FanOutSubAgentDispatchWorkflow(),
+                config=placed_config(harness._config(placed_root), placed_root),
+            )
 
     assert arrivals == [], (
         f"`TailKeepSpanProcessor.on_end` was REACHED with {arrivals} from a head-dropped "
@@ -786,11 +794,10 @@ async def test_the_tail_processor_never_sees_what_the_head_dropped() -> None:
         harness._install_fake_providers(mp, harness._SucceedingAnthropicClient())
         harness._install_fake_od_stage4(mp)
         harness._install_fake_webhook_composer_factory(mp, [])
-        with tempfile.TemporaryDirectory() as tmp:
-            await harness.api_run(
-                harness._FanOutSubAgentDispatchWorkflow(),
-                config=harness._config(pathlib.Path(tmp)),
-            )
+        await harness.api_run(
+            harness._FanOutSubAgentDispatchWorkflow(),
+            config=placed_config(harness._config(placed_root), placed_root),
+        )
     assert _MEMBER in arrivals, (
         f"the tail-processor spy did not fire even at base_rate=1.0 (arrivals={arrivals}) — "
         "the zero-arrivals assertion above proves nothing"
@@ -1137,7 +1144,9 @@ def test_the_two_uncalled_spans_land_on_opposite_sides_of_the_envelope() -> None
 
 
 @pytest.mark.asyncio
-async def test_candidate_a_prime_admits_the_member_but_orphans_it() -> None:
+async def test_candidate_a_prime_admits_the_member_but_orphans_it(
+    placed_root: pathlib.Path,
+) -> None:
     """**A′'s durable witness** (out-of-family Codex round 5) — it was an unpinned claim.
 
     The register calls A′ *measured*, but no committed test constructed the bare
@@ -1168,11 +1177,10 @@ async def test_candidate_a_prime_admits_the_member_but_orphans_it() -> None:
             harness._install_fake_providers(mp, harness._SucceedingAnthropicClient())
             harness._install_fake_od_stage4(mp)
             harness._install_fake_webhook_composer_factory(mp, [])
-            with tempfile.TemporaryDirectory() as tmp:
-                await harness.api_run(
-                    harness._FanOutSubAgentDispatchWorkflow(),
-                    config=harness._config(pathlib.Path(tmp)),
-                )
+            await harness.api_run(
+                harness._FanOutSubAgentDispatchWorkflow(),
+                config=placed_config(harness._config(placed_root), placed_root),
+            )
 
     exported = {s.name: s for s in exporter.get_finished_spans()}
     assert _MEMBER in exported, (

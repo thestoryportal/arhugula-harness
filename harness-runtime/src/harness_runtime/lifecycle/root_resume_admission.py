@@ -11,8 +11,9 @@ runs the workflow body with a `ClaimedChildAdmission` over the root's `StartedPr
 timeout: the API may return ``drained`` while the worker still owns the lease, which
 `run_started` releases only when the body returns.
 
-A fresh root run is a `FreshRunAdmission` (Runtime spec v1.137 Rules B1/B2): before its body it
-supersedes the workflow's journal at its admission point, then runs with no authority. A
+A fresh root run is a `FreshRunAdmission` (Runtime spec v1.137 Rules B1-B3): before its body it
+places the run's pause-journal root and supersedes the workflow's journal there at its admission
+point, then runs with no authority. A
 caller-supplied snapshot is `UNCLAIMED`: no claim and no authority. Both leave stage 5's refusing
 child admission as the fallback.
 
@@ -24,7 +25,6 @@ child's own refusal included) propagate as themselves.
 
 from __future__ import annotations
 
-import os
 from collections.abc import Callable
 from enum import StrEnum
 from pathlib import Path
@@ -37,9 +37,11 @@ from harness_cp.workflow_driver_types import ChildResumeAuthority
 from harness_runtime.config import state_placement
 from harness_runtime.config.state_placement import StateRootPlacementError, place_state_dir
 from harness_runtime.lifecycle.claimed_child_admission import ClaimedChildAdmission
-from harness_runtime.lifecycle.journal_workflow_pause_store import (
-    JournalWorkflowPauseStore,
-    pause_journal_dir_for,
+from harness_runtime.lifecycle.durable_pause_resume_protocol import DurablePauseResumeProtocol
+from harness_runtime.lifecycle.journal_workflow_pause_store import JournalWorkflowPauseStore
+from harness_runtime.lifecycle.pause_journal_root_resolver import (
+    PauseJournalRootUnresolvedError,
+    resolve_pause_journal_root,
 )
 from harness_runtime.lifecycle.resume_claim_store import (
     ClaimBusyError,
@@ -98,12 +100,12 @@ class ResumeClaimRefusedError(Exception):
 
 
 class JournalDirectoryMismatchError(Exception):
-    """The bootstrapped capture directory is not the directory the record was read from.
+    """The run's bootstrapped capture directory is not the directory the record was read from.
 
-    Both may sit inside the verified root, yet a STATE_LEDGER binding changed (or a symlink in
-    it retargeted) between the pre-bootstrap read and bootstrap would pair a record claimed in
-    one directory with a run that captures and admits children in another. A `placement`
-    refusal: no claim is made and the body never runs.
+    A declared pause-journal root symlink retargeted between the pre-bootstrap read and bootstrap
+    would pair a record claimed in one directory with a run that captures and admits children in
+    another (Runtime spec v1.137 Rule B3: one journal file). A `placement` refusal: no claim is
+    made and the body never runs.
     """
 
     def __init__(self) -> None:
@@ -114,6 +116,19 @@ class JournalDirectoryMismatchError(Exception):
 
 
 type _PreBodyRefusal = GatewayRefusal | StateRootPlacementError | JournalDirectoryMismatchError
+
+
+def _run_journal_root(ctx: HarnessContext) -> Path:
+    """This run's pause-journal root: its durable capture directory, else a fresh resolution.
+
+    [LAW:one-source-of-truth] A durable run's capture directory was resolved once at bootstrap;
+    resolving the declared root again could name a different directory than its captures.
+    """
+    match ctx.pause_resume_protocol:
+        case DurablePauseResumeProtocol(journal_dir=journal_dir):
+            return journal_dir
+        case _:
+            return resolve_pause_journal_root(ctx.config)
 
 
 def _reason_of(refusal: _PreBodyRefusal) -> RootResumeRefusal | None:
@@ -161,10 +176,7 @@ class DurableRootResume:
                 # Looked up at call time: the same verifier stage 1 stamped the root with.
                 filesystem_type=state_placement.linux_filesystem_type,
             )
-            # The stage-5 capture derivation, resolved like the read's: containment alone would
-            # admit a different directory inside the same root.
-            capture_dir = pause_journal_dir_for(ctx.ledger_writer.handle.canonical_path.parent)
-            if Path(os.path.realpath(capture_dir)) != self.journal_dir:
+            if _run_journal_root(ctx) != self.journal_dir:
                 raise JournalDirectoryMismatchError
             store = ResumeClaimStore(placement=placement, tenant_id=ctx.config.tenant_id)
 
@@ -201,13 +213,14 @@ UNCLAIMED: Final = _Unclaimed()
 class FreshRunAdmissionError(Exception):
     """A fresh root run failed at its admission point; its workflow body did not run.
 
-    The message names no path or identifier; the failed journal operation is the `__cause__`.
+    The message names no path or identifier; the failed resolution, placement or journal
+    operation is the `__cause__`.
     """
 
     def __init__(self) -> None:
         super().__init__(
-            "the fresh run's supersession append failed and its workflow body did not run "
-            "(Runtime spec v1.137 Rule B3)"
+            "the fresh run's pause-journal root resolution, placement or supersession append "
+            "failed and its workflow body did not run (Runtime spec v1.137 Rule B3)"
         )
 
 
@@ -219,9 +232,8 @@ class FreshRunAdmission:
     is ever shared with a concurrent invocation. `failure` has one writer (`run`, before any
     body) and stays `None` whenever the body was reached.
 
-    The journal directory is the capture derivation's, so the supersession lands in the file
-    this binding's snapshots are captured to; the Rule B3/B7 root resolver replaces it at every
-    journal site at once.
+    Rule B3: the journal directory is the run's pause-journal root, placed under the verified state
+    root like every other journal site, so a durable run supersedes in the file it captures to.
     """
 
     def __init__(self, *, workflow_id: str, run_id: str) -> None:
@@ -231,14 +243,26 @@ class FreshRunAdmission:
 
     def run[R](self, ctx: HarnessContext, body: Body[R]) -> R:
         """Append the supersession record at the admission point, then run `body` unclaimed."""
-        store = JournalWorkflowPauseStore(
-            journal_dir=pause_journal_dir_for(ctx.ledger_writer.handle.canonical_path.parent),
-            tenant_id=ctx.config.tenant_id,
-        )
         try:
+            placement = place_state_dir(
+                _run_journal_root(ctx),
+                ctx.config,
+                ctx.verified_state_root,
+                what="pause-journal root",
+                filesystem_type=state_placement.linux_filesystem_type,
+            )
+            store = JournalWorkflowPauseStore(
+                journal_dir=placement.path, tenant_id=ctx.config.tenant_id
+            )
             store.supersede(self.workflow_id, self.run_id)
-        except (OSError, CrossProcessLockTimeoutError) as exc:
-            # [LAW:no-silent-failure] Rule B3: a failed append fails the run before its first step.
+        except (
+            PauseJournalRootUnresolvedError,
+            StateRootPlacementError,
+            OSError,
+            CrossProcessLockTimeoutError,
+        ) as exc:
+            # [LAW:no-silent-failure] Rule B3: a failed resolution, placement or append fails the
+            # run before its first step (witness I.16 F1).
             self.failure = FreshRunAdmissionError()
             raise self.failure from exc
         return body(None)
