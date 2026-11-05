@@ -2,8 +2,8 @@
 
 *Delta-only file. One contract amended: C-RT-27 (§14.17, text current at the base file v1.32) gains
 skill-content delivery. It amends §4 C-RT-04 `skills` load (via §14.17.5 invariant 7 and §14.17.7),
-§14.17.2 hook 2, §14.17.4 failure-mode taxonomy and §14.17.5 invariants 3, 6 and 7, and adds NEW
-§14.17.8. Hooks 1 and 3 are unchanged. Every other v1.138 and earlier term remains in force.
+§14.17.2 hook 2, §14.17.4 failure-mode taxonomy, §14.17.5 invariants 3, 6 and 7 and the §14.6 C-RT-16
+per-candidate attempt loop (one propagation arm), and adds NEW §14.17.8. Hooks 1 and 3 are unchanged. Every other v1.138 and earlier term remains in force.
 Proposed v1.135/v1.136 deltas are not amended. Cleared predecessor files are not edited.*
 
 **Status: PROPOSED — contract text for independent review and integration-lead ratification. Not
@@ -26,6 +26,7 @@ with no textual change below.
 | §4 C-RT-04 load (`load_skills_from_dir`) | Unavailable or invalid content is a typed load failure that aborts bootstrap stage 2. |
 | §14.17.2 hook 2 | The selected skills' content is rendered into the dispatch's effective system prompt. An unknown or duplicate selected id fails the step instead of being skipped. |
 | §14.17.4 | Two new fail classes: `RT-FAIL-SKILL-CONTENT-INVALID`, `RT-FAIL-SKILL-SELECTION-INVALID`. |
+| §14.6 C-RT-16 attempt loop | `SkillSelectionInvalidError` propagates through a by-name arm: no retry, candidate advance or breaker charge. The run's step `fail_class` names `RT-FAIL-SKILL-SELECTION-INVALID`. |
 | §14.17.5 inv 3, 6 | Inv 3 keeps the opt-out path but removes the skills-unbound skip. Inv 6 makes the hook-2 membership check a step failure. |
 | NEW §14.17.8 | Skill-content delivery contract and witnesses. |
 
@@ -97,24 +98,41 @@ with no textual change below.
 | Fail class | Trigger | Permanent? |
 |---|---|---|
 | `RT-FAIL-SKILL-CONTENT-INVALID` | `load_skills_from_dir` rejects a skill. The reason is one of `content-missing`, `content-unreadable`, `content-not-utf8`, `content-empty` or `version-sha-mismatch`. The typed error `SkillContentInvalidError(skill_id, content_path, reason)` carries the reason. | YES. Bootstrap stage 2 aborts, fail-closed per ADR-F4 v1.1. |
-| `RT-FAIL-SKILL-SELECTION-INVALID` | Hook 2 receives an unknown or duplicate id (reasons `unknown-id`, `duplicate-id`). The typed error `SkillSelectionInvalidError(skill_id, reason)` is raised at the dispatch site. | YES for the step. See the classification rule below. |
+| `RT-FAIL-SKILL-SELECTION-INVALID` | Hook 2 receives an unknown or duplicate id (reasons `unknown-id`, `duplicate-id`). The typed error `SkillSelectionInvalidError(skill_id, reason)` is raised at the dispatch site and carries the class attribute `rt_fail_class = "RT-FAIL-SKILL-SELECTION-INVALID"`. | YES for the step and run. See the propagation rule below. |
 
 Reasons are closed enums. Messages name the skill id and, for content failures, the content path.
 
-**Retry classification.** Hook 2 runs inside each C-RT-16 attempt (`retry_breaker_fallback.py`).
-`_classify_provider_exception` maps any unnamed exception to `TRANSIENT_RETRY`. So
-`SkillSelectionInvalidError` is admitted **by name** to its fail-fast (`None`) set. It is never
-admitted through inheritance from a payload-shape type. This follows the B-116 and B-114 precedent
-for deterministic, candidate-independent faults. It does not charge the breaker. Each remaining
-candidate fails identically before any provider call. The step then fails through the wrapper's
-existing fail-fast exhaustion path and the CP driver's step-failure boundary.
+**Propagation through C-RT-16 (amends the §14.6 per-candidate attempt loop).** Hook 2 runs inside
+`self.inner.dispatch` of every C-RT-16 attempt (`retry_breaker_fallback.py`). The selection reads
+only the loaded skill ids, the workflow id and the step index, never the candidate, so every attempt
+on every candidate would fail identically. `SkillSelectionInvalidError` therefore propagates untouched
+through a dedicated by-name `except` arm. The arm precedes the generic `except Exception` arm,
+beside the existing audit-signing and post-tool-effect arms. It sets `retry.delay_ms = 0` and
+`retry.terminal = "skill-selection-invalid"` on the attempt span, then re-raises. As a result:
+
+- No same-candidate retry and no candidate advance occur. No `fallback.exhausted` event is emitted
+  and no `RetryBreakerFallbackExhaustedError` is raised.
+- The breaker is not charged: `breaker.record_failure` is never called, because a selection fault
+  says nothing about `{provider, model}` health (the §14.6.3 test). A half-open trial is released
+  without an outcome by the existing outer `BaseException` arm (`_release_half_open_trial`, §14.6.4
+  cells 6-8 class).
+- The type is not added to `_classify_provider_exception`'s fail-fast set or to
+  `_BREAKER_CHARGE_WAIVED_TYPES`. Those govern the candidate-advancing arm, which this error never
+  reaches.
+
+**Step fail class.** The CP driver's step-dispatch boundary already surfaces an `rt_fail_class`
+marker through `_step_fail_class`. The run ends with `status = FAILED` and `fail_class =
+"step-failure: RT-FAIL-SKILL-SELECTION-INVALID: <message>"`. The marker lacks the
+`RT-FAIL-HITL-GATE-` prefix, so the driver's HITL carve-out does not apply. No CP driver change is
+required.
 
 ### §14.17.8.4 Invariants (amend §14.17.5)
 
 - **Inv 3 (amended).** Every hook site fires only when the emitter and hook are bound. Default
   config emits zero spans and delivers zero content. No bound hook skips work silently.
 - **Inv 6 (amended).** Hook 2 enforces membership and uniqueness as a step failure
-  (§14.17.8.2 item 2). Spans are never emitted for an invalid selection.
+  (§14.17.8.2 item 2). Spans are never emitted for an invalid selection. The failure propagates
+  through C-RT-16 without retry, candidate advance or breaker charge (§14.17.8.3).
 - **Inv 7 (amended).** `version_sha` and `body_tokens` derive from the loaded content bytes
   (§14.17.8.1). For every delivered block, `version_sha` in the block, in the span and on
   `ctx.skills[id].manifest` is the same value and equals `git hash-object` of the loaded file.
@@ -132,10 +150,15 @@ existing fail-fast exhaustion path and the CP driver's step-failure boundary.
 - **W3 delivery.** A workflow step dispatched with a hook selecting `[a, b]` reaches the
   provider adapter. The system prompt there is the base, then block `a`, then block `b`, then the
   memory packet when one is bound. Exactly two spans are emitted, with matching `version_sha`.
-- **W4 selection failures.** A hook returning an unknown id, or a duplicate id, fails the step
-  with the reason under C-RT-16 with at least two fallback candidates. The test observes zero
-  spans, zero provider calls on every candidate and zero retry staircase. Driving the wrapper
-  directly, `_classify_provider_exception(SkillSelectionInvalidError(...))` returns `None`.
+- **W4 selection failures.** A workflow step whose hook returns an unknown id, or a duplicate id,
+  runs under C-RT-16 with at least two fallback candidates and `max_attempts >= 2`. The run ends
+  with `RunResult.status = FAILED` and a `fail_class` beginning
+  `step-failure: RT-FAIL-SKILL-SELECTION-INVALID:`, with the reason in the message. The test
+  observes zero `skill.activation` spans, zero provider calls on every candidate, one attempt span
+  with `retry.terminal = "skill-selection-invalid"` and no `fallback.exhausted` event. The primary
+  candidate's breaker records no failure: its state and failure count are unchanged.
+- **W4b half-open trial.** With the primary breaker half-open, the same selection failure leaves
+  the breaker half-open with its trial re-armed, not opened.
 - **W5 opt-out and empty.** With no hook, and with a hook returning `[]`, the provider sees the
   pre-v1.139 payload byte-for-byte and zero spans are emitted.
 - **W6 conflict.** Skills selected while the payload carries its own system source raise the
@@ -151,8 +174,9 @@ existing fail-fast exhaustion path and the CP driver's step-failure boundary.
 `lifecycle/llm_dispatch.py` (hook 2 at the current 1256–1286 block, and composition at the
 effective-system-prompt site before `compose_system_prompt_with_memory_packet`),
 `lifecycle/skill_activation.py` (unchanged emitter; the selection check precedes `emit`),
-`lifecycle/retry_breaker_fallback.py` (by-name fail-fast admission),
-`harness_runtime/types.py` (no field change expected), and `tests/test_lifecycle_skills.py`,
+`lifecycle/retry_breaker_fallback.py` (by-name propagation arm),
+`harness_runtime/types.py` (no field change expected), `harness-cp` `workflow_driver.py` (unchanged;
+`_step_fail_class` reads the marker), and `tests/test_lifecycle_skills.py`,
 `tests/test_lifecycle_skill_activation.py` and the two skill integration tests (fixtures gain
 content files).
 
