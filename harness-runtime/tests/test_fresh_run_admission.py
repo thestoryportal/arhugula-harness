@@ -6,14 +6,15 @@ I.16. Every `run_workflow` invocation builds its own `FreshRunAdmission`, which 
 when the journal exists and is non-empty, before the body's first step. Earlier and later are
 journal positions under that lock, never start or wall-clock time.
 
-The journal directory is still the capture derivation; the Rule B3/B7 root resolver is a later
-slice, so I.16's root-resolution-failure caller (F1) is not witnessed here. Overlap is forced by
-events and the real `flock`, never timed.
+The journal directory is the installation's resolved pause-journal root (Rule B3), placed under
+the verified state root; an unresolved root fails the run before its body (Rule B7, I.16 F1).
+Overlap is forced by events and the real `flock`, never timed.
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import json
 import os
 import subprocess
@@ -28,6 +29,7 @@ from typing import Any
 import pytest
 from harness_cp.handoff_context import StateSummary
 from harness_cp.pause_resume_protocol_types import PauseSnapshot, WorkflowPauseReason
+from harness_is.pause_journal_root import UnresolvedCause
 from harness_is.state_ledger_entry_schema import Identifier
 from harness_runtime.lifecycle import journal_workflow_pause_store as journal_module
 from harness_runtime.lifecycle.journal_workflow_pause_store import (
@@ -35,17 +37,23 @@ from harness_runtime.lifecycle.journal_workflow_pause_store import (
     JournalWorkflowPauseStore,
     PauseJournalReadCause,
     cross_process_journal_lock,
-    pause_journal_dir_for,
+)
+from harness_runtime.lifecycle.pause_journal_root_resolver import (
+    INSTALLATION_STATE,
+    STORAGE_UNSELECTED,
+    PauseJournalRootUnresolvedError,
 )
 from harness_runtime.lifecycle.root_resume_admission import (
     FreshRunAdmission,
     FreshRunAdmissionError,
 )
+from harness_runtime.types import PathBindingConfig
 from mcp.types import CallToolResult, TextContent
 
 from .integration.test_r_cc_1_api_resume import (
     _patched_runtime,  # noqa: F401  # pyright: ignore[reportPrivateUsage, reportUnusedImport]
 )
+from .pause_journal_roots import declare_pause_journal_root
 from .test_b104_root_resume_facade import (
     _WORKFLOW_ID,  # pyright: ignore[reportPrivateUsage]
     Harness,
@@ -81,23 +89,28 @@ def _snapshot(workflow_id: str, run_id: str) -> PauseSnapshot:
     )
 
 
-def _ledger_dir(tmp_path: Path) -> Path:
-    return tmp_path / "state-ledger"
+def _journal_root(tmp_path: Path) -> Path:
+    return tmp_path.resolve() / "pause-journal"
+
+
+@pytest.fixture(autouse=True)
+def _installation_root(tmp_path: Path) -> None:
+    """Each test's installation declares an existing root inside its verified state root."""
+    declare_pause_journal_root(_journal_root(tmp_path)).mkdir()
 
 
 def _store(tmp_path: Path) -> JournalWorkflowPauseStore:
-    """The store over the journal directory a fresh run's admission derives (capture's)."""
-    return JournalWorkflowPauseStore(
-        journal_dir=pause_journal_dir_for(_ledger_dir(tmp_path)), tenant_id=None
-    )
+    """The store over the journal directory a fresh run's admission resolves."""
+    return JournalWorkflowPauseStore(journal_dir=_journal_root(tmp_path), tenant_id=None)
 
 
 def _ctx(tmp_path: Path) -> Any:
-    """The two facts the admission reads from a bootstrapped context: ledger dir and tenant."""
-    state_jsonl = _ledger_dir(tmp_path) / "state.jsonl"
+    """What the admission reads from a bootstrapped context: bindings, placement, stamp, tenant."""
     return SimpleNamespace(
-        ledger_writer=SimpleNamespace(handle=SimpleNamespace(canonical_path=state_jsonl)),
-        config=SimpleNamespace(tenant_id=None),
+        config=SimpleNamespace(
+            tenant_id=None, path_bindings=PathBindingConfig(), state_placement=object()
+        ),
+        verified_state_root=SimpleNamespace(realpath=tmp_path.resolve()),
     )
 
 
@@ -122,14 +135,27 @@ def _admit_in_another_process(tmp_path: Path, workflow_id: str, run_id: str) -> 
         "import sys\n"
         "from pathlib import Path\n"
         "from types import SimpleNamespace as N\n"
+        "from harness_runtime.lifecycle.pause_journal_root_resolver import (\n"
+        "    INSTALLATION_STATE, InstallationState)\n"
         "from harness_runtime.lifecycle.root_resume_admission import FreshRunAdmission\n"
-        "ledger, workflow_id, run_id = sys.argv[1:4]\n"
-        "ctx = N(ledger_writer=N(handle=N(canonical_path=Path(ledger) / 'state.jsonl')),\n"
-        "        config=N(tenant_id=None))\n"
+        "from harness_runtime.types import PathBindingConfig\n"
+        "state_root, journal_root, workflow_id, run_id = sys.argv[1:5]\n"
+        "INSTALLATION_STATE.set(InstallationState(({'installation_root': journal_root},)))\n"
+        "ctx = N(config=N(tenant_id=None, path_bindings=PathBindingConfig(),\n"
+        "                 state_placement=object()),\n"
+        "        verified_state_root=N(realpath=Path(state_root)))\n"
         "FreshRunAdmission(workflow_id=workflow_id, run_id=run_id).run(ctx, lambda _: None)\n"
     )
     subprocess.run(
-        [sys.executable, "-c", script, str(_ledger_dir(tmp_path)), workflow_id, run_id],
+        [
+            sys.executable,
+            "-c",
+            script,
+            str(tmp_path.resolve()),
+            str(_journal_root(tmp_path)),
+            workflow_id,
+            run_id,
+        ],
         check=True,
         timeout=60,
     )
@@ -153,7 +179,6 @@ def test_a_fresh_run_with_no_journal_writes_no_line(tmp_path: Path) -> None:
 def test_a_fresh_run_over_an_empty_journal_writes_no_line(tmp_path: Path) -> None:
     store = _store(tmp_path)
     journal = store._journal_file(_W)  # pyright: ignore[reportPrivateUsage]
-    journal.parent.mkdir(parents=True)
     journal.touch()
 
     FreshRunAdmission(workflow_id=_W, run_id="run-fresh").run(_ctx(tmp_path), lambda _: None)
@@ -193,6 +218,28 @@ def test_a_failed_append_fails_the_run_before_its_body_and_records_its_own_failu
     assert raised.value is admission.failure
     assert isinstance(raised.value.__cause__, PermissionError)
     assert str(tmp_path) not in str(raised.value)
+
+
+def test_an_unresolved_root_fails_the_run_before_its_body_and_writes_nothing(
+    tmp_path: Path,
+) -> None:
+    """I.16 F1: production's unselected storage declares no root, so the run never starts."""
+    _store(tmp_path).capture(_snapshot(_W, "run-paused"), depth=0)
+    before = sorted(p.name for p in _journal_root(tmp_path).iterdir())
+    INSTALLATION_STATE.set(STORAGE_UNSELECTED)
+    admission = FreshRunAdmission(workflow_id=_W, run_id="run-fresh")
+    body: list[object] = []
+
+    with pytest.raises(FreshRunAdmissionError) as raised:
+        admission.run(_ctx(tmp_path), body.append)
+
+    assert body == []
+    assert raised.value is admission.failure
+    cause = raised.value.__cause__
+    assert isinstance(cause, PauseJournalRootUnresolvedError)
+    assert cause.cause is UnresolvedCause.UNBOUND
+    assert sorted(p.name for p in _journal_root(tmp_path).iterdir()) == before
+    assert _order(_store(tmp_path), _W) == ["snapshot:run-paused"]
 
 
 # --- I.16 / criterion 18: overlapping root runs are ordered by journal position (cross-process) --
@@ -258,7 +305,6 @@ def test_a_snapshot_written_while_an_admission_waits_on_the_lock_is_superseded(
 ) -> None:
     store = _store(tmp_path)
     journal = store._journal_file(_W)  # pyright: ignore[reportPrivateUsage]
-    journal.parent.mkdir(parents=True)
     failures: list[BaseException] = []
 
     def admit() -> None:
@@ -271,7 +317,8 @@ def test_a_snapshot_written_while_an_admission_waits_on_the_lock_is_superseded(
 
     with _admission_waiting_on_the_held_lock(monkeypatch) as waiting:
         with cross_process_journal_lock(journal):
-            admission = threading.Thread(target=admit)
+            # A plain thread starts from an empty context; carry the test's declared root.
+            admission = threading.Thread(target=contextvars.copy_context().run, args=(admit,))
             admission.start()
             assert waiting.wait(timeout=10), "the admission never reached the journal lock"
             # A capture's bytes, written by the lock holder: ordered before the admission's check.

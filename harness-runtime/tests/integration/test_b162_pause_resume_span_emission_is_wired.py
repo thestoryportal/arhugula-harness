@@ -35,13 +35,14 @@ import ast
 import importlib.util
 import pathlib
 import sys
-import tempfile
 from typing import Any
 
 import pytest
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+from ..pause_journal_roots import placed_config
 
 _REPO = pathlib.Path(__file__).resolve().parents[3]
 _DRIVER = _REPO / "harness-cp/src/harness_cp/workflow_driver.py"
@@ -60,7 +61,8 @@ def _b72() -> Any:
     path = pathlib.Path(__file__).with_name(
         "test_b72_fanout_sub_agent_dispatch_hitl_gate_resume.py"
     )
-    name = "_b162_b72_harness"
+    # Inside this package, so the harness's own relative imports resolve.
+    name = f"{__package__}._b162_b72_harness"
     if name in sys.modules:
         return sys.modules[name]
     spec = importlib.util.spec_from_file_location(name, path)
@@ -71,7 +73,7 @@ def _b72() -> Any:
     return module
 
 
-async def _run_and_collect(*, then_resume: bool = False) -> list[Any]:
+async def _run_and_collect(placed_root: pathlib.Path, *, then_resume: bool = False) -> list[Any]:
     """Drive the shipped `api.run` (and optionally `api.resume`) path; return exported spans.
 
     `then_resume=True` completes AC #5's *"pause + resume"* half by feeding the paused
@@ -92,32 +94,31 @@ async def _run_and_collect(*, then_resume: bool = False) -> list[Any]:
         harness._install_fake_providers(mp, harness._SucceedingAnthropicClient())
         harness._install_fake_od_stage4(mp)
         harness._install_fake_webhook_composer_factory(mp, [])
-        with tempfile.TemporaryDirectory() as tmp:
-            result = await harness.api_run(
+        result = await harness.api_run(
+            harness._FanOutSubAgentDispatchWorkflow(),
+            config=placed_config(harness._config(placed_root), placed_root),
+        )
+        assert result.status == "paused", f"the venue did not reach its pause: {result.status}"
+        if then_resume:
+            await harness.resume(
                 harness._FanOutSubAgentDispatchWorkflow(),
-                config=harness._config(pathlib.Path(tmp)),
+                pause_snapshot=result.pause_snapshot,
+                resume_context=harness.ResumeContext(
+                    hitl_response=harness._resolved_hitl_result(entry_suffix="b162")
+                ),
+                config=placed_config(harness._config(placed_root), placed_root),
             )
-            assert result.status == "paused", f"the venue did not reach its pause: {result.status}"
-            if then_resume:
-                await harness.resume(
-                    harness._FanOutSubAgentDispatchWorkflow(),
-                    pause_snapshot=result.pause_snapshot,
-                    resume_context=harness.ResumeContext(
-                        hitl_response=harness._resolved_hitl_result(entry_suffix="b162")
-                    ),
-                    config=harness._config(pathlib.Path(tmp)),
-                )
     return list(exporter.get_finished_spans())
 
 
 @pytest.mark.asyncio
-async def test_pause_captured_is_emitted_by_the_shipped_run() -> None:
+async def test_pause_captured_is_emitted_by_the_shipped_run(placed_root: pathlib.Path) -> None:
     """**AC #1 + AC #5** — the span exists at runtime, not just as a helper.
 
     Reverting the `_emit_pause_captured(...)` call in `workflow_driver.py` turns this RED,
     which is the whole point: before B-162 this assertion could not have passed at all.
     """
-    spans = await _run_and_collect()
+    spans = await _run_and_collect(placed_root)
     captured = [s for s in spans if s.name == "pause.captured"]
     assert captured, (
         f"`pause.captured` was not emitted by the shipped run; got {sorted({s.name for s in spans})}"
@@ -126,13 +127,15 @@ async def test_pause_captured_is_emitted_by_the_shipped_run() -> None:
 
 
 @pytest.mark.asyncio
-async def test_pause_captured_carries_the_four_canonical_attributes() -> None:
+async def test_pause_captured_carries_the_four_canonical_attributes(
+    placed_root: pathlib.Path,
+) -> None:
     """**AC #4** — attribute names byte-exact per OD §C-OD-30.1, not merely present.
 
     Asserting the exact set (rather than a subset) means a dropped attribute reddens, and
     an extra one forces a deliberate contract re-read rather than silent drift.
     """
-    spans = await _run_and_collect()
+    spans = await _run_and_collect(placed_root)
     captured = [s for s in spans if s.name == "pause.captured"]
     assert captured, "`pause.captured` was not emitted — see the emission test above"
 
@@ -253,7 +256,9 @@ def test_the_resume_emitter_is_wired_to_the_entry_point_call() -> None:
 
 
 @pytest.mark.asyncio
-async def test_resume_attempted_is_emitted_and_carries_its_four_attributes() -> None:
+async def test_resume_attempted_is_emitted_and_carries_its_four_attributes(
+    placed_root: pathlib.Path,
+) -> None:
     """**AC #2 + AC #5's resume half** — driven through the real `resume()` entry point.
 
     The pause tests above cover only half of what U-CP-65 AC #5 asks for (*"pause + resume
@@ -261,7 +266,7 @@ async def test_resume_attempted_is_emitted_and_carries_its_four_attributes() -> 
     `resume()` API, which is exactly where `_emit_resume_attempted` is wired, and asserts
     the canonical `resume.*` attribute set rather than mere presence.
     """
-    spans = await _run_and_collect(then_resume=True)
+    spans = await _run_and_collect(placed_root, then_resume=True)
     attempted = [s for s in spans if s.name == "resume.attempted"]
     assert attempted, (
         f"`resume.attempted` was not emitted by the shipped resume; got "

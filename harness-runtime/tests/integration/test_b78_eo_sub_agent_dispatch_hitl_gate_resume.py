@@ -151,6 +151,8 @@ from harness_runtime.types import (
     RuntimeConfig,
 )
 
+from ..pause_journal_roots import placed_config
+
 _WORKLOAD = WorkloadClass.SOFTWARE_ENGINEERING
 _SURFACE = DeploymentSurface.LOCAL_DEVELOPMENT
 _WORKFLOW_ID = "wf-b78-eo-sub-agent-dispatch-hitl-gate-resume"
@@ -622,6 +624,7 @@ def _rejected_hitl_result(*, entry_suffix: str) -> HITLResult:
 @pytest.mark.asyncio
 async def test_eo_generate_step_own_gate_pauses_on_first_dispatch(
     tmp_path: Path,
+    placed_root: Path,
     monkeypatch: pytest.MonkeyPatch,
     _captured_webhook_requests: list[httpx.Request],
 ) -> None:
@@ -646,7 +649,7 @@ async def test_eo_generate_step_own_gate_pauses_on_first_dispatch(
 
     monkeypatch.setattr(sub_agent_dispatch.RuntimeSubAgentDispatcher, "dispatch", _spying_dispatch)
 
-    config = _config(tmp_path)
+    config = placed_config(_config(placed_root), placed_root)
     workflow = _EvaluatorOptimizerSubAgentDispatchWorkflow()
 
     paused = await api_run(workflow, config=config)
@@ -682,6 +685,7 @@ async def test_eo_generate_step_own_gate_pauses_on_first_dispatch(
 @pytest.mark.asyncio
 async def test_eo_generate_step_gate_resume_with_resolved_answer_is_consumed(
     tmp_path: Path,
+    placed_root: Path,
     monkeypatch: pytest.MonkeyPatch,
     _captured_webhook_requests: list[httpx.Request],
 ) -> None:
@@ -727,7 +731,7 @@ async def test_eo_generate_step_gate_resume_with_resolved_answer_is_consumed(
 
     monkeypatch.setattr(sub_agent_dispatch.RuntimeSubAgentDispatcher, "dispatch", _spying_dispatch)
 
-    config = _config(tmp_path)
+    config = placed_config(_config(placed_root), placed_root)
     workflow = _EvaluatorOptimizerSubAgentDispatchWorkflow()
 
     paused = await api_run(workflow, config=config)
@@ -788,6 +792,7 @@ async def test_eo_generate_step_gate_resume_with_resolved_answer_is_consumed(
 @pytest.mark.asyncio
 async def test_eo_generate_step_gate_resume_with_reject_is_terminal_not_paused(
     tmp_path: Path,
+    placed_root: Path,
     monkeypatch: pytest.MonkeyPatch,
     _captured_webhook_requests: list[httpx.Request],
 ) -> None:
@@ -813,7 +818,7 @@ async def test_eo_generate_step_gate_resume_with_reject_is_terminal_not_paused(
 
     monkeypatch.setattr(sub_agent_dispatch.RuntimeSubAgentDispatcher, "dispatch", _spying_dispatch)
 
-    config = _config(tmp_path)
+    config = placed_config(_config(placed_root), placed_root)
     workflow = _EvaluatorOptimizerSubAgentDispatchWorkflow()
 
     paused = await api_run(workflow, config=config)
@@ -855,6 +860,7 @@ async def test_eo_generate_step_gate_resume_with_reject_is_terminal_not_paused(
 @pytest.mark.asyncio
 async def test_dh_stage_own_gate_pauses_and_resumes(
     tmp_path: Path,
+    placed_root: Path,
     monkeypatch: pytest.MonkeyPatch,
     _captured_webhook_requests: list[httpx.Request],
 ) -> None:
@@ -879,7 +885,7 @@ async def test_dh_stage_own_gate_pauses_and_resumes(
 
     monkeypatch.setattr(sub_agent_dispatch.RuntimeSubAgentDispatcher, "dispatch", _spying_dispatch)
 
-    config = _config(tmp_path)
+    config = placed_config(_config(placed_root), placed_root)
     workflow = _DecentralizedHandoffSubAgentDispatchWorkflow()
 
     paused = await api_run(workflow, config=config)
@@ -933,6 +939,7 @@ async def test_dh_stage_own_gate_pauses_and_resumes(
 @pytest.mark.asyncio
 async def test_dh_stage_gate_resume_with_reject_is_terminal_not_paused(
     tmp_path: Path,
+    placed_root: Path,
     monkeypatch: pytest.MonkeyPatch,
     _captured_webhook_requests: list[httpx.Request],
 ) -> None:
@@ -953,7 +960,7 @@ async def test_dh_stage_gate_resume_with_reject_is_terminal_not_paused(
 
     monkeypatch.setattr(sub_agent_dispatch.RuntimeSubAgentDispatcher, "dispatch", _spying_dispatch)
 
-    config = _config(tmp_path)
+    config = placed_config(_config(placed_root), placed_root)
     workflow = _DecentralizedHandoffSubAgentDispatchWorkflow()
 
     paused = await api_run(workflow, config=config)

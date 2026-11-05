@@ -103,7 +103,6 @@ __all__ = [
     "encode_pause_journal_key",
     "journal_exclusion_is_degraded",
     "legacy_pause_journal_filename",
-    "pause_journal_dir_for",
     "pause_journal_filename",
 ]
 
@@ -350,20 +349,6 @@ that replaces that inode. It is a LOCK file, never a canonical one — it carrie
 no bytes and nothing reads it. Reads open one sha256-named path directly and
 nothing globs this directory, so the extra sibling is inert.
 """
-
-
-def pause_journal_dir_for(state_ledger_dir: Path) -> Path:
-    """Return the pause-journal directory co-located under the STATE_LEDGER dir.
-
-    The single source of truth for the journal directory location, consumed by
-    BOTH the stage-5 factory (which derives ``state_ledger_dir`` from
-    ``ctx.ledger_writer.handle.canonical_path.parent``) and ``api.resume`` (which
-    resolves it from ``config`` via ``PathResolver``) — both compute the same
-    ``<state_ledger_dir>/pause-journal`` path for the same
-    ``(workflow_class, deployment_surface)``, so a capture-side write and a
-    resume-side read over a fresh bootstrap find the same file (restart-survival).
-    """
-    return state_ledger_dir / PAUSE_JOURNAL_SUBDIR
 
 
 # ---------------------------------------------------------------------------

@@ -67,6 +67,8 @@ from harness_runtime.types import (
     RuntimeConfig,
 )
 
+from ..pause_journal_roots import placed_config
+
 # ---------------------------------------------------------------------------
 # Fixture scaffolding (mirrors test_bootstrap.py).
 # ---------------------------------------------------------------------------
@@ -346,6 +348,7 @@ async def test_e2e_shutdown_idempotent(
 @pytest.mark.asyncio
 async def test_e2e_run_executes_workflow_via_cp_driver(
     tmp_path: Path,
+    placed_root: Path,
     _patched_runtime: dict[str, Any],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -375,7 +378,7 @@ async def test_e2e_run_executes_workflow_via_cp_driver(
     from harness_runtime.api import RunResult
     from harness_runtime.api import run as _run
 
-    config = _config(tmp_path)
+    config = placed_config(_config(placed_root), placed_root)
     monkeypatch.setattr("harness_runtime.api._default_config", lambda: config)
 
     # Track ledger writes by patching the LedgerWriter.append site post-bootstrap.
@@ -481,6 +484,7 @@ async def test_e2e_run_executes_workflow_via_cp_driver(
 @pytest.mark.asyncio
 async def test_e2e_run_returns_drained_when_flag_set_before_execute(
     tmp_path: Path,
+    placed_root: Path,
     _patched_runtime: dict[str, Any],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -496,7 +500,7 @@ async def test_e2e_run_returns_drained_when_flag_set_before_execute(
     """
     from harness_runtime.api import run as _run
 
-    config = _config(tmp_path)
+    config = placed_config(_config(placed_root), placed_root)
     monkeypatch.setattr("harness_runtime.api._default_config", lambda: config)
 
     real_run_bootstrap = run_bootstrap
@@ -594,6 +598,7 @@ async def test_e2e_run_returns_drained_when_flag_set_before_execute(
 @pytest.mark.asyncio
 async def test_e2e_run_surfaces_drain_timeout_when_step_exceeds_budget(
     tmp_path: Path,
+    placed_root: Path,
     _patched_runtime: dict[str, Any],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -617,7 +622,9 @@ async def test_e2e_run_surfaces_drain_timeout_when_step_exceeds_budget(
     from harness_runtime.api import run as _run
 
     # Tight 200ms budget — far below the test-step sleep.
-    config = _config(tmp_path).model_copy(update={"drain_timeout_seconds": 0.2})
+    config = placed_config(_config(placed_root), placed_root).model_copy(
+        update={"drain_timeout_seconds": 0.2}
+    )
     monkeypatch.setattr("harness_runtime.api._default_config", lambda: config)
 
     class _SlowDispatcher:
@@ -680,6 +687,7 @@ async def test_e2e_run_surfaces_drain_timeout_when_step_exceeds_budget(
 @pytest.mark.asyncio
 async def test_e2e_run_returns_bounded_report_with_saturated_executor(
     tmp_path: Path,
+    placed_root: Path,
     _patched_runtime: dict[str, Any],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -722,7 +730,9 @@ async def test_e2e_run_returns_bounded_report_with_saturated_executor(
     release = threading.Event()
     started = threading.Event()
 
-    config = _config(tmp_path).model_copy(update={"drain_timeout_seconds": 0.2})
+    config = placed_config(_config(placed_root), placed_root).model_copy(
+        update={"drain_timeout_seconds": 0.2}
+    )
     monkeypatch.setattr("harness_runtime.api._default_config", lambda: config)
 
     # The REAL shutdown, on a tighter budget: with the executor saturated the
@@ -819,6 +829,7 @@ async def test_e2e_run_returns_bounded_report_with_saturated_executor(
 @pytest.mark.asyncio
 async def test_e2e_run_step_body_fires_cost_attribution_chain(
     tmp_path: Path,
+    placed_root: Path,
     _patched_runtime: dict[str, Any],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -874,7 +885,7 @@ async def test_e2e_run_step_body_fires_cost_attribution_chain(
     from harness_od.idempotency_join_dedup import DispatchKind, SpanCostRecord
     from harness_runtime.api import run as _run
 
-    config = _config(tmp_path)
+    config = placed_config(_config(placed_root), placed_root)
     monkeypatch.setattr("harness_runtime.api._default_config", lambda: config)
 
     # Captured surfaces: the ctx (for cost_chain access from the
