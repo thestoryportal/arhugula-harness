@@ -983,9 +983,10 @@ def test_ac11_the_preexisting_migrate_audit_sidecar_gap_is_not_absorbed() -> Non
     from harness_runtime.cli.app import app
 
     registered = {command.name for command in app.registered_commands}
-    # 5 shipped before this unit + the 2 it adds.
+    # 5 shipped before this unit + the 2 it adds + `resume` (U-RT-160b, spec v1.137 §D).
     assert registered == {
         "run",
+        "resume",
         "daemon",
         "inspect",
         "shutdown",
