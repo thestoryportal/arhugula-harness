@@ -10,7 +10,8 @@
 
 | Axis | Spec |
 |---|---|
-| Runtime | `Spec_Harness_Runtime_v1_139.md` (**v1.139 — current cleared HEAD**, 2026-11-05; delta over v1.138, or over cleared v1.137 if v1.138 does not land first; clearance `Spec_Harness_Runtime-v1_139-cleared-2026-11-05.md`; see `.harness/artifact-heads.md`) |
+| Runtime | `Spec_Harness_Runtime_v1_139.md` (**v1.139 — current cleared HEAD**, 2026-11-05; delta over cleared v1.138; clearance `Spec_Harness_Runtime-v1_139-cleared-2026-11-05.md`; see `.harness/artifact-heads.md`) |
+| Runtime | `Spec_Harness_Runtime_v1_138.md` (**v1.138 — former cleared HEAD**, 2026-11-05; delta over v1.137; Proposed v1.135/v1.136 not cleared; clearance `spec-harness-runtime-v1-138-cleared-2026-11-05.md`; see `.harness/artifact-heads.md`) |
 | Runtime | `Spec_Harness_Runtime_v1_137.md` (**v1.137 — former cleared HEAD**, 2026-11-04; delta over v1.134; Proposed v1.135/v1.136 not cleared; clearance `spec-harness-runtime-v1-137-cleared-2026-11-04.md`; see `.harness/artifact-heads.md`) |
 | Runtime | `Spec_Harness_Runtime_v1_134.md` (**v1.134 — former cleared HEAD**, 2026-10-04; clearance `spec-harness-runtime-v1-134-cleared-2026-10-04.md`; see `.harness/artifact-heads.md`) |
 | Runtime | `Spec_Harness_Runtime_v1_133.md` (**v1.133 — former cleared HEAD**, 2026-09-30; clearance `spec-harness-runtime-v1-133-cleared-2026-09-30.md`; see `.harness/artifact-heads.md`) |

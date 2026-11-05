@@ -107,6 +107,7 @@ def test_schema_pattern_p1_alignment_with_cp_validator_framework() -> None:
     from harness_cp.sub_agent_gate_level_descent import GateLevel
     from harness_cp.validator_framework import ConcreteValidatorFramework
     from harness_cp.validator_framework_types import (
+        ValidatorBurdenLedger,
         ValidatorFailClass,
         ValidatorOutcome,
         ValidatorResult,
@@ -148,7 +149,9 @@ def test_schema_pattern_p1_alignment_with_cp_validator_framework() -> None:
     framework = ConcreteValidatorFramework(
         validator_registry={step.step_id: _FailingValidator()},
     )
-    evaluation = asyncio.run(framework.evaluate(step, {}, step_context=ctx))
+    evaluation = asyncio.run(
+        framework.evaluate(step, {}, step_context=ctx, burden=ValidatorBurdenLedger())
+    )
 
     # Every CP-emitted key must be a recognized validator.* OD canonical key
     # OR a step.id (also in the schema). non-validator.* keys are not constrained.

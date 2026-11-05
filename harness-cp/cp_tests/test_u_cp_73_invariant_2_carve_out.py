@@ -26,6 +26,7 @@ from harness_core.identity import StepID
 from harness_cp.sub_agent_gate_level_descent import GateLevel
 from harness_cp.validator_framework import ConcreteValidatorFramework
 from harness_cp.validator_framework_types import (
+    ValidatorBurdenLedger,
     ValidatorEvaluation,
     ValidatorOutcome,
     ValidatorResult,
@@ -129,12 +130,16 @@ async def test_flag_on_typed_family_raises_through_hook_and_nonmember_still_swal
     member_hook = _RaisingHook(_FakeSigningError("kms unavailable (test)"))
     framework = _framework(member_hook, raise_through=(_FakeSigningError,))
     with pytest.raises(_FakeSigningError):
-        await framework.evaluate(_make_step(), {}, step_context=_make_step_context())
+        await framework.evaluate(
+            _make_step(), {}, step_context=_make_step_context(), burden=ValidatorBurdenLedger()
+        )
     assert member_hook.calls == 1, "invariant 4: the hook fires at most once"
 
     nonmember_hook = _RaisingHook(ValueError("rate-table miss (test)"))
     framework_nm = _framework(nonmember_hook, raise_through=(_FakeSigningError,))
-    evaluation = await framework_nm.evaluate(_make_step(), {}, step_context=_make_step_context())
+    evaluation = await framework_nm.evaluate(
+        _make_step(), {}, step_context=_make_step_context(), burden=ValidatorBurdenLedger()
+    )
     assert evaluation.result.outcome is ValidatorOutcome.PASS
     assert nonmember_hook.calls == 1
 
@@ -148,7 +153,9 @@ async def test_flag_off_both_swallowed_as_today() -> None:
     for exc in (_FakeSigningError("kms unavailable (test)"), ValueError("miss")):
         hook = _RaisingHook(exc)
         framework = _framework(hook, raise_through=())
-        evaluation = await framework.evaluate(_make_step(), {}, step_context=_make_step_context())
+        evaluation = await framework.evaluate(
+            _make_step(), {}, step_context=_make_step_context(), burden=ValidatorBurdenLedger()
+        )
         assert evaluation.result.outcome is ValidatorOutcome.PASS
         assert hook.calls == 1
 
@@ -164,5 +171,7 @@ async def test_raise_through_default_is_empty_at_legacy_construction() -> None:
         validator_registry={step.step_id: _PassValidator()},
         post_evaluate_hook=hook,
     )
-    evaluation = await framework.evaluate(step, {}, step_context=_make_step_context())
+    evaluation = await framework.evaluate(
+        step, {}, step_context=_make_step_context(), burden=ValidatorBurdenLedger()
+    )
     assert evaluation.result.outcome is ValidatorOutcome.PASS

@@ -56,8 +56,7 @@ from opentelemetry.trace import Status, StatusCode, TracerProvider
 if TYPE_CHECKING:
     from harness_is.state_ledger_entry_schema import Identifier
 
-    from harness_cp.validator_framework import SyncValidatorFrameworkFacade
-    from harness_cp.validator_framework_types import ValidatorEvaluation
+    from harness_cp.validator_framework_types import ValidatorEvaluation, ValidatorRunBinding
 
 from harness_core import (
     JournalRecordRef,
@@ -153,6 +152,7 @@ from harness_cp.sub_agent_dispatch_capacity_authority import (
     DefaultCapacityAuthority as _DefaultCapacityAuthority,
 )
 from harness_cp.topology_pattern import CascadePolicy, TopologyPattern
+from harness_cp.validator_framework_types import ValidatorFrameworkFailureError
 from harness_cp.workflow_driver_errors import (
     BranchBarrierDeadlineExceededError,
     EngineClassNotYetMaterializedError,
@@ -559,18 +559,6 @@ class DriverContext(Protocol):
     # (HarnessContext exposes the materialized provider with the same
     # `object`-typed field per harness-runtime/types.py).
     tracer_provider: object
-
-    # OPTIONAL ValidatorFramework — operator-opt-in per C-CP-25 §25.3 +
-    # Decision 2.D3 (Phase A.2 RATIFIED). When None, the U-CP-61 post-dispatch
-    # validation hook is skipped (driver-level opt-out). When bound, the
-    # operator-populated validator_registry must cover every step.step_id
-    # (Decision 2.D3 in-band opt-out is via no-op validator at registry, not
-    # at framework binding). Typed as `object | None` so the CP Protocol does
-    # not import the sync facade type — concrete binding at runtime stage 5
-    # uses `harness_cp.validator_framework.SyncValidatorFrameworkFacade`
-    # (structural match via the `.evaluate(...)` sync method per
-    # `SyncValidatorFrameworkLike` Protocol).
-    validator_framework: object | None
 
     # OPTIONAL PauseResumeProtocol — U-RT-87 (v2.20) operator-opt-in per
     # runtime spec v1.21 §14.14.3 workflow_driver per-step pre-entry
@@ -1704,6 +1692,17 @@ def _step_fail_class(prefix: str, exc: BaseException) -> str:
     `ManagedAgentsSessionError` name-match)."""
     code = getattr(exc, "rt_fail_class", None) or type(exc).__name__
     return f"{prefix}: {code}: {exc}"
+
+
+def _validator_fail_class(exc: Exception) -> str:
+    """Compose the `fail_class` of a validator-evaluation failure (CP v1.129 §28.11.4).
+
+    [LAW:single-enforcer] the one place a typed validator failure keeps its CP
+    fail class; every other exception stays `validator-framework-failure`.
+    """
+    if isinstance(exc, ValidatorFrameworkFailureError):
+        return f"{exc.fail_class}: {exc}"
+    return f"validator-framework-failure: {type(exc).__name__}: {exc}"
 
 
 _HITL_GATE_TERMINAL_FAIL_CLASS_PREFIX = "RT-FAIL-HITL-GATE-"
@@ -3236,6 +3235,7 @@ def execute_workflow(
     reconstruct_final_state: bool = True,
     resume_context: ResumeContext | None = None,
     child_resume_authority: ChildResumeAuthority | None = None,
+    validator_run: ValidatorRunBinding | None = None,
     hitl_uniform_fallback_eligible_run_id: str | None = None,
     effect_fence_uniform_fallback_eligible_key: str | None = None,
     effect_fence_tree_wide_abort_present: bool = False,
@@ -3259,6 +3259,7 @@ def execute_workflow(
         descent_depth=0,
         resume_context=resume_context,
         child_resume_authority=child_resume_authority,
+        validator_run=validator_run,
         hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
         effect_fence_uniform_fallback_eligible_key=effect_fence_uniform_fallback_eligible_key,
         effect_fence_tree_wide_abort_present=effect_fence_tree_wide_abort_present,
@@ -3279,6 +3280,11 @@ def execute_workflow_at_depth(
     parent_gate_floor: GateLevel = GateLevel.AUTO,
     resume_context: ResumeContext | None = None,
     child_resume_authority: ChildResumeAuthority | None = None,
+    # CP v1.129 §28.11.3: this execution's validator binding (root: opened at ingress;
+    # child: `open_child()` by sub-agent dispatch), composed onto every step context.
+    # [LAW:types-are-the-program] exception: `None` default mirrors `child_resume_authority`
+    # for out-of-slice direct callers; Runtime ingress and the child runner pass it explicitly.
+    validator_run: ValidatorRunBinding | None = None,
     hitl_uniform_fallback_eligible_run_id: str | None = None,
     effect_fence_uniform_fallback_eligible_key: str | None = None,
     effect_fence_tree_wide_abort_present: bool = False,
@@ -3616,6 +3622,7 @@ def execute_workflow_at_depth(
             # execute_workflow call's own top-level parameter; unmodified pass-through).
             resume_context=resume_context,
             child_resume_authority=child_resume_authority,
+            validator_run=validator_run,
             hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
             effect_fence_uniform_fallback_eligible_key=effect_fence_uniform_fallback_eligible_key,
             effect_fence_tree_wide_abort_present=effect_fence_tree_wide_abort_present,
@@ -3660,6 +3667,7 @@ def _execute_workflow_body(
     descent_depth: int,
     resume_context: ResumeContext | None = None,
     child_resume_authority: ChildResumeAuthority | None = None,
+    validator_run: ValidatorRunBinding | None = None,
     hitl_uniform_fallback_eligible_run_id: str | None = None,
     effect_fence_uniform_fallback_eligible_key: str | None = None,
     effect_fence_tree_wide_abort_present: bool = False,
@@ -4712,6 +4720,7 @@ def _execute_workflow_body(
             descent_depth=descent_depth,
             resume_context=resume_context,
             child_resume_authority=child_resume_authority,
+            validator_run=validator_run,
             hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
             effect_fence_uniform_fallback_eligible_key=effect_fence_uniform_fallback_eligible_key,
             effect_fence_tree_wide_abort_present=effect_fence_tree_wide_abort_present,
@@ -4734,6 +4743,7 @@ def _execute_workflow_body(
             descent_depth=descent_depth,
             resume_context=resume_context,
             child_resume_authority=child_resume_authority,
+            validator_run=validator_run,
             hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
             effect_fence_uniform_fallback_eligible_key=effect_fence_uniform_fallback_eligible_key,
             effect_fence_tree_wide_abort_present=effect_fence_tree_wide_abort_present,
@@ -4777,6 +4787,7 @@ def _execute_workflow_body(
             descent_depth=descent_depth,
             resume_context=resume_context,
             child_resume_authority=child_resume_authority,
+            validator_run=validator_run,
             hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
             effect_fence_uniform_fallback_eligible_key=effect_fence_uniform_fallback_eligible_key,
             effect_fence_tree_wide_abort_present=effect_fence_tree_wide_abort_present,
@@ -4818,6 +4829,7 @@ def _execute_workflow_body(
             descent_depth=descent_depth,
             resume_context=resume_context,
             child_resume_authority=child_resume_authority,
+            validator_run=validator_run,
             hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
             effect_fence_uniform_fallback_eligible_key=effect_fence_uniform_fallback_eligible_key,
             effect_fence_tree_wide_abort_present=effect_fence_tree_wide_abort_present,
@@ -4841,6 +4853,7 @@ def _execute_workflow_body(
             descent_depth=descent_depth,
             resume_context=resume_context,
             child_resume_authority=child_resume_authority,
+            validator_run=validator_run,
             hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
             effect_fence_uniform_fallback_eligible_key=effect_fence_uniform_fallback_eligible_key,
             effect_fence_tree_wide_abort_present=effect_fence_tree_wide_abort_present,
@@ -5660,6 +5673,7 @@ def _execute_workflow_body(
             # step's context to forward into the recursive `execute_workflow` call).
             resume_context=resume_context,
             child_resume_authority=child_resume_authority,
+            validator_run=validator_run,
             hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
             effect_fence_uniform_fallback_eligible_key=effect_fence_uniform_fallback_eligible_key,
             effect_fence_tree_wide_abort_present=effect_fence_tree_wide_abort_present,
@@ -5883,7 +5897,7 @@ def _execute_workflow_body(
 
         # § 25.3.5 (NEW at v1.10) — U-CP-61 post-dispatch validation hook.
         # Per C-CP-25 §25.3 "post-dispatch, pre-ledger-append validation
-        # hook". Operator-opt-in: skip when ctx.validator_framework is None
+        # hook". Operator-opt-in: skip when validator_run is None
         # (driver-level opt-out). When bound, the framework returns a
         # ValidatorEvaluation; the next_action drives the branch:
         #   PROCEED   → fall through to ledger append (normal flow)
@@ -5898,15 +5912,15 @@ def _execute_workflow_body(
         #               span linking-to subsequent hitl.gate.evaluated per
         #               §C-OD-29.1 row 10 + F2-02 absorption.
         #   ABORT     → return RunResult(FAILED) with CP-FAIL-VALIDATOR-PERMANENT
-        if ctx.validator_framework is not None:
+        if validator_run is not None:
             tracer = cast(TracerProvider, ctx.tracer_provider).get_tracer(
                 "harness.cp.workflow_driver"
             )
             with tracer.start_as_current_span("validator.evaluate") as evaluate_span:
                 try:
-                    evaluation: ValidatorEvaluation = cast(
-                        "SyncValidatorFrameworkFacade", ctx.validator_framework
-                    ).evaluate(
+                    # CP v1.129 §28.11.2: this execution's binding runs the shared
+                    # async framework on the ingress loop with this execution's ledger.
+                    evaluation: ValidatorEvaluation = validator_run.evaluate(
                         step,
                         step_output,
                         step_context=step_context,
@@ -5920,7 +5934,7 @@ def _execute_workflow_body(
                         terminal_step_index=step_index,
                         partial_state=dict(accumulated),
                         final_state=None,
-                        fail_class=(f"validator-framework-failure: {type(exc).__name__}: {exc}"),
+                        fail_class=_validator_fail_class(exc),
                     ), steps_executed
 
                 # §C-OD-29.1 outer envelope (3 attrs).
@@ -5965,7 +5979,7 @@ def _execute_workflow_body(
                 # gate. Escalation cannot be silently dropped." Fires the
                 # ValidatorEscalationGateComposer mid-step pre-ledger-append
                 # per C-CP-28 §25.3 + §25.4 invariant 2. Operator-opt-in:
-                # only when both validator_framework AND ask_user_question_
+                # only when both validator_run AND ask_user_question_
                 # surface are bound at ctx (production paths supply both;
                 # test paths may set ask_user_question_surface = None and
                 # the escalation outcome will fail-closed).
@@ -8131,6 +8145,7 @@ def _execute_parallelization(
     descent_depth: int,
     resume_context: ResumeContext | None = None,
     child_resume_authority: ChildResumeAuthority | None = None,
+    validator_run: ValidatorRunBinding | None = None,
     hitl_uniform_fallback_eligible_run_id: str | None = None,
     effect_fence_uniform_fallback_eligible_key: str | None = None,
     effect_fence_tree_wide_abort_present: bool = False,
@@ -8582,6 +8597,7 @@ def _execute_parallelization(
         # compose_branch_child_context's model_copy (deliberately not reset).
         resume_context=resume_context,
         child_resume_authority=child_resume_authority,
+        validator_run=validator_run,
         hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
         effect_fence_uniform_fallback_eligible_key=effect_fence_uniform_fallback_eligible_key,
         effect_fence_tree_wide_abort_present=effect_fence_tree_wide_abort_present,
@@ -11171,6 +11187,7 @@ def _execute_evaluator_optimizer(
     descent_depth: int,
     resume_context: ResumeContext | None = None,
     child_resume_authority: ChildResumeAuthority | None = None,
+    validator_run: ValidatorRunBinding | None = None,
     hitl_uniform_fallback_eligible_run_id: str | None = None,
     effect_fence_uniform_fallback_eligible_key: str | None = None,
     effect_fence_tree_wide_abort_present: bool = False,
@@ -11487,6 +11504,7 @@ def _execute_evaluator_optimizer(
             # B-39 Slice B — plain pass-through (no fan-out at this strategy).
             resume_context=resume_context,
             child_resume_authority=child_resume_authority,
+            validator_run=validator_run,
             hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
             effect_fence_uniform_fallback_eligible_key=effect_fence_uniform_fallback_eligible_key,
             effect_fence_tree_wide_abort_present=effect_fence_tree_wide_abort_present,
@@ -12198,6 +12216,7 @@ def _execute_orchestrator_workers(
     descent_depth: int,
     resume_context: ResumeContext | None = None,
     child_resume_authority: ChildResumeAuthority | None = None,
+    validator_run: ValidatorRunBinding | None = None,
     hitl_uniform_fallback_eligible_run_id: str | None = None,
     effect_fence_uniform_fallback_eligible_key: str | None = None,
     effect_fence_tree_wide_abort_present: bool = False,
@@ -12850,6 +12869,7 @@ def _execute_orchestrator_workers(
         # compose_branch_child_context's model_copy (deliberately not reset).
         resume_context=resume_context,
         child_resume_authority=child_resume_authority,
+        validator_run=validator_run,
         hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
         effect_fence_uniform_fallback_eligible_key=effect_fence_uniform_fallback_eligible_key,
         effect_fence_tree_wide_abort_present=effect_fence_tree_wide_abort_present,
@@ -15571,6 +15591,7 @@ def _execute_hierarchical_delegation(
     descent_depth: int,
     resume_context: ResumeContext | None = None,
     child_resume_authority: ChildResumeAuthority | None = None,
+    validator_run: ValidatorRunBinding | None = None,
     hitl_uniform_fallback_eligible_run_id: str | None = None,
     effect_fence_uniform_fallback_eligible_key: str | None = None,
     effect_fence_tree_wide_abort_present: bool = False,
@@ -15687,6 +15708,7 @@ def _execute_hierarchical_delegation(
         descent_depth=descent_depth,
         resume_context=resume_context,
         child_resume_authority=child_resume_authority,
+        validator_run=validator_run,
         hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
         effect_fence_uniform_fallback_eligible_key=effect_fence_uniform_fallback_eligible_key,
         effect_fence_tree_wide_abort_present=effect_fence_tree_wide_abort_present,
@@ -15773,6 +15795,7 @@ def _execute_decentralized_handoff(
     descent_depth: int,
     resume_context: ResumeContext | None = None,
     child_resume_authority: ChildResumeAuthority | None = None,
+    validator_run: ValidatorRunBinding | None = None,
     hitl_uniform_fallback_eligible_run_id: str | None = None,
     effect_fence_uniform_fallback_eligible_key: str | None = None,
     effect_fence_tree_wide_abort_present: bool = False,
@@ -16155,6 +16178,7 @@ def _execute_decentralized_handoff(
             # compose_branch_child_context's model_copy (deliberately not reset).
             resume_context=resume_context,
             child_resume_authority=child_resume_authority,
+            validator_run=validator_run,
             hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
             effect_fence_uniform_fallback_eligible_key=effect_fence_uniform_fallback_eligible_key,
             effect_fence_tree_wide_abort_present=effect_fence_tree_wide_abort_present,

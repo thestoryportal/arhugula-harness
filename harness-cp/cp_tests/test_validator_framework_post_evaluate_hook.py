@@ -8,7 +8,7 @@ ACs from CP plan v2.27 §2 (U-CP-73) per CP spec v1.24 §28.10:
   AC #5  evaluate() measures execution_time_ms via time.monotonic_ns()
   AC #6  evaluate() swallows ALL hook exceptions; returns evaluation unchanged
   AC #7  Hook does NOT fire if evaluate() raises before ValidatorEvaluation construction
-  AC #8  SyncValidatorFrameworkFacade transparent passthrough
+  AC #8  ValidatorRunBinding transparent passthrough (CP v1.129 §28.11.2)
   AC #9  convert_revalidate_to_permanent_fail does NOT fire hook
 
 Reading-only fork doc anchor:
@@ -27,9 +27,11 @@ from harness_core.identity import StepID
 from harness_cp.sub_agent_gate_level_descent import GateLevel
 from harness_cp.validator_framework import (
     ConcreteValidatorFramework,
-    materialize_sync_validator_framework_facade,
+    open_validator_run,
 )
 from harness_cp.validator_framework_types import (
+    ValidatorBurdenLedger,
+    ValidatorCatalogMissingError,
     ValidatorEvaluation,
     ValidatorFailClass,
     ValidatorOutcome,
@@ -223,7 +225,7 @@ async def test_evaluate_fires_hook_once_after_evaluation_construction() -> None:
         post_evaluate_hook=hook,
     )
 
-    evaluation = await fw.evaluate(step, {}, step_context=ctx)
+    evaluation = await fw.evaluate(step, {}, step_context=ctx, burden=ValidatorBurdenLedger())
 
     assert len(hook.calls) == 1
     assert hook.calls[0]["evaluation"] is evaluation
@@ -241,7 +243,7 @@ async def test_evaluate_fires_hook_with_correct_kwargs() -> None:
         post_evaluate_hook=hook,
     )
 
-    await fw.evaluate(step, {}, step_context=ctx)
+    await fw.evaluate(step, {}, step_context=ctx, burden=ValidatorBurdenLedger())
 
     call = hook.calls[0]
     assert call["step"] is step
@@ -263,7 +265,7 @@ async def test_evaluate_measures_execution_time_ms_via_monotonic_ns() -> None:
         post_evaluate_hook=hook,
     )
 
-    await fw.evaluate(step, {}, step_context=ctx)
+    await fw.evaluate(step, {}, step_context=ctx, burden=ValidatorBurdenLedger())
 
     elapsed_ms = hook.calls[0]["execution_time_ms"]
     # Minimum monotonic resolution ≥ 0; should be a small positive number for an
@@ -288,7 +290,7 @@ async def test_evaluate_swallows_hook_exception_returns_evaluation_unchanged() -
         post_evaluate_hook=hook,
     )
 
-    evaluation = await fw.evaluate(step, {}, step_context=ctx)
+    evaluation = await fw.evaluate(step, {}, step_context=ctx, burden=ValidatorBurdenLedger())
 
     # No exception propagated; evaluation returned per §28.10.4 invariant 2
     assert evaluation.result.outcome == ValidatorOutcome.PASS
@@ -301,7 +303,7 @@ async def test_evaluate_swallows_hook_exception_returns_evaluation_unchanged() -
 
 @pytest.mark.asyncio
 async def test_evaluate_does_not_fire_hook_on_registry_miss() -> None:
-    """AC #7 — registry-lookup miss raises KeyError; hook NOT fired."""
+    """AC #7 — registry-lookup miss raises the typed catalog-missing failure; hook NOT fired."""
     step = _make_step("unknown-step")
     ctx = _make_step_context()
     hook = _RecordingHook()
@@ -310,8 +312,8 @@ async def test_evaluate_does_not_fire_hook_on_registry_miss() -> None:
         post_evaluate_hook=hook,
     )
 
-    with pytest.raises(KeyError):
-        await fw.evaluate(step, {}, step_context=ctx)
+    with pytest.raises(ValidatorCatalogMissingError):
+        await fw.evaluate(step, {}, step_context=ctx, burden=ValidatorBurdenLedger())
 
     assert hook.calls == []
 
@@ -329,24 +331,22 @@ async def test_evaluate_does_not_fire_hook_on_validator_exception() -> None:
     )
 
     with pytest.raises(_RaisingValidator.Boom):
-        await fw.evaluate(step, {}, step_context=ctx)
+        await fw.evaluate(step, {}, step_context=ctx, burden=ValidatorBurdenLedger())
 
     assert hook.calls == []
 
 
 # ----------------------------------------------------------------------------
-# AC #8 — SyncValidatorFrameworkFacade transparent passthrough
+# AC #8 — ValidatorRunBinding transparent passthrough
 # ----------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_sync_facade_transparent_hook_passthrough() -> None:
-    """AC #8 — SyncValidatorFrameworkFacade fires hook via wrapped async fw.
+async def test_run_binding_transparent_hook_passthrough() -> None:
+    """AC #8 — a `ValidatorRunBinding` fires the hook via the shared async fw.
 
-    Sync facade bridges to the captured event loop; calling sync `evaluate`
-    from sync code requires the loop to be running on another thread. Here
-    we exercise the inner-fw path the facade delegates to, confirming the
-    hook fires regardless of facade wrapping.
+    The binding bridges to the loop captured at `open_validator_run`; calling its
+    sync `evaluate` requires that loop to be running while a worker thread blocks.
     """
     import asyncio as _asyncio
 
@@ -358,11 +358,10 @@ async def test_sync_facade_transparent_hook_passthrough() -> None:
         validator_registry={step.step_id: validator},
         post_evaluate_hook=hook,
     )
-    facade = materialize_sync_validator_framework_facade(fw, result_timeout_seconds=5.0)
+    binding = open_validator_run(fw, result_timeout_seconds=5.0)
 
-    # Sync facade.evaluate() runs from a worker thread + bridges to the
-    # captured loop. Exercise the facade via to_thread.
-    evaluation = await _asyncio.to_thread(facade.evaluate, step, {}, step_context=ctx)
+    # binding.evaluate() runs from a worker thread + bridges to the captured loop.
+    evaluation = await _asyncio.to_thread(binding.evaluate, step, {}, step_context=ctx)
 
     assert evaluation.result.outcome == ValidatorOutcome.PASS
     assert len(hook.calls) == 1

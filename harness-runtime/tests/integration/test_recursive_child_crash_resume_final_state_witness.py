@@ -366,6 +366,7 @@ def test_recursive_child_crash_resume_reconstructs_full_final_state(
         cast(Any, ctx), durable_admission=RefuseDurableChildAdmission()
     )
     result = runner(
+        validator_run=None,
         workflow_id=_CHILD_WF,
         manifest_entry=_manifest(),
         steps=[_step(0), _step(1), _step(2)],
@@ -415,6 +416,7 @@ def test_recursive_child_crash_resume_save_point_reconstructs_full_final_state(
         cast(Any, ctx), durable_admission=RefuseDurableChildAdmission()
     )
     result = runner(
+        validator_run=None,
         workflow_id=_CHILD_WF,
         manifest_entry=_manifest(engine_class=EngineClass.SAVE_POINT_CHECKPOINT),
         steps=[_step(0), _step(1), _step(2)],
@@ -478,6 +480,7 @@ def test_recursive_child_crash_resume_reconciler_clean_cas_auto_resumes(
         cast(Any, ctx), durable_admission=RefuseDurableChildAdmission()
     )
     result = runner(
+        validator_run=None,
         workflow_id=_CHILD_WF,
         manifest_entry=_manifest(engine_class=EngineClass.RECONCILER_LOOP),
         steps=[_step(0), _step(1), _step(2)],
@@ -526,6 +529,7 @@ def test_recursive_child_crash_resume_reconciler_f1_abort_fails_closed_at_most_o
         cast(Any, ctx), durable_admission=RefuseDurableChildAdmission()
     )
     result = runner(
+        validator_run=None,
         workflow_id=_CHILD_WF,
         manifest_entry=_manifest(engine_class=EngineClass.RECONCILER_LOOP),
         steps=[_step(0), _step(1), _step(2)],
@@ -585,6 +589,7 @@ def test_recursive_child_crash_resume_e1_live_seed_reconstructs_full_final_state
         cast(Any, ctx), durable_admission=RefuseDurableChildAdmission()
     )
     result = runner(
+        validator_run=None,
         workflow_id=_CHILD_WF,
         manifest_entry=_manifest(),
         steps=[_step(0), _step(1), _step(2)],
@@ -621,6 +626,7 @@ def test_recursive_child_crash_resume_without_store_degrades_to_suffix_only(
         cast(Any, ctx), durable_admission=RefuseDurableChildAdmission()
     )
     result = runner(
+        validator_run=None,
         workflow_id=_CHILD_WF,
         manifest_entry=_manifest(),
         steps=[_step(0), _step(1), _step(2)],
@@ -949,6 +955,7 @@ def test_maybe_ran_nonleaf_child_grandchild_auto_resumes_at_most_once(tmp_path: 
     # simulation the depth-1 witnesses pin via uuid — here passed directly so the grandchild's
     # OWN run_id comes from the real seed composition, not the monkeypatch.
     result = child_runner(
+        validator_run=None,
         workflow_id=_CHILD_WF,
         manifest_entry=_manifest(engine_class=EngineClass.EVENT_SOURCED_REPLAY),
         steps=[_step(0), grandchild_step],

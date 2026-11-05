@@ -318,6 +318,7 @@ def test_the_runner_raises_a_typed_workflow_mismatch_before_verification(
 
     with pytest.raises(ChildResumeRefusedError) as raised:
         runner(
+            validator_run=None,
             workflow_id="a-different-child-wf",
             manifest_entry=cast(Any, None),
             steps=(),

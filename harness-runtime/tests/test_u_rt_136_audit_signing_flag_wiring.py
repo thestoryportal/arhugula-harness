@@ -648,9 +648,20 @@ async def test_tool_retry_wrapper_fence_ahead_of_transient_and_fail_fast_arms() 
 # ---------------------------------------------------------------------------
 
 
+class _PassValidator:
+    """Operator validator bound at `step-001` so evaluate() reaches the hook."""
+
+    async def validate(self, _step: Any, _result: Any, *, step_context: Any) -> Any:
+        from harness_cp.validator_framework_types import ValidatorOutcome, ValidatorResult
+
+        _ = step_context
+        return ValidatorResult(outcome=ValidatorOutcome.PASS)
+
+
 def _runtime_config(tmp_path: Any, *, fail_closed_explicit: bool) -> Any:
     from harness_core.deployment_surface import DeploymentSurface
     from harness_cp.topology_pattern import TopologyPattern
+    from harness_runtime.lifecycle.validator_framework_types import ValidatorBinding
     from harness_runtime.types import (
         CollectorConfig,
         OTelConfig,
@@ -675,7 +686,14 @@ def _runtime_config(tmp_path: Any, *, fail_closed_explicit: bool) -> Any:
         # — this keeps the wiring witness free of the MTC bootstrap
         # invariants (backend/tenant/record), which U-RT-134 owns.
         audit_signing_fail_closed=True if fail_closed_explicit else None,
-        validator_framework_config=ValidatorFrameworkConfig(),
+        validator_framework_config=ValidatorFrameworkConfig(
+            bindings=(
+                ValidatorBinding(
+                    step_id=StepID("step-001"),
+                    class_qualified_name=f"{__name__}:{_PassValidator.__qualname__}",
+                ),
+            )
+        ),
     )
 
 
@@ -710,7 +728,7 @@ async def test_validator_framework_factory_injects_carve_out_only_under_resolved
     )
     assert framework_on is not None
     assert framework_on._audit_signing_raise_through == AUDIT_SIGNING_HARD_FAILURES  # type: ignore[attr-defined]
-    assert framework_on._post_evaluate_hook._audit_signing_fail_closed is True  # type: ignore[union-attr]
+    assert framework_on._post_evaluate_hook._audit_signing_fail_closed is True  # type: ignore[attr-defined]
 
     off_cfg = _runtime_config(tmp_path, fail_closed_explicit=False)
     assert resolve_audit_signing_fail_closed(off_cfg) is False
@@ -723,7 +741,7 @@ async def test_validator_framework_factory_injects_carve_out_only_under_resolved
     )
     assert framework_off is not None
     assert framework_off._audit_signing_raise_through == ()  # type: ignore[attr-defined]
-    assert framework_off._post_evaluate_hook._audit_signing_fail_closed is False  # type: ignore[union-attr]
+    assert framework_off._post_evaluate_hook._audit_signing_fail_closed is False  # type: ignore[attr-defined]
 
 
 @pytest.mark.asyncio
@@ -737,26 +755,12 @@ async def test_flag_on_typed_family_raises_through_real_framework_evaluate(
     invariant-2 carve-out); under resolved-OFF the same failure is
     ERROR-logged and `evaluate` returns the evaluation (invariant 2)."""
     import harness_runtime.lifecycle.cost_attribution_validator_dispatch as hook_mod
-    from harness_cp.validator_framework_types import (
-        ValidatorOutcome,
-        ValidatorResult,
-    )
+    from harness_cp.validator_framework_types import ValidatorBurdenLedger, ValidatorOutcome
     from harness_runtime.bootstrap.factories.validator_framework_factory import (
         materialize_validator_framework_stage,
     )
 
     monkeypatch.setattr(hook_mod, "run_audit_off_loop", _raise_family_offload)
-
-    class _PassValidator:
-        async def validate(self, _step: Any, _result: Any, *, step_context: Any) -> Any:
-            _ = step_context
-            return ValidatorResult(
-                outcome=ValidatorOutcome.PASS,
-                fail_class=None,
-                cause_attribution=None,
-                confidence=None,
-                detail="",
-            )
 
     async def _build(cfg: Any) -> Any:
         from harness_runtime.lifecycle.audit_signing_fail_closed_validation import (
@@ -771,9 +775,7 @@ async def test_flag_on_typed_family_raises_through_real_framework_evaluate(
             audit_signing_fail_closed=resolve_audit_signing_fail_closed(cfg),
         )
         assert framework is not None
-        # The v1.18 factory builds an empty registry; bind one validator so
-        # evaluate() reaches the hook-firing site through the real body.
-        framework._validator_registry = {StepID("step-001"): _PassValidator()}  # type: ignore[attr-defined]
+        # The configured `step-001` binding reaches the hook-firing site.
         return framework
 
     step = WorkflowStep(
@@ -784,10 +786,14 @@ async def test_flag_on_typed_family_raises_through_real_framework_evaluate(
 
     framework_on = await _build(_runtime_config(tmp_path, fail_closed_explicit=True))
     with pytest.raises(AUDIT_SIGNING_HARD_FAILURES):
-        await framework_on.evaluate(step, {}, step_context=_step_context())
+        await framework_on.evaluate(
+            step, {}, step_context=_step_context(), burden=ValidatorBurdenLedger()
+        )
 
     framework_off = await _build(_runtime_config(tmp_path, fail_closed_explicit=False))
-    evaluation = await framework_off.evaluate(step, {}, step_context=_step_context())
+    evaluation = await framework_off.evaluate(
+        step, {}, step_context=_step_context(), burden=ValidatorBurdenLedger()
+    )
     assert evaluation.result.outcome is ValidatorOutcome.PASS
 
 

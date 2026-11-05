@@ -65,7 +65,7 @@ Canonical spec heads — **one family per row, so each version stays bound to it
 |---|---|---|
 | IS | `Spec_Information_Substrate_v1.md` | **v1.17** (cleared 2026-11-04) |
 | AS | `Spec_Action_Surface_v1.md` | **v1.14** (cleared 2026-07-15) |
-| CP | `Spec_Control_Plane_v1_124.md` | **v1.124** (cleared 2026-09-25) |
+| CP | `Spec_Control_Plane_v1_129.md` | **v1.129** (cleared 2026-11-05) |
 | OD | `Spec_Operational_Discipline_v1_43.md` | **v1.43** (cleared 2026-11-04) |
 | Runtime | `Spec_Harness_Runtime_v1_139.md` | **v1.139** (cleared 2026-11-05) |
 | Memory | `Spec_Memory_Substrate_v1.md` | **v1.3** (cleared 2026-08-06) |

@@ -2,7 +2,8 @@
 
 ACs from CP plan v2.16 §1 (U-CP-60):
   AC #1 Bijective-on-outcomes mapping (5 outcomes → 4 next_actions)
-  AC #2 Burden count monotonic per workflow; tracked on `ctx.operator_burden_counter`
+  AC #2 Burden count monotonic per workflow execution; tracked on the execution's
+        `ValidatorBurdenLedger` (CP v1.129 §1 amended invariant 5)
   AC #3 Single Validator per step invariant; raises MultipleValidatorsError
   AC #4 CP fail class CP-FAIL-VALIDATOR-PERMANENT raised on PERMANENT_FAIL
   AC #5 Unit test: each of 5 outcomes maps to documented next_action
@@ -23,6 +24,7 @@ from harness_cp.validator_framework import (
     _map_outcome_to_next_action,
 )
 from harness_cp.validator_framework_types import (
+    ValidatorBurdenLedger,
     ValidatorEvaluation,
     ValidatorFailClass,
     ValidatorFramework,
@@ -138,11 +140,33 @@ def test_concrete_validator_framework_satisfies_protocol() -> None:
 # ----------------------------------------------------------------------------
 
 
+def test_burden_ledger_opens_at_zero() -> None:
+    """AC #2 — an execution's burden ledger starts at 0."""
+    assert ValidatorBurdenLedger().count == 0
+
+
 @pytest.mark.asyncio
-async def test_burden_count_zero_on_construction() -> None:
-    """AC #2 — burden_count starts at 0."""
-    framework = ConcreteValidatorFramework(validator_registry={})
-    assert framework.burden_count == 0
+async def test_one_framework_charges_only_the_ledger_it_is_handed() -> None:
+    """CP v1.129 §1 / F1 — the shared framework holds no burden: a second execution's
+    ledger starts at 0 after the first execution's non-PASS evaluation."""
+    step = _make_step()
+    validator = _FixedOutcomeValidator(
+        ValidatorResult(
+            outcome=ValidatorOutcome.PERMANENT_FAIL,
+            fail_class=ValidatorFailClass.SAFETY_POLICY,
+        )
+    )
+    framework = ConcreteValidatorFramework(validator_registry={step.step_id: validator})
+    first, second = ValidatorBurdenLedger(), ValidatorBurdenLedger()
+
+    first_eval = await framework.evaluate(step, {}, step_context=_make_step_context(), burden=first)
+    second_eval = await framework.evaluate(
+        step, {}, step_context=_make_step_context(), burden=second
+    )
+
+    assert (first.count, second.count) == (1, 1)
+    assert first_eval.burden_count == second_eval.burden_count == 1
+    assert second_eval.span_attributes["validator.burden_count_cumulative"] == 1
 
 
 @pytest.mark.asyncio
@@ -151,12 +175,13 @@ async def test_burden_count_unchanged_on_pass() -> None:
     step = _make_step()
     validator = _FixedOutcomeValidator(ValidatorResult(outcome=ValidatorOutcome.PASS))
     framework = ConcreteValidatorFramework(validator_registry={step.step_id: validator})
+    burden = ValidatorBurdenLedger()
 
-    await framework.evaluate(step, {}, step_context=_make_step_context())
-    assert framework.burden_count == 0
+    await framework.evaluate(step, {}, step_context=_make_step_context(), burden=burden)
+    assert burden.count == 0
 
-    await framework.evaluate(step, {}, step_context=_make_step_context())
-    assert framework.burden_count == 0
+    await framework.evaluate(step, {}, step_context=_make_step_context(), burden=burden)
+    assert burden.count == 0
 
 
 @pytest.mark.asyncio
@@ -170,15 +195,16 @@ async def test_burden_count_increments_on_non_pass() -> None:
         )
     )
     framework = ConcreteValidatorFramework(validator_registry={step.step_id: validator})
+    burden = ValidatorBurdenLedger()
 
-    await framework.evaluate(step, {}, step_context=_make_step_context())
-    assert framework.burden_count == 1
+    await framework.evaluate(step, {}, step_context=_make_step_context(), burden=burden)
+    assert burden.count == 1
 
-    await framework.evaluate(step, {}, step_context=_make_step_context())
-    assert framework.burden_count == 2
+    await framework.evaluate(step, {}, step_context=_make_step_context(), burden=burden)
+    assert burden.count == 2
 
-    await framework.evaluate(step, {}, step_context=_make_step_context())
-    assert framework.burden_count == 3
+    await framework.evaluate(step, {}, step_context=_make_step_context(), burden=burden)
+    assert burden.count == 3
 
 
 # ----------------------------------------------------------------------------
@@ -231,8 +257,11 @@ async def test_evaluate_returns_validator_evaluation_with_correct_next_action() 
         )
     )
     framework = ConcreteValidatorFramework(validator_registry={step.step_id: validator})
+    burden = ValidatorBurdenLedger()
 
-    evaluation = await framework.evaluate(step, {}, step_context=_make_step_context())
+    evaluation = await framework.evaluate(
+        step, {}, step_context=_make_step_context(), burden=burden
+    )
 
     assert isinstance(evaluation, ValidatorEvaluation)
     assert evaluation.result.outcome == ValidatorOutcome.ESCALATE
@@ -246,8 +275,11 @@ async def test_evaluate_span_attributes_include_required_envelope_keys() -> None
     step = _make_step()
     validator = _FixedOutcomeValidator(ValidatorResult(outcome=ValidatorOutcome.PASS))
     framework = ConcreteValidatorFramework(validator_registry={step.step_id: validator})
+    burden = ValidatorBurdenLedger()
 
-    evaluation = await framework.evaluate(step, {}, step_context=_make_step_context())
+    evaluation = await framework.evaluate(
+        step, {}, step_context=_make_step_context(), burden=burden
+    )
 
     assert evaluation.span_attributes["step.id"] == str(step.step_id)
     assert evaluation.span_attributes["validator.outcome"] == "pass"
@@ -266,8 +298,11 @@ async def test_evaluate_span_attributes_include_fail_keys_on_non_pass() -> None:
         )
     )
     framework = ConcreteValidatorFramework(validator_registry={step.step_id: validator})
+    burden = ValidatorBurdenLedger()
 
-    evaluation = await framework.evaluate(step, {}, step_context=_make_step_context())
+    evaluation = await framework.evaluate(
+        step, {}, step_context=_make_step_context(), burden=burden
+    )
 
     assert evaluation.span_attributes["validator.fail.next_action"] == "abort"
     assert evaluation.span_attributes["validator.fail.escalation_owed"] is False
@@ -296,8 +331,11 @@ async def test_convert_revalidate_to_permanent_fail_basic_conversion() -> None:
         )
     )
     framework = ConcreteValidatorFramework(validator_registry={step.step_id: validator})
+    burden = ValidatorBurdenLedger()
 
-    revalidate_evaluation = await framework.evaluate(step, {}, step_context=_make_step_context())
+    revalidate_evaluation = await framework.evaluate(
+        step, {}, step_context=_make_step_context(), burden=burden
+    )
     assert revalidate_evaluation.result.outcome == ValidatorOutcome.REVALIDATE
     assert revalidate_evaluation.next_action == ValidatorNextAction.RETRY
 
@@ -319,8 +357,11 @@ async def test_convert_revalidate_rejects_non_revalidate_outcome() -> None:
     step = _make_step()
     validator = _FixedOutcomeValidator(ValidatorResult(outcome=ValidatorOutcome.PASS))
     framework = ConcreteValidatorFramework(validator_registry={step.step_id: validator})
+    burden = ValidatorBurdenLedger()
 
-    pass_evaluation = await framework.evaluate(step, {}, step_context=_make_step_context())
+    pass_evaluation = await framework.evaluate(
+        step, {}, step_context=_make_step_context(), burden=burden
+    )
 
     with pytest.raises(ValueError, match="only REVALIDATE may be converted"):
         framework.convert_revalidate_to_permanent_fail(pass_evaluation, step_id=step.step_id)
@@ -332,11 +373,14 @@ async def test_convert_revalidate_preserves_burden_count() -> None:
     step = _make_step()
     validator = _FixedOutcomeValidator(ValidatorResult(outcome=ValidatorOutcome.REVALIDATE))
     framework = ConcreteValidatorFramework(validator_registry={step.step_id: validator})
+    burden = ValidatorBurdenLedger()
 
     # Three REVALIDATE evaluations before exhaustion-conversion:
     for _ in range(3):
-        eval_n = await framework.evaluate(step, {}, step_context=_make_step_context())
-    assert framework.burden_count == 3
+        eval_n = await framework.evaluate(
+            step, {}, step_context=_make_step_context(), burden=burden
+        )
+    assert burden.count == 3
 
     converted = framework.convert_revalidate_to_permanent_fail(eval_n, step_id=step.step_id)
     assert converted.burden_count == 3  # not incremented by conversion

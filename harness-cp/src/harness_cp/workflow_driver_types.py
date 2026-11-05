@@ -49,6 +49,7 @@ from harness_cp.pause_resume_protocol_types import (
     ResumeContext,
     require_ref_binds_snapshot,
 )
+from harness_cp.validator_framework_types import ValidatorRunBinding
 
 
 class RunStatus(StrEnum):
@@ -440,6 +441,17 @@ class StepExecutionContext(BaseModel):
     Hash-inert and non-persistent (`exclude=True`, so it is absent from every `model_dump`,
     hence from any snapshot or hash input); `None` (every existing caller) is byte-identical
     to pre-arc. NOT a ContextVar, thread-local or registry: it travels with the dispatch call."""
+
+    validator_run: ValidatorRunBinding | None = Field(default=None, exclude=True, repr=False)
+    """CP v1.129 §28.11.5 — this execution's validator run binding, composed by the driver
+    from its `validator_run` argument at every context it builds (branch children inherit
+    it through `compose_branch_child_context`'s `model_copy`: same execution, same ledger).
+    Runtime sub-agent dispatch is its only reader and opens each child's binding from it;
+    `ValidatorFramework.evaluate` never reads it. A capability, not an identity: no run id,
+    nothing keyed by it. Hash-inert and non-persistent like `child_resume_authority`.
+    [LAW:types-are-the-program] exception: defaults to `None` because a required field would
+    change 60 out-of-slice test constructions; the Runtime v1.138 §14.13.9 nested witnesses
+    and drop-the-field mutants enforce every driver site."""
 
     child_resume: PausedChildCapture | None = None
     """B-HIERARCHICAL-PAUSE (R-FS-1) — on RESUME, the `PauseSnapshot` a recursive

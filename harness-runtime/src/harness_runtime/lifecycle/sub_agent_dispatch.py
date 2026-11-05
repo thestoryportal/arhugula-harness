@@ -1121,6 +1121,14 @@ class RuntimeSubAgentDispatcher:
                     child_resume=step_context.child_resume,
                     # B-104 Task 5b-1 — CP's opaque carrier, threaded beside `child_resume`.
                     child_resume_authority=step_context.child_resume_authority,
+                    # Runtime v1.138 §14.13.8(3): each child execution (fresh or resumed)
+                    # is its own workflow boundary, so it gets its OWN binding with a ledger
+                    # at zero, never the parent's.
+                    validator_run=(
+                        None
+                        if step_context.validator_run is None
+                        else step_context.validator_run.open_child()
+                    ),
                     child_run_id_seed=_child_run_id_seed,
                     # B-39 Slice B — the operator's resume payload, read off the SAME
                     # step_context the composer already receives (a CP driver-stamped
