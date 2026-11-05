@@ -19,7 +19,11 @@ from harness_runtime.lifecycle.skill_activation import (
     SkillActivationHookConfig,
     SkillActivationMode,
     SkillActivationSpanEmitter,
+    SkillSelectionInvalidError,
+    SkillSelectionInvalidReason,
     UnknownSkillError,
+    compose_system_prompt_with_skills,
+    parse_skill_selection,
 )
 from harness_runtime.lifecycle.skills import (
     Skill,
@@ -109,22 +113,21 @@ def test_compute_git_blob_sha_byte_exact_to_git_hash_object() -> None:
 
 
 def test_load_skills_computes_version_sha_and_body_tokens(tmp_path: Path) -> None:
-    """AC #5 + #6: load_skills_from_dir computes version_sha + body_tokens
-    when absent from the manifest JSON."""
+    """AC #5 + #6 at v1.139: version_sha + body_tokens derive from the
+    `<stem>.SKILL.md` content bytes, not the manifest."""
     skills_dir = tmp_path / "skills"
     skills_dir.mkdir()
     manifest_file = skills_dir / "my-skill.skill.json"
     raw = '{"skill_id": "my-skill", "name": "test", "description": "hello world", "version": "1.0"}'
     manifest_file.write_text(raw)
+    content_file = skills_dir / "my-skill.SKILL.md"
+    content_file.write_text("skill body text\n")
 
     skills = load_skills_from_dir(skills_dir)
-    assert SkillID("my-skill") in skills
     skill = skills[SkillID("my-skill")]
-    # version_sha is byte-exact git hash-object output for the raw manifest bytes
-    expected_sha = compute_git_blob_sha(manifest_file.read_bytes())
-    assert skill.manifest.version_sha == expected_sha
-    # body_tokens = len("hello world") // 4 = 2
-    assert skill.manifest.body_tokens == 2
+    assert skill.manifest.version_sha == compute_git_blob_sha(content_file.read_bytes())
+    # body_tokens = len("skill body text\n") // 4 = 4
+    assert skill.manifest.body_tokens == 4
 
 
 # --- U-RT-100 emitter tests --------------------------------------------------
@@ -163,16 +166,16 @@ class _FakeTracerProvider:
         return self.tracer
 
 
-def _make_skill(skill_id: str = "my-skill") -> Skill:
+def _make_skill(skill_id: str = "my-skill", content: str = "body") -> Skill:
     manifest = SkillManifest(
         skill_id=SkillID(skill_id),
         name="My Skill",
         description="testing",
         version="1.0",
-        version_sha="deadbeef",
-        body_tokens=10,
+        version_sha=compute_git_blob_sha(content.encode()),
+        body_tokens=len(content) // 4,
     )
-    return Skill(manifest=manifest, source_path=Path("/tmp/fake.skill.json"))
+    return Skill(manifest=manifest, source_path=Path("/tmp/fake.skill.json"), content=content)
 
 
 def test_emitter_emit_opens_skill_activation_span_with_six_attrs() -> None:
@@ -193,9 +196,9 @@ def test_emitter_emit_opens_skill_activation_span_with_six_attrs() -> None:
     assert span.attrs["__span_name__"] == "skill.activation"
     assert span.attrs["skill.id"] == "my-skill"
     assert span.attrs["skill.name"] == "My Skill"
-    assert span.attrs["skill.version_sha"] == "deadbeef"
+    assert span.attrs["skill.version_sha"] == skill.manifest.version_sha
     assert span.attrs["skill.frontmatter.version"] == "1.0"
-    assert span.attrs["skill.body_tokens"] == 10
+    assert span.attrs["skill.body_tokens"] == skill.manifest.body_tokens
     assert span.attrs["skill.activation_mode"] == "tool_search"
     assert span.attrs["workflow.id"] == "wf-1"
 
@@ -414,3 +417,85 @@ def test_dispatcher_no_op_when_emitter_or_hook_none() -> None:
         skills={SkillID("x"): _make_skill("x")},
     )
     assert dispatcher2.skill_activation_emitter.hook is None
+
+
+# --- Runtime v1.139 §14.17.8.2: selection checkpoint + rendering --------------
+
+
+def test_parse_skill_selection_keeps_selection_order() -> None:
+    a, b = _make_skill("a", "A body"), _make_skill("b", "B body")
+    skills = {SkillID("a"): a, SkillID("b"): b}
+
+    selection = parse_skill_selection([SkillID("b"), SkillID("a")], skills)
+
+    assert list(selection.items()) == [(SkillID("b"), b), (SkillID("a"), a)]
+
+
+@pytest.mark.parametrize(
+    ("selected", "bad_id", "reason"),
+    [
+        (["a", "ghost", "a"], "ghost", SkillSelectionInvalidReason.UNKNOWN_ID),
+        (["a", "a", "ghost"], "a", SkillSelectionInvalidReason.DUPLICATE_ID),
+    ],
+)
+def test_parse_skill_selection_rejects_first_invalid_id_in_order(
+    selected: list[str], bad_id: str, reason: SkillSelectionInvalidReason
+) -> None:
+    with pytest.raises(SkillSelectionInvalidError) as exc_info:
+        parse_skill_selection([SkillID(i) for i in selected], {SkillID("a"): _make_skill("a")})
+    err = exc_info.value
+    assert (err.skill_id, err.reason) == (SkillID(bad_id), reason)
+    assert err.rt_fail_class == "RT-FAIL-SKILL-SELECTION-INVALID"
+    assert repr(bad_id) in str(err) and reason.value in str(err)
+
+
+def test_compose_system_prompt_with_skills_renders_base_then_blocks() -> None:
+    a, b = _make_skill("a", "A body"), _make_skill("b", "B body")
+
+    prompt = compose_system_prompt_with_skills("BASE", {SkillID("a"): a, SkillID("b"): b})
+
+    assert prompt == (
+        "BASE\n\n"
+        f'<skill id="a" version="1.0" version_sha="{a.manifest.version_sha}">\nA body\n</skill>'
+        "\n\n"
+        f'<skill id="b" version="1.0" version_sha="{b.manifest.version_sha}">\nB body\n</skill>'
+    )
+
+
+@pytest.mark.parametrize("base", [None, ""])
+def test_compose_system_prompt_with_skills_blocks_alone_without_base(base: str | None) -> None:
+    a = _make_skill("a", "A body")
+
+    prompt = compose_system_prompt_with_skills(base, {SkillID("a"): a})
+
+    assert prompt == (
+        f'<skill id="a" version="1.0" version_sha="{a.manifest.version_sha}">\nA body\n</skill>'
+    )
+
+
+@pytest.mark.parametrize("base", [None, "", "BASE"])
+def test_compose_system_prompt_with_empty_selection_is_identity(base: str | None) -> None:
+    assert compose_system_prompt_with_skills(base, {}) is base
+
+
+# --- Runtime v1.139 §14.17.8.5 W7: bind ------------------------------------
+
+
+def test_w7_hook_without_skills_mapping_fails_bind() -> None:
+    from harness_runtime.lifecycle.llm_dispatch import LLMDispatchBindError, RuntimeLLMDispatcher
+
+    tp = _FakeTracerProvider()
+    emitter = SkillActivationSpanEmitter(tracer_provider=tp, hook=_HookSelectingAllForLLM())
+
+    with pytest.raises(LLMDispatchBindError, match="skills mapping"):
+        RuntimeLLMDispatcher(providers={}, tracer_provider=tp, skill_activation_emitter=emitter)
+
+    # An empty mapping and an unbound hook both bind.
+    RuntimeLLMDispatcher(
+        providers={}, tracer_provider=tp, skill_activation_emitter=emitter, skills={}
+    )
+    RuntimeLLMDispatcher(
+        providers={},
+        tracer_provider=tp,
+        skill_activation_emitter=SkillActivationSpanEmitter(tracer_provider=tp),
+    )

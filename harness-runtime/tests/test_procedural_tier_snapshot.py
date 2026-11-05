@@ -39,7 +39,7 @@ def _skill(skill_id: str, version_sha: str = "v-sha-default") -> Skill:
         version_sha=version_sha,
         body_tokens=1,
     )
-    return Skill(manifest=manifest, source_path=Path("/dev/null"))
+    return Skill(manifest=manifest, source_path=Path("/dev/null"), content=f"body-{skill_id}")
 
 
 def _routing_manifest(manifest_version: int = 1) -> RoutingManifest:

@@ -111,6 +111,7 @@ from harness_runtime.lifecycle.post_tool_effect import (
     ToolEffectFailureOrigin,
 )
 from harness_runtime.lifecycle.retry_breaker import BreakerStateMachine
+from harness_runtime.lifecycle.skill_activation import SkillSelectionInvalidError
 from harness_runtime.memory_tool_executor import (
     MemoryToolExecutionInputError,
     MemoryToolExecutionInternalError,
@@ -1316,6 +1317,17 @@ class RetryBreakerFallbackDispatcher:
                         self._charge_post_effect_provider_fault(
                             exc, breaker, trial_token, inner_span, outer_span, candidate
                         )
+                    raise
+                except SkillSelectionInvalidError:
+                    # Runtime v1.139 §14.17.8.3: the hook-2 selection reads only the
+                    # loaded skill ids, workflow id and step index - never the
+                    # candidate - so every attempt on every candidate would fail
+                    # identically, and it says nothing about provider health.
+                    # Propagate untouched: no retry, no candidate advance, no breaker
+                    # charge. A half-open trial is re-armed (not re-tripped) by the
+                    # outer BaseException arm (`_release_half_open_trial`).
+                    inner_span.set_attribute("retry.delay_ms", 0)
+                    inner_span.set_attribute("retry.terminal", "skill-selection-invalid")
                     raise
                 except Exception as exc:
                     last_failure_detail = _failure_detail(exc)
