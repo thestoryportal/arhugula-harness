@@ -27,7 +27,10 @@ from harness_runtime.api import (
     ResumeStepIndexOutOfRangeError,
     ResumeWorkflowMismatchError,
 )
-from harness_runtime.lifecycle.journal_workflow_pause_store import PauseJournalReadCause
+from harness_runtime.lifecycle.journal_workflow_pause_store import (
+    HandleUnknownCause,
+    PauseJournalReadCause,
+)
 from harness_runtime.lifecycle.root_resume_admission import RootResumeRefusal
 
 __all__ = [
@@ -160,7 +163,7 @@ def fail_class(kind: RefusalKind) -> str:
     return _FAIL_CLASS[kind]
 
 
-def _handle_cause(cause: PauseJournalReadCause) -> HandleCause:
+def _handle_cause(cause: HandleUnknownCause) -> HandleCause:
     # [LAW:types-are-the-program] Exhaustive over the read vocabulary, so a member added there
     # fails type-checking here until it is given an arm instead of silently becoming a cause.
     match cause:

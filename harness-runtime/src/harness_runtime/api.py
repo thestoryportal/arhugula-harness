@@ -109,6 +109,7 @@ from harness_od.idempotency_join_dedup import SpanCostRecord
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from harness_runtime.lifecycle.journal_workflow_pause_store import (
+    HandleUnknownCause,
     PauseJournalReadCause,
     PauseJournalReadResult,
 )
@@ -231,12 +232,12 @@ class ResumeHandleUnknownError(Exception):
         self,
         message: str,
         *,
-        cause: PauseJournalReadCause,
+        cause: HandleUnknownCause,
         retryable: bool = False,
         indeterminate: bool = False,
     ) -> None:
         super().__init__(message)
-        self.cause: PauseJournalReadCause = cause
+        self.cause: HandleUnknownCause = cause
         self.retryable: bool = retryable
         self.indeterminate: bool = indeterminate
 
@@ -1441,6 +1442,14 @@ async def resume(
             # would suppress exactly the `read-error` retry the refinement exists
             # to enable. Cause class only: no exception text, no resolved path.
             assert _read.cause is not None
+            # [LAW:types-are-the-program] Runtime spec v1.137 Rule A3: supersession is its own
+            # pre-bootstrap refusal, so the handle cause below narrows to the closed five.
+            if _read.cause is PauseJournalReadCause.SUPERSEDED:
+                raise ResumePauseRecordSupersededError(
+                    "RT-FAIL-RESUME-PAUSE-RECORD-SUPERSEDED: a later fresh run of this workflow "
+                    "superseded the durable pause record for this resume_handle; it is no "
+                    "longer resumable (Runtime spec v1.137 §D.5)."
+                )
             raise ResumeHandleUnknownError(
                 f"no resumable durable PauseSnapshot for resume_handle="
                 f"{resume_handle!r} under the resolved STATE_LEDGER pause-journal; "
