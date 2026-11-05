@@ -58,7 +58,7 @@ from harness_cp.pause_resume_protocol_types import (
     ResumeContext,
 )
 from harness_cp.per_step_override_evaluator import StepEffectiveBinding
-from harness_cp.topology_pattern import TopologyPattern
+from harness_cp.topology_pattern import TopologyPattern, WorkerSelection
 from harness_cp.workflow_driver import (
     DriverContext,
     StepDispatcher,
@@ -98,7 +98,7 @@ _PROCEED_TIER = PersonaTier.SOLO_DEVELOPER
 class _InMemoryBranchStore:
     def __init__(self) -> None:
         self._branches: dict[str, dict[int, tuple[str, str, dict[str, Any] | None]]] = {}
-        self._orchestrators: dict[str, tuple[str, dict[str, Any]]] = {}
+        self._orchestrators: dict[str, tuple[str, dict[str, Any], WorkerSelection]] = {}
         # branch indexes marked present-but-unreadable (corruption / tamper) per run_key.
         self._corrupt: dict[str, set[int]] = {}
         self._cardinality: dict[str, int] = {}
@@ -181,8 +181,14 @@ class _InMemoryBranchStore:
             dict(output) if output is not None else None,
         )
 
-    def record_orchestrator(self, run_key: str, step_id: str, output: dict[str, Any]) -> None:
-        self._orchestrators[run_key] = (str(step_id), dict(output))
+    def record_orchestrator(
+        self,
+        run_key: str,
+        step_id: str,
+        output: dict[str, Any],
+        worker_selection: WorkerSelection = WorkerSelection.DECLARED_POOL,
+    ) -> None:
+        self._orchestrators[run_key] = (str(step_id), dict(output), worker_selection)
 
     # -- B-FANOUT-CRASH-RESUME-STRICT-TIER-INCOMPLETE / MAYBE-RAN-RESOLUTION: reserve-before-
     # dispatch ----
@@ -378,7 +384,9 @@ class _InMemoryBranchStore:
     def present_branch_indexes(self, run_key: str) -> set[int]:
         return set(self._branches.get(run_key, {})) | self._corrupt.get(run_key, set())
 
-    def read_orchestrator_output(self, run_key: str) -> tuple[str, dict[str, Any]] | None:
+    def read_orchestrator_output(
+        self, run_key: str
+    ) -> tuple[str, dict[str, Any], WorkerSelection] | None:
         return self._orchestrators.get(run_key)
 
     def orchestrator_present(self, run_key: str) -> bool:
@@ -3390,7 +3398,11 @@ def test_crash_resume_cardinality_only_orchestrator_out_of_range_marker_fails_cl
     the WORKER count, not the recorded `len(steps)` cardinality (which for ORCHESTRATOR_WORKERS
     INCLUDES the orchestrator `steps[0]`). A stale `branch-{worker_count}.dispatched` marker (a
     worker ordinal one past the last real worker) with a re-fire-safe kind must fail closed, not
-    re-run fresh (out-of-family Codex [P2] — `_cardinality` over-counts by one for orchestrated)."""
+    re-run fresh (out-of-family Codex [P2] — `_cardinality` over-counts by one for orchestrated).
+
+    CP v1.130 §25.11.1.5(4): with no orchestrator record and no orchestrator marker, the worker and
+    cardinality markers are orphaned, so `_determine_fanout_resume` now refuses the store as corrupt
+    before the cardinality-only arm is reached."""
     store = _InMemoryBranchStore()
     steps = [_step("orch", 0), _step("w0", 0), _step("w1", 1)]  # 1 orchestrator + 2 workers
     _run_persona(
@@ -3419,8 +3431,8 @@ def test_crash_resume_cardinality_only_orchestrator_out_of_range_marker_fails_cl
         persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
         topology=TopologyPattern.ORCHESTRATOR_WORKERS,
     )
-    assert r2.status is RunStatus.FAILED  # worker-count bound → branch-2 out of range → closed
-    assert "fan-out-crash-resume-cascade-policy-incomplete-recovery" in (r2.fail_class or "")
+    assert r2.status is RunStatus.FAILED  # orphaned worker + cardinality markers → closed
+    assert "fan-out-crash-resume-store-corrupt" in (r2.fail_class or "")
     assert resume.dispatched == []
 
 

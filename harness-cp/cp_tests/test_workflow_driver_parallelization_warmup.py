@@ -721,7 +721,7 @@ class _MiniFanoutStore:
         _ = run_key
         return False
 
-    def read_orchestrator_output(self, run_key: str) -> tuple[str, dict[str, Any]] | None:
+    def read_orchestrator_output(self, run_key: str) -> tuple[str, dict[str, Any], Any] | None:
         _ = run_key
         return None
 

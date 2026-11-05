@@ -96,7 +96,7 @@ from harness_cp.pause_resume_protocol_types import (
 )
 from harness_cp.per_step_override_evaluator import StepEffectiveBinding
 from harness_cp.sub_agent_dispatch_capacity_authority import DefaultCapacityAuthority
-from harness_cp.topology_pattern import TopologyPattern
+from harness_cp.topology_pattern import TopologyPattern, WorkerSelection
 from harness_cp.workflow_driver import (
     DriverContext,
     StepDispatcherRegistry,
@@ -263,7 +263,7 @@ class _MiniOWStore:
         self._instrumented: set[str] = set()
         self._dispatched: dict[str, dict[int, str | None]] = {}
         self._dispatched_step_id: dict[str, dict[int, str | None]] = {}
-        self._orchestrator: dict[str, tuple[str, dict[str, Any]]] = {}
+        self._orchestrator: dict[str, tuple[str, dict[str, Any], WorkerSelection]] = {}
         self._orch_marker: dict[str, tuple[str, str]] = {}
 
     # -- producer surface --
@@ -305,8 +305,14 @@ class _MiniOWStore:
     ) -> None:
         self._orch_marker[run_key] = (str(step_id), str(step_kind))
 
-    def record_orchestrator(self, run_key: str, step_id: str, output: dict[str, Any]) -> None:
-        self._orchestrator[run_key] = (str(step_id), dict(output))
+    def record_orchestrator(
+        self,
+        run_key: str,
+        step_id: str,
+        output: dict[str, Any],
+        worker_selection: WorkerSelection = WorkerSelection.DECLARED_POOL,
+    ) -> None:
+        self._orchestrator[run_key] = (str(step_id), dict(output), worker_selection)
 
     def record_synthesis(
         self, run_key: str, step_id: str, output: dict[str, Any], self_hash: str
@@ -359,7 +365,9 @@ class _MiniOWStore:
     def orchestrator_present(self, run_key: str) -> bool:
         return run_key in self._orchestrator
 
-    def read_orchestrator_output(self, run_key: str) -> tuple[str, dict[str, Any]] | None:
+    def read_orchestrator_output(
+        self, run_key: str
+    ) -> tuple[str, dict[str, Any], WorkerSelection] | None:
         return self._orchestrator.get(run_key)
 
     def orchestrator_dispatched(self, run_key: str) -> bool:

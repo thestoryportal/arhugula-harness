@@ -60,6 +60,8 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, cast
 
+from harness_cp.topology_pattern import WorkerSelection
+
 __all__ = [
     "ENGINE_OUTPUT_BRANCHES_SUFFIX",
     "ENGINE_OUTPUT_SUBDIR",
@@ -266,28 +268,86 @@ class EngineOutputStore:
         run_key: str,
         step_id: str,
         output: Mapping[str, Any],
+        worker_selection: WorkerSelection,
     ) -> None:
         """Capture the ORCHESTRATOR_WORKERS ``steps[0]`` output (not a branch).
 
         The orchestrator output rides the `FanOutResumeState.orchestrator_output`
         field on resume; captured to a dedicated ``orchestrator.jsonl`` under the
         branches dir so it does not collide with the ``branch-*`` worker files.
+        ``worker_selection`` is recorded with the output (CP v1.130 §25.11.1.5(6)): the
+        plan is a pure function of both, so crash resume re-derives it from this record.
         """
-        record = {"step_id": str(step_id), "output": dict(output)}
+        record = {
+            "step_id": str(step_id),
+            "output": dict(output),
+            "worker_selection": worker_selection.value,
+        }
         line = json.dumps(record, sort_keys=True)
         self._append_path(self._orchestrator_file(run_key), line)
 
-    def read_orchestrator_output(self, run_key: str) -> tuple[str, dict[str, Any]] | None:
-        """Return the captured ``(step_id, output)`` orchestrator record, or None.
+    def read_orchestrator_output(
+        self, run_key: str
+    ) -> tuple[str, dict[str, Any], WorkerSelection] | None:
+        """Return the captured ``(step_id, output, worker_selection)`` record, or None.
 
-        None means ABSENT (no orchestrator captured). A present-but-unreadable
-        orchestrator file is surfaced by `orchestrator_present` so the caller fails
-        closed (the symmetric of the per-branch corrupt-detection).
+        None means ABSENT (no orchestrator captured) or unreadable. A present-but-unreadable
+        orchestrator file (including an unknown selection value) is surfaced by
+        `orchestrator_present` so the caller fails closed (the symmetric of the per-branch
+        corrupt-detection). A record without a selection predates CP v1.130 and reads as
+        `DECLARED_POOL`, the only selection that existed then.
+
+        Only the unterminated final segment can be a torn append; it is skipped. A
+        newline-terminated line that is not JSON is tolerated only when a later readable
+        record supersedes it (the `_append_path` leading-newline self-heal of a torn line).
+        Otherwise it, or any JSON record that is malformed (not an object, a bad
+        ``step_id``/``output``, or an unknown selection), makes the whole journal unreadable:
+        skipping it would resurrect an older record and a stale plan.
         """
         path = self._orchestrator_file(run_key)
         if not path.exists():
             return None
-        return self._read_last_branch_record(path)
+        try:
+            lines = path.read_text(encoding="utf-8").split("\n")
+        except (OSError, UnicodeDecodeError):
+            return None
+        result: tuple[str, dict[str, Any], WorkerSelection] | None = None
+        unsuperseded_garbage = False
+        for index, line in enumerate(lines):
+            terminated = index < len(lines) - 1
+            if not terminated and not line:
+                break  # nothing after the final newline
+            try:
+                parsed = self._parse_orchestrator_record(line)
+            except ValueError:
+                return None
+            if parsed is not None:
+                result = parsed  # last readable record wins, as for branch files
+                unsuperseded_garbage = False
+            elif terminated:
+                unsuperseded_garbage = True
+        return None if unsuperseded_garbage else result
+
+    @classmethod
+    def _parse_orchestrator_record(
+        cls, line: str
+    ) -> tuple[str, dict[str, Any], WorkerSelection] | None:
+        """Parse one orchestrator line; None for a line that is not JSON (the caller decides
+        from its position whether it is torn), ValueError for a JSON record that is malformed
+        or carries an unknown ``worker_selection``."""
+        try:
+            loaded = json.loads(line)
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(loaded, dict):
+            raise ValueError("orchestrator record is not a JSON object")
+        record = cast("dict[str, object]", loaded)
+        step_id = record.get("step_id")
+        output = record.get("output")
+        if not isinstance(step_id, str) or not isinstance(output, dict):
+            raise ValueError("orchestrator record has a malformed step_id or output")
+        raw = record.get("worker_selection", WorkerSelection.DECLARED_POOL.value)
+        return (step_id, cast("dict[str, Any]", output), WorkerSelection(raw))
 
     def orchestrator_present(self, run_key: str) -> bool:
         """Whether an orchestrator journal FILE exists (regardless of readability)."""

@@ -920,6 +920,15 @@ class RuntimeSubAgentDispatcher:
                 f"SUB_AGENT_DISPATCH step {str(step.step_id)!r} step_payload "
                 f"failed SubAgentDispatchPayload validation: {exc}"
             ) from exc
+        # Runtime v1.140 §14.7.2 step 1 — the one read of `lead_brief`: rebind `payload` to the
+        # effective payload so the handoff, descent and audit `response_hash` below agree on one
+        # brief. A `LEAD_PLAN` worker's recorded lead brief replaces the declared one; every other
+        # context keeps the parsed payload. Child identity, manifest and steps stay declared.
+        payload = (
+            payload
+            if step_context.lead_brief is None
+            else payload.model_copy(update={"brief": step_context.lead_brief})
+        )
 
         # --- Step 2: compose HandoffContext (AC #4) ------------------------
         handoff_context = _compose_handoff_context(step_context=step_context, payload=payload)

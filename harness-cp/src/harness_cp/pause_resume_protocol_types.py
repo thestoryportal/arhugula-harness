@@ -40,9 +40,18 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Any
 
 from harness_core import JournalRecordRef
-from pydantic import AfterValidator, BaseModel, ConfigDict, PrivateAttr, model_validator
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    ConfigDict,
+    PrivateAttr,
+    SerializerFunctionWrapHandler,
+    model_serializer,
+    model_validator,
+)
 
 from harness_cp.handoff_context import StateSummary
+from harness_cp.topology_pattern import WorkerSelection
 
 if TYPE_CHECKING:
     from harness_cp.hitl_placement import HITLResult
@@ -593,6 +602,24 @@ class FanOutResumeState(BaseModel):
     empty, so every pre-existing
     snapshot hashes byte-identically (the `effect_fence_paused_branches` drop-when-
     empty discipline)."""
+
+    worker_selection: WorkerSelection = WorkerSelection.DECLARED_POOL
+    """CP v1.130 §25.11.1.5(6) — the running manifest's `worker_selection` at pause capture.
+    Resume compares it with the resumed manifest's before deriving the plan, so a changed
+    selection over the same worker list fails closed. A snapshot without it predates v1.130
+    and parses as `DECLARED_POOL`, the only selection that existed then."""
+
+    @model_serializer(mode="wrap")
+    def _drop_default_worker_selection(
+        self, handler: SerializerFunctionWrapHandler
+    ) -> dict[str, Any]:
+        # The drop-when-default discipline of `_compute_snapshot_hash`, owned by this carrier
+        # so every dump (hash input and persisted snapshot) agrees: a pre-v1.130 snapshot keeps
+        # its hash, and its absent key reads back as the same default.
+        data: dict[str, Any] = handler(self)
+        if self.worker_selection is WorkerSelection.DECLARED_POOL:
+            data.pop("worker_selection", None)  # absent already under a caller `include`
+        return data
 
 
 class PeerFanOutResumeState(BaseModel):

@@ -69,6 +69,26 @@ producer provenance; do not label it Gemini to pass a family test. Correction
 review uses `HARNESS_CYCLE_PASS=correction` and the previous reviewed head as
 `--base`; add new material authors without dropping previous ones.
 
+An unreserved arc that no trial unit enrolls has no cycle to tag. Import its
+reviewer's final with the pass unset and the arc named explicitly:
+
+```bash
+HARNESS_ARC_ID=<arc-id> HARNESS_LANE_ID=<lane-id> uv run python tools/native_review.py record --transcript <native-transcript> --authors <author-session> <correction-author-session> --base origin/main
+```
+
+The adapter refuses this route unless all of these hold:
+- the arc has no reservation;
+- the reviewed head's committed policy selects this delivery setting and does not
+  enroll the arc;
+- the gate log holds no tagged row for the arc;
+- this reviewer's verdict on this head and digest is not already recorded.
+
+It appends one untagged row bound to the six values, the reviewer and every
+material author, under the log lock. That row is the record of the independent
+review and nothing more: it completes no cycle pass, reserves nothing and does
+not authorize landing. Landing still needs the merge gate, required CI and the
+safe wrapper. A reserved arc, or one with cycle history, keeps its tagged passes.
+
 A separately launched subscription wrapper remains an optional independent
 review route where that launch is authorized: `just review-cycle-pass initial
 <round-log> origin/main`, with the existing arc/lane IDs. Initial/correction passes
