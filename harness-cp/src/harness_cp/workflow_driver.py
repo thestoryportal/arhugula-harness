@@ -153,6 +153,13 @@ from harness_cp.sub_agent_dispatch_capacity_authority import (
 )
 from harness_cp.topology_pattern import CascadePolicy, TopologyPattern
 from harness_cp.validator_framework_types import ValidatorFrameworkFailureError
+from harness_cp.worker_plan import (
+    WorkerAssignment,
+    WorkerPlan,
+    WorkerPlanInvalid,
+    WorkerSelection,
+    derive_worker_plan,
+)
 from harness_cp.workflow_driver_errors import (
     BranchBarrierDeadlineExceededError,
     EngineClassNotYetMaterializedError,
@@ -3880,6 +3887,20 @@ def _execute_workflow_body(
                     _crash_branch_steps,
                     manifest_entry.topology_pattern,
                     manifest_entry.fanout_timeout_disposition,
+                    manifest_entry.worker_selection,
+                )
+            except _WorkerPlanRefusedError as exc:
+                return (
+                    RunResult(
+                        workflow_id=manifest_entry.workflow_id,
+                        run_id=run_id,
+                        status=RunStatus.FAILED,
+                        terminal_step_index=None,
+                        partial_state=None,
+                        final_state=None,
+                        fail_class=exc.fail_class,
+                    ),
+                    0,
                 )
             except _FanOutStoreCorruptError as exc:
                 return (
@@ -3920,6 +3941,22 @@ def _execute_workflow_body(
                     ),
                     0,
                 )
+            # CP v1.130 §25.11.1.5(3) — every worker-ordinal decision below resolves an ordinal
+            # through the recorded plan (the same derivation `_determine_fanout_resume` just
+            # bound, so it cannot refuse here); `_crash_branch_steps` stays the declared body.
+            _crash_plan_steps = _crash_ordinal_steps(
+                _crash_branch_steps,
+                manifest_entry.worker_selection,
+                (
+                    (
+                        _crash_fan_out_resume.orchestrator_step_id,
+                        _crash_fan_out_resume.orchestrator_output,
+                        _crash_fan_out_resume.worker_selection,
+                    )
+                    if isinstance(_crash_fan_out_resume, FanOutResumeState)
+                    else None
+                ),
+            )
             # RECONCILER fan-out replay returns before the linear engine branch below, so a present
             # engine pause record must fire the engine-layer pause/CAS gate before branch-store
             # replay/finalization. Branch records (and synthesis records) are reserve-before-commit:
@@ -4011,9 +4048,9 @@ def _execute_workflow_body(
                     # ORCHESTRATOR_WORKERS / HIERARCHICAL_DELEGATION INCLUDES the orchestrator
                     # `steps[0]`, so `_cardinality` would over-count by one and let a stale
                     # `branch-{worker_count}.dispatched` marker slip through as in-range; out-of-
-                    # family Codex [P2]). Computed from `_crash_branch_steps` (synthesis already
+                    # family Codex [P2]). Computed from `_crash_plan_steps` (synthesis already
                     # split off) the same way as the incomplete-recovery `_expected_branches`.
-                    _card_branch_count = len(_crash_branch_steps) - (
+                    _card_branch_count = len(_crash_plan_steps) - (
                         1
                         if manifest_entry.topology_pattern
                         in {
@@ -4035,7 +4072,7 @@ def _execute_workflow_body(
                     # unrecoverable remainder (SUB_AGENT / MANAGED / out-of-range / un-kinded /
                     # changed-to-non-TOOL) forces the fail-closed.
                     _dispatched_resumed_kinds = _resumed_branch_kinds_by_ordinal(
-                        _crash_branch_steps,
+                        _crash_plan_steps,
                         branch_count=_card_branch_count,
                         orchestrated=manifest_entry.topology_pattern
                         in {
@@ -4044,7 +4081,7 @@ def _execute_workflow_body(
                         },
                     )
                     _dispatched_resumed_step_ids = _resumed_branch_step_ids_by_ordinal(
-                        _crash_branch_steps,
+                        _crash_plan_steps,
                         branch_count=_card_branch_count,
                         orchestrated=manifest_entry.topology_pattern
                         in {
@@ -4068,7 +4105,7 @@ def _execute_workflow_body(
                         ),
                         resumed_subagent_recoverable_indexes=(
                             _resumed_subagent_recoverable_by_ordinal(
-                                _crash_branch_steps,
+                                _crash_plan_steps,
                                 branch_count=_card_branch_count,
                                 orchestrated=manifest_entry.topology_pattern
                                 in {
@@ -4081,7 +4118,7 @@ def _execute_workflow_body(
                             _crash_replay_store, run_idempotency_key
                         ),
                         resumed_child_engines=_resumed_subagent_child_engine_by_ordinal(
-                            _crash_branch_steps,
+                            _crash_plan_steps,
                             branch_count=_card_branch_count,
                             orchestrated=manifest_entry.topology_pattern
                             in {
@@ -4320,12 +4357,12 @@ def _execute_workflow_body(
                             run_idempotency_key
                         )
                         _pr_resumed_kinds = _resumed_branch_kinds_by_ordinal(
-                            _crash_branch_steps,
+                            _crash_plan_steps,
                             branch_count=_crash_expected,
                             orchestrated=_pr_orchestrated,
                         )
                         _pr_resumed_step_ids = _resumed_branch_step_ids_by_ordinal(
-                            _crash_branch_steps,
+                            _crash_plan_steps,
                             branch_count=_crash_expected,
                             orchestrated=_pr_orchestrated,
                         )
@@ -4343,7 +4380,7 @@ def _execute_workflow_body(
                             ),
                             resumed_subagent_recoverable_indexes=(
                                 _resumed_subagent_recoverable_by_ordinal(
-                                    _crash_branch_steps,
+                                    _crash_plan_steps,
                                     branch_count=_crash_expected,
                                     orchestrated=_pr_orchestrated,
                                 )
@@ -4352,7 +4389,7 @@ def _execute_workflow_body(
                                 _crash_replay_store, run_idempotency_key
                             ),
                             resumed_child_engines=_resumed_subagent_child_engine_by_ordinal(
-                                _crash_branch_steps,
+                                _crash_plan_steps,
                                 branch_count=_crash_expected,
                                 orchestrated=_pr_orchestrated,
                             ),
@@ -4468,7 +4505,7 @@ def _execute_workflow_body(
                         # remainder (SUB_AGENT_DISPATCH recursive child / MANAGED_AGENTS unfenced /
                         # out-of-range / un-kinded / changed-to-non-TOOL) forces the fail-closed.
                         _maybe_ran_resumed_kinds = _resumed_branch_kinds_by_ordinal(
-                            _crash_branch_steps,
+                            _crash_plan_steps,
                             branch_count=_crash_expected,
                             orchestrated=manifest_entry.topology_pattern
                             in {
@@ -4477,7 +4514,7 @@ def _execute_workflow_body(
                             },
                         )
                         _maybe_ran_resumed_step_ids = _resumed_branch_step_ids_by_ordinal(
-                            _crash_branch_steps,
+                            _crash_plan_steps,
                             branch_count=_crash_expected,
                             orchestrated=manifest_entry.topology_pattern
                             in {
@@ -4501,7 +4538,7 @@ def _execute_workflow_body(
                             ),
                             resumed_subagent_recoverable_indexes=(
                                 _resumed_subagent_recoverable_by_ordinal(
-                                    _crash_branch_steps,
+                                    _crash_plan_steps,
                                     branch_count=_crash_expected,
                                     orchestrated=manifest_entry.topology_pattern
                                     in {
@@ -4514,7 +4551,7 @@ def _execute_workflow_body(
                                 _crash_replay_store, run_idempotency_key
                             ),
                             resumed_child_engines=_resumed_subagent_child_engine_by_ordinal(
-                                _crash_branch_steps,
+                                _crash_plan_steps,
                                 branch_count=_crash_expected,
                                 orchestrated=manifest_entry.topology_pattern
                                 in {
@@ -4627,7 +4664,7 @@ def _execute_workflow_body(
                     TopologyPattern.ORCHESTRATOR_WORKERS,
                     TopologyPattern.HIERARCHICAL_DELEGATION,
                 }
-                _expected_branches = len(_crash_branch_steps) - (1 if _is_orchestrated else 0)
+                _expected_branches = len(_crash_plan_steps) - (1 if _is_orchestrated else 0)
                 _complete_output_bearing = (
                     _crash_fan_out_resume is not None
                     and len(_crash_fan_out_resume.branches) == _expected_branches
@@ -7765,12 +7802,66 @@ class _FanOutStoreOrchestratorMaybeRanError(Exception):
     """
 
 
+class _WorkerPlanRefusedError(Exception):
+    """A fan-out's worker plan cannot bind (CP v1.130 §25.11.1.4(3), §25.11.1.5(5)/(6)).
+
+    `fail_class` is the run's FAILED class: a selection that differs from the recorded one, or a
+    plan that fails derivation. Raised before any worker dispatch or worker marker.
+    """
+
+    def __init__(self, fail_class: str) -> None:
+        super().__init__(fail_class)
+        self.fail_class = fail_class
+
+
+def _bound_worker_plan(
+    selection: WorkerSelection,
+    recorded_selection: WorkerSelection,
+    orchestrator_output: Mapping[str, Any],
+    pool: Sequence[WorkflowStep],
+) -> WorkerPlan:
+    """The fan-out's worker plan, bound to the selection recorded with the orchestrator output.
+
+    The plan is a pure function of selection, recorded output and declared pool; the selection is
+    the input resume cannot otherwise check, so a recorded selection that differs from the running
+    manifest's refuses the plan (§25.11.1.5(6)). A fresh dispatch records the manifest's own
+    selection, so it passes it as both. Every orchestrator-topology unit that maps a worker ordinal
+    gets its plan here [LAW:single-enforcer].
+    """
+    if recorded_selection is not selection:
+        raise _WorkerPlanRefusedError("orchestrator-workers-selection-mismatch")
+    try:
+        return derive_worker_plan(selection, orchestrator_output, pool)
+    except WorkerPlanInvalid as exc:
+        raise _WorkerPlanRefusedError(f"orchestrator-workers-plan-invalid: {exc.reason}") from exc
+
+
+def _crash_ordinal_steps(
+    steps: Sequence[WorkflowStep],
+    selection: WorkerSelection,
+    orchestrator: tuple[str, Mapping[str, Any], WorkerSelection] | None,
+) -> Sequence[WorkflowStep]:
+    """`steps` with its declared worker pool replaced by the recorded orchestrator output's plan.
+
+    A worker's branch ordinal is its plan position (§25.11.1.5(1)), so the pre-strategy crash units
+    resolve ordinal `i` to `result[i + 1]`, the `orchestrated=True` convention of the
+    `_resumed_*_by_ordinal` helpers. With no orchestrator record there is no plan: such a store
+    holds no legitimate worker artifact (§25.11.1.5(4)), and the declared body is the domain.
+    """
+    if orchestrator is None:
+        return steps
+    _step_id, output, recorded_selection = orchestrator
+    plan = _bound_worker_plan(selection, recorded_selection, output, steps[1:])
+    return [steps[0], *(assignment.step for assignment in plan.assignments)]
+
+
 def _determine_fanout_resume(
     store: Any,
     run_key: str,
     steps: Sequence[WorkflowStep],
     topology: TopologyPattern,
     timeout_disposition: FanoutTimeoutDisposition = FanoutTimeoutDisposition.FAIL_CLOSED,
+    worker_selection: WorkerSelection = WorkerSelection.DECLARED_POOL,
 ) -> FanOutResumeState | PeerFanOutResumeState | None:
     """Reconstruct a fan-out crash-resume state from the durable branch STORE.
 
@@ -7821,6 +7912,26 @@ def _determine_fanout_resume(
             f"fan-out crash-resume cardinality mismatch: store captured a {_recorded_cardinality}-"
             f"branch fan-out, resume supplied {len(steps)} (changed body) — fail closed"
         )
+    _orchestrated = topology in {
+        TopologyPattern.ORCHESTRATOR_WORKERS,
+        TopologyPattern.HIERARCHICAL_DELEGATION,
+    }
+    orchestrator = store.read_orchestrator_output(run_key) if _orchestrated else None
+    # Cardinality-ordering fail-closed (out-of-family Codex [P2]): the orchestrator record is
+    # fsynced BEFORE the fan-out cardinality marker, so a crash between them leaves a valid
+    # orchestrator record with NO recorded cardinality — and a manifest with a CHANGED worker
+    # count would then reuse the old orchestrator output against the new worker set undetected.
+    # An orchestrator record without a cardinality marker therefore fails closed — before the
+    # record's plan is derived, so the plan is only ever read against a validated body.
+    if orchestrator is not None and _recorded_cardinality is None:
+        raise _FanOutStoreCorruptError(
+            "fan-out orchestrator record present but the fan-out cardinality marker is absent "
+            "(crash between orchestrator capture and cardinality write) — fail closed (the "
+            "worker count cannot be validated against a changed manifest)"
+        )
+    # CP v1.130 §25.11.1.5(3) — the worker ordinal domain is the recorded output's plan (the
+    # recorded cardinality above stays a check on the declared body).
+    _ordinal_steps = _crash_ordinal_steps(steps, worker_selection, orchestrator)
     # Disposition recovery (the at-most-once class closer — an output-only store made every
     # non-clean-success disposition invisible). A COMPLETED branch with NO output (ran-and-
     # errored; its effect LANDED) is recovered as TERMINAL — not re-dispatched (the seed loop
@@ -7850,15 +7961,7 @@ def _determine_fanout_resume(
             # maybe-ran machinery) re-runs them. `_branch_count` is the worker/branch count
             # (orchestrator `steps[0]` excluded for the orchestrator topologies — the marker is
             # keyed by branch ordinal, matching the cardinality-only `_card_branch_count`).
-            _branch_count = len(steps) - (
-                1
-                if topology
-                in {
-                    TopologyPattern.ORCHESTRATOR_WORKERS,
-                    TopologyPattern.HIERARCHICAL_DELEGATION,
-                }
-                else 0
-            )
+            _branch_count = len(_ordinal_steps) - (1 if _orchestrated else 0)
             _timeout_unsafe = _refire_unsafe_branch_indices(
                 set(timed_out), store.dispatched_branch_kinds(run_key), _branch_count
             )
@@ -7917,7 +8020,6 @@ def _determine_fanout_resume(
     # orchestrator — else re-dispatching `steps[0]` double-fires its effect, which the
     # sidecar already captured (out-of-family Codex [P1]). The orchestrator record is
     # therefore the recovery authority for these topologies, independent of the branch set.
-    orchestrator = store.read_orchestrator_output(run_key)
     if orchestrator is None:
         if store.orchestrator_present(run_key):
             # Orchestrator file present-but-unreadable → fail closed (corruption / tamper),
@@ -8097,30 +8199,30 @@ def _determine_fanout_resume(
                     "a stamped-only recovery class without the dispatch-instrumented stamp; "
                     "re-dispatch would risk a double-fire)"
                 )
+            # CP v1.130 §25.11.1.5(4) — every worker dispatch marker and the cardinality marker
+            # are written after `record_orchestrator`, so with neither an orchestrator record nor
+            # an orchestrator marker, either one is orphaned (corruption), not a fresh run. Checked
+            # by presence, under every cascade_policy and both selections; no plan is derived.
+            if store.dispatched_branch_kinds(run_key) or store.fanout_cardinality_present(run_key):
+                raise _FanOutStoreCorruptError(
+                    "fan-out worker dispatch marker / cardinality marker present but neither the "
+                    "orchestrator record nor its dispatch marker is (orphaned marker, corrupt "
+                    "store) — fail closed, never a fresh re-dispatch"
+                )
             return None  # no marker → provably-not-run OR pre-arc journal → fresh run
         # Workers completed but the orchestrator output is ABSENT — an inconsistent store
         # (the orchestrator completes BEFORE any worker dispatches). Fail closed.
         raise _FanOutStoreCorruptError(
             "fan-out orchestrator output absent but workers completed (inconsistent store)"
         )
-    # Cardinality-ordering fail-closed (out-of-family Codex [P2]): the orchestrator record is
-    # fsynced BEFORE the fan-out cardinality marker, so a crash between them leaves a valid
-    # orchestrator record with NO recorded cardinality — and a manifest with a CHANGED worker
-    # count would then reuse the old orchestrator output against the new worker set undetected.
-    # An orchestrator record without a cardinality marker therefore fails closed.
-    if _recorded_cardinality is None:
-        raise _FanOutStoreCorruptError(
-            "fan-out orchestrator record present but the fan-out cardinality marker is absent "
-            "(crash between orchestrator capture and cardinality write) — fail closed (the "
-            "worker count cannot be validated against a changed manifest)"
-        )
-    orchestrator_step_id, orchestrator_output = orchestrator
+    orchestrator_step_id, orchestrator_output, recorded_selection = orchestrator
     return FanOutResumeState(
         orchestrator_output=orchestrator_output,
         orchestrator_step_id=orchestrator_step_id,
         branches=branches,  # possibly empty — orchestrator captured, zero workers completed
-        worker_count=len(steps) - 1,
+        worker_count=len(_ordinal_steps) - 1,
         paused_child_branches=(),
+        worker_selection=recorded_selection,
     )
 
 
@@ -12434,13 +12536,39 @@ def _execute_orchestrator_workers(
         return result, 0
 
     orchestrator_step = steps[0]
-    worker_steps = list(steps[1:])
+    # CP v1.130 §25.11.1.2 — the declared worker pool; the plan selects, orders and briefs its
+    # members. `worker_steps` is the planned list every later operation reads (§25.11.1.4(1)),
+    # bound below once the orchestrator output is known: here on resume (recovered output), after
+    # the orchestrator dispatch on a fresh run. A worker's `branch_index` is its plan position.
+    worker_pool = steps[1:]
+    worker_assignments: tuple[WorkerAssignment, ...] = ()
+    worker_steps: list[WorkflowStep] = []
 
     # B-FANOUT-PAUSE — material-diff guard on resume: the re-supplied workflow's
     # worker count MUST match the count captured at pause, else the recovered
     # branch ordinals no longer map to these steps (a changed body) → fail closed
     # rather than re-dispatch a mismatched set.
     if _fan_out_resume is not None:
+        # §25.11.1.5(2)/(5)/(6) — re-derive the plan from the recovered output under the resumed
+        # manifest, refusing a changed selection, before any worker-ordinal check.
+        try:
+            worker_assignments = _bound_worker_plan(
+                manifest_entry.worker_selection,
+                _fan_out_resume.worker_selection,
+                _fan_out_resume.orchestrator_output,
+                worker_pool,
+            ).assignments
+        except _WorkerPlanRefusedError as exc:
+            return RunResult(
+                workflow_id=workflow_id,
+                run_id=run_id,
+                status=RunStatus.FAILED,
+                terminal_step_index=None,
+                partial_state=None,
+                final_state=None,
+                fail_class=exc.fail_class,
+            ), 0
+        worker_steps = [assignment.step for assignment in worker_assignments]
 
         def _resume_body_mismatch() -> str | None:
             # orchestrator identity (its output is recovered + dispatch skipped —
@@ -12966,6 +13094,33 @@ def _execute_orchestrator_workers(
         # double-fire window.
         # `_fanout_replay_store` handle reused.
         _orch_replay_store = _fanout_replay_store(ctx, manifest_entry)
+        # CP v1.130 §25.11.1.5(6) — the selection is recorded with the orchestrator output, so a
+        # `LEAD_PLAN` record is never written without it: a bound store whose `record_orchestrator`
+        # cannot take it refuses the run before the orchestrator dispatches. `DECLARED_POOL` keeps
+        # the historical three-argument call for such a store, whose record reads back as it.
+        _orch_record_kwargs: dict[str, object] = (
+            {"worker_selection": manifest_entry.worker_selection}
+            if _orch_replay_store is not None
+            and _callable_accepts_keyword(
+                _orch_replay_store.record_orchestrator, "worker_selection"
+            )
+            else {}
+        )
+        if (
+            _orch_replay_store is not None
+            and not _orch_record_kwargs
+            and manifest_entry.worker_selection is WorkerSelection.LEAD_PLAN
+        ):
+            _finalize_reconciler_cas_if_attempted()
+            return RunResult(
+                workflow_id=workflow_id,
+                run_id=run_id,
+                status=RunStatus.FAILED,
+                terminal_step_index=None,
+                partial_state=None,
+                final_state=None,
+                fail_class="orchestrator-workers-plan-store-unsupported",
+            ), 0
         try:
             _orch_dispatcher = step_dispatchers.lookup(orchestrator_step.step_kind)
             if _orch_replay_store is not None:
@@ -13120,7 +13275,10 @@ def _execute_orchestrator_workers(
         # computed above for the reserve-before-DISPATCH marker — reuse it).
         if _orch_replay_store is not None:
             _orch_replay_store.record_orchestrator(
-                run_idempotency_key, str(orchestrator_step.step_id), orchestrator_output
+                run_idempotency_key,
+                str(orchestrator_step.step_id),
+                orchestrator_output,
+                **_orch_record_kwargs,
             )
         _append_buffered_sequential_entry(
             writer=orchestrator_writer,
@@ -13130,6 +13288,31 @@ def _execute_orchestrator_workers(
             timestamp=fanout_timestamp,
             procedural_tier_snapshot_ref=snapshot_ref,
         )
+        # CP v1.130 §25.11.1.4(1)/(3) — one plan per fan-out, derived from the output just
+        # recorded and before any worker marker. A plan that fails derivation fails the run with
+        # the orchestrator's ledger entry and replay record kept; no worker failed, so
+        # `cascade_policy` does not apply.
+        try:
+            worker_assignments = _bound_worker_plan(
+                manifest_entry.worker_selection,
+                manifest_entry.worker_selection,
+                orchestrator_output,
+                worker_pool,
+            ).assignments
+        except _WorkerPlanRefusedError as exc:
+            drain_branch_buffers(ctx.ledger_writer, [orchestrator_writer])
+            ctx.lifecycle_emitter.emit(WorkflowEventClass.STEP_BOUNDARY)
+            _finalize_reconciler_cas_if_attempted()
+            return RunResult(
+                workflow_id=workflow_id,
+                run_id=run_id,
+                status=RunStatus.FAILED,
+                terminal_step_index=None,
+                partial_state=None,
+                final_state=None,
+                fail_class=exc.fail_class,
+            ), 1
+        worker_steps = [assignment.step for assignment in worker_assignments]
 
     # B-60 (codex round-1 on PR #1075, reproduced): the orchestrator's
     # SEQUENTIAL dispatch above is this strategy's Phase 1 — a token
@@ -13159,7 +13342,8 @@ def _execute_orchestrator_workers(
     # run-level `ABORT` (which fails the whole run). The ORCHESTRATOR analogue of the
     # parallelization peer scoped-abort.
     _scoped_abort_ordinals: set[int] = set()
-    for branch_index, step in enumerate(worker_steps):
+    for branch_index, assignment in enumerate(worker_assignments):
+        step = assignment.step
         # B-FANOUT-PAUSE — on resume, a branch that reached a terminal disposition
         # before the prior `pause` halt is SKIPPED (§25.15.2 obligation 7: a
         # `completed`/`timed_out`/`cancelled` branch MUST NOT be re-dispatched —
@@ -13202,7 +13386,8 @@ def _execute_orchestrator_workers(
         # default` fold site below. (Out-of-family review [P3].)
         role = binding.agent_role or derive_agent_role(step.step_id)
         # The worker's DECLARED step ordinal is its position in the original
-        # `steps` (orchestrator=0, workers=1,2,…), i.e. `branch_index + 1`.
+        # `steps` (orchestrator=0, workers=1,2,…), i.e. `assignment.declared_index`
+        # — fixed by the declaration, never by its plan position (CP v1.130 §25.11.1.4(2)).
         # `compose_branch_child_context` inherits `step_index` from the fan-out
         # parent (the orchestrator, step 0), so set it to the declared ordinal
         # here — downstream consumers key per-step policy / audit / the runtime
@@ -13309,7 +13494,10 @@ def _execute_orchestrator_workers(
             # tuple (keyed from manifest_entry, NOT the inherited fanout_parent — so
             # the orchestrator's own placement override never leaks to a worker).
             update={
-                "step_index": branch_index + 1,
+                "step_index": assignment.declared_index,
+                # CP v1.130 §25.11.1.4(4) — the lead-authored brief (`None` unless `LEAD_PLAN` and
+                # a sub-agent worker); Runtime's sub-agent composer is its only reader.
+                "lead_brief": assignment.brief,
                 "child_resume": _child_resume,
                 "effect_fence_resolution": _branch_effect_fence_directive,
                 "hitl_delivery_holder": _branch_hitl_delivery_cell,
@@ -13485,7 +13673,7 @@ def _execute_orchestrator_workers(
     # WORKER branches' LOST ledger entries (out-of-family Codex [P1]): a crash before the
     # barrier drained nothing, so the resumed ledger would omit them + undercount
     # `workflow.step_count`. Dedup-safe; extends the barrier-drain set. (The worker context
-    # mirrors the dispatch-plan build: `derive_agent_role` + `step_index = branch_index + 1`;
+    # mirrors the dispatch-plan build: `derive_agent_role` + the declared `step_index`;
     # `child_resume_snapshot` is None — a crash has no paused children.)
     if _fan_out_crash_resume is not None:
         for _bi in sorted(_recovered_terminal):
@@ -13502,7 +13690,7 @@ def _execute_orchestrator_workers(
                 agent_role=_r_binding.agent_role or derive_agent_role(_r_step.step_id),
             ).model_copy(
                 update={
-                    "step_index": _bi + 1,
+                    "step_index": worker_assignments[_bi].declared_index,
                     "hitl_placements": fold_step_hitl_placements(
                         manifest_entry.hitl_placements,
                         _r_binding.hitl_placement,
@@ -13532,7 +13720,7 @@ def _execute_orchestrator_workers(
     # re-dispatch — `[[durable-recovery-presence-validity-scope]]`). Its writer joins the barrier
     # drain; its ordinal (`_scoped_abort_ordinals`) feeds the post-barrier fold (PARTIAL with
     # survivors; FAILED if NONE) + the run fail_class. NEVER re-dispatched. (Worker context
-    # mirrors the dispatch-plan / re-materialize build: derive role + `step_index = _bi + 1`.)
+    # mirrors the dispatch-plan / re-materialize build: derive role + the declared `step_index`.)
     # SKIPPED under PROCEED: an effect-fence resume under PROCEED is rejected fail-closed (the
     # strict-tier guard below, + the `not branch_plan` early gate), so recording a durable terminal
     # here would corrupt state for a rejected resume (fail-closed precedes durable writes —
@@ -13563,7 +13751,7 @@ def _execute_orchestrator_workers(
             agent_role=_sa_binding.agent_role or derive_agent_role(_sa_step.step_id),
         ).model_copy(
             update={
-                "step_index": _sa_bi + 1,
+                "step_index": worker_assignments[_sa_bi].declared_index,
                 "hitl_placements": fold_step_hitl_placements(
                     manifest_entry.hitl_placements,
                     _sa_binding.hitl_placement,
@@ -13781,7 +13969,7 @@ def _execute_orchestrator_workers(
                 agent_role=_r_binding.agent_role or derive_agent_role(_r_step.step_id),
             ).model_copy(
                 update={
-                    "step_index": _bi + 1,
+                    "step_index": worker_assignments[_bi].declared_index,
                     "hitl_placements": fold_step_hitl_placements(
                         manifest_entry.hitl_placements,
                         _r_binding.hitl_placement,
@@ -13923,6 +14111,7 @@ def _execute_orchestrator_workers(
                     for _bi, _status in sorted(terminal_dispositions.items())
                 ),
                 worker_count=len(worker_steps),
+                worker_selection=manifest_entry.worker_selection,
                 # B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT-MAYBE-RAN-FENCE-STEP-ID — the
                 # ORCHESTRATOR_WORKERS / HIERARCHICAL reconstruct-no-dispatch path ALWAYS
                 # short-circuits HERE (every worker is skipped → empty branch_plan → this
@@ -15395,6 +15584,7 @@ def _execute_orchestrator_workers(
                 for _bi, _status in sorted(terminal_dispositions.items())
             ),
             worker_count=len(worker_steps),
+            worker_selection=manifest_entry.worker_selection,
             # B-HIERARCHICAL-PAUSE — workers whose recursive child PAUSED this round.
             # DISJOINT from `branches` (a paused-child ordinal never entered
             # `terminal_dispositions`). Each carries the child's nested PauseSnapshot so

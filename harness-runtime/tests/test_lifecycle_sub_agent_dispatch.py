@@ -2597,3 +2597,60 @@ def test_u_rt_137_sub_agent_compose_signs_five_segment_with_tenant(tmp_path: Pat
     absent_dispatcher, _r2, _e2 = _dispatcher(tmp_path, signing_backend=absent_backend)
     absent_dispatcher.dispatch(_binding(), _step(), step_context=_step_context())
     assert len(_parse_segments(absent_backend.messages[-1])) == 4
+
+
+# ---------------------------------------------------------------------------
+# Runtime v1.140 §14.7.2 step 1 — the effective brief (RW1 / RW2)
+# ---------------------------------------------------------------------------
+
+
+class _BriefSpyHandoffRegistry:
+    """Wraps the real registry and records the brief each later reader hands it: the
+    gate-level descent `sub_agent_brief` and the audit `response_hash` input."""
+
+    def __init__(self) -> None:
+        self._real = RuntimeHandoffRegistry()
+        self.descent_briefs: list[SubAgentBrief] = []
+        self.hashed_briefs: list[SubAgentBrief] = []
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._real, name)
+
+    def dispatch(self, **kwargs: Any) -> SubAgentGateLevelDescent:
+        self.descent_briefs.append(kwargs["sub_agent_brief"])
+        return self._real.dispatch(**kwargs)
+
+    def dispatch_response_hash(self, brief: SubAgentBrief) -> str:
+        self.hashed_briefs.append(brief)
+        return self._real.dispatch_response_hash(brief)
+
+
+def _lead_brief() -> SubAgentBrief:
+    return _brief().model_copy(
+        update={"objective": "the lead-authored objective", "summary_hash": "1" * 64}
+    )
+
+
+@pytest.mark.parametrize("lead", [True, False], ids=["RW1-lead-brief", "RW2-declared-brief"])
+def test_effective_brief_reaches_every_reader(tmp_path: Path, lead: bool) -> None:
+    """RW1 — a context `lead_brief` drives the handoff objective, the descent `sub_agent_brief`
+    and the audit `response_hash` together; kills any one reader left on the declared brief.
+    RW2 — `lead_brief=None` leaves all three on the declared brief; kills a resolution that
+    drops or rewrites it. Child identity stays declared either way."""
+    dispatcher, runner, _ = _dispatcher(tmp_path)
+    spy = _BriefSpyHandoffRegistry()
+    cast(Any, dispatcher).handoff_registry = spy
+    expected = _lead_brief() if lead else _brief()
+    step_context = _step_context().model_copy(
+        update={"lead_brief": _lead_brief() if lead else None}
+    )
+
+    dispatcher.dispatch(_binding(), _step(), step_context=step_context)
+
+    call = runner.calls[0]
+    proposed = call["handoff_context"].proposed_action
+    assert proposed.payload == {"objective": expected.objective}
+    assert proposed.brief == expected
+    assert spy.descent_briefs == [expected]
+    assert spy.hashed_briefs == [expected]
+    assert call["workflow_id"] == "child-wf"

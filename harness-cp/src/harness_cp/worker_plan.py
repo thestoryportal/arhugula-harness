@@ -13,7 +13,7 @@ reads [LAW:parse-dont-validate]: a worker's branch ordinal is its plan position,
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Any
+from typing import Any, cast
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 
@@ -89,18 +89,16 @@ def _parse_lead_plan(
 ) -> tuple[WorkerAssignment, ...]:
     if WORKER_PLAN_KEY not in orchestrator_output:
         raise WorkerPlanInvalid("missing-worker-plan")
-    entries = orchestrator_output[WORKER_PLAN_KEY]
-    if (
-        not isinstance(entries, Sequence)
-        or isinstance(entries, str | bytes)
-        or not all(isinstance(entry, Mapping) for entry in entries)
-    ):
+    raw: object = orchestrator_output[WORKER_PLAN_KEY]
+    if not isinstance(raw, Sequence) or isinstance(raw, str | bytes):
         raise WorkerPlanInvalid("not-a-sequence")
-    assignments: list[WorkerAssignment] = []
+    entries: list[object] = list(cast("Sequence[object]", raw))
+    if not all(isinstance(entry, Mapping) for entry in entries):
+        raise WorkerPlanInvalid("not-a-sequence")
     seen: set[str] = set()
-    for entry in entries:
-        assignments.append(_parse_assignment(entry, declared, seen))
-    return tuple(assignments)
+    return tuple(
+        _parse_assignment(cast("Mapping[Any, Any]", entry), declared, seen) for entry in entries
+    )
 
 
 def _parse_assignment(

@@ -25,7 +25,7 @@ from harness_cp.pause_resume_protocol_types import (
     FanOutResumeState,
     PeerFanOutResumeState,
 )
-from harness_cp.topology_pattern import TopologyPattern
+from harness_cp.topology_pattern import TopologyPattern, WorkerSelection
 from harness_cp.workflow_driver import (
     _determine_fanout_resume,
     _FanOutStoreCorruptError,
@@ -73,9 +73,11 @@ class _FakeStore:
         orchestrator_subagent_engine: str | None = None,
         dispatched_kinds: dict[int, str | None] | None = None,
         synthesis_present: bool = False,
+        orchestrator_selection: WorkerSelection = WorkerSelection.DECLARED_POOL,
     ) -> None:
         self._branches = dict(branches)
         self._orchestrator = orchestrator
+        self._orchestrator_selection = orchestrator_selection
         self._corrupt = set(corrupt_branches)
         self._orchestrator_corrupt = orchestrator_corrupt
         self._cardinality = cardinality
@@ -130,8 +132,12 @@ class _FakeStore:
     def present_branch_indexes(self, run_key: str) -> set[int]:
         return set(self._branches) | self._corrupt
 
-    def read_orchestrator_output(self, run_key: str) -> tuple[str, dict[str, object]] | None:
-        return None if self._orchestrator_corrupt else self._orchestrator
+    def read_orchestrator_output(
+        self, run_key: str
+    ) -> tuple[str, dict[str, object], WorkerSelection] | None:
+        if self._orchestrator_corrupt or self._orchestrator is None:
+            return None
+        return (*self._orchestrator, self._orchestrator_selection)
 
     def orchestrator_present(self, run_key: str) -> bool:
         return self._orchestrator_corrupt or self._orchestrator is not None
