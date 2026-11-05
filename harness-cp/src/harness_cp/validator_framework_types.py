@@ -30,10 +30,11 @@ U-CP-58 (CP plan v2.16 §1).
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, ClassVar, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict
 
@@ -253,6 +254,36 @@ class ValidatorFramework(Protocol):
     ) -> ValidatorEvaluation: ...
 
 
+class ValidatorFrameworkFailureError(Exception):
+    """A validator-framework failure that names its CP fail class (CP v1.129 §28.11.4).
+
+    The driver surfaces `fail_class` verbatim; any other exception from
+    evaluation stays `validator-framework-failure: <type>` (e.g. audit signing).
+    """
+
+    fail_class: ClassVar[str]
+
+
+class ValidatorCatalogMissingError(ValidatorFrameworkFailureError):
+    """The validator registry has no entry for the evaluated step."""
+
+    fail_class = "CP-FAIL-VALIDATOR-CATALOG-MISSING"
+
+    def __init__(self, step_id: str) -> None:
+        super().__init__(f"no validator registered for step_id={step_id}")
+
+
+class ValidatorResultTimeoutError(ValidatorFrameworkFailureError):
+    """The binding's blocking wait for the evaluation result expired."""
+
+    fail_class = "CP-FAIL-VALIDATOR-EXECUTION"
+
+    def __init__(self, step_id: str, timeout_seconds: float) -> None:
+        super().__init__(
+            f"validator result not ready within {timeout_seconds}s at step_id={step_id}"
+        )
+
+
 @dataclass(eq=False)
 class ValidatorBurdenLedger:
     """Run-owned burden cell of one workflow execution (CP v1.129 §28.11.1).
@@ -290,14 +321,19 @@ class ValidatorRunBinding:
         *,
         step_context: StepExecutionContext,
     ) -> ValidatorEvaluation:
-        # [LAW:no-silent-failure] `future.result` re-raises the coroutine's
-        # exception verbatim, so hook/signing failures reach the driver (§28.11.2).
         coro = self.framework.evaluate(
             step, step_result, step_context=step_context, burden=self.burden
         )
-        return asyncio.run_coroutine_threadsafe(coro, self.loop).result(
-            timeout=self.result_timeout_seconds
-        )
+        future = asyncio.run_coroutine_threadsafe(coro, self.loop)
+        # [LAW:no-silent-failure] the wait itself expiring is a typed execution
+        # failure (§28.11.4), told apart from a TimeoutError the validator raised;
+        # the abandoned evaluation is cancelled rather than left running.
+        if not concurrent.futures.wait((future,), timeout=self.result_timeout_seconds).done:
+            future.cancel()
+            raise ValidatorResultTimeoutError(step.step_id, self.result_timeout_seconds)
+        # `result` re-raises the coroutine's exception verbatim, so hook/signing
+        # failures reach the driver (§28.11.2).
+        return future.result()
 
     def open_child(self) -> ValidatorRunBinding:
         """The binding of a child execution: same framework/loop, ledger at zero (§28.11.3)."""

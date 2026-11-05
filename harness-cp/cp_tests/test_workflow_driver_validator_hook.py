@@ -33,6 +33,7 @@ from harness_cp.validator_framework import (
     open_validator_run,
 )
 from harness_cp.validator_framework_types import (
+    Validator,
     ValidatorFailClass,
     ValidatorOutcome,
     ValidatorResult,
@@ -176,6 +177,13 @@ def _open_binding(
     result: ValidatorResult,
     step_ids: list[StepID],
 ) -> ValidatorRunBinding:
+    return _open_registry_binding({sid: _FixedValidator(result) for sid in step_ids}, 10.0)
+
+
+def _open_registry_binding(
+    validator_registry: Mapping[StepID, Validator],
+    result_timeout_seconds: float,
+) -> ValidatorRunBinding:
     """Open a root `ValidatorRunBinding` backed by a background loop.
 
     The binding requires opening on a running event loop. We spin up a
@@ -191,10 +199,10 @@ def _open_binding(
         asyncio.set_event_loop(loop)
 
         async def _on_loop() -> None:
-            inner = ConcreteValidatorFramework(
-                validator_registry={sid: _FixedValidator(result) for sid in step_ids},
+            inner = ConcreteValidatorFramework(validator_registry=validator_registry)
+            container["binding"] = open_validator_run(
+                inner, result_timeout_seconds=result_timeout_seconds
             )
-            container["binding"] = open_validator_run(inner, result_timeout_seconds=10.0)
             loop_ready.set()
             # Block the loop alive for the test process lifetime.
             await asyncio.Event().wait()
@@ -438,3 +446,101 @@ def test_permanent_fail_returns_failed_with_typed_fail_class() -> None:
     assert result.status.value == "failed"
     assert result.fail_class is not None
     assert "CP-FAIL-VALIDATOR-PERMANENT" in result.fail_class
+
+
+# ----------------------------------------------------------------------------
+# CP v1.129 §28.11.4 — typed binding failures keep their CP fail class
+# ----------------------------------------------------------------------------
+
+
+class _StalledValidator:
+    """Never returns; records whether the abandoned evaluation was cancelled."""
+
+    def __init__(self) -> None:
+        self.cancelled = threading.Event()
+
+    async def validate(
+        self,
+        step: WorkflowStep,
+        step_result: Mapping[str, Any],
+        *,
+        step_context: Any,
+    ) -> ValidatorResult:
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            self.cancelled.set()
+            raise
+        raise AssertionError("unreachable")
+
+
+class _RaisingTimeoutValidator:
+    async def validate(
+        self,
+        step: WorkflowStep,
+        step_result: Mapping[str, Any],
+        *,
+        step_context: Any,
+    ) -> ValidatorResult:
+        raise TimeoutError("validator's own upstream call timed out")
+
+
+def _run_single_step(binding: ValidatorRunBinding, step: WorkflowStep) -> Any:
+    ctx = _FakeCtx(tracer_provider=TracerProvider())
+    result = execute_workflow(
+        manifest_entry=_manifest(),
+        steps=[step],
+        run_id=f"run-{step.step_id}",
+        ctx=cast(Any, ctx),
+        validator_run=binding,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=_registry(cast(StepDispatcher, _EchoDispatcher())),
+    )
+    assert ctx.ledger_writer.appends == []  # type: ignore[attr-defined]
+    return result
+
+
+def _echo_step(step_id: str) -> WorkflowStep:
+    return WorkflowStep(
+        step_id=StepID(step_id),
+        step_kind=StepKind.INFERENCE_STEP,
+        step_payload={"echo": "ok"},
+    )
+
+
+def test_registry_miss_returns_catalog_missing_fail_class() -> None:
+    step = _echo_step("step-unregistered")
+    binding = _open_registry_binding({StepID("step-other"): _StalledValidator()}, 10.0)
+
+    result = _run_single_step(binding, step)
+
+    assert result.status.value == "failed"
+    assert result.fail_class == (
+        "CP-FAIL-VALIDATOR-CATALOG-MISSING: no validator registered for step_id=step-unregistered"
+    )
+
+
+def test_result_timeout_returns_execution_fail_class_and_cancels_evaluation() -> None:
+    step = _echo_step("step-stalled")
+    stalled = _StalledValidator()
+    binding = _open_registry_binding({step.step_id: stalled}, 0.2)
+
+    result = _run_single_step(binding, step)
+
+    assert result.status.value == "failed"
+    assert result.fail_class == (
+        "CP-FAIL-VALIDATOR-EXECUTION: validator result not ready within 0.2s at step_id=step-stalled"
+    )
+    assert stalled.cancelled.wait(timeout=5.0), "the abandoned evaluation kept running"
+
+
+def test_validator_raised_timeout_is_not_the_binding_timeout() -> None:
+    step = _echo_step("step-raises-timeout")
+    binding = _open_registry_binding({step.step_id: _RaisingTimeoutValidator()}, 10.0)
+
+    result = _run_single_step(binding, step)
+
+    assert result.status.value == "failed"
+    assert result.fail_class == (
+        "validator-framework-failure: TimeoutError: validator's own upstream call timed out"
+    )

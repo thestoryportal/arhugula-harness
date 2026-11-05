@@ -53,6 +53,7 @@ from harness_core.identity import StepID
 from harness_cp.validator_framework_types import (
     Validator,
     ValidatorBurdenLedger,
+    ValidatorCatalogMissingError,
     ValidatorEvaluation,
     ValidatorFailClass,
     ValidatorFramework,
@@ -213,7 +214,9 @@ class ConcreteValidatorFramework:
         """
         start_monotonic_ns = time.monotonic_ns()
 
-        validator = self._validator_registry[step.step_id]
+        validator = self._validator_registry.get(step.step_id)
+        if validator is None:
+            raise ValidatorCatalogMissingError(step.step_id)
 
         result: ValidatorResult = await validator.validate(
             step,

@@ -31,6 +31,7 @@ from harness_cp.validator_framework import (
 )
 from harness_cp.validator_framework_types import (
     ValidatorBurdenLedger,
+    ValidatorCatalogMissingError,
     ValidatorEvaluation,
     ValidatorFailClass,
     ValidatorOutcome,
@@ -302,7 +303,7 @@ async def test_evaluate_swallows_hook_exception_returns_evaluation_unchanged() -
 
 @pytest.mark.asyncio
 async def test_evaluate_does_not_fire_hook_on_registry_miss() -> None:
-    """AC #7 — registry-lookup miss raises KeyError; hook NOT fired."""
+    """AC #7 — registry-lookup miss raises the typed catalog-missing failure; hook NOT fired."""
     step = _make_step("unknown-step")
     ctx = _make_step_context()
     hook = _RecordingHook()
@@ -311,7 +312,7 @@ async def test_evaluate_does_not_fire_hook_on_registry_miss() -> None:
         post_evaluate_hook=hook,
     )
 
-    with pytest.raises(KeyError):
+    with pytest.raises(ValidatorCatalogMissingError):
         await fw.evaluate(step, {}, step_context=ctx, burden=ValidatorBurdenLedger())
 
     assert hook.calls == []

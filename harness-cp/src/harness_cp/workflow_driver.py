@@ -152,6 +152,7 @@ from harness_cp.sub_agent_dispatch_capacity_authority import (
     DefaultCapacityAuthority as _DefaultCapacityAuthority,
 )
 from harness_cp.topology_pattern import CascadePolicy, TopologyPattern
+from harness_cp.validator_framework_types import ValidatorFrameworkFailureError
 from harness_cp.workflow_driver_errors import (
     BranchBarrierDeadlineExceededError,
     EngineClassNotYetMaterializedError,
@@ -1691,6 +1692,17 @@ def _step_fail_class(prefix: str, exc: BaseException) -> str:
     `ManagedAgentsSessionError` name-match)."""
     code = getattr(exc, "rt_fail_class", None) or type(exc).__name__
     return f"{prefix}: {code}: {exc}"
+
+
+def _validator_fail_class(exc: Exception) -> str:
+    """Compose the `fail_class` of a validator-evaluation failure (CP v1.129 §28.11.4).
+
+    [LAW:single-enforcer] the one place a typed validator failure keeps its CP
+    fail class; every other exception stays `validator-framework-failure`.
+    """
+    if isinstance(exc, ValidatorFrameworkFailureError):
+        return f"{exc.fail_class}: {exc}"
+    return f"validator-framework-failure: {type(exc).__name__}: {exc}"
 
 
 _HITL_GATE_TERMINAL_FAIL_CLASS_PREFIX = "RT-FAIL-HITL-GATE-"
@@ -5922,7 +5934,7 @@ def _execute_workflow_body(
                         terminal_step_index=step_index,
                         partial_state=dict(accumulated),
                         final_state=None,
-                        fail_class=(f"validator-framework-failure: {type(exc).__name__}: {exc}"),
+                        fail_class=_validator_fail_class(exc),
                     ), steps_executed
 
                 # §C-OD-29.1 outer envelope (3 attrs).
