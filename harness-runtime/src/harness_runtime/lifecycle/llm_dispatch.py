@@ -130,6 +130,11 @@ from harness_runtime.lifecycle.memory_tool_dispatch import (
     step_has_memory_tool,
 )
 from harness_runtime.lifecycle.post_tool_effect import ToolEffectFence
+from harness_runtime.lifecycle.skill_activation import (
+    SkillActivationMode,
+    compose_system_prompt_with_skills,
+    parse_skill_selection,
+)
 from harness_runtime.memory_context import (
     RenderedMemoryPromptPacket,
     RuntimeMemoryContext,
@@ -678,7 +683,8 @@ class RuntimeLLMDispatcher:
     # ergonomics; production stage-5 binding sets both when the operator opts
     # in via `RuntimeConfig.skill_activation_hook_config`. When either is None
     # OR the emitter's bound hook is None, the per-LLM-dispatch activation
-    # hook silent-skips per §14.17.5 invariant 3.
+    # hook is the operator opt-out (§14.17.5 invariant 3). A bound hook needs a
+    # `skills` mapping, enforced in `__post_init__` (v1.139 §14.17.8.2 item 1).
     skill_activation_emitter: Any = None
     skills: Any = None
     # R-300 — layered routing-selection substrate. Threaded at bootstrap stage 5
@@ -849,6 +855,20 @@ class RuntimeLLMDispatcher:
     # `UnresolvableResultRef` naming the missing store, never a second
     # unrelated error) — production wiring always injects a real instance.
     protected_result_store: Any = None
+
+    def __post_init__(self) -> None:
+        # [LAW:parse-dont-validate] v1.139 §14.17.8.2 item 1: a bound hook-2
+        # policy always meets a `skills` mapping (possibly empty), so dispatch
+        # never has an unbound-skills case to skip.
+        if (
+            self.skill_activation_emitter is not None
+            and self.skill_activation_emitter.hook is not None
+            and self.skills is None
+        ):
+            raise LLMDispatchBindError(
+                "skill activation hook bound without a skills mapping "
+                "(C-RT-27 v1.139 §14.17.8.2 item 1)"
+            )
 
     async def prewarm(self) -> PrewarmOutcome:
         """Boot-time prompt-cache pre-warm (B-18-KEEPALIVE; ADR-D3 §1.5:189).
@@ -1254,36 +1274,35 @@ class RuntimeLLMDispatcher:
             ``step-failure: {type}: {exc}``.
         """
         # --- C-RT-27 §14.17.2 hook-2 (per-LLM-dispatch activation hook) ---
-        # Pre-condition: emitter bound + hook bound + skills available. When
-        # any is missing/None, silent-skip per §14.17.5 invariant 3 (operator
-        # opt-out path preserves pre-v1.32 production behavior). Emit one
-        # `skill.activation` span per skill returned by the operator-supplied
-        # `SkillActivationHook.select_for_llm_dispatch(...)` policy, with
-        # `activation_mode = TOOL_SEARCH` per Q2=(d) hybrid hook-to-enum
-        # mapping. Fires BEFORE provider resolution + LLM call per §14.17.2
-        # hook-2 step 4 ordering.
+        # Pre-condition: emitter bound + hook bound (the operator opt-in; the
+        # opt-out selects nothing, §14.17.5 invariant 3). `__post_init__`
+        # guarantees a bound hook has a `skills` mapping. The selection is
+        # parsed before any effect (v1.139 §14.17.8.2 item 2): an unknown or
+        # duplicate id fails the step with no span and no provider call. Then
+        # one `skill.activation` span per selected skill, `activation_mode =
+        # TOOL_SEARCH` per Q2=(d), BEFORE provider resolution + LLM call per
+        # §14.17.2 hook-2 step 4. The selected content is composed into the
+        # effective system prompt below, after the base and before memory.
+        _selected_skills: Mapping[Any, Any] = {}
         if (
             self.skill_activation_emitter is not None
             and self.skill_activation_emitter.hook is not None
-            and self.skills is not None
         ):
-            from harness_runtime.lifecycle.skill_activation import SkillActivationMode
-
-            selected_ids = list(
+            _selected_skills = parse_skill_selection(
                 self.skill_activation_emitter.hook.select_for_llm_dispatch(
                     loaded_skills=self.skills.keys(),
                     workflow_id=step_context.workflow_id,
                     step_index=step_context.step_index,
-                )
+                ),
+                self.skills,
             )
-            for skill_id in selected_ids:
-                if skill_id in self.skills:
-                    self.skill_activation_emitter.emit(
-                        skill_id=skill_id,
-                        mode=SkillActivationMode.TOOL_SEARCH,
-                        workflow_id=step_context.workflow_id,
-                        skill=self.skills[skill_id],
-                    )
+            for skill_id, skill in _selected_skills.items():
+                self.skill_activation_emitter.emit(
+                    skill_id=skill_id,
+                    mode=SkillActivationMode.TOOL_SEARCH,
+                    workflow_id=step_context.workflow_id,
+                    skill=skill,
+                )
 
         payload = _coerce_payload(step.step_payload)
 
@@ -1377,6 +1396,11 @@ class RuntimeLLMDispatcher:
             _effective_system_prompt = self.per_role_system_prompts[_role]
         else:
             _effective_system_prompt = self.active_system_prompt
+        # v1.139 §14.17.8.2 item 5: base, then the hook-2 skills, then memory.
+        _effective_system_prompt = compose_system_prompt_with_skills(
+            _effective_system_prompt,
+            _selected_skills,
+        )
         _memory_context = self.memory_context
         _standard_memory_tool_executor = self.standard_memory_tool_executor
         if self.memory_runtime is not None:

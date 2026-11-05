@@ -23,11 +23,16 @@ This module owns:
   fail class ``RT-FAIL-SKILL-ACTIVATION-STAGE-MATERIALIZE`` per §14.17.4.
 * ``UnknownSkillError`` — raised by ``HarnessContext.activate_skill`` on
   skill-id miss per §14.17.2 hook-3 step 3.
+* ``parse_skill_selection`` / ``SkillSelectionInvalidError`` — the hook-2
+  selection checkpoint (v1.139 §14.17.8.2 item 2): known, unique ids or a
+  ``RT-FAIL-SKILL-SELECTION-INVALID`` step failure.
+* ``compose_system_prompt_with_skills`` — renders a parsed selection's content
+  into the dispatch's effective system prompt (v1.139 §14.17.8.2 items 4-5).
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
@@ -43,7 +48,11 @@ __all__ = [
     "SkillActivationHookConfig",
     "SkillActivationMode",
     "SkillActivationSpanEmitter",
+    "SkillSelectionInvalidError",
+    "SkillSelectionInvalidReason",
     "UnknownSkillError",
+    "compose_system_prompt_with_skills",
+    "parse_skill_selection",
 ]
 
 
@@ -141,6 +150,69 @@ class UnknownSkillError(KeyError):
     def __init__(self, skill_id: SkillID) -> None:
         super().__init__(skill_id)
         self.skill_id = skill_id
+
+
+class SkillSelectionInvalidReason(StrEnum):
+    """Closed reasons for ``RT-FAIL-SKILL-SELECTION-INVALID`` (v1.139 §14.17.8.3)."""
+
+    UNKNOWN_ID = "unknown-id"
+    DUPLICATE_ID = "duplicate-id"
+
+
+class SkillSelectionInvalidError(Exception):
+    """Hook 2 selected an id it cannot deliver; the step fails.
+
+    Per v1.139 §14.17.8.3. The selection never depends on the provider
+    candidate, so the C-RT-16 attempt loop propagates this by name without
+    retry, candidate advance or breaker charge; the CP driver reads
+    ``rt_fail_class`` as the step's fail class.
+    """
+
+    rt_fail_class = "RT-FAIL-SKILL-SELECTION-INVALID"
+
+    def __init__(self, skill_id: SkillID, reason: SkillSelectionInvalidReason) -> None:
+        super().__init__(f"skill selection {skill_id!r} rejected: {reason.value}")
+        self.skill_id = skill_id
+        self.reason = reason
+
+
+def parse_skill_selection(
+    selected_ids: Iterable[SkillID],
+    skills: Mapping[SkillID, Skill],
+) -> Mapping[SkillID, Skill]:
+    """Resolve a hook-2 selection to the loaded skills it names, in selection order.
+
+    [LAW:parse-dont-validate] the result holds only known, unique ids, so span
+    emission and rendering cannot meet an invalid selection. The first unknown
+    or repeated id, in returned order, raises ``SkillSelectionInvalidError``.
+    """
+    selection: dict[SkillID, Skill] = {}
+    for skill_id in selected_ids:
+        if skill_id not in skills:
+            raise SkillSelectionInvalidError(skill_id, SkillSelectionInvalidReason.UNKNOWN_ID)
+        if skill_id in selection:
+            raise SkillSelectionInvalidError(skill_id, SkillSelectionInvalidReason.DUPLICATE_ID)
+        selection[skill_id] = skills[skill_id]
+    return selection
+
+
+def compose_system_prompt_with_skills(
+    system_prompt: str | None,
+    selection: Mapping[SkillID, Skill],
+) -> str | None:
+    """Append one ``<skill>`` block per selected skill to the resolved base prompt.
+
+    Base, then the blocks in selection order, joined by a blank line; the
+    blocks alone when the base is ``None`` or empty. An empty selection returns
+    the base unchanged, byte for byte (v1.139 §14.17.8.2 items 4-5).
+    """
+    blocks = [
+        f'<skill id="{skill_id}" version="{skill.manifest.version}" '
+        f'version_sha="{skill.manifest.version_sha}">\n{skill.content}\n</skill>'
+        for skill_id, skill in selection.items()
+    ]
+    parts = [system_prompt, *blocks] if system_prompt else blocks
+    return "\n\n".join(parts) if parts else system_prompt
 
 
 class SkillActivationEmitterStageMaterializeError(Exception):
