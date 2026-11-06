@@ -128,11 +128,20 @@ required final-head/base CI, the attested merge tree and the holder-bound safe
 merge wrapper. A gate-log-only commit may transfer review only through the
 existing landing-delta proof. Do not use raw `gh pr merge` or `--admin`.
 
+For stacked source work whose parent has not landed, qualified authors may push
+the reviewed source branch without opening a PR or starting full remote CI yet.
+Continue independent work while the parent lands. At the front of the train,
+reconcile the final head against actual main and complete the applicable native
+review import and affected verification; then open the PR on main so its normal
+PR CI runs on that final candidate. Reuse only evidence whose inputs and impact
+remain valid; the landed main commit still requires its own CI.
+
 For an existing stacked PR, complete the normal final-head checks first, then
 use `uv run python tools/stacked_pr_publish.py <pr> --old-head <remote-sha>
 --final-head <checked-sha>` to retarget to main before publishing the final
-fast-forward head. The tool checks the live PR and refuses a changed head or a
-non-fast-forward update. A changed base still requires an exact matching CI
+fast-forward head. The tool checks the live PR and refuses a changed head, a
+different push destination or a non-fast-forward update; an exact expected-old
+lease fences the final push at the server. A changed base still requires an exact matching CI
 binding; confirm the final synchronize run and required PR checks actually appear.
 The ordering does not establish GitHub's internal check-association behavior.
 

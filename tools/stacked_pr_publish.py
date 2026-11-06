@@ -53,6 +53,9 @@ def publish(pr: int, old_head: str, final_head: str, call: Callable[..., str] = 
     initial = view()
     pr_url = re.fullmatch(r"https://github\.com/([^/]+/[^/]+)/pull/[0-9]+", initial["url"])
     remote_url = call("git", "remote", "get-url", "origin").strip()
+    push_urls = call("git", "remote", "get-url", "--push", "--all", "origin").splitlines()
+    if push_urls != [remote_url]:
+        raise PublishError("origin push destinations differ from its verified fetch URL")
     remote = re.fullmatch(
         r"(?:https://github\.com/|git@github\.com:|ssh://git@github\.com/)([^/]+/[^/]+?)(?:\.git)?",
         remote_url,
@@ -89,7 +92,10 @@ def publish(pr: int, old_head: str, final_head: str, call: Callable[..., str] = 
         raise PublishError("origin branch changed during retarget")
     # [LAW:no-ambient-temporal-coupling] Retarget must finish before synchronize;
     # The final synchronize event must describe the intended base and final head.
-    call("git", "push", "origin", f"{final_head}:refs/heads/{current['headRefName']}")
+    ref = f"refs/heads/{current['headRefName']}"
+    # [LAW:no-ambient-temporal-coupling] The server must enforce the observed old
+    # head; the ancestry check above independently forbids a history rewrite.
+    call("git", "push", f"--force-with-lease={ref}:{old_head}", "origin", f"{final_head}:{ref}")
 
 
 def main(argv: list[str] | None = None) -> int:

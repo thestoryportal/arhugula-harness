@@ -44,6 +44,11 @@ class Remote:
             sha = MAIN if args[-1] == "refs/heads/main" else OLD
             return sha + "\t" + args[-1] + "\n"
         if args[:2] == ("git", "push"):
+            assert args[2:] == (
+                f"--force-with-lease=refs/heads/feature:{OLD}",
+                "origin",
+                f"{FINAL}:refs/heads/feature",
+            )
             self.events.append(("synchronize", self.pr["baseRefName"]))
             return ""
         raise AssertionError(args)
@@ -115,3 +120,79 @@ def test_wrong_origin_or_moved_base_never_pushes():
     with pytest.raises(sp.PublishError, match="base or head branch changed"):
         sp.publish(17, OLD, FINAL, remote)
     assert remote.events == [("edited", "main")]
+
+
+@pytest.mark.parametrize(
+    "push_urls",
+    [
+        "https://github.com/other/repo.git\n",
+        "https://github.com/owner/repo.git\nhttps://github.com/other/repo.git\n",
+    ],
+)
+def test_different_or_multiple_push_destinations_refuse_before_retarget(push_urls):
+    class WrongPush(Remote):
+        def __call__(self, *args):
+            if args[:5] == ("git", "remote", "get-url", "--push", "--all"):
+                return push_urls
+            return super().__call__(*args)
+
+    remote = WrongPush()
+    with pytest.raises(sp.PublishError, match="push destinations"):
+        sp.publish(17, OLD, FINAL, remote)
+    assert not remote.events
+
+
+def test_real_git_lease_rejects_intermediate_advance(tmp_path):
+    import subprocess
+
+    def git(*args, cwd=tmp_path, check=True):
+        return subprocess.run(["git", *args], cwd=cwd, text=True, capture_output=True, check=check)
+
+    bare = tmp_path / "remote.git"
+    git("init", "--bare", str(bare))
+    work = tmp_path / "work"
+    git("init", str(work))
+    git("config", "user.name", "Test", cwd=work)
+    git("config", "user.email", "test@example.invalid", cwd=work)
+    git("remote", "add", "origin", str(bare), cwd=work)
+    commits = []
+    for value in ("old", "intermediate", "final"):
+        (work / "file").write_text(value)
+        git("add", "file", cwd=work)
+        git("commit", "-m", value, cwd=work)
+        commits.append(git("rev-parse", "HEAD", cwd=work).stdout.strip())
+    old, intermediate, final = commits
+    ref = "refs/heads/feature"
+    git("push", "origin", f"{old}:{ref}", cwd=work)
+    git("merge-base", "--is-ancestor", old, final, cwd=work)
+    git("push", "origin", f"{intermediate}:{ref}", cwd=work)
+    stale = git(
+        "push", f"--force-with-lease={ref}:{old}", "origin", f"{final}:{ref}", cwd=work, check=False
+    )
+    assert stale.returncode != 0
+    assert git("--git-dir", str(bare), "rev-parse", ref).stdout.strip() == intermediate
+
+
+def test_real_git_effective_push_urls_include_rewrites_and_multipush(tmp_path):
+    import subprocess
+
+    def git(*args):
+        return (
+            subprocess.run(["git", *args], cwd=tmp_path, text=True, capture_output=True, check=True)
+            .stdout.strip()
+            .splitlines()
+        )
+
+    git("init")
+    git("remote", "add", "origin", "https://github.com/owner/repo.git")
+    git("config", "url.ssh://git@github.com/.pushInsteadOf", "https://github.com/")
+    assert git("remote", "get-url", "origin") == ["https://github.com/owner/repo.git"]
+    assert git("remote", "get-url", "--push", "--all", "origin") == [
+        "ssh://git@github.com/owner/repo.git"
+    ]
+    git("config", "--add", "remote.origin.pushurl", "https://github.com/owner/repo.git")
+    git("config", "--add", "remote.origin.pushurl", "https://github.com/other/repo.git")
+    assert git("remote", "get-url", "--push", "--all", "origin") == [
+        "https://github.com/owner/repo.git",
+        "https://github.com/other/repo.git",
+    ]

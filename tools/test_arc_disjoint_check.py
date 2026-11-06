@@ -112,7 +112,7 @@ def test_other_lane_heads_are_the_non_terminal_siblings(repo: Path, qdir: Path) 
     rs.transition("arc-open", "open", lane_id="other-2")
     rs.reserve("arc-merged", lane_id="other-3", branch="lane-d", arc_type="applying")
     rs.transition("arc-merged", "open", lane_id="other-3")
-    rs.transition("arc-merged", "merged", lane_id="other-3")
+    rs.transition("arc-merged", "merged", lane_id="other-3", updates={"merge_sha": "c" * 40})
     rs.reserve("arc-mine", lane_id="me", branch="lane-a", arc_type="applying")
 
     heads = adc.other_lane_heads(repo, "me")

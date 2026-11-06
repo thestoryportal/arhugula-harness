@@ -19,6 +19,7 @@ import argparse
 import errno
 import json
 import os
+import re
 import secrets
 import socket
 import stat as stat_module
@@ -1552,14 +1553,25 @@ def _merge_once(
             if proc.returncode == 0:
                 return attempt > 1
             failures.append(f"gh merge exited {proc.returncode}: {proc.stderr or proc.stdout}")
+            # [LAW:parse-dont-validate] This exact GitHub rejection is definitive;
+            # other GraphQL and transport failures remain ambiguous.
+            rejected = bool(
+                re.fullmatch(
+                    r'GraphQL: Required status check "[^"\n]+" is expected\. \(mergePullRequest\)',
+                    proc.stderr.strip(),
+                )
+            )
         except subprocess.TimeoutExpired:
             failures.append("gh merge timed out")
+            rejected = False
         try:
             state = reconcile_ground({**lease, "pr": pr}, ground)
         except Exception as exc:
             raise DoorFailed(f"{'; '.join(failures)}; reconciliation failed: {exc}") from exc
         if state == "MERGED":
             return True  # invariant: NEVER re-invoke after MERGED
+        if rejected:
+            raise DoorFailed(failures[-1])
         if attempt == budget:
             # [LAW:no-silent-failure] Preserve each diagnostic even when a nonzero
             # exit is an ambiguous transport failure rather than a rejection.
@@ -1706,10 +1718,25 @@ def land(
             raise DoorFailed("post-merge confirm: not MERGED")
         _kill_after("confirm")
         merge_sha = (v.get("mergeCommit") or {}).get("oid") or ""
-        if rs.current(arc_id)[1]["state"] != "merged":
-            if merge_sha:
-                rs.update_payload(arc_id, {"merge_sha": merge_sha})
-            rs.transition(arc_id, "merged", lane_id=lane_id)  # (vi)
+        if not re.fullmatch(r"[0-9a-f]{40}", merge_sha):
+            raise DoorFailed("post-merge confirm: missing full merge commit oid")
+        reservation = rs.current(arc_id)[1]
+        if reservation["state"] != "merged":
+            if reservation.get("pr") != pr or reservation.get("merge_sha") not in (None, merge_sha):
+                raise DoorFailed("reservation identity or merge receipt changed")
+            rs.transition(
+                arc_id,
+                "merged",
+                lane_id=lane_id,
+                updates={"merge_sha": merge_sha},
+                expect={"pr": pr, "merge_sha": reservation.get("merge_sha")},
+            )
+        elif not reservation.get("merge_sha"):
+            rs.reconcile(arc_id, gh_view=ground.gh_view)
+            if rs.current(arc_id)[1].get("merge_sha") != merge_sha:
+                raise DoorFailed("recovered merge receipt differs from confirmed merge")
+        elif reservation["merge_sha"] != merge_sha:
+            raise DoorFailed("reservation merge receipt differs from confirmed merge")
         _kill_after("reservation-merged")
         toctou_attested = lease.get("unblocked_from") == merge_sha
         if merge_sha and not toctou_attested and ground.git_first_parent(merge_sha) != base_sha:

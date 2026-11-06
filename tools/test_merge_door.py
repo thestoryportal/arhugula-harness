@@ -1076,6 +1076,39 @@ def test_rejected_merge_preserves_github_error_after_bounded_retry(door):
     assert "Required status check is expected" in md.read_lease()["blocked_reason"]
 
 
+def test_confirmed_required_check_rejection_stops_after_one_attempt(door):
+    g = FakeGround()
+    error = (
+        'GraphQL: Required status check "pytest (all axis packages) — blocking" '
+        "is expected. (mergePullRequest)"
+    )
+
+    def rejected(pr, head, timeout):
+        g.merge_calls.append((pr, head))
+        return subprocess.CompletedProcess([], 1, "", error + "\n")
+
+    g.gh_merge = rejected
+    with pytest.raises(md.DoorBlocked, match="Required status check"):
+        _land(door, g)
+    assert len(g.merge_calls) == 1
+    assert error in md.read_lease()["blocked_reason"]
+
+
+def test_unknown_graphql_failure_remains_retryable(door):
+    g = FakeGround()
+
+    def transient(pr, head, timeout):
+        g.merge_calls.append((pr, head))
+        if len(g.merge_calls) == 1:
+            return subprocess.CompletedProcess([], 1, "", "GraphQL: service unavailable")
+        g.states[pr].update(state="MERGED", mergedAt="now", mergeCommit={"oid": "c" * 40})
+        return subprocess.CompletedProcess([], 0, "", "")
+
+    g.gh_merge = transient
+    assert _land(door, g) == "released"
+    assert len(g.merge_calls) == 2
+
+
 def test_rejected_merge_preserves_error_when_reconciliation_fails(door):
     g = FakeGround()
 
@@ -1091,13 +1124,17 @@ def test_rejected_merge_preserves_error_when_reconciliation_fails(door):
     assert "not reconcilable" in md.read_lease()["blocked_reason"]
 
 
-def test_rejected_merge_reconciles_a_server_side_merge(door):
+@pytest.mark.parametrize(
+    "error",
+    ["connection lost", 'GraphQL: Required status check "ci" is expected. (mergePullRequest)'],
+)
+def test_rejected_merge_reconciles_a_server_side_merge(door, error):
     g = FakeGround()
 
     def rejected_after_merge(pr, head, timeout):
         g.merge_calls.append((pr, head))
         g.states[pr].update(state="MERGED", mergedAt="now", mergeCommit={"oid": "c" * 40})
-        return subprocess.CompletedProcess([], 1, "", "connection lost")
+        return subprocess.CompletedProcess([], 1, "", error)
 
     g.gh_merge = rejected_after_merge
     assert _land(door, g) == "released"
@@ -2270,7 +2307,7 @@ def test_resumed_refresh_already_merged_never_reissued(door):
         json.dumps({"pr": 2, "head_sha": "r" * 40}),
     )
     md.mark_attempted(lease, suffix="refresh")
-    _step_vi()
+    _step_vi(sha="c" * 40)
     resumed = md.read_lease()
     assert md.land(
         1, expected="legacy", lane_id="A", arc_id="pr-1", ground=g, refresh=None, lease=resumed
@@ -2455,6 +2492,32 @@ def test_fresh_land_of_an_already_merged_pr_never_reissues(door):
     g.states[1].update(state="MERGED", mergedAt="now", mergeCommit={"oid": "c" * 40})
     assert _land(door, g) == "released"
     assert g.merge_calls == []  # verified ground truth; nothing re-issued
+
+
+def test_land_recovers_legacy_null_receipt_from_confirmed_merge(door):
+    g = FakeGround()
+    rs.update_payload("pr-1", {"attested_merge_tree": "d" * 40})
+    lease = md.acquire(lane_id="A", arc_id="pr-1", pr=1, head_sha="a" * 40, base_sha="b" * 40)
+    md.mark_attempted(lease)
+    rs._cas_next("pr-1", lambda head: {**head, "state": "merged"})  # legacy receipt
+    g.states[1].update(state="MERGED", mergedAt="now", mergeCommit={"oid": "c" * 40})
+    assert (
+        md.land(
+            1, expected="legacy", lane_id="A", arc_id="pr-1", ground=g, refresh=None, lease=lease
+        )
+        == "released"
+    )
+    assert rs.current("pr-1")[1]["merge_sha"] == "c" * 40
+    assert g.merge_calls == []
+
+
+def test_land_refuses_merged_response_without_merge_oid(door):
+    g = FakeGround()
+    g.states[1].update(state="MERGED", mergedAt="now", mergeCommit=None)
+    with pytest.raises(md.DoorFailed, match="missing full merge commit oid"):
+        _land(door, g)
+    assert rs.current("pr-1")[1]["state"] == "open"
+    assert g.merge_calls == []
 
 
 # mutation-probe: drop unblock()'s open-holder refusal (a foreign lane takes the successor)
@@ -2662,7 +2725,7 @@ def test_release_verb_refuses_when_the_reservation_records_no_merge_sha(door, mo
     fresh = _unblocked_successor()
     _release_ground(monkeypatch)
     # the §4(vi) flip WITHOUT the merge_sha it normally records alongside
-    rs.transition("pr-1", "merged", lane_id="A")
+    rs._cas_next("pr-1", lambda head: {**head, "state": "merged"})  # legacy receipt
     assert rs.current("pr-1")[1].get("merge_sha") is None
     monkeypatch.setattr(md, "_process_is_alive", lambda pid: False)
     assert md.main(["release", "--lane-id", "A"]) == 4

@@ -409,6 +409,13 @@ def transition(
                     f"superseding reservation {superseded_by!r} (held by "
                     f"{sup[1]['lane_id']}, not {lane_id}) -- C-HE-03 §5"
                 )
+        if to_state == "merged":
+            previous = head.get("merge_sha")
+            merge_sha = (updates or {}).get("merge_sha", previous)
+            if not isinstance(merge_sha, str) or not re.fullmatch(r"[0-9a-f]{40}", merge_sha):
+                raise ReservationError(f"{arc_id}: merged state requires a full merge SHA")
+            if previous is not None and previous != merge_sha:
+                raise ReservationError(f"{arc_id}: merge SHA conflicts with existing receipt")
         head["state"] = to_state
         head["transitioned_at"] = now_iso()
         if superseded_by:
@@ -796,7 +803,7 @@ def _gh_view(pr: int) -> dict:
     """`gh pr view`-backed ground truth (C-HE-03 §5), bounded 30 s. ANY failure raises;
     reconcile() catches it and fails safe to "still open, not reclaimable"."""
     proc = subprocess.run(
-        ["gh", "pr", "view", str(pr), "--json", "state,mergedAt"],
+        ["gh", "pr", "view", str(pr), "--json", "state,mergedAt,mergeCommit,headRefOid"],
         cwd=REPO,
         capture_output=True,
         text=True,
@@ -830,8 +837,11 @@ def reconcile(
         # A semantically corrupt head must isolate in-band at reconcile_all, never fall
         # through to the open branch as a clean "open"/rc 0 (codex r4 P2).
         raise ReservationError(f"{arc_id}: corrupt head state {head['state']!r}")
-    if head["state"] in TERMINAL:
+    if head["state"] in TERMINAL and not (
+        head["state"] == "merged" and not head.get("merge_sha") and head.get("pr")
+    ):
         return head["state"]
+    recover_merged = head["state"] == "merged"
     if head["state"] == "pending":
         if _aged(head["reserved_at"], now):
             # Durable HITL row FIRST (C-HE-20 §1): emit_loop_row fails closed, so if the
@@ -885,7 +895,14 @@ def reconcile(
             print(f"reservations: {msg}", file=sys.stderr)
             if on_unconfirmed is not None:
                 on_unconfirmed(msg)
+            if recover_merged:
+                raise ReservationError(msg)
             return "open"
+        if state == "MERGED":
+            commit = view.get("mergeCommit")
+            merge_sha = commit.get("oid") if isinstance(commit, dict) else None
+            if not isinstance(merge_sha, str) or not re.fullmatch(r"[0-9a-f]{40}", merge_sha):
+                raise ReservationError("merged PR has no full merge commit oid")
     except Exception as exc:  # ANY gh failure fails safe (C-HE-03 §5)
         msg = f"gh transient for {arc_id}: {exc}; still open, not reclaimable"
         print(f"reservations: {msg}", file=sys.stderr)
@@ -893,16 +910,52 @@ def reconcile(
             # "couldn't look" must never report as a clean pass (codex r6 P2): the state
             # stays open (fail-safe), but the caller's summary marks it UNCONFIRMED.
             on_unconfirmed(msg)
+        if recover_merged:
+            raise ReservationError(f"{arc_id}: merged receipt recovery unconfirmed: {exc}") from exc
         return "open"
+    if recover_merged:
+        if state != "MERGED":
+            msg = f"terminal reservation {arc_id} not confirmed MERGED by GitHub"
+            if on_unconfirmed is not None:
+                on_unconfirmed(msg)
+            raise ReservationError(msg)
+        recorded_head = head.get("head_sha")
+        if (
+            not isinstance(recorded_head, str)
+            or not re.fullmatch(r"[0-9a-f]{40}", recorded_head)
+            or view.get("headRefOid") != recorded_head
+        ):
+            raise ReservationError(f"{arc_id}: merged receipt recovery head is unconfirmed")
+
+        def recover(current_head: dict) -> dict:
+            # [LAW:one-source-of-truth] Only the missing terminal receipt can be
+            # appended, bound to the same PR and freshly confirmed merge commit.
+            if (
+                current_head["state"] != "merged"
+                or current_head.get("pr") != head["pr"]
+                or current_head.get("head_sha") != recorded_head
+            ):
+                raise IllegalTransition("reservation changed during merged receipt recovery")
+            existing = current_head.get("merge_sha")
+            if existing and existing != merge_sha:
+                raise IllegalTransition("merged receipt conflicts with GitHub")
+            current_head["merge_sha"] = merge_sha
+            return current_head
+
+        _cas_next(arc_id, recover)
+        return "merged"
     if state in ("MERGED", "CLOSED") and (state == "MERGED" or superseded_by):
         to_state = "merged" if state == "MERGED" else "abandoned"
+        if to_state == "merged" and head.get("merge_sha") not in (None, merge_sha):
+            raise ReservationError(f"{arc_id}: existing merge receipt conflicts with GitHub")
         try:
             transition(
                 arc_id,
                 to_state,
                 lane_id=lane,
+                updates={"merge_sha": merge_sha} if to_state == "merged" else None,
                 superseded_by=superseded_by if to_state == "abandoned" else None,
-                expect={"pr": head["pr"]},
+                expect={"pr": head["pr"], "merge_sha": head.get("merge_sha")},
             )
         except IllegalTransition as exc:
             # Lost a race since the ground-truth check (codex r1 P1/P2, classified r9 P2):
@@ -915,6 +968,8 @@ def reconcile(
             same_outcome = (
                 head2 is not None
                 and head2["state"] == to_state
+                and head2.get("pr") == head["pr"]
+                and (to_state != "merged" or head2.get("merge_sha") == merge_sha)
                 # For an abandonment the supersession POINTER is part of the outcome
                 # (gate r1 concurrency P1): a loser whose superseded_by differs from
                 # the winner's must not report clean success -- the persisted chain
