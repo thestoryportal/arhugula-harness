@@ -111,12 +111,15 @@ async def test_read_exact_refuses_a_supersession_position(tmp_path: Path) -> Non
 
 def test_the_supersession_record_is_exactly_kind_workflow_id_run_id(tmp_path: Path) -> None:
     store = _journal(tmp_path)
+    _write_latest(store, {"workflow_id": _WORKFLOW_ID})  # Rule B2: only a non-empty journal
     store.supersede(_WORKFLOW_ID, "run-fresh")
     path = store._journal_file(_WORKFLOW_ID)  # pyright: ignore[reportPrivateUsage]
 
-    assert [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()] == [
-        {"kind": "supersession", "workflow_id": _WORKFLOW_ID, "run_id": "run-fresh"}
-    ]
+    assert json.loads(path.read_text(encoding="utf-8").splitlines()[-1]) == {
+        "kind": "supersession",
+        "workflow_id": _WORKFLOW_ID,
+        "run_id": "run-fresh",
+    }
 
 
 @pytest.mark.asyncio

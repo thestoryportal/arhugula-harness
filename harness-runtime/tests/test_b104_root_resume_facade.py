@@ -45,7 +45,6 @@ from harness_runtime.lifecycle import resume_claim_store as rcs
 from harness_runtime.lifecycle.claimed_child_admission import ClaimedChildAdmission
 from harness_runtime.lifecycle.journal_workflow_pause_store import (
     JournalWorkflowPauseStore,
-    pause_journal_dir_for,
 )
 from harness_runtime.lifecycle.pause_resume_protocol_types import PauseResumeProtocolConfig
 from harness_runtime.lifecycle.resume_claim_store import (
@@ -59,6 +58,7 @@ from harness_runtime.lifecycle.resume_claim_store import (
     UnstartedProof,
     parse_claim,
 )
+from harness_runtime.lifecycle.root_resume_admission import JournalDirectoryMismatchError
 from harness_runtime.shutdown import shutdown
 from harness_runtime.types import RuntimeConfig
 
@@ -66,6 +66,7 @@ from .integration.test_r_cc_1_api_resume import (
     _CHAIN,  # pyright: ignore[reportPrivateUsage]
     _patched_runtime,  # noqa: F401  # pyright: ignore[reportPrivateUsage, reportUnusedImport]
 )
+from .pause_journal_roots import declare_pause_journal_root
 from .test_b104_5b1_runtime_handoff import Chain
 from .test_state_placement import world  # noqa: F401  (fixture: scratch dir with no .git above)
 from .test_state_placement_bootstrap import Site
@@ -160,7 +161,11 @@ class Harness:
         self._placement = placement
         self._drain = drain
         self.config = self.config_with_ledger(self.site.root / ledger)
-        self.journal_dir = pause_journal_dir_for(self.site.root / ledger)
+        # The installation's root sits under the verified root but in no binding (Rule B3), so a
+        # STATE_LEDGER rebinding never moves it; it exists before capture's bootstrap resolves it.
+        self.site.stamp(self.site.config(placement=True, ledger=self.site.root / ledger))
+        self.journal_dir = declare_pause_journal_root(self.site.root / "pause-journal")
+        self.journal_dir.mkdir()
 
     def config_with_ledger(self, ledger: Path) -> RuntimeConfig:
         """This site's config with its STATE_LEDGER cell bound to `ledger`."""
@@ -503,19 +508,20 @@ def _retargeted_link(scratch: Path) -> tuple[Harness, Path]:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("change", ["rebound", "retargeted"])
-async def test_a_capture_directory_changed_between_read_and_bootstrap_refuses_before_any_claim(
+async def test_a_ledger_binding_changed_between_read_and_bootstrap_still_claims_the_one_root(
     world: Path,  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
     change: str,
 ) -> None:
+    """Rule B3: the journal is the installation's root, so no STATE_LEDGER change can move it."""
     if change == "rebound":
         harness = Harness(world)
-        await harness.capture_root()
+        ref = await harness.capture_root()
         other = harness.site.root / "state-ledger-b"  # still inside the verified root
         _changing_bootstrap(monkeypatch, lambda _config: harness.config_with_ledger(other))
     else:
         harness, link = _retargeted_link(world)
-        await harness.capture_root()
+        ref = await harness.capture_root()
 
         def retarget(config: RuntimeConfig) -> RuntimeConfig:
             (harness.site.root / "state-ledger-b").mkdir()
@@ -526,14 +532,42 @@ async def test_a_capture_directory_changed_between_read_and_bootstrap_refuses_be
         _changing_bootstrap(monkeypatch, retarget)
     dispatcher = _Dispatcher()
 
+    result = await resume(_Workflow(dispatcher), resume_handle=_WORKFLOW_ID, config=harness.config)
+
+    assert result.status == "completed", result
+    assert dispatcher.steps == ["step-0"]
+    assert (harness.phase(ref), harness.lease(ref)) == ("started", "free")
+
+
+@pytest.mark.asyncio
+async def test_a_declared_root_link_retargeted_between_read_and_bootstrap_is_refused_unclaimed(
+    world: Path,  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Rule B3 (F1): a record read in one directory is never claimed for captures in another."""
+    harness = Harness(world)
+    link = declare_pause_journal_root(harness.site.root / "pause-journal-link")
+    link.symlink_to(harness.journal_dir)
+    ref = await harness.capture_root()
+
+    def retarget(config: RuntimeConfig) -> RuntimeConfig:
+        (harness.site.root / "pause-journal-b").mkdir()
+        link.unlink()
+        link.symlink_to(harness.site.root / "pause-journal-b")  # same declaration, new target
+        return config
+
+    _changing_bootstrap(monkeypatch, retarget)
+    dispatcher = _Dispatcher()
+
     outcome = await _outcome(
         resume(_Workflow(dispatcher), resume_handle=_WORKFLOW_ID, config=harness.config)
     )
 
     assert dispatcher.steps == []
     _assert_refused(outcome, "placement")
-    assert type(getattr(outcome, "__cause__", None)).__name__ == "JournalDirectoryMismatchError"
-    assert harness.claim_files() == []  # no claim or lease in either directory
+    assert isinstance(getattr(outcome, "__cause__", None), JournalDirectoryMismatchError)
+    assert harness.claim_files() == []
+    assert harness.phase(ref) == "none"
 
 
 @pytest.mark.asyncio

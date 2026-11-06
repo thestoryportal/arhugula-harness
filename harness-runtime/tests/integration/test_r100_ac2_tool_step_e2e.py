@@ -40,6 +40,7 @@ from typing import Any
 
 import pytest
 
+from ..pause_journal_roots import placed_config
 from .fixtures.streamable_http_echo import streamable_http_echo_server
 
 
@@ -57,7 +58,7 @@ def _read_ledger(state_ledger_root: Path) -> list[dict[str, Any]]:
 
 @pytest.mark.asyncio
 async def test_r100_ac2_tool_step_via_api_run(
-    tmp_path: Path,
+    placed_root: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from harness_as.discriminators import MCPTransport
@@ -94,7 +95,7 @@ async def test_r100_ac2_tool_step_via_api_run(
 
     surface = DeploymentSurface.LOCAL_DEVELOPMENT
     workload = WorkloadClass.PIPELINE_AUTOMATION  # permits SINGLE_THREADED_LINEAR
-    state_ledger_root = tmp_path / "state_ledger"
+    state_ledger_root = placed_root / "state_ledger"
     path_bindings = PathBindingConfig(
         raw_entries=tuple(
             {
@@ -104,7 +105,7 @@ async def test_r100_ac2_tool_step_via_api_run(
                 "path": str(
                     state_ledger_root
                     if pc is PathClass.STATE_LEDGER
-                    else tmp_path / pc.value.lower()
+                    else placed_root / pc.value.lower()
                 ),
             }
             for pc in PathClass
@@ -170,7 +171,7 @@ async def test_r100_ac2_tool_step_via_api_run(
     with streamable_http_echo_server() as mcp_url:
         config = RuntimeConfig(
             deployment_surface=surface,
-            repository_root=tmp_path,
+            repository_root=placed_root,
             path_bindings=path_bindings,
             provider_secrets=ProviderSecretsConfig(),
             otel=OTelConfig(otlp_endpoint="http://localhost:4318"),
@@ -250,7 +251,7 @@ async def test_r100_ac2_tool_step_via_api_run(
                 return binding
 
         # --- exercise: the operator api.run path with a TOOL_STEP. ---
-        result = await _run(_Workflow(), config=config)
+        result = await _run(_Workflow(), config=placed_config(config, placed_root))
 
     # AC #2 — the TOOL_STEP dispatched through the full bootstrap and completed.
     assert isinstance(result, RunResult), f"got {type(result).__name__}"

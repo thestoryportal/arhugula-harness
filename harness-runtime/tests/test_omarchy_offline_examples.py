@@ -64,6 +64,7 @@ from harness_runtime.types import RuntimeConfig
 from opentelemetry.sdk.trace import TracerProvider
 from pydantic import ValidationError
 
+from .pause_journal_roots import placed_config
 from .test_local_ollama_examples import (
     _EmitterDouble,
     _LedgerDouble,
@@ -484,13 +485,15 @@ class _Collector:
 
 
 def _run_as_the_cli_does(
-    example: _Example, client: _Client, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    example: _Example, client: _Client, placed_root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> RunResult:
     """Run a shipped manifest the way `harness run` does: the documented config and the
     manifest loader feed `api.run`, whose bootstrap builds the production dispatcher
     registry, sub-agent dispatcher and child-workflow runner. Only the Ollama client and
     the OD collector/tracer stages are in-process stand-ins."""
-    config = _load_config(example.config, tmp_path, extra=example.workload)
+    config = placed_config(
+        _load_config(example.config, placed_root, extra=example.workload), placed_root
+    )
 
     async def _unreachable_ping() -> None:
         raise AssertionError("stage 3a is replaced, so nothing pings the stand-in")
@@ -512,7 +515,7 @@ def _run_as_the_cli_does(
 
 
 def test_hierarchical_delegation_runs_the_child_hierarchy_through_the_production_path(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    placed_root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     workflow = _load(_EXAMPLES[2])
     root_steps = [s for s in workflow.steps if s.step_kind is _INFER]
@@ -526,7 +529,7 @@ def test_hierarchical_delegation_runs_the_child_hierarchy_through_the_production
         return f"OUT-{prompts.get(str(messages[0]['content']), 'synthesis')}"
 
     client = _Client(reply)
-    result = _run_as_the_cli_does(_EXAMPLES[2], client, tmp_path, monkeypatch)
+    result = _run_as_the_cli_does(_EXAMPLES[2], client, placed_root, monkeypatch)
 
     assert result.status == "completed", result.failure_cause
     sent = [prompts.get(str(c[0]["content"]), "synthesis") for c in client.calls]

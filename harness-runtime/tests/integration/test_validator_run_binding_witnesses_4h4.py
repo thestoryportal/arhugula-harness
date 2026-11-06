@@ -57,6 +57,7 @@ from harness_runtime.types import HarnessContext
 from mcp.shared.memory import create_connected_server_and_client_session
 from opentelemetry.sdk.trace import TracerProvider
 
+from ..pause_journal_roots import placed_config
 from ..test_lifecycle_sub_agent_dispatch import (
     _brief,  # pyright: ignore[reportPrivateUsage]
     _child_manifest,  # pyright: ignore[reportPrivateUsage]
@@ -234,7 +235,7 @@ class _Daemon:
 
 
 async def _daemon(
-    tmp_path: Path,
+    placed_root: Path,
     *,
     framework: ValidatorFramework | None,
     recorder: _BurdenRecorder | None = None,
@@ -246,9 +247,11 @@ async def _daemon(
     `framework` replaces the bootstrap's stage-4 value (`None` is the opt-out) unless a TOML
     `config` produced it, in which case it must be `ctx.validator_framework` itself.
     """
-    bootstrapped = await run_bootstrap(config or build_config(tmp_path), workload_class=WORKLOAD)
+    bootstrapped = await run_bootstrap(
+        placed_config(config or build_config(placed_root), placed_root), workload_class=WORKLOAD
+    )
     body = _Body()
-    dispatcher, _, _ = _dispatcher(tmp_path)
+    dispatcher, _, _ = _dispatcher(placed_root)
     update: dict[str, Any] = {
         "step_dispatchers": _Registry(body, dispatcher),
         # The patched fake tracer provider has no `get_tracer`; the driver needs one.
@@ -268,12 +271,12 @@ async def _daemon(
     return _Daemon(ctx=ctx, body=body, recorder=recorder or _BurdenRecorder())
 
 
-async def _recording_daemon(tmp_path: Path) -> _Daemon:
+async def _recording_daemon(placed_root: Path) -> _Daemon:
     recorder = _BurdenRecorder()
     framework = ConcreteValidatorFramework(
         validator_registry=_EveryStep(), post_evaluate_hook=recorder
     )
-    return await _daemon(tmp_path, framework=framework, recorder=recorder)
+    return await _daemon(placed_root, framework=framework, recorder=recorder)
 
 
 def _succeeded(result: dict[str, Any]) -> None:
@@ -287,10 +290,10 @@ def _succeeded(result: dict[str, Any]) -> None:
 
 @pytest.mark.asyncio
 async def test_sequential_roots_on_one_daemon_each_start_at_zero(
-    tmp_path: Path, patched_runtime: dict[str, Any]
+    placed_root: Path, patched_runtime: dict[str, Any]
 ) -> None:
     _ = patched_runtime
-    daemon = await _recording_daemon(tmp_path)
+    daemon = await _recording_daemon(placed_root)
     for run in ("first", "second"):
         _succeeded(await daemon.run(_workflow(f"wf-{run}", *_charging(run, 2))))
 
@@ -302,10 +305,10 @@ async def test_sequential_roots_on_one_daemon_each_start_at_zero(
 
 @pytest.mark.asyncio
 async def test_concurrent_roots_on_one_daemon_each_start_at_zero(
-    tmp_path: Path, patched_runtime: dict[str, Any]
+    placed_root: Path, patched_runtime: dict[str, Any]
 ) -> None:
     _ = patched_runtime
-    daemon = await _recording_daemon(tmp_path)
+    daemon = await _recording_daemon(placed_root)
     roots = ("left", "right", "third")
     results = await asyncio.gather(
         *(daemon.run(_workflow(f"wf-{root}", *_charging(root, 3))) for root in roots)
@@ -324,10 +327,10 @@ async def test_concurrent_roots_on_one_daemon_each_start_at_zero(
 
 @pytest.mark.asyncio
 async def test_linear_child_and_depth_two_grandchild_start_at_zero_without_touching_the_parent(
-    tmp_path: Path, patched_runtime: dict[str, Any]
+    placed_root: Path, patched_runtime: dict[str, Any]
 ) -> None:
     _ = patched_runtime
-    daemon = await _recording_daemon(tmp_path)
+    daemon = await _recording_daemon(placed_root)
     grandchild = (_step(f"grand/{_CHARGE}-0"),)
     child = (
         _step(f"child/{_CHARGE}-0"),
@@ -358,10 +361,10 @@ async def test_linear_child_and_depth_two_grandchild_start_at_zero_without_touch
 
 @pytest.mark.asyncio
 async def test_fan_out_siblings_are_isolated_and_a_concurrent_second_root_is_unaffected(
-    tmp_path: Path, patched_runtime: dict[str, Any]
+    placed_root: Path, patched_runtime: dict[str, Any]
 ) -> None:
     _ = patched_runtime
-    daemon = await _recording_daemon(tmp_path)
+    daemon = await _recording_daemon(placed_root)
     siblings = ("kid0", "kid1", "kid2")
     fan_out = _workflow(
         "wf-fan-out",
@@ -396,12 +399,12 @@ async def test_fan_out_siblings_are_isolated_and_a_concurrent_second_root_is_una
 
 @pytest.mark.asyncio
 async def test_toml_binding_reaches_the_driver_through_ingress_with_every_outcome(
-    tmp_path: Path, patched_runtime: dict[str, Any]
+    placed_root: Path, patched_runtime: dict[str, Any]
 ) -> None:
     _ = patched_runtime
     surface = _RecordingSurface()
     daemon = await _daemon(
-        tmp_path, framework=None, surface=surface, config=_load_toml_config(tmp_path)
+        placed_root, framework=None, surface=surface, config=_load_toml_config(placed_root)
     )
     framework = daemon.ctx.validator_framework
     assert isinstance(framework, ValidatorFramework)
@@ -440,7 +443,7 @@ async def test_toml_binding_reaches_the_driver_through_ingress_with_every_outcom
 
 @pytest.mark.asyncio
 async def test_an_audit_signing_failure_raises_through_the_binding_to_the_driver(
-    tmp_path: Path, patched_runtime: dict[str, Any]
+    placed_root: Path, patched_runtime: dict[str, Any]
 ) -> None:
     _ = patched_runtime
     framework = ConcreteValidatorFramework(
@@ -448,7 +451,7 @@ async def test_an_audit_signing_failure_raises_through_the_binding_to_the_driver
         post_evaluate_hook=_RaisingHook(AuditSigningFailedError("signing backend down")),
         audit_signing_raise_through=AUDIT_SIGNING_HARD_FAILURES,
     )
-    daemon = await _daemon(tmp_path, framework=framework)
+    daemon = await _daemon(placed_root, framework=framework)
 
     result = await daemon.run(_workflow("wf-signing", _step("signing/pass-0")))
 
@@ -460,7 +463,7 @@ async def test_an_audit_signing_failure_raises_through_the_binding_to_the_driver
 
 @pytest.mark.asyncio
 async def test_a_best_effort_hook_failure_stays_swallowed_through_the_binding(
-    tmp_path: Path, patched_runtime: dict[str, Any]
+    placed_root: Path, patched_runtime: dict[str, Any]
 ) -> None:
     """§28.10 swallows a non-signing hook failure; the binding must not resurrect it."""
     _ = patched_runtime
@@ -469,7 +472,7 @@ async def test_a_best_effort_hook_failure_stays_swallowed_through_the_binding(
         post_evaluate_hook=_RaisingHook(RuntimeError("cost sink down")),
         audit_signing_raise_through=AUDIT_SIGNING_HARD_FAILURES,
     )
-    daemon = await _daemon(tmp_path, framework=framework)
+    daemon = await _daemon(placed_root, framework=framework)
 
     _succeeded(await daemon.run(_workflow("wf-cost", _step("cost/pass-0"))))
 
@@ -481,10 +484,10 @@ async def test_a_best_effort_hook_failure_stays_swallowed_through_the_binding(
 
 @pytest.mark.asyncio
 async def test_opt_out_carries_no_binding_to_the_root_or_its_child(
-    tmp_path: Path, patched_runtime: dict[str, Any]
+    placed_root: Path, patched_runtime: dict[str, Any]
 ) -> None:
     _ = patched_runtime
-    daemon = await _daemon(tmp_path, framework=None)
+    daemon = await _daemon(placed_root, framework=None)
     root = _workflow(
         "wf-opt-out",
         _step("root/pass-0"),
