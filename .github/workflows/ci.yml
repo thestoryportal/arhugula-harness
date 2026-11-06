@@ -736,6 +736,9 @@ jobs:
       - name: Native independent review provenance tests
         run: uv run python -m pytest tools/test_native_review.py -q
 
+      - name: Stacked PR publication safety tests
+        run: uv run python -m pytest tools/test_stacked_pr_publish.py -q
+
   q1-review-gate:
     needs: changes
     if: ${{ !cancelled() }}

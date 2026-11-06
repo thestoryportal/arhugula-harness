@@ -58,6 +58,8 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.trace import StatusCode
 
+from ..pause_journal_roots import placed_config
+
 # An anthropic model that does not exist -> the real Messages API returns a 404
 # `not_found_error` (unbilled). Used only by the live test; the deterministic
 # test fakes the leaf client and ignores the model string.
@@ -426,6 +428,7 @@ class _FakeAdapter:
 @pytest.mark.asyncio
 async def test_r300_deterministic_cross_family_fallback_through_production_path(
     tmp_path: Path,
+    placed_root: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Cross-family fallback fires through the real ``api.run`` production path.
@@ -457,7 +460,7 @@ async def test_r300_deterministic_cross_family_fallback_through_production_path(
     exporter = _install_fake_od_stage4(monkeypatch)
 
     chain = _build_chain(primary_model="claude-haiku-4-5")
-    config = _build_config(tmp_path, chain)
+    config = placed_config(_build_config(placed_root, chain), placed_root)
     monkeypatch.setattr("harness_runtime.api._default_config", lambda: config)
 
     result = await _run(_make_workflow(chain), config=config)

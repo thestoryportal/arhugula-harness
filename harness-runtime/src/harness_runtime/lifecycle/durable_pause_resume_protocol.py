@@ -43,6 +43,8 @@ from harness_cp.pause_resume_protocol_types import (
 )
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from harness_core import JournalRecordRef
 
     from harness_runtime.lifecycle.journal_workflow_pause_store import (
@@ -57,8 +59,8 @@ class DurablePauseResumeProtocol(PauseResumeProtocol):
     """A ``PauseResumeProtocol`` that durably persists captured snapshots.
 
     Constructed by the stage-5 factory with the same constructor refs as the
-    bare CP protocol plus a ``JournalWorkflowPauseStore`` (co-located under the
-    resolved ``STATE_LEDGER`` dir). ``isinstance(self, PauseResumeProtocol)`` is
+    bare CP protocol plus a ``JournalWorkflowPauseStore`` (over the installation's
+    resolved pause-journal root). ``isinstance(self, PauseResumeProtocol)`` is
     ``True``, so the frozen ``HarnessContext`` accepts it and the workflow driver
     consumes it unchanged.
     """
@@ -77,6 +79,11 @@ class DurablePauseResumeProtocol(PauseResumeProtocol):
             pause_context_reader=pause_context_reader,
         )
         self._store = store
+
+    @property
+    def journal_dir(self) -> Path:
+        """The directory this run's snapshots are captured to, fixed at bootstrap."""
+        return self._store.journal_dir
 
     async def capture_pause_snapshot(
         self,

@@ -75,6 +75,8 @@ from harness_runtime.types import (
 from mcp.shared.memory import create_connected_server_and_client_session
 from mcp.types import ElicitResult
 
+from ..pause_journal_roots import placed_config
+
 _WORKLOAD = WorkloadClass.SOFTWARE_ENGINEERING
 _SURFACE = DeploymentSurface.LOCAL_DEVELOPMENT
 _CHAIN = FallbackChain(
@@ -417,6 +419,7 @@ def _make_test_step_dispatchers_override(
 @pytest.mark.asyncio
 async def test_e2e_run_workflow_elicit_round_trip(
     tmp_path: Path,
+    placed_root: Path,
     _patched_runtime: dict[str, Any],
 ) -> None:
     """AC #6 — full topology end-to-end with PRE_ACTION HITL placement.
@@ -431,7 +434,7 @@ async def test_e2e_run_workflow_elicit_round_trip(
     - The H_E `AskUserQuestion` surface is reached only via the MCP envelope
       (the elicitation_callback IS the H_E surrogate; no direct invocation).
     """
-    config = _config(tmp_path)
+    config = placed_config(_config(placed_root), placed_root)
     ctx = await run_bootstrap(config, workload_class=_WORKLOAD)
     assert ctx.mcp_server is not None, "U-RT-62 AC #2 — mcp_server bound at stage 2"
 
@@ -555,6 +558,7 @@ async def test_e2e_run_workflow_elicit_round_trip(
 @pytest.mark.asyncio
 async def test_e2e_manifest_placement_fires_gate_via_producer(
     tmp_path: Path,
+    placed_root: Path,
     _patched_runtime: dict[str, Any],
 ) -> None:
     """R-FS-1 B-HITL-PLACEMENT-PER-STEP-PRODUCER — the FULL-CHAIN witness.
@@ -570,7 +574,7 @@ async def test_e2e_manifest_placement_fires_gate_via_producer(
     proxy-based `test_e2e_run_workflow_elicit_round_trip` would pass even if the
     producer were broken — it bypasses the producer via the step proxy.)
     """
-    config = _config(tmp_path)
+    config = placed_config(_config(placed_root), placed_root)
     ctx = await run_bootstrap(config, workload_class=_WORKLOAD)
     assert ctx.mcp_server is not None
 

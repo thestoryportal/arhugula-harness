@@ -100,6 +100,8 @@ from harness_runtime.types import (
     RuntimeConfig,
 )
 
+from ..pause_journal_roots import placed_config
+
 _WORKLOAD = WorkloadClass.SOFTWARE_ENGINEERING
 _SURFACE = DeploymentSurface.LOCAL_DEVELOPMENT
 _WORKFLOW_ID = "wf-b72-fanout-sub-agent-dispatch-hitl-gate-resume"
@@ -444,6 +446,7 @@ def _resolved_hitl_result(*, entry_suffix: str) -> HITLResult:
 @pytest.mark.asyncio
 async def test_fanout_branch_own_gate_pauses_on_first_dispatch(
     tmp_path: Path,
+    placed_root: Path,
     monkeypatch: pytest.MonkeyPatch,
     _captured_webhook_requests: list[httpx.Request],
 ) -> None:
@@ -456,7 +459,7 @@ async def test_fanout_branch_own_gate_pauses_on_first_dispatch(
     _install_fake_od_stage4(monkeypatch)
     _install_fake_webhook_composer_factory(monkeypatch, _captured_webhook_requests)
 
-    config = _config(tmp_path)
+    config = placed_config(_config(placed_root), placed_root)
     workflow = _FanOutSubAgentDispatchWorkflow()
 
     paused = await api_run(workflow, config=config)
@@ -485,6 +488,7 @@ async def test_fanout_branch_own_gate_pauses_on_first_dispatch(
 @pytest.mark.asyncio
 async def test_fanout_branch_gate_resume_with_resolved_answer_is_consumed(
     tmp_path: Path,
+    placed_root: Path,
     monkeypatch: pytest.MonkeyPatch,
     _captured_webhook_requests: list[httpx.Request],
 ) -> None:
@@ -564,7 +568,7 @@ async def test_fanout_branch_gate_resume_with_resolved_answer_is_consumed(
 
     monkeypatch.setattr(sub_agent_dispatch.RuntimeSubAgentDispatcher, "dispatch", _spying_dispatch)
 
-    config = _config(tmp_path)
+    config = placed_config(_config(placed_root), placed_root)
     workflow = _FanOutSubAgentDispatchWorkflow()
 
     paused = await api_run(workflow, config=config)
@@ -619,6 +623,7 @@ async def test_fanout_branch_gate_resume_with_resolved_answer_is_consumed(
 @pytest.mark.asyncio
 async def test_b71_resume_preserves_the_run_id_the_pre_dispatch_identity_is_composed_from(
     tmp_path: Path,
+    placed_root: Path,
     monkeypatch: pytest.MonkeyPatch,
     _captured_webhook_requests: list[httpx.Request],
 ) -> None:
@@ -648,7 +653,7 @@ async def test_b71_resume_preserves_the_run_id_the_pre_dispatch_identity_is_comp
     _install_fake_od_stage4(monkeypatch)
     _install_fake_webhook_composer_factory(monkeypatch, _captured_webhook_requests)
 
-    config = _config(tmp_path)
+    config = placed_config(_config(placed_root), placed_root)
     workflow = _FanOutSubAgentDispatchWorkflow()
 
     paused = await api_run(workflow, config=config)
