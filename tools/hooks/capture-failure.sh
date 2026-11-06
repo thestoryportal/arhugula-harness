@@ -97,7 +97,7 @@ SIG="${EVENT}:${TOOL}:${ERRTYPE}:${EXIT_OR_CMDHEAD}"   # recurrence key (semanti
 # --- Critical section: count + append must be atomic (codex P2 — overlapping
 # failure hooks for parallel tool calls all read the same prior counts before any
 # appends; a 12-way identical-failure probe emitted SIX rows past the 2-cap).
-# mkdir is the portable atomic primitive (macOS ships no flock binary). On a
+# mkdir(2) is the portable atomic primitive (macOS ships no flock binary). On a
 # crashed holder the lock goes stale: reclaim when older than 10s. If the lock
 # cannot be acquired, the row is STILL LOGGED but emission is SUPPRESSED (codex
 # round-2: a lockless fallback let 20 contenders emit 3-6 nudges — the cap
@@ -116,7 +116,21 @@ _release_lock() {
   return 0
 }
 for _try in $(seq 1 "${CAPTURE_FAILURE_LOCK_TRIES:-50}"); do
-  if mkdir "$LOCKDIR" 2>/dev/null; then
+  # [LAW:single-enforcer] use the syscall result: uutils mkdir 0.10 can report
+  # success on a concurrent EEXIST, allowing two holders to overwrite ownership.
+  if python3 - "$LOCKDIR" <<'PY'
+import os
+import sys
+
+try:
+    os.mkdir(sys.argv[1])
+except FileExistsError:
+    sys.exit(1)
+except OSError as error:
+    print(f"capture-failure: cannot acquire lock: {error}", file=sys.stderr)
+    sys.exit(2)
+PY
+  then
     # Ownership token (codex round-4): a holder that exceeds the 10s stale
     # threshold mid-section can be taken over; its pathname-based release then
     # deleted the SUCCESSOR's lock. Release verifies this token first, so a
@@ -126,6 +140,9 @@ for _try in $(seq 1 "${CAPTURE_FAILURE_LOCK_TRIES:-50}"); do
     _LOCK_TOKEN="$$.$(date +%s).$RANDOM"
     printf '%s' "$_LOCK_TOKEN" > "$LOCKDIR/owner" 2>/dev/null || true
     _LOCKED=true; break
+  else
+    _lock_status=$?
+    [ "$_lock_status" -eq 1 ] || break
   fi
   # NO in-band stale reclamation (codex rounds 3/4/6 closed one takeover race
   # per round and each fix surfaced the next — mkdir-locks on a REUSABLE

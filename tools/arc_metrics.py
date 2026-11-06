@@ -1741,7 +1741,10 @@ def _drain_one(path: Path, entry: dict, arc_id: str, committed: set[str], local:
                 updates = (
                     {"pr": entry["pr"]} if cur[1].get("pr") is None and "pr" in entry else None
                 )
-                rs.transition(arc_id, "merged", lane_id=LANE_ID, updates=updates)
+                if updates:
+                    rs.update_payload(arc_id, updates)
+                if rs.reconcile(arc_id, gh_view=rs._gh_view) != "merged":
+                    raise AbortError(f"{arc_id}: merged PR receipt is unconfirmed")
                 head = rs.current(arc_id)
                 if head:
                     # the crashed drain's fold may predate accretions; re-fold the
@@ -1752,6 +1755,11 @@ def _drain_one(path: Path, entry: dict, arc_id: str, committed: set[str], local:
                 # A refold that failed after the terminal flip (ledger claimed, I/O --
                 # codex r10 P2) heals here: idempotent re-projection from the terminal
                 # head on every held pass while the row is uncommitted.
+                if not cur[1].get("merge_sha"):
+                    rs.reconcile(arc_id, gh_view=rs._gh_view)
+                    cur = rs.current(arc_id)
+                    if not cur or not cur[1].get("merge_sha"):
+                        raise AbortError(f"{arc_id}: merged PR receipt is unconfirmed")
                 _refold_local_row(arc_id, cur[1])
         except (KeyError, TypeError, AttributeError, ValueError, rs.ReservationError) as exc:
             print(f"  {arc_id}: deferred terminalization not completed ({exc})")
@@ -1847,6 +1855,11 @@ def _drain_one(path: Path, entry: dict, arc_id: str, committed: set[str], local:
         # post-U-HE-22 normal flow flips open->merged at the merge door BEFORE the
         # closure capture drains, so the merged holder's own first append IS the
         # ordinary capture path -- append()'s gate admits exactly this shape.
+        if cur[1]["state"] == "merged" and not cur[1].get("merge_sha"):
+            rs.reconcile(arc_id, gh_view=rs._gh_view)
+            cur = rs.current(arc_id)
+            if not cur or not cur[1].get("merge_sha"):
+                raise AbortError(f"{arc_id}: merged PR receipt is unconfirmed")
         res = cur[1]
         # Namespace construction reads entry fields, so a malformed entry can
         # raise HERE, after the claim -- it must restore before propagating or
@@ -1895,7 +1908,9 @@ def _drain_one(path: Path, entry: dict, arc_id: str, committed: set[str], local:
         _kill_after("append")
         _hold_after("append")
         if res.get("state") == "open":
-            updates = {"pr": entry["pr"]} if res.get("pr") is None and "pr" in entry else None
+            updates = {"merge_sha": row.merge_sha}
+            if res.get("pr") is None and "pr" in entry:
+                updates["pr"] = entry["pr"]
             try:
                 rs.transition(
                     arc_id,
@@ -2896,7 +2911,9 @@ def cmd_extract(args: argparse.Namespace) -> int:
                 rs.open_with_sensor(row.arc_id, LANE_ID)
             if row.pr is not None and cur[1].get("pr") is None:
                 rs.update_payload(row.arc_id, {"pr": row.pr})
-            rs.transition(row.arc_id, "merged", lane_id=LANE_ID)
+            rs.transition(
+                row.arc_id, "merged", lane_id=LANE_ID, updates={"merge_sha": row.merge_sha}
+            )
         except rs.ReservationError as exc:
             # A concurrent same-worktree retry won a CAS in this sequence (codex r14
             # P3): an expected cooperative loss surfaces as the CLI's clean AbortError
