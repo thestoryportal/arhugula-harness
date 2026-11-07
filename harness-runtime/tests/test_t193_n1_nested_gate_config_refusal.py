@@ -59,10 +59,14 @@ pw = _witness()
 class Scenario:
     """One N1 layout with its owned webhook, Ollama stub and tool server, provisioned once."""
 
-    def __init__(self, layout: Any, webhook: Any, ollama: Any) -> None:
+    def __init__(
+        self, layout: Any, webhook: Any, ollama: Any, server: subprocess.Popen[bytes], port: int
+    ) -> None:
         self.layout = layout
         self.webhook = webhook
         self.ollama = ollama
+        self.server = server
+        self.port = port
 
     def tools(self) -> dict[str, int]:
         return pw.tool_counts(self.layout)
@@ -101,7 +105,7 @@ def n1(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Scenario]:
         owners.callback(server.kill)
         assert _listening(server, port), "the witness tool server never listened"
         pw.HELPERS.phase_provision(layout)
-        yield Scenario(layout, webhook, ollama)
+        yield Scenario(layout, webhook, ollama, server, port)
 
 
 def _serving(listener: Any, owners: Any) -> Any:
@@ -184,5 +188,75 @@ def test_a_direct_child_handle_is_refused_before_any_effect(n1: Scenario) -> Non
 
     assert direct["outcome"] == "raised", direct
     assert direct["error_type"].endswith(".ResumeDirectChildHandleError")
+    assert n1.tools() == {"witness.b": 3}
+    assert n1.webhook_keys() == [pw.KEY_A]
+
+
+def _leaf_lease(n1: Scenario) -> Any:
+    """Hold the paused leaf's claim lease, as a concurrent resume of that leaf would."""
+    from harness_runtime.lifecycle.resume_claim_store import HeldLease, ResumeClaimStore
+
+    config = pw._config(n1.layout)  # pyright: ignore[reportPrivateUsage]
+    leaf = pw._latest_root(config, pw.LEAF_ID)  # pyright: ignore[reportPrivateUsage]
+    placement = sp.place_state_dir(
+        leaf.journal_dir, config, sp.probe_declared_state_root(config), what="test leaf journal"
+    )
+    store = ResumeClaimStore(placement=placement, tenant_id=config.tenant_id)
+    lease = store.paths_for(leaf.ref).lease
+    lease.write_bytes(store._lease_bytes(leaf.ref, "0" * 32))  # pyright: ignore[reportPrivateUsage]
+    held = store.probe_lease(leaf.ref)
+    assert isinstance(held, HeldLease), held
+    return held
+
+
+def test_a_busy_depth_two_leaf_claim_ends_the_root_failed_with_the_typed_refusal(
+    n1: Scenario,
+) -> None:
+    _paused(n1)
+    held = _leaf_lease(n1)
+    try:
+        low = pw.phase_resume(n1.layout)
+    finally:
+        held.close()
+
+    assert low["outcome"] == "returned", (low.get("error_type"), low.get("message"))
+    assert low["status"] == "failed" and low["has_pause_snapshot"] is False, low
+    cause = low["failure_cause"]
+    assert cause["runtime_fail_class"] == pw.WORKFLOW_FAILURE_CLASS, cause
+    refusal = pw.parse_terminal_refusal(cause["validator_fail_class"])
+    assert refusal is not None, cause
+    assert refusal.family == pw.ROOT_FAMILY
+    assert refusal.reasons == frozenset({"claim-busy"}), refusal
+    assert n1.tools() == {"witness.b": 3}  # the refused resume ran no step
+
+
+def test_a_genuinely_failed_leaf_keeps_the_cascade_pause_and_no_refusal(n1: Scenario) -> None:
+    _paused(n1)
+    # Same port, but the approved leaf step's tool is gone: a leaf that genuinely failed, not one
+    # that refused its resume.
+    n1.server.kill()
+    n1.server.wait()
+    source = n1.layout.tmp / "failing_mcp_server.py"
+    source.write_text(
+        pw.MCP_SERVER_SOURCE.replace(
+            '@mcp.tool(name="witness.a")', '@mcp.tool(name="witness.a.gone")'
+        )
+    )
+    failing = subprocess.Popen(
+        [sys.executable, "-I", str(source), str(n1.layout.tool_calls), str(n1.port)],
+        cwd=n1.layout.tmp,
+    )
+    try:
+        assert _listening(failing, n1.port), "the failing tool server never listened"
+        low = pw.phase_resume(n1.layout)
+    finally:
+        failing.kill()
+        failing.wait()
+
+    assert low["outcome"] == "returned", (low.get("error_type"), low.get("message"))
+    # A failed branch keeps the cascade-pause semantics: an operator pause, never a terminal
+    # typed refusal, and no step past the failed one ran.
+    assert low["status"] == "paused" and low["failure_cause"] is None, low["status"]
+    assert low["returned_pause_reason"] == "explicit_operator", low["returned_pause_reason"]
     assert n1.tools() == {"witness.b": 3}
     assert n1.webhook_keys() == [pw.KEY_A]
