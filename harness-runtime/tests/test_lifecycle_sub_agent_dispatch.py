@@ -76,7 +76,9 @@ from harness_cp.topology_subagent_namespace import (
 )
 from harness_cp.workflow_driver import StepDispatcher
 from harness_cp.workflow_driver_types import (
+    ChildResumeRefusal,
     ChildResumeRefusedError,
+    ResumeRefusal,
     RunResult,
     RunStatus,
     StepExecutionContext,
@@ -2654,3 +2656,161 @@ def test_effective_brief_reaches_every_reader(tmp_path: Path, lead: bool) -> Non
     assert spy.descent_briefs == [expected]
     assert spy.hashed_briefs == [expected]
     assert call["workflow_id"] == "child-wf"
+
+
+#: A returned refusal standing for two reasons (CP v1.131 §0.3): the dispatcher must carry both.
+_TWO_REASONS = ResumeRefusal(
+    reasons=frozenset({ChildResumeRefusal.HITL_GATE_CONFIG_CHANGED, ChildResumeRefusal.CLAIM_BUSY})
+)
+
+
+def _refused_result(refusal: ResumeRefusal | None = _TWO_REASONS) -> RunResult:
+    """A FAILED child result; with `refusal` it is a returned resume refusal (T193 N1)."""
+    return RunResult(
+        workflow_id="child-wf",
+        run_id="child-run-1",
+        status=RunStatus.FAILED,
+        terminal_step_index=0,
+        partial_state=None,
+        final_state=None,
+        fail_class="orchestrator-workers-child-resume-refused (claim-busy; hitl-gate-config-changed)",
+        resume_refusal=refusal,
+    )
+
+
+def test_a_returned_refusal_raises_the_typed_refusal_with_every_reason(tmp_path: Path) -> None:
+    """Runtime plan v2.70 U-RT-159 criteria 1 and 3.
+
+    Mutation probes: remapping the carrier to `SubAgentChildFailedError` fails the first
+    block; collapsing to one reason fails `reasons`; classifying by fail-class substring
+    or setting a carrier on every FAILED child fails the second block, whose text names
+    the reasons but carries no refusal.
+    """
+    refused, _r1, _e1 = _dispatcher(tmp_path, child_result=_refused_result())
+    with pytest.raises(ChildResumeRefusedError) as exc:
+        refused.dispatch(_binding(), _step(), step_context=_step_context())
+    assert exc.value.refusal == _TWO_REASONS
+    assert exc.value.reasons == _TWO_REASONS.reasons
+    assert not exc.value.audit_signing_failed
+
+    text_only, _r2, _e2 = _dispatcher(tmp_path, child_result=_refused_result(None))
+    with pytest.raises(SubAgentChildFailedError):
+        text_only.dispatch(_binding(), _step(), step_context=_step_context())
+
+
+def test_a_returned_refusal_under_fail_closed_signing_keeps_the_result_and_the_refusal(
+    tmp_path: Path,
+) -> None:
+    """Runtime plan v2.70 U-RT-159 criterion 2 (the returned arm, dispatcher level).
+
+    Mutation probes: raising the refusal-only `RefusedChildAuditSigningError` drops
+    `result`/`result_ref`; raising a plain `PostEffectAuditSigningError` drops the typed
+    refusal; resolving no store ref fails the `store.read` round trip.
+    """
+    from harness_od.audit_signing_errors import AUDIT_SIGNING_HARD_FAILURES
+    from harness_runtime.lifecycle.audit_signing_errors import (
+        PostEffectAuditSigningError,
+        PostEffectClass,
+        RefusedChildAuditSigningError,
+        RefusedChildResultAuditSigningError,
+    )
+
+    child_result = _refused_result()
+    store = _protected_store(tmp_path)
+    dispatcher, _r, _e = _dispatcher(
+        tmp_path,
+        child_result=child_result,
+        audit_writer_override=cast(Any, _FamilyRaisingAuditWriter()),
+        protected_result_store=store,
+    )
+    dispatcher.audit_signing_fail_closed = True
+    with pytest.raises(RefusedChildResultAuditSigningError) as exc:
+        dispatcher.dispatch(_binding(), _step(), step_context=_step_context())
+    carrier = exc.value
+    assert isinstance(carrier, ChildResumeRefusedError)
+    assert isinstance(carrier, PostEffectAuditSigningError)
+    assert isinstance(carrier, AUDIT_SIGNING_HARD_FAILURES)
+    assert not isinstance(carrier, RefusedChildAuditSigningError)
+    assert carrier.reasons == _TWO_REASONS.reasons
+    assert carrier.audit_signing_failed
+    assert carrier.effect_class is PostEffectClass.SUB_AGENT_RESULT
+    assert carrier.result == child_result
+    assert isinstance(carrier.result_ref, str)
+    assert store.read(None, carrier.result_ref) == child_result
+
+
+def test_a_returned_refusal_whose_store_write_fails_carries_the_unresolvable_ref(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Runtime plan v2.70 U-RT-159 criterion 2, the failed store write.
+
+    Mutation probe: dropping the carrier, or substituting a live-looking string for the
+    store's declaration, fails the discriminated `UnresolvableResultRef` assertion.
+    """
+    from harness_runtime.lifecycle.audit_signing_errors import (
+        RefusedChildResultAuditSigningError,
+    )
+    from harness_runtime.lifecycle.protected_result_store import (
+        ProtectedResultStore,
+        UnresolvableResultRef,
+    )
+
+    def _boom(self: ProtectedResultStore, entry_path: Path, data: bytes) -> None:
+        raise OSError("simulated disk-full during publication")
+
+    monkeypatch.setattr(ProtectedResultStore, "_publish_atomic", _boom)
+    child_result = _refused_result()
+    dispatcher, _r, _e = _dispatcher(
+        tmp_path,
+        child_result=child_result,
+        audit_writer_override=cast(Any, _FamilyRaisingAuditWriter()),
+        protected_result_store=_protected_store(tmp_path),
+    )
+    dispatcher.audit_signing_fail_closed = True
+    with pytest.raises(RefusedChildResultAuditSigningError) as exc:
+        dispatcher.dispatch(_binding(), _step(), step_context=_step_context())
+    assert exc.value.reasons == _TWO_REASONS.reasons
+    assert exc.value.result == child_result
+    assert isinstance(exc.value.result_ref, UnresolvableResultRef)
+    assert "store write failed" in exc.value.result_ref.reason
+
+
+class _RefusingChildRunner:
+    """A child runner that refuses before any child step runs (the raised arm)."""
+
+    def __init__(self, refusal: ChildResumeRefusedError) -> None:
+        self.refusal = refusal
+
+    def __call__(self, **_: Any) -> RunResult:
+        raise self.refusal
+
+
+def test_a_raised_multi_reason_refusal_under_fail_closed_signing_keeps_every_reason(
+    tmp_path: Path,
+) -> None:
+    """Runtime plan v2.70 U-RT-159 criterion 8 (the raised arm).
+
+    Mutation probes: collapsing the raised arm to one reason fails `reasons`; raising any
+    result-preserving carrier fails the `PostEffectAuditSigningError` exclusion.
+    """
+    from harness_od.audit_signing_errors import AUDIT_SIGNING_HARD_FAILURES
+    from harness_runtime.lifecycle.audit_signing_errors import (
+        PostEffectAuditSigningError,
+        RefusedChildAuditSigningError,
+    )
+
+    dispatcher, _r, _e = _dispatcher(
+        tmp_path,
+        child_result=_failed_result(),
+        audit_writer_override=cast(Any, _FamilyRaisingAuditWriter()),
+    )
+    dispatcher.child_workflow_runner = cast(
+        Any, _RefusingChildRunner(ChildResumeRefusedError(_TWO_REASONS, "refused"))
+    )
+    dispatcher.audit_signing_fail_closed = True
+    with pytest.raises(RefusedChildAuditSigningError) as exc:
+        dispatcher.dispatch(_binding(), _step(), step_context=_step_context())
+    assert exc.value.reasons == _TWO_REASONS.reasons
+    assert exc.value.audit_signing_failed
+    assert isinstance(exc.value, AUDIT_SIGNING_HARD_FAILURES)
+    assert not isinstance(exc.value, PostEffectAuditSigningError)

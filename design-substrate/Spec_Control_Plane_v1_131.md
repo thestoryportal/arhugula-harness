@@ -1,22 +1,28 @@
-# Spec: Control Plane — v1.128 (PROPOSED delta over cleared v1.124)
+# Spec: Control Plane — v1.131 (delta over cleared v1.130)
 
 *Delta-only file. One amendment site: C-CP-25 §25.11/§25.15/§25.2, the typed resume refusal. Every
-other v1.124 and earlier C-CP-01 … C-CP-29 term remains in force. No `RunStatus` value, pause-snapshot
+other v1.130 and earlier C-CP-01 … C-CP-29 term remains in force. No `RunStatus` value, pause-snapshot
 hash byte or fail-class prefix is added or changed.*
 
-**Status: PROPOSED — not cleared.** No clearance marker, artifact-head row or pointer is filed by this
-draft.
+**Status: CLEARED 2026-11-07 — ratified by the integration lead at LIT `cmt-756042fc-eb54-4a73-b152-61488707f1a2`
+on the frozen reviewed body `745f234f0000e9abcd0f87624e64883bd57e1494` (independent contract GREEN
+`cmt-553de0a0-3dcd-4af9-b87e-dd9987bad06e`); clearance `.harness/clearance/spec-control-plane-v1-131-cleared-2026-11-07.md`.
+Contract clearance only; source conformance, CI, landing and installed acceptance remain owed.**
 
-**Lineage:** grounded on cleared v1.124 (`.harness/clearance/spec-control-plane-v1-124-cleared-2026-09-25.md`).
-Slots v1.125 … v1.127 exist only as historical drafts in preserved worktrees and are NOT ratified;
-this delta neither revives nor supersedes them. Buford owns the version fold and numbering at filing.
-The Runtime folds A3 v1.134 (cleared 2026-10-04), A5 v1.135 (Proposed) and A4 Runtime v1.136 / U-RT-159 (Proposed) change no CP spec or plan file. Whether they affect CP contracts in meaning is not judged here.
+**Lineage:** folded onto cleared head v1.130 (`.harness/clearance/Spec_Control_Plane-v1_130-cleared-2026-11-05.md`)
+by the integration lead's scope and numbering decision (LIT `arhugula-harness-trial-193` `cmt-7836db07-b27b-4248-849b-50101a522c0e`).
+This is the former Proposed v1.128 with its semantics unchanged; it was drafted over cleared v1.124, whose
+§0.2–§0.4 terms it extends. Slots v1.125 … v1.128 are not ratified and are not heads; this delta neither
+revives nor amends them. Cleared v1.129 (C-CP-28 run-owned burden ledger and evaluation binding) and
+v1.130 (§25.11.1 orchestrator worker selection) amend no site amended here; their terms are preserved.
+The paired Runtime fold is Proposed v1.142 / U-RT-159; Runtime A5 v1.135 stays Proposed and unfolded.
+Whether the Runtime folds affect CP contracts in meaning is not judged here.
 
 **Authority:** A4 typed-refusal arc (LIT `arhugula-harness-trial-193` `cmt-7d8db0b5-6fe0-4f33-8529-9f1c9dd5e821`), independent
 design GO `.harness/review-evidence/a4-contract-authority/a4-opus-design-review.md`; fork record
 `.harness/class_1_fork_a4_typed_resume_refusal.md`.
 
-## §0 Change-note (v1.124 → v1.128)
+## §0 Change-note (v1.130 → v1.131)
 
 ### §0.1 The gap
 

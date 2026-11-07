@@ -27,7 +27,7 @@ Authority:
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from enum import StrEnum
 from typing import Any, Literal, Protocol, runtime_checkable
 
@@ -158,6 +158,11 @@ class RunResult(BaseModel):
     resume. `None` for all non-PAUSED returns per runtime spec v1.21 §14.14.5
     invariant 4. Additive minor-version evolution.
     """
+    resume_refusal: ResumeRefusal | None = None
+    """Why this FAILED run's resume was refused before its own steps ran (CP v1.131 §0.3).
+    `None` on every other run, including a FAILED run whose steps ran, whatever its
+    `fail_class` text says. The typed carrier across each RETURNED child boundary, so a
+    parent's dispatch raises `ChildResumeRefusedError` without parsing `fail_class`."""
     pause_record_ref: JournalRecordRef | None = None
     """B-104 Task 4a — the exact journal record the durable capture of `pause_snapshot`
     appended (`None` for an ephemeral capture). Bound to `pause_snapshot` by the
@@ -169,6 +174,12 @@ class RunResult(BaseModel):
             if self.pause_snapshot is None:
                 raise ValueError("pause_record_ref requires the pause_snapshot it identifies")
             require_ref_binds_snapshot(self.pause_record_ref, self.pause_snapshot)
+        return self
+
+    @model_validator(mode="after")
+    def _refusal_only_on_failure(self) -> RunResult:
+        if self.resume_refusal is not None and self.status is not RunStatus.FAILED:
+            raise ValueError("resume_refusal requires status FAILED")
         return self
 
 
@@ -219,6 +230,30 @@ class ChildResumeRefusal(StrEnum):
     CLAIM_REFUSED = "claim-refused"
     CLAIM_BUSY = "claim-busy"
     START_REFUSED = "start-refused"
+    HITL_GATE_CONFIG_CHANGED = "hitl-gate-config-changed"
+
+
+class ResumeRefusal(BaseModel):
+    """One resume refusal as a value (CP v1.131 §0.3): every reason it stands for, and
+    whether composing its audit record also failed signing under fail-closed.
+
+    [LAW:types-are-the-program] The reason set is non-empty by construction, so no consumer
+    ever has to pick "the" reason out of an empty or ambiguous set.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    reasons: frozenset[ChildResumeRefusal] = Field(min_length=1)
+    audit_signing_failed: bool = False
+
+    @classmethod
+    def union(cls, refusals: Iterable[ResumeRefusal]) -> ResumeRefusal:
+        """Every reason of every refusal, and the OR of their signing facts (§0.4 item 3)."""
+        merged = tuple(refusals)
+        return cls(
+            reasons=frozenset[ChildResumeRefusal]().union(*(refusal.reasons for refusal in merged)),
+            audit_signing_failed=any(refusal.audit_signing_failed for refusal in merged),
+        )
 
 
 class ChildResumeRefusedError(Exception):
@@ -231,15 +266,49 @@ class ChildResumeRefusedError(Exception):
     """
 
     def __init__(
-        self, reason: ChildResumeRefusal, detail: str = "", *, audit_signing_failed: bool = False
+        self,
+        reason: ChildResumeRefusal | ResumeRefusal,
+        detail: str = "",
+        *,
+        audit_signing_failed: bool = False,
     ) -> None:
-        self.reason = reason
+        value = (
+            reason
+            if isinstance(reason, ResumeRefusal)
+            else ResumeRefusal(reasons=frozenset({reason}))
+        )
+        #: The one stored refusal (CP v1.131 §0.3); `reasons`, `audit_signing_failed` and
+        #: `reason` derive from it. The signing fact is CP-owned (a plain bool) so CP never
+        #: imports the OD signing family; it only makes the terminal fail_class truthful.
+        self.refusal = ResumeRefusal(
+            reasons=value.reasons,
+            audit_signing_failed=value.audit_signing_failed or audit_signing_failed,
+        )
         self.detail = detail
-        #: True when composing this refusal's audit record also failed signing under
-        #: fail-closed. CP-owned (a plain bool) so CP never imports the OD signing family;
-        #: it only makes the terminal fail_class truthful about the audit failure.
-        self.audit_signing_failed = audit_signing_failed
-        super().__init__(f"child resume refused ({reason.value}){': ' + detail if detail else ''}")
+        super().__init__(refusal_message(self.refusal, detail))
+
+    @property
+    def reasons(self) -> frozenset[ChildResumeRefusal]:
+        return self.refusal.reasons
+
+    @property
+    def audit_signing_failed(self) -> bool:
+        return self.refusal.audit_signing_failed
+
+    @property
+    def reason(self) -> ChildResumeRefusal:
+        """The single reason of a single-reason refusal; no reason is ever chosen from a set."""
+        if len(self.refusal.reasons) != 1:
+            raise ValueError(
+                f"refusal has {len(self.refusal.reasons)} reasons; read `reasons` instead"
+            )
+        return next(iter(self.refusal.reasons))
+
+
+def refusal_message(refusal: ResumeRefusal, detail: str) -> str:
+    """The human message of a child resume refusal (the stable v1.124 wording)."""
+    reasons = "; ".join(sorted(reason.value for reason in refusal.reasons))
+    return f"child resume refused ({reasons}){': ' + detail if detail else ''}"
 
 
 @runtime_checkable
@@ -1066,6 +1135,7 @@ def compose_branch_terminal_path(branch_context: StepExecutionContext) -> str:
 __all__ = [
     "ChildResumeRefusal",
     "ChildResumeRefusedError",
+    "ResumeRefusal",
     "RunResult",
     "RunStatus",
     "StepExecutionContext",
