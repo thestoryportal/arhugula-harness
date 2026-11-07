@@ -32,6 +32,7 @@ from harness_cp.workflow_driver import (
 from harness_cp.workflow_driver_types import (
     ChildResumeRefusal,
     ChildResumeRefusedError,
+    ResumeRefusal,
     RunResult,
     RunStatus,
     StepKind,
@@ -367,3 +368,52 @@ def test_a_snapshot_presenting_one_record_for_two_children_dispatches_nothing(
 
     assert run.result.status is RunStatus.FAILED
     assert resumed.received == {}  # refused before any worker was dispatched
+
+
+class _PerWorkerRefusals(_SubAgents):
+    """Every listed worker refuses with its own reasons and signing fact."""
+
+    def __init__(self, refusals: dict[str, ChildResumeRefusedError]) -> None:
+        super().__init__(refuse=frozenset(refusals))
+        self._refusals = refusals
+
+    def dispatch(
+        self, binding: Any, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        try:
+            return super().dispatch(binding, step, step_context=step_context)
+        except ChildResumeRefusedError:
+            raise self._refusals[str(step.step_id)] from None
+
+
+@pytest.mark.parametrize("family", _FAMILIES)
+def test_two_recorded_disjoint_refusals_end_the_run_on_their_union(family: str) -> None:
+    """CP plan v2.56 U-CP-106 criterion 3: both children refuse concurrently with disjoint
+    reasons and differing signing facts; w-1's refusal is recorded through the in-flight drain
+    before the barrier ends. The run carries the reason union and the signing OR, and its fail
+    class renders that same value.
+
+    Mutation probes: keeping only the first recorded refusal loses `hitl-gate-config-changed`
+    and the signing fact; keeping only the last loses `claim-busy`. Both turn this red.
+    """
+    refusals = {
+        "w-0": ChildResumeRefusedError(ChildResumeRefusal.CLAIM_BUSY, "w-0"),
+        "w-1": ChildResumeRefusedError(
+            ChildResumeRefusal.HITL_GATE_CONFIG_CHANGED, "w-1", audit_signing_failed=True
+        ),
+    }
+
+    run = _execute(family, 2, _PerWorkerRefusals(refusals))
+
+    prefix = _REFUSED_FAIL_CLASS[family].split(" (")[0]
+    assert run.result.status is RunStatus.FAILED
+    assert run.result.resume_refusal == ResumeRefusal(
+        reasons=frozenset(
+            {ChildResumeRefusal.CLAIM_BUSY, ChildResumeRefusal.HITL_GATE_CONFIG_CHANGED}
+        ),
+        audit_signing_failed=True,
+    )
+    assert run.result.fail_class == (
+        f"{prefix} (claim-busy; hitl-gate-config-changed; audit-signing-failed)"
+    )
+    assert run.result.pause_snapshot is None and run.captures == []
