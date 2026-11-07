@@ -1,6 +1,7 @@
 # Implementation Plan: Control Plane — v2.56 (PROPOSED delta over cleared v2.55)
 
-**Status: PROPOSED — not cleared.** Grounded on cleared v2.55; implements proposed CP spec v1.128.
+**Status: PROPOSED — not cleared.** Grounded on cleared v2.55; implements proposed CP spec v1.131 (the
+former Proposed v1.128, folded onto cleared CP spec v1.130 by LIT `cmt-7836db07-b27b-4248-849b-50101a522c0e`).
 Buford owns numbering and fold at filing.
 
 ## U-CP-106 — typed resume refusal (A4)

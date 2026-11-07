@@ -1,7 +1,7 @@
 # A4 contract authority record
 
-**Status:** Proposed provenance for CP spec v1.128 / plan v2.56 (U-CP-106) and Runtime spec v1.136 /
-plan v2.67 (U-RT-159), the A4 typed resume refusal; not cleared. It maps each authority and evidence
+**Status:** Proposed provenance for CP spec v1.131 / plan v2.56 (U-CP-106) and Runtime spec v1.142 /
+plan v2.70 (U-RT-159), the A4 typed resume refusal; not cleared. It maps each authority and evidence
 citation in `.harness/class_1_fork_a4_typed_resume_refusal.md` to its filed copy in
 `.harness/review-evidence/a4-contract-authority/`, or marks it **GAP**. It is provenance, not
 normative content; the contracts live in the spec text. This record clears nothing.
@@ -48,7 +48,15 @@ These contract files were drafted against cleared Runtime v1.133 / plan v2.64 an
 against main `39aa78e8d55f68feb4b2ea76cd87abec5245aebd`. Main carries the four Proposed A4 documents
 and this record, but none of the A4 source or A4 tests.
 
-- **Cleared Runtime head: A3 v1.134 / v2.65.** Cleared 2026-10-04 by
+- **Fold onto the current cleared heads (2026-11-07).** By the integration lead's scope and numbering
+  decision (LIT `cmt-7836db07-b27b-4248-849b-50101a522c0e`), CP v1.128 is folded as v1.131 over cleared v1.130, Runtime
+  v1.136 as v1.142 over cleared v1.141 and Runtime plan v2.67 as v2.70 over cleared v2.69; CP plan v2.56
+  stays over cleared v2.55. U-CP-106 and U-RT-159 keep their labels; U-RT-160/161 are unchanged. Cleared
+  CP v1.129–v1.130 and Runtime v1.137–v1.141 amend no A4 site, so the A4 semantics carry over unchanged.
+  At main `bd8c7efd15a146a2a8a42b999426ae74442de69d`, `audit_signing_errors.py` was last changed by #1616
+  and `sub_agent_dispatch.py`'s 17 later added lines name no carrier type, so the carrier bases below
+  still hold. Cleared files that cite the former slots keep their bytes.
+- **Drafting basis: cleared A3 v1.134 / v2.65.** Cleared 2026-10-04 by
   `.harness/clearance/spec-harness-runtime-v1-134-cleared-2026-10-04.md` and
   `.harness/clearance/implementation-plan-harness-runtime-v2-65-cleared-2026-10-04.md`; contracts on
   main through PR #1633 (`763e726585fced31f7c768ee7f503da1955773fd`), source through PR #1643
@@ -61,7 +69,7 @@ and this record, but none of the A4 source or A4 tests.
   (`Spec_Harness_Runtime_v1_134.md:72-75`). It touches no §14.7, §14.14.8 or C-RT-24 site. On main,
   `harness-runtime/src/harness_runtime/lifecycle/audit_signing_errors.py` and `sub_agent_dispatch.py`
   were last changed by #1616 (`d2095b18`), not by #1643. The `ChildResumeRefusedError` and
-  `PostEffectAuditSigningError` bases that v1.136 §0.1 item 1 requires are therefore those of v1.133.
+  `PostEffectAuditSigningError` bases that v1.142 §0.1 item 1 requires are therefore those of v1.133.
 - **A5 stays Proposed.** Runtime v1.135 / plan v2.66 (on main through PR #1635,
   `01cb8d17b18d7d3b531a75d29d778781f3ac03d1`) amends C-RT-05 only; see
   `.harness/a5_contract_authority.md`. The fold order is A3 (U-RT-157) → A5 (U-RT-158) → A4
@@ -72,21 +80,21 @@ and this record, but none of the A4 source or A4 tests.
   `pack/a4-final-u1`, `pack/a4-final-u2`), Unit 2 `cf1c916f252a4f49450d81898de5055984b6b94c`
   (`pack/a4-final-u2`) and public test `bba659dc5c22d381e931fa71922c6d7e5da26483`
   (`test/omarchy-public-resume-refusal`). None of their `harness-*` files cites an A4 contract version
-  or unit ID (v1.136, v2.67, v1.128, v2.56, U-RT-159, U-CP-106), so a renumber of these documents
+  or unit ID (v1.128/v1.131, v1.136/v1.142, v2.67/v2.70, v2.56, U-RT-159, U-CP-106), so a renumber of these documents
   changes no citation at those heads. The heads must be rechecked at whatever head actually lands.
 - **Owed result-preserving carrier.** The preparation heads implement the superseded refusal-only
-  returned arm. Runtime v1.136 §0.1 item 1's `RefusedChildResultAuditSigningError` (a
+  returned arm. Runtime v1.142 §0.1 item 1's `RefusedChildResultAuditSigningError` (a
   `ChildResumeRefusedError` and a `PostEffectAuditSigningError` with `effect_class = sub-agent-result`,
-  the child `RunResult` and its resolved `result_ref`), plan v2.67 criterion 2, criterion 5's
+  the child `RunResult` and its resolved `result_ref`), plan v2.70 criterion 2, criterion 5's
   returned-arm mutations and criterion 4's real-dispatcher, real-leaf witness are owed source work at
   the applicable head, after the A5 binding above.
 
 Buford owns version numbering, clearance markers and artifact-head rows at filing. A renumber of
-v1.136 / v2.67 or v1.128 / v2.56 must update every citation of them in the same change.
+v1.142 / v2.70 or v1.131 / v2.56 must update every citation of them in the same change.
 
 ## Not in this record
 
 There is no clearance status, no clearance marker, no head or pointer row, and no claim that any
-item above clears v1.128, v2.56, v1.136 or v2.67. A Proposed document or a source GO is neither
+item above clears v1.131, v2.56, v1.142 or v2.70. A Proposed document or a source GO is neither
 clearance nor installed acceptance. Installed N1 and the negative-provenance attempt remain
 consent-gated.
