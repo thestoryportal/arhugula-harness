@@ -88,8 +88,8 @@ def n1(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Scenario]:
     for name, value in pw.HELPERS.child_env(layout).items():
         monkeypatch.setenv(name, value)
     with pw.Owners() as owners, pw.HELPERS.installation_bound(layout):
-        webhook = pw.WebhookCapture().started_under(owners)
-        ollama = pw.OllamaListStub().started_under(owners)
+        webhook = _serving(pw.WebhookCapture(), owners)
+        ollama = _serving(pw.OllamaListStub(), owners)
         port = pw.HELPERS.free_loopback_port()
         pw.HELPERS.write_new(layout.mcp_server, pw.MCP_SERVER_SOURCE)
         pw.HELPERS.write_new(layout.config, pw.config_text(layout, webhook.port, port, ollama.port))
@@ -102,6 +102,17 @@ def n1(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Scenario]:
         assert _listening(server, port), "the witness tool server never listened"
         pw.HELPERS.phase_provision(layout)
         yield Scenario(layout, webhook, ollama)
+
+
+def _serving(listener: Any, owners: Any) -> Any:
+    # [LAW:no-ambient-temporal-coupling] `started_under` proves no thread can take SIGINT, which only
+    # a single-run witness process can satisfy: the runtime's process-wide audit-offload daemon
+    # thread outlives each in-process bootstrap. Nothing here is ordered by signals, so the listener
+    # keeps the same socket/thread ownership without that proof.
+    owners.callback(listener.server.server_close)
+    listener.thread.start()
+    owners.callback(listener.stop)
+    return listener
 
 
 def _listening(server: subprocess.Popen[bytes], port: int) -> bool:
