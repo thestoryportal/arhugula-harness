@@ -396,15 +396,23 @@ def test_two_recorded_disjoint_refusals_end_the_run_on_their_union(family: str) 
     Mutation probes: keeping only the first recorded refusal loses `hitl-gate-config-changed`
     and the signing fact; keeping only the last loses `claim-busy`. Both turn this red.
     """
-    refusals = {
+    run = _execute(family, 2, _PerWorkerRefusals(_disjoint_refusals()))
+
+    _assert_ended_on_the_disjoint_union(family, run)
+
+
+def _disjoint_refusals() -> dict[str, ChildResumeRefusedError]:
+    # Disjoint reasons and differing signing facts: a first-only selector loses
+    # `hitl-gate-config-changed` and the signing fact; a last-only selector loses `claim-busy`.
+    return {
         "w-0": ChildResumeRefusedError(ChildResumeRefusal.CLAIM_BUSY, "w-0"),
         "w-1": ChildResumeRefusedError(
             ChildResumeRefusal.HITL_GATE_CONFIG_CHANGED, "w-1", audit_signing_failed=True
         ),
     }
 
-    run = _execute(family, 2, _PerWorkerRefusals(refusals))
 
+def _assert_ended_on_the_disjoint_union(family: str, run: _Run) -> None:
     prefix = _REFUSED_FAIL_CLASS[family].split(" (")[0]
     assert run.result.status is RunStatus.FAILED
     assert run.result.resume_refusal == ResumeRefusal(
@@ -417,3 +425,43 @@ def test_two_recorded_disjoint_refusals_end_the_run_on_their_union(family: str) 
         f"{prefix} (claim-busy; hitl-gate-config-changed; audit-signing-failed)"
     )
     assert run.result.pause_snapshot is None and run.captures == []
+
+
+class _OrderedRefusals(_PerWorkerRefusals):
+    """Logs each dispatch's entry and exit, so a test can see whether two overlapped."""
+
+    def __init__(self, refusals: dict[str, ChildResumeRefusedError]) -> None:
+        super().__init__(refusals)
+        self.order: list[str] = []
+
+    def dispatch(
+        self, binding: Any, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        sid = str(step.step_id)
+        self.order.append(f"enter {sid}")
+        try:
+            return super().dispatch(binding, step, step_context=step_context)
+        finally:
+            self.order.append(f"exit {sid}")
+
+
+@pytest.mark.parametrize("family", _FAMILIES)
+def test_one_proceed_resume_ends_on_the_union_of_both_resumed_refusals(family: str) -> None:
+    """One resume, under `proceed`, of a parent the CP itself paused on two children. Each
+    resumed child gets its own exact capture, the two are dispatched one after the other
+    (B-39), and both refusals are recorded before the barrier ends, so the run ends on their
+    union rather than on the first refusal.
+
+    `proceed` never captures a resumable child pause (B-21 fails that run instead), so the
+    snapshot is captured under the `pause` tier and the one resume runs under `proceed`."""
+    snapshot = _paused_snapshot(family, 2)
+    resumed = _OrderedRefusals(_disjoint_refusals())
+
+    run = _execute(
+        family, 2, resumed, resume_from=snapshot, persona_tier=PersonaTier.SOLO_DEVELOPER
+    )
+
+    carriers = _carriers(family, snapshot)
+    assert [resumed.received[n] for n in ("w-0", "w-1")] == [c.as_capture() for c in carriers]
+    assert resumed.order == ["enter w-0", "exit w-0", "enter w-1", "exit w-1"]
+    _assert_ended_on_the_disjoint_union(family, run)
