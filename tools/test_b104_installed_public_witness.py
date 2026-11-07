@@ -20,11 +20,24 @@ import tempfile
 import threading
 import time
 import tomllib
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Generator, Iterator
 from pathlib import Path
 from typing import Any
 
 import pytest
+from harness_core import JournalRecordRef
+from harness_cp.handoff_context import StateSummary
+from harness_cp.pause_resume_protocol_types import PauseSnapshot, WorkflowPauseReason
+from harness_is.pause_journal_root import UnresolvedCause
+from harness_is.state_ledger_entry_schema import Identifier
+from harness_runtime.config import state_placement
+from harness_runtime.lifecycle import journal_workflow_pause_store as journal_module
+from harness_runtime.lifecycle.pause_journal_root_resolver import (
+    INSTALLATION_STATE,
+    InstallationState,
+    PauseJournalRootUnresolvedError,
+)
+from harness_runtime.types import PathBindingConfig, RuntimeConfig, StatePlacementConfig
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -2862,3 +2875,135 @@ def test_artifacts_collision_refuses_before_services_start(
     assert os.path.lexists(artifacts)
     assert not output.with_suffix(".logs").exists()
     assert not (tmp_path / "scenario").exists()
+
+
+# The witness reads the pause journal at the installed Runtime's resolved root (Runtime spec
+# v1.137 Rules B3/B7). Declarations below are author-test bindings only: production leaves
+# storage unselected, so the installed witness fails closed until storage is bound.
+
+TENANT = "witness-tenant"
+
+UNRESOLVED_INSTALLATIONS: dict[UnresolvedCause, Callable[[Path], tuple[Path, ...]]] = {
+    UnresolvedCause.UNBOUND: lambda _tmp: (),
+    UnresolvedCause.MISSING: lambda tmp: (tmp / "absent",),
+    UnresolvedCause.CONFLICTING: lambda tmp: (tmp / "a", tmp / "b"),
+}
+
+
+@contextlib.contextmanager
+def installation_declaring(*roots: Path) -> Generator[None]:
+    """Declare `roots` as the installation's pause-journal root for the block."""
+    token = INSTALLATION_STATE.set(
+        InstallationState(tuple({"installation_root": str(root)} for root in roots))
+    )
+    try:
+        yield
+    finally:
+        INSTALLATION_STATE.reset(token)
+
+
+def witness_config(repo: Path, state: Path | None = None) -> RuntimeConfig:
+    """A config carrying only what the witness's journal and claim sites read."""
+    return RuntimeConfig.model_construct(
+        repository_root=repo,
+        state_placement=None if state is None else StatePlacementConfig(state_root=state),
+        path_bindings=PathBindingConfig(),
+        tenant_id=TENANT,
+    )
+
+
+def ext4(_path: Path) -> str:
+    return "ext4"
+
+
+@pytest.fixture
+def declared_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[tuple[Path, RuntimeConfig]]:
+    """A declared pause-journal root inside a stamped state root, and a config placed there."""
+    # The scratch dir may be tmpfs; the verifier's real resolver is not under test here.
+    monkeypatch.setattr(state_placement, "linux_filesystem_type", ext4)
+    repo, state = tmp_path / "repo", tmp_path / "state"
+    (repo / ".git").mkdir(parents=True)
+    state_placement.bootstrap_state_root(
+        StatePlacementConfig(state_root=state),
+        repository_root=repo,
+        worktree_base=state_placement.transient_worktree_base(repo),
+        path_bindings=PathBindingConfig(),
+        filesystem_type=ext4,
+    )
+    journal_root = state / "pause-journal"
+    journal_root.mkdir()
+    with installation_declaring(journal_root):
+        yield journal_root, witness_config(repo, state)
+
+
+def seed_pause(journal_root: Path, workflow_id: str) -> None:
+    """One depth-0 pause record for `workflow_id`, captured through the installed journal store."""
+    snapshot = PauseSnapshot(
+        workflow_id=workflow_id,
+        run_id=f"{workflow_id}-run",
+        step_index=0,
+        pause_reason=WorkflowPauseReason.HITL_PENDING,
+        state_summary=StateSummary(
+            relevant_entries=(),
+            summary_text="",
+            summary_hash="0" * 64,
+            idempotency_key=Identifier(""),
+            external_references=(),
+        ),
+        snapshot_hash="0" * 64,
+        created_at=0,
+        state_ledger_anchor="0" * 64,
+    )
+    journal_module.JournalWorkflowPauseStore(journal_dir=journal_root, tenant_id=TENANT).capture(
+        snapshot, depth=0
+    )
+
+
+class JournalUntouchable:
+    """Stands in for the journal store: an unresolved installation must never reach it."""
+
+    def __init__(self, **_: object) -> None:
+        raise AssertionError("an unresolved installation reached the pause journal")
+
+
+def test_record_reads_the_declared_root_and_places_its_claim_store_there(
+    declared_root: tuple[Path, RuntimeConfig],
+) -> None:
+    journal_root, config = declared_root
+    seed_pause(journal_root, w.WORKFLOW_ID)
+
+    record = w._record(config)  # pyright: ignore[reportPrivateUsage]
+    journal_dir, ref = record["journal_dir"], record["ref"]
+    assert isinstance(journal_dir, Path) and isinstance(ref, JournalRecordRef)
+    placement, _store = w._store(journal_dir, config)  # pyright: ignore[reportPrivateUsage]
+
+    assert journal_dir == journal_root.resolve()
+    assert (ref.workflow_id, ref.record_count) == (w.WORKFLOW_ID, 1)
+    assert (placement.path, placement.stamp.realpath) == (
+        journal_dir,
+        journal_root.parent.resolve(),
+    )
+
+
+@pytest.mark.parametrize(
+    ("cause", "roots"),
+    UNRESOLVED_INSTALLATIONS.items(),
+    ids=[c.value for c in UNRESOLVED_INSTALLATIONS],
+)
+def test_record_refuses_an_unresolved_installation_before_any_journal_access(
+    cause: UnresolvedCause,
+    roots: Callable[[Path], tuple[Path, ...]],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(journal_module, "JournalWorkflowPauseStore", JournalUntouchable)
+
+    with (
+        installation_declaring(*roots(tmp_path)),
+        pytest.raises(PauseJournalRootUnresolvedError) as raised,
+    ):
+        w._record(witness_config(tmp_path))  # pyright: ignore[reportPrivateUsage]
+
+    assert raised.value.cause is cause

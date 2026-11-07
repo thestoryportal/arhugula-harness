@@ -471,23 +471,24 @@ def _config(layout: Layout) -> RuntimeConfig:
 
 @dataclass(frozen=True)
 class LatestRecord:
-    """The journal's latest record for one workflow: exact ref, recorded depth, full snapshot."""
+    """The journal's latest record for one workflow, read at the resolved journal root."""
 
+    journal_dir: Path
     ref: JournalRecordRef
     depth: int | None
     snapshot: PauseSnapshot
 
 
-def _latest_root(layout: Layout, config: RuntimeConfig, workflow_id: str = ROOT_ID) -> LatestRecord:
+def _latest_root(config: RuntimeConfig, workflow_id: str = ROOT_ID) -> LatestRecord:
     """The journal's latest record for `workflow_id`, as a typed record (absent is an error)."""
     from harness_core import JournalRecordRef
-    from harness_runtime.lifecycle.journal_workflow_pause_store import (
-        JournalWorkflowPauseStore,
-        pause_journal_dir_for,
-    )
+    from harness_runtime.lifecycle.journal_workflow_pause_store import JournalWorkflowPauseStore
+    from harness_runtime.lifecycle.pause_journal_root_resolver import resolve_pause_journal_root
     from harness_runtime.lifecycle.protected_result_store import normalize_tenant_scope
 
-    journal_dir = pause_journal_dir_for(layout.ledger_dir)
+    # [LAW:one-source-of-truth] The installed Runtime's one resolver names the journal root; an
+    # unbound or unresolved installation raises here, before any journal read.
+    journal_dir = resolve_pause_journal_root(config)
     read = JournalWorkflowPauseStore(
         journal_dir=journal_dir, tenant_id=config.tenant_id
     ).read_latest_attributed(workflow_id)
@@ -501,7 +502,7 @@ def _latest_root(layout: Layout, config: RuntimeConfig, workflow_id: str = ROOT_
         latest_digest=read.latest_record_digest,
         snapshot_hash=read.snapshot.snapshot_hash,
     )
-    return LatestRecord(ref=ref, depth=read.depth, snapshot=read.snapshot)
+    return LatestRecord(journal_dir=journal_dir, ref=ref, depth=read.depth, snapshot=read.snapshot)
 
 
 def _paused_children(snapshot: PauseSnapshot) -> list[PauseSnapshot]:
@@ -580,9 +581,8 @@ def declared_placements(workflow: WorkflowObject) -> dict[str, list[list[str]]]:
     return found
 
 
-def _claim_view(layout: Layout, config: RuntimeConfig, ref: JournalRecordRef) -> dict[str, object]:
+def _claim_view(config: RuntimeConfig, record: LatestRecord) -> dict[str, object]:
     from harness_runtime.config.state_placement import place_state_dir, probe_declared_state_root
-    from harness_runtime.lifecycle.journal_workflow_pause_store import pause_journal_dir_for
     from harness_runtime.lifecycle.resume_claim_store import (
         InvalidClaim,
         ResumeClaimStore,
@@ -591,15 +591,17 @@ def _claim_view(layout: Layout, config: RuntimeConfig, ref: JournalRecordRef) ->
         parse_claim,
     )
 
+    # [LAW:one-source-of-truth] Placed at the directory the record was read from, not resolved
+    # again: the claim and the journal it guards share one physical root.
     placement = place_state_dir(
-        pause_journal_dir_for(layout.ledger_dir),
+        record.journal_dir,
         config,
         probe_declared_state_root(config),
         what="witness pause journal",
     )
-    paths = ResumeClaimStore(placement=placement, tenant_id=config.tenant_id).paths_for(ref)
+    paths = ResumeClaimStore(placement=placement, tenant_id=config.tenant_id).paths_for(record.ref)
     raw = paths.claim.read_bytes() if paths.claim.exists() else None
-    match None if raw is None else parse_claim(raw, ref):
+    match None if raw is None else parse_claim(raw, record.ref):
         case None:
             phase = "absent"
         case UnstartedProof():
@@ -666,7 +668,7 @@ def hitl_audit_view(layout: Layout) -> dict[str, object]:
 
 
 def _observe_common(layout: Layout, config: RuntimeConfig) -> dict[str, object]:
-    latest = _latest_root(layout, config)
+    latest = _latest_root(config)
     return {
         "ref": latest.ref.model_dump(mode="json"),
         "depth": latest.depth,
@@ -715,7 +717,7 @@ def phase_resume(layout: Layout, *, root_has_placement: bool = True) -> dict[str
     from harness_runtime import api
 
     config = _config(layout)
-    before = _latest_root(layout, config)
+    before = _latest_root(config)
     leaf_run_id = str(nested_chain(before.snapshot)[-1]["run_id"])
     outcome: dict[str, object] = {
         "addressed_run_id": leaf_run_id,
@@ -754,7 +756,7 @@ def phase_resume(layout: Layout, *, root_has_placement: bool = True) -> dict[str
         }
     after = _observe_common(layout, config)
     outcome |= after
-    outcome["before_claim"] = _claim_view(layout, config, before.ref)
+    outcome["before_claim"] = _claim_view(config, before)
     return outcome
 
 
@@ -765,13 +767,13 @@ def phase_resume_child_handle(layout: Layout) -> dict[str, object]:
     from harness_runtime import api
 
     config = _config(layout)
-    root = _latest_root(layout, config)
-    leaf = _latest_root(layout, config, LEAF_ID)
+    root = _latest_root(config)
+    leaf = _latest_root(config, LEAF_ID)
     outcome: dict[str, object] = {
         "leaf_depth": leaf.depth,
         "leaf_ref": leaf.ref.model_dump(mode="json"),
         "root_before_ref": root.ref.model_dump(mode="json"),
-        "root_before_claim": _claim_view(layout, config, root.ref),
+        "root_before_claim": _claim_view(config, root),
     }
     try:
         asyncio.run(api.resume(build_workflow(), resume_handle=LEAF_ID, config=config))
@@ -783,10 +785,10 @@ def phase_resume_child_handle(layout: Layout) -> dict[str, object]:
         }
     else:
         outcome["outcome"] = "returned"
-    outcome["leaf_claim"] = _claim_view(layout, config, leaf.ref)
-    root_after = _latest_root(layout, config)
+    outcome["leaf_claim"] = _claim_view(config, leaf)
+    root_after = _latest_root(config)
     outcome["root_ref"] = root_after.ref.model_dump(mode="json")
-    outcome["root_claim"] = _claim_view(layout, config, root.ref)
+    outcome["root_claim"] = _claim_view(config, root)
     outcome["audits"] = hitl_audit_view(layout)
     return outcome
 
