@@ -21,6 +21,7 @@ coverage extension of AC #9 per Reading β):
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -32,7 +33,7 @@ from harness_cp.cross_family_fallback_chain import (
     ProviderFamily,
 )
 from harness_cp.engine_class import EngineClass
-from harness_cp.topology_pattern import TopologyPattern
+from harness_cp.topology_pattern import TopologyPattern, WorkerSelection
 from harness_cp.workflow_manifest_entry import (
     FanoutTimeoutDisposition,
     WorkflowManifestEntry,
@@ -547,6 +548,57 @@ def test_optional_field_absent_uses_pydantic_carrier_default(tmp_path: Path) -> 
     # `concurrent_cache_warmup` not present → WME default True applies (B-18-3C-PREWARM-DEFAULT-ON,
     # CP spec v1.89 §25.17); ADR-D4 §1.8(f) required-at-cap>1.
     assert workflow.manifest_entry.concurrent_cache_warmup is True
+    # `worker_selection` not present → WME default DECLARED_POOL applies (CP v1.130 §25.11.1.1).
+    assert workflow.manifest_entry.worker_selection is WorkerSelection.DECLARED_POOL
+
+
+# CP v1.130 §25.11.1.1 — an operator CAN opt a manifest into the lead plan; the
+# selector is projected byte-exact onto the WME for both orchestrator topologies.
+@pytest.mark.parametrize(
+    ("suffix", "build", "line"),
+    [
+        ("toml", _toml_with_wme, 'worker_selection = "lead-plan"\n'),
+        ("yaml", _yaml_with_wme, '  worker_selection: "lead-plan"\n'),
+    ],
+)
+@pytest.mark.parametrize(
+    "topology",
+    [TopologyPattern.ORCHESTRATOR_WORKERS, TopologyPattern.HIERARCHICAL_DELEGATION],
+)
+def test_worker_selection_lead_plan_projects_onto_manifest_entry(
+    tmp_path: Path,
+    suffix: str,
+    build: Callable[[str], str],
+    line: str,
+    topology: TopologyPattern,
+) -> None:
+    body = build(line).replace('"evaluator-optimizer"', f'"{topology.value}"')
+    path = _write(tmp_path, f"lead-plan.{suffix}", body)
+    workflow = WorkflowManifestLoader.load_workflow(path)
+    assert workflow.manifest_entry.topology_pattern is topology
+    assert workflow.manifest_entry.worker_selection is WorkerSelection.LEAD_PLAN
+
+
+# The CP carrier's single enforcer refuses a lead plan without a lead; the loader
+# surfaces it as the typed schema refusal before any workflow effect.
+def test_worker_selection_lead_plan_on_non_orchestrator_topology_raises_schema_error(
+    tmp_path: Path,
+) -> None:
+    path = _write(tmp_path, "lead-plan-eo.toml", _toml_with_wme('worker_selection = "lead-plan"\n'))
+    with pytest.raises(ManifestSchemaError) as exc:
+        WorkflowManifestLoader.load_workflow(path)
+    assert exc.value.FAIL_CLASS == "RT-FAIL-CLI-MANIFEST-SCHEMA"
+    assert "requires an orchestrator topology" in str(exc.value)
+
+
+def test_worker_selection_invalid_value_raises_enum_value_error(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path, "bad-selector.toml", _toml_with_wme('worker_selection = "lead-chooses"\n')
+    )
+    with pytest.raises(ManifestEnumValueError) as exc:
+        WorkflowManifestLoader.load(path)
+    assert exc.value.FAIL_CLASS == "RT-FAIL-CLI-MANIFEST-ENUM-VALUE"
+    assert "worker_selection" in str(exc.value)
 
 
 # AC #4 — YAML↔TOML round-trip invariant (§14.19.4 #8)

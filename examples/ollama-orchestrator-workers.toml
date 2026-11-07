@@ -9,8 +9,10 @@
 # instruction.
 #
 # Current limits, stated rather than hidden: this manifest uses the default
-# declared-pool worker selection, because the manifest schema cannot select the
-# CP v1.130 lead plan yet. The worker set is the declared steps, not chosen at run
+# declared-pool worker selection. The manifest schema accepts
+# worker_selection = "lead-plan" (CP v1.130), but the lead plan needs the lead's
+# output to carry a worker_plan, and the runtime does not yet turn an Ollama reply
+# into one. The worker set is the declared steps, not chosen at run
 # time, and workers do NOT receive the orchestrator's output, so the orchestrator
 # runs and is recorded as its own step but does not steer the workers. The
 # synthesis sees worker outputs only. Only local Ollama is

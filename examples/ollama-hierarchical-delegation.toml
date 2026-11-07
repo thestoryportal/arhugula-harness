@@ -11,8 +11,9 @@
 # calls run at the root level and three in the child.
 #
 # Current limits, stated rather than hidden: the tree is the declared steps, not
-# grown at run time. This manifest uses the default declared-pool worker selection,
-# because the manifest schema cannot select the CP v1.130 lead plan yet, so every
+# grown at run time. This manifest uses the default declared-pool worker selection:
+# the manifest schema accepts worker_selection = "lead-plan" (CP v1.130), but the
+# runtime does not yet turn an Ollama reply into the worker_plan it needs, so every
 # declared child runs and no step receives its lead's output. This example declares
 # no HITL placements, so it does not exercise approval-gate inheritance across levels.
 # The child shares the parent's ledger and context. Only local Ollama is bound; every
