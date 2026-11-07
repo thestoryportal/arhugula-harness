@@ -465,3 +465,75 @@ def test_one_proceed_resume_ends_on_the_union_of_both_resumed_refusals(family: s
     assert [resumed.received[n] for n in ("w-0", "w-1")] == [c.as_capture() for c in carriers]
     assert resumed.order == ["enter w-0", "exit w-0", "enter w-1", "exit w-1"]
     _assert_ended_on_the_disjoint_union(family, run)
+
+
+class _RefusalAfterDeadline(_SubAgents):
+    """w-0 completes; w-1 is still in flight when the barrier deadline expires and only then
+    refuses, so its refusal is never recorded before the run ends."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.sibling_entered = threading.Event()
+        self.release = threading.Event()
+
+    def dispatch(
+        self, binding: Any, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        sid = str(step.step_id)
+        self.received[sid] = step_context.child_resume
+        if sid == "w-0":
+            return {"completed": sid}
+        self.sibling_entered.set()
+        self.release.wait(timeout=5.0)  # cleanup backstop; the test releases in finally
+        raise ChildResumeRefusedError(ChildResumeRefusal.CLAIM_BUSY, sid)
+
+
+@pytest.mark.parametrize("family", _FAMILIES)
+def test_proceed_deadline_with_the_refusal_still_in_flight_stays_partial(
+    family: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CP plan v2.56 U-CP-106 criterion 3(c), keeping Runtime v1.124 §0.4: under `proceed`, a
+    refusal still in flight when the barrier deadline ends its branch is not a recorded
+    refusal. The run is PARTIAL on the completed sibling, with no `resume_refusal` and no
+    refusal suffix."""
+    from harness_cp import workflow_driver as wd
+
+    monkeypatch.setattr(wd, "_DEFAULT_FANOUT_BARRIER_DEADLINE_SECONDS", 0.5)
+    sub_agents = _RefusalAfterDeadline()
+    try:
+        run = _execute(family, 2, sub_agents, persona_tier=PersonaTier.SOLO_DEVELOPER)
+    finally:
+        sub_agents.release.set()
+
+    assert sub_agents.sibling_entered.is_set()
+    assert set(sub_agents.received) == {"w-0", "w-1"}
+    assert run.result.status is RunStatus.PARTIAL
+    assert run.result.resume_refusal is None
+    assert run.result.fail_class is None
+    assert run.result.pause_snapshot is None and run.captures == []
+
+
+@pytest.mark.parametrize("family", _FAMILIES)
+@pytest.mark.parametrize(
+    "persona_tier",
+    [PersonaTier.TEAM_BINDING, PersonaTier.MULTI_TENANT_COMPLIANCE],  # pause, cascade-cancel
+)
+def test_outside_proceed_the_first_resumed_refusal_ends_the_run_before_the_next_dispatch(
+    family: str, persona_tier: PersonaTier
+) -> None:
+    """CP plan v2.56 U-CP-106 criterion 3(d): under the `pause` and `cascade-cancel` tiers, one
+    resume of a parent the CP paused on two children ends on the first resumed child's refusal.
+    The second resumed child is never dispatched, so the run carries exactly that one refusal."""
+    snapshot = _paused_snapshot(family, 2)
+    resumed = _OrderedRefusals(_disjoint_refusals())
+
+    run = _execute(family, 2, resumed, resume_from=snapshot, persona_tier=persona_tier)
+
+    assert resumed.order == ["enter w-0", "exit w-0"]
+    assert resumed.received == {"w-0": _carriers(family, snapshot)[0].as_capture()}
+    assert run.result.status is RunStatus.FAILED
+    assert run.result.resume_refusal == ResumeRefusal(
+        reasons=frozenset({ChildResumeRefusal.CLAIM_BUSY}), audit_signing_failed=False
+    )
+    assert run.result.fail_class == f"{_REFUSED_FAIL_CLASS[family].split(' (')[0]} (claim-busy)"
+    assert run.result.pause_snapshot is None and run.captures == []
