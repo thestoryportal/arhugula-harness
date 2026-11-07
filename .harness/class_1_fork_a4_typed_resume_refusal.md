@@ -36,7 +36,11 @@ All of it is PROPOSED text; no source changed:
 - **Runtime v1.132 §14.14.8.** Items (b) and (c), the nine-value enumeration and the single-reason
   carrier, are superseded by Runtime v1.142 §0.3. The cleared file is unchanged.
 - **CP union witness.** Plan v2.56 criterion 3 now requires a two-child disjoint-refusal matrix for
-  both fan-out families, with first- and last-record selection mutants.
+  both fan-out families, with first- and last-record selection mutants. Because B-39 dispatches
+  resumed targets one at a time, the matrix is split: one `proceed` resume of a CP-captured
+  two-child pause, a separate concurrent fresh-dispatch witness, the unchanged in-flight PARTIAL
+  regression and first-refusal behavior outside `proceed` (LIT
+  `cmt-5dd4c286-9301-48ce-af16-80753940030b`).
 
 Revision note: the Runtime unit was drafted as U-RT-158. A5 keeps that label, so A4's unit is
 U-RT-159, following the fold order A3 (U-RT-157) → A5 (U-RT-158) → A4 (root decision, LIT
