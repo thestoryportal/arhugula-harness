@@ -158,6 +158,10 @@ class RunResult(BaseModel):
     resume. `None` for all non-PAUSED returns per runtime spec v1.21 §14.14.5
     invariant 4. Additive minor-version evolution.
     """
+    resume_refusal_reasons: frozenset[ChildResumeRefusal] = frozenset()
+    """Why this FAILED run was a resume refused before any step ran (empty for every other
+    run). The typed carrier across each RETURNED child boundary, so a parent's dispatch can
+    raise `ChildResumeRefusedError` without parsing `fail_class`."""
     pause_record_ref: JournalRecordRef | None = None
     """B-104 Task 4a — the exact journal record the durable capture of `pause_snapshot`
     appended (`None` for an ephemeral capture). Bound to `pause_snapshot` by the
@@ -169,6 +173,12 @@ class RunResult(BaseModel):
             if self.pause_snapshot is None:
                 raise ValueError("pause_record_ref requires the pause_snapshot it identifies")
             require_ref_binds_snapshot(self.pause_record_ref, self.pause_snapshot)
+        return self
+
+    @model_validator(mode="after")
+    def _refusal_reasons_only_on_failure(self) -> RunResult:
+        if self.resume_refusal_reasons and self.status is not RunStatus.FAILED:
+            raise ValueError("resume_refusal_reasons requires status FAILED")
         return self
 
 
@@ -219,6 +229,7 @@ class ChildResumeRefusal(StrEnum):
     CLAIM_REFUSED = "claim-refused"
     CLAIM_BUSY = "claim-busy"
     START_REFUSED = "start-refused"
+    HITL_GATE_CONFIG_CHANGED = "hitl-gate-config-changed"
 
 
 class ChildResumeRefusedError(Exception):
@@ -231,10 +242,18 @@ class ChildResumeRefusedError(Exception):
     """
 
     def __init__(
-        self, reason: ChildResumeRefusal, detail: str = "", *, audit_signing_failed: bool = False
+        self,
+        reason: ChildResumeRefusal,
+        detail: str = "",
+        *,
+        audit_signing_failed: bool = False,
+        nested_reasons: frozenset[ChildResumeRefusal] = frozenset(),
     ) -> None:
         self.reason = reason
         self.detail = detail
+        #: Every refusal reason this error stands for: its own plus those a returned
+        #: descendant refusal carried up (`RunResult.resume_refusal_reasons`).
+        self.reasons = frozenset({reason}) | nested_reasons
         #: True when composing this refusal's audit record also failed signing under
         #: fail-closed. CP-owned (a plain bool) so CP never imports the OD signing family;
         #: it only makes the terminal fail_class truthful about the audit failure.

@@ -123,8 +123,14 @@ class RefusedChildAuditSigningError(ChildResumeRefusedError, AuditSigningFailedE
     completed, so there is no result to preserve and nothing to report as done.
     """
 
-    def __init__(self, reason: ChildResumeRefusal, detail: str = "") -> None:
-        super().__init__(reason, detail, audit_signing_failed=True)
+    def __init__(
+        self,
+        reason: ChildResumeRefusal,
+        detail: str = "",
+        *,
+        nested_reasons: frozenset[ChildResumeRefusal] = frozenset(),
+    ) -> None:
+        super().__init__(reason, detail, audit_signing_failed=True, nested_reasons=nested_reasons)
 
 
 def report_post_effect_audit_failure(exc: PostEffectAuditSigningError) -> None:

@@ -167,6 +167,7 @@ from harness_cp.workflow_driver_errors import (
 )
 from harness_cp.workflow_driver_types import (
     ChildResumeAuthority,
+    ChildResumeRefusal,
     ChildResumeRefusedError,
     RunResult,
     RunStatus,
@@ -3224,10 +3225,23 @@ def _refused_fail_class(prefix: str, refusals: Mapping[int, ChildResumeRefusedEr
     refusal reasons, plus `audit-signing-failed` when composing a refusal's audit also
     failed signing under fail-closed, so the run records what truly happened.
     """
-    parts = sorted({r.reason.value for r in refusals.values()})
+    parts = sorted({reason.value for r in refusals.values() for reason in r.reasons})
     if any(r.audit_signing_failed for r in refusals.values()):
         parts.append("audit-signing-failed")
     return f"{prefix} ({'; '.join(parts)})"
+
+
+def _refused_finish(
+    finished: tuple[RunResult, int], refusals: Mapping[int, ChildResumeRefusedError]
+) -> tuple[RunResult, int]:
+    """Stamp a refused run's terminal result with its typed reasons for the level above.
+
+    [LAW:parse-dont-validate] The parent's dispatch reads these reasons as data; it never
+    parses the human `fail_class` built by `_refused_fail_class`.
+    """
+    result, steps_executed = finished
+    reasons = frozenset(reason for r in refusals.values() for reason in r.reasons)
+    return RunResult(**{**dict(result), "resume_refusal_reasons": reasons}), steps_executed
 
 
 def execute_workflow(
@@ -5424,6 +5438,9 @@ def _execute_workflow_body(
                                 f"{resume_at}: snapshot hitl_gate_config_hash="
                                 f"{resume_snapshot.hitl_gate_config_hash!r}, resume "
                                 f"recomputes {_resumed_linear_gate_config_hash!r}"
+                            ),
+                            resume_refusal_reasons=frozenset(
+                                {ChildResumeRefusal.HITL_GATE_CONFIG_CHANGED}
                             ),
                         ),
                         0,
@@ -10026,12 +10043,15 @@ def _execute_parallelization(
             if not child_resume_refused_dispositions:
                 return None
             _synthesize_undispatched_terminals()
-            return _finish(
-                RunStatus.FAILED,
-                fail_class=_refused_fail_class(
-                    "parallelization-child-resume-refused", child_resume_refused_dispositions
+            return _refused_finish(
+                _finish(
+                    RunStatus.FAILED,
+                    fail_class=_refused_fail_class(
+                        "parallelization-child-resume-refused", child_resume_refused_dispositions
+                    ),
+                    salvage=False,
                 ),
-                salvage=False,
+                child_resume_refused_dispositions,
             )
 
         try:
@@ -10729,12 +10749,15 @@ def _execute_parallelization(
     # FAILED before any policy branching so nothing re-pauses, re-dispatches or captures.
     if child_resume_refused_dispositions:
         _synthesize_undispatched_terminals()
-        return _finish(
-            RunStatus.FAILED,
-            fail_class=_refused_fail_class(
-                "parallelization-child-resume-refused", child_resume_refused_dispositions
+        return _refused_finish(
+            _finish(
+                RunStatus.FAILED,
+                fail_class=_refused_fail_class(
+                    "parallelization-child-resume-refused", child_resume_refused_dispositions
+                ),
+                salvage=False,
             ),
-            salvage=False,
+            child_resume_refused_dispositions,
         )
 
     if effect_fence_aborted_dispositions:
@@ -11800,6 +11823,9 @@ def _execute_evaluator_optimizer(
                             f"{resume_snapshot.step_index}: snapshot hitl_gate_config_hash="
                             f"{resume_snapshot.hitl_gate_config_hash!r}, resume recomputes "
                             f"{_resumed_eo_gate_config_hash!r}"
+                        ),
+                        resume_refusal_reasons=frozenset(
+                            {ChildResumeRefusal.HITL_GATE_CONFIG_CHANGED}
                         ),
                     ), 0
             hitl_delivery_cell = HITLDeliveryCell(_eo_resolved_hitl)
@@ -14775,12 +14801,16 @@ def _execute_orchestrator_workers(
             if not child_resume_refused_dispositions:
                 return None
             _synthesize_undispatched_terminals()
-            return _finish(
-                RunStatus.FAILED,
-                fail_class=_refused_fail_class(
-                    "orchestrator-workers-child-resume-refused", child_resume_refused_dispositions
+            return _refused_finish(
+                _finish(
+                    RunStatus.FAILED,
+                    fail_class=_refused_fail_class(
+                        "orchestrator-workers-child-resume-refused",
+                        child_resume_refused_dispositions,
+                    ),
+                    salvage=False,
                 ),
-                salvage=False,
+                child_resume_refused_dispositions,
             )
 
         try:
@@ -15429,12 +15459,15 @@ def _execute_orchestrator_workers(
     # FAILED before any policy branching so nothing re-pauses, re-dispatches or captures.
     if child_resume_refused_dispositions:
         _synthesize_undispatched_terminals()
-        return _finish(
-            RunStatus.FAILED,
-            fail_class=_refused_fail_class(
-                "orchestrator-workers-child-resume-refused", child_resume_refused_dispositions
+        return _refused_finish(
+            _finish(
+                RunStatus.FAILED,
+                fail_class=_refused_fail_class(
+                    "orchestrator-workers-child-resume-refused", child_resume_refused_dispositions
+                ),
+                salvage=False,
             ),
-            salvage=False,
+            child_resume_refused_dispositions,
         )
 
     if effect_fence_aborted_dispositions:
@@ -16203,6 +16236,9 @@ def _execute_decentralized_handoff(
                             f"{resume_snapshot.step_index}: snapshot hitl_gate_config_hash="
                             f"{resume_snapshot.hitl_gate_config_hash!r}, resume recomputes "
                             f"{_resumed_handoff_gate_config_hash!r}"
+                        ),
+                        resume_refusal_reasons=frozenset(
+                            {ChildResumeRefusal.HITL_GATE_CONFIG_CHANGED}
                         ),
                     ), 0
             hitl_delivery_cell = HITLDeliveryCell(_handoff_resolved_hitl)
