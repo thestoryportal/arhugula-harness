@@ -1424,7 +1424,8 @@ def parse_ollama_requests(value: object) -> list[tuple[str, str]] | None:
 
 
 def ollama_failures(states: Sequence[PhaseState], ev: dict[str, Any]) -> list[str]:
-    """The stub saw only list pings: exactly the grounded count through each completed phase.
+    """The stub saw only list pings: exactly the grounded count through each completed phase,
+    each phase snapshot being the matching prefix of the final record.
 
     Missing, malformed, extra or unexpected request evidence each fails; nothing is inferred
     from absence.
@@ -1444,6 +1445,10 @@ def ollama_failures(states: Sequence[PhaseState], ev: dict[str, Any]) -> list[st
         got = "malformed" if seen is None else len(seen)
         if got != want:
             reasons.append(f"{state.phase}:ollama-stub:requests:{got}!={want}")
+        elif seen != final[:want]:
+            # [LAW:one-source-of-truth] The parent-owned final record is the authority; a phase
+            # snapshot is its prefix at that moment, request for request.
+            reasons.append(f"{state.phase}:ollama-stub:snapshot-not-final-prefix")
     if len(completed) == len(states) and len(final) != wants[-1]:
         reasons.append(f"ollama-stub:final-requests:{len(final)}!={wants[-1]}")
     return reasons

@@ -948,8 +948,17 @@ PING_BREAKS: dict[str, tuple[Callable[[dict[str, Any]], None], list[str]]] = {
         [
             "n1:ollama-stub:unexpected-request:POST /api/chat",
             "n1:resume-lowered:ollama-stub:requests:3!=2",
+            "n1:resume-lowered-again:ollama-stub:snapshot-not-final-prefix",
             "n1:ollama-stub:final-requests:4!=3",
         ],
+    ),
+    "snapshot-model-request-final-clean": (
+        lambda ev: _pings(ev, "p", "run", [CHAT]),
+        ["p:run:ollama-stub:snapshot-not-final-prefix"],
+    ),
+    "snapshot-diverges-from-final": (
+        lambda ev: _pings(ev, "p", "resume-1", [PING, CHAT]),
+        ["p:resume-1:ollama-stub:snapshot-not-final-prefix"],
     ),
     "unknown-method": (
         lambda ev: _pings(ev, "p", None, [PING, PING, PING, ["BREW", "/x"]]),
