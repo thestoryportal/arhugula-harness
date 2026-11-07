@@ -39,7 +39,7 @@ from harness_core.workload_class import WorkloadClass
 from harness_cp.cp_shared_types import ModelBinding
 from harness_cp.engine_class import EngineClass
 from harness_cp.gate_level_rule import GateLevel
-from harness_cp.topology_pattern import TopologyPattern
+from harness_cp.topology_pattern import TopologyPattern, WorkerSelection
 from harness_cp.workflow_driver_types import StepKind, WorkflowStep
 from harness_cp.workflow_manifest_entry import (
     FanoutTimeoutDisposition,
@@ -163,6 +163,7 @@ class _WorkflowSection(BaseModel):
     default_gate_level: GateLevel | None = None
     fanout_timeout_disposition: FanoutTimeoutDisposition = FanoutTimeoutDisposition.FAIL_CLOSED
     concurrent_cache_warmup: bool = True
+    worker_selection: WorkerSelection = WorkerSelection.DECLARED_POOL
     layer_budgets: list[Any] = []
     fallback_chain: dict[str, Any] | None = None
     hitl_placements: list[Any] = []
@@ -424,6 +425,7 @@ class WorkflowManifestLoader:
                     "default_gate_level": manifest.workflow.default_gate_level,
                     "fanout_timeout_disposition": (manifest.workflow.fanout_timeout_disposition),
                     "concurrent_cache_warmup": manifest.workflow.concurrent_cache_warmup,
+                    "worker_selection": manifest.workflow.worker_selection,
                 }
             )
         except ValidationError as exc:
