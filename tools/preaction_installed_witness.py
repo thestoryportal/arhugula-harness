@@ -5,6 +5,10 @@ Scenario P drives a three-level durable pause through the PUBLIC API only: root 
 TEAM_BINDING x RECONCILER_LOOP (the durable-async cell), with real tools served by an owned loopback
 MCP server (READ_ONLY, L3) and an owned loopback webhook. No `step_dispatchers` override and no
 direct child resume are used: that would remove the behaviour this witness proves.
+SUB_AGENT_DISPATCH makes the workflow inference-bearing (Runtime spec §2.1), so every api.run /
+api.resume bootstrap constructs and pings its one enabled provider: an owned loopback
+Ollama-protocol stub answers only that ping (`GET /api/tags`, no models) and records every request,
+so no model or inference request can pass unseen.
 
     R  PRE_ACTION(witness.a)          orchestrator TOOL_STEP witness.b ; worker -> C
     C  PRE_ACTION(witness.a),         orchestrator TOOL_STEP witness.b ; worker -> G
@@ -47,9 +51,10 @@ from collections import Counter
 from collections.abc import Callable, Generator
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from itertools import accumulate, takewhile
 from pathlib import Path
 from types import FrameType, ModuleType
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Self, cast
 
 if TYPE_CHECKING:  # static types only: the product is never imported by the parent process
     from collections.abc import Sequence
@@ -131,6 +136,21 @@ REFUSAL_REASON = "hitl-gate-config-changed"
 # `<family>-child-resume-refused (<reasons>[; audit-signing-failed])`: ORCHESTRATOR_WORKERS.
 ROOT_FAMILY = "orchestrator-workers"
 AUDIT_SIGNING_FAILED = "audit-signing-failed"
+# The provider ping `ollama.AsyncClient.list()` (ollama 0.6.2) and the only answer the stub gives.
+OLLAMA_LIST: tuple[str, str] = ("GET", "/api/tags")
+OLLAMA_LIST_BODY = b'{"models": []}'
+# Pings each phase adds: one per bootstrap (stage 3a, one enabled provider, first attempt answered).
+# `provision` never bootstraps; a direct child handle is refused before bootstrap (api.resume's
+# admission); every other resume bootstraps, including the one whose claim is then refused.
+OLLAMA_LIST_CALLS = {
+    "provision": 0,
+    "run": 1,
+    "resume-1": 1,
+    "resume-2": 1,
+    "resume-lowered": 1,
+    "resume-lowered-again": 1,
+    "resume-child-handle": 0,
+}
 
 PHASES_P = ("provision", "run", "resume-1", "resume-2")
 PHASES_N1 = ("provision", "run", "resume-lowered", "resume-lowered-again")
@@ -141,7 +161,12 @@ PLAN = {
     "scope": "nested PRE_ACTION inheritance through the public api.run / api.resume",
     "scenarios": {name: list(phases) for name, phases in SCENARIOS.items()},
     "n3": "shared-prover refusal of a mismatched receipt/head/startup/wheel before any child",
-    "provider_free": "owned loopback MCP tool server and webhook; no model, no step_dispatchers",
+    "model_free": (
+        "owned loopback MCP tool server, webhook and Ollama-protocol stub answering only the "
+        "bootstrap provider ping (GET /api/tags, no models); no model or inference request, "
+        "no step_dispatchers"
+    ),
+    "ollama_list_calls": OLLAMA_LIST_CALLS,
     "child_cap_seconds": CHILD_CAP_SECONDS,
     "overall_cap_seconds": OVERALL_CAP_SECONDS,
     "attempts": 1,
@@ -264,9 +289,23 @@ if __name__ == "__main__":
 '''
 
 
-def config_text(layout: Layout, webhook_port: int, mcp_port: int) -> str:
-    """The reviewed B-104 operator TOML (placed state, webhook, loopback L3 READ_ONLY MCP)."""
-    return HELPERS.config_text(layout, webhook_port, mcp_port)
+def config_text(layout: Layout, webhook_port: int, mcp_port: int, ollama_port: int) -> str:
+    """The reviewed B-104 operator TOML with exactly one provider: Ollama at the owned stub.
+
+    The runtime defaults enable CLI and hosted providers; this selects only Ollama and makes its
+    ping mandatory, so a bootstrap that cannot reach the stub fails instead of degrading.
+    """
+    base = HELPERS.config_text(layout, webhook_port, mcp_port)
+    optional = "ollama_optional = true\n"
+    if base.count(optional) != 1:
+        raise ValueError("the B-104 operator TOML no longer has exactly one ollama_optional line")
+    selection = (
+        'enabled_provider_names = ["ollama"]',
+        "external_cli_providers = []",
+        f'ollama_host = "http://127.0.0.1:{ollama_port}"',
+        "ollama_optional = false",
+    )
+    return base.replace(optional, "".join(f"{line}\n" for line in selection))
 
 
 # --- the public WorkflowObject -----------------------------------------------------------------
@@ -396,7 +435,42 @@ def build_workflow(*, root_has_placement: bool = True) -> WorkflowObject:
 # --- owned loopback webhook ---------------------------------------------------------------------
 
 
-class WebhookCapture:
+class LoopbackListener:
+    """One owned 127.0.0.1 HTTP listener and its serving thread; the subclass owns the handler."""
+
+    def __init__(self, handler: type[BaseHTTPRequestHandler], name: str) -> None:
+        self.name = name
+        self.server = HTTPServer(("127.0.0.1", 0), handler)
+        self.thread = threading.Thread(
+            target=self.server.serve_forever, kwargs={"poll_interval": 0.05}
+        )
+
+    @property
+    def port(self) -> int:
+        return int(self.server.server_address[1])
+
+    def start(self) -> None:
+        # [LAW:no-ambient-temporal-coupling] A thread inherits its creator's signal mask, so this
+        # listener never takes an interruption; one the main thread holds stays pending for all.
+        with interruptions_held():
+            self.thread.start()
+
+    def stop(self) -> None:
+        """Stop the serving thread; the socket has its own owner (`server.server_close`)."""
+        self.server.shutdown()
+        self.thread.join(timeout=3)
+        if self.thread.is_alive():
+            raise RuntimeError(f"owned loopback {self.name} listener did not stop")
+
+    def started_under(self, owners: Owners) -> Self:
+        """Give `owners` the socket, then start serving and give them the thread."""
+        owners.callback(self.server.server_close)
+        self.start()
+        owners.callback(self.stop)
+        return self
+
+
+class WebhookCapture(LoopbackListener):
     """One owned 127.0.0.1 listener recording every delivery with its headers."""
 
     def __init__(self) -> None:
@@ -443,27 +517,49 @@ class WebhookCapture:
             def log_message(self, format: str, *args: object) -> None:
                 return
 
-        self.server = HTTPServer(("127.0.0.1", 0), Handler)
-        self.thread = threading.Thread(
-            target=self.server.serve_forever, kwargs={"poll_interval": 0.05}
-        )
+        super().__init__(Handler, "webhook")
 
-    @property
-    def port(self) -> int:
-        return int(self.server.server_address[1])
 
-    def start(self) -> None:
-        # [LAW:no-ambient-temporal-coupling] A thread inherits its creator's signal mask, so this
-        # listener never takes an interruption; one the main thread holds stays pending for all.
-        with interruptions_held():
-            self.thread.start()
+class OllamaListStub(LoopbackListener):
+    """The owned Ollama-protocol endpoint: answers only the provider ping, records every request.
 
-    def stop(self) -> None:
-        """Stop the serving thread; the socket has its own owner (`server.server_close`)."""
-        self.server.shutdown()
-        self.thread.join(timeout=3)
-        if self.thread.is_alive():
-            raise RuntimeError("owned loopback webhook listener did not stop")
+    Any other method or path is answered 404 and recorded; a request the server cannot parse or
+    finish is recorded as an error. Either one fails the verdict.
+    """
+
+    def __init__(self) -> None:
+        self.requests: list[list[str]] = []
+        self.errors: list[str] = []
+        owner = self
+        responses: dict[tuple[str, str], tuple[int, bytes]] = {OLLAMA_LIST: (200, OLLAMA_LIST_BODY)}
+
+        class Handler(BaseHTTPRequestHandler):
+            timeout = 3
+
+            def __getattr__(self, name: str) -> Callable[[], None]:
+                # The base dispatches `do_<METHOD>`; routing every method here means none is
+                # answered 501 without being recorded.
+                if not name.startswith("do_"):
+                    raise AttributeError(name)
+                return self.answer
+
+            def answer(self) -> None:
+                owner.requests.append([self.command, self.path])
+                status, body = responses.get((self.command, self.path), (404, b""))
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Connection", "close")
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_error(self, format: str, *args: object) -> None:
+                owner.errors.append(format % args)
+
+            def log_message(self, format: str, *args: object) -> None:
+                return
+
+        super().__init__(Handler, "ollama-protocol stub")
 
 
 def tool_counts(layout: Layout) -> dict[str, int]:
@@ -923,24 +1019,22 @@ def with_services(
     deadline: float,
     fleet: Fleet,
     servers: Fleet,
-    body: Callable[[WebhookCapture], dict[str, object]],
+    body: Callable[[WebhookCapture, OllamaListStub], dict[str, object]],
 ) -> dict[str, object]:
-    """Own the webhook listener, the tool server and every phase group for one scenario's life.
+    """Own the webhook, the Ollama stub, the tool server and every phase group for one scenario.
 
     They close in reverse order of ownership: phase groups, the tool server's record then its
-    group, the webhook's thread, then its socket.
+    group, the stub's thread then its socket, the webhook's thread then its socket.
     """
     tool_server: dict[str, object] = {}
     phase_cleanup: list[dict[str, object]] = []
     with Owners() as owners:
         with interruptions_held():
-            capture = WebhookCapture()
-            owners.callback(capture.server.server_close)
-            capture.start()
-            owners.callback(capture.stop)
+            capture = WebhookCapture().started_under(owners)
+            ollama = OllamaListStub().started_under(owners)
         tool_port = HELPERS.free_loopback_port()
         HELPERS.write_new(layout.mcp_server, MCP_SERVER_SOURCE)
-        HELPERS.write_new(layout.config, config_text(layout, capture.port, tool_port))
+        HELPERS.write_new(layout.config, config_text(layout, capture.port, tool_port, ollama.port))
 
         def own_server(server: Child) -> None:
             servers.own(server)  # the caller's later finalizer retries it if this cleanup fails
@@ -957,11 +1051,13 @@ def with_services(
         owners.callback(lambda: tool_server.update(HELPERS.stream_record(server)))
         owners.callback(lambda: phase_cleanup.extend(fleet.settle_all()))
         ready = HELPERS.wait_listening(server, tool_port, deadline)
-        evidence = body(capture) if ready else _no_scenario_evidence()
+        evidence = body(capture, ollama) if ready else _no_scenario_evidence()
     evidence["phase_cleanup"] = phase_cleanup
     evidence["tool_server"] = {**tool_server, "ready": ready}
     evidence["webhook_requests"] = capture.requests
     evidence["webhook_errors"] = capture.errors
+    evidence["ollama_requests"] = ollama.requests
+    evidence["ollama_errors"] = ollama.errors
     return evidence
 
 
@@ -993,12 +1089,13 @@ def run_scenario(
     layout: Layout,
     launch: Launcher,
     capture: WebhookCapture,
+    ollama: OllamaListStub,
     deadline: float,
 ) -> dict[str, object]:
     """Run one scenario's phases in order, stopping at the first that cannot continue.
 
     After every phase the parent snapshots what the owned services saw so far, so per-phase effects
-    (webhooks, tool calls) are attributable without trusting the child.
+    (webhooks, tool calls, provider pings) are attributable without trusting the child.
     """
     runs: dict[str, object] = {}
     results: dict[str, object] = {}
@@ -1012,6 +1109,7 @@ def run_scenario(
         services[phase] = {
             "webhook_keys": [str(r["idempotency_key"]) for r in capture.requests],
             "tool_counts": tool_counts(layout),
+            "ollama_requests": list(ollama.requests),
         }
         if run.timed_out or run.exit_code != 0:
             break
@@ -1311,6 +1409,46 @@ def behaviour_failures(
     return reasons
 
 
+def parse_ollama_requests(value: object) -> list[tuple[str, str]] | None:
+    """Recorded stub requests as (method, path) pairs; any other shape is malformed (`None`)."""
+    if not isinstance(value, list):
+        return None
+    pairs: list[tuple[str, str]] = []
+    for item in cast("list[object]", value):
+        match item:
+            case [str() as method, str() as path] if isinstance(item, list):
+                pairs.append((method, path))
+            case _:
+                return None
+    return pairs
+
+
+def ollama_failures(states: Sequence[PhaseState], ev: dict[str, Any]) -> list[str]:
+    """The stub saw only list pings: exactly the grounded count through each completed phase.
+
+    Missing, malformed, extra or unexpected request evidence each fails; nothing is inferred
+    from absence.
+    """
+    final = parse_ollama_requests(ev.get("ollama_requests"))
+    errors = ev.get("ollama_errors")
+    if final is None or not isinstance(errors, list):
+        return ["ollama-stub:malformed-evidence"]
+    reasons = [f"ollama-stub:unexpected-request:{m} {p}" for m, p in final if (m, p) != OLLAMA_LIST]
+    if errors:
+        reasons.append("ollama-stub:listener-errors")
+    completed = list(takewhile(lambda s: isinstance(s, Completed), states))
+    wants = list(accumulate(OLLAMA_LIST_CALLS[s.phase] for s in completed))
+    for state, want in zip(completed, wants, strict=True):
+        snapshot = _d(_d(ev.get("services")).get(state.phase))
+        seen = parse_ollama_requests(snapshot.get("ollama_requests"))
+        got = "malformed" if seen is None else len(seen)
+        if got != want:
+            reasons.append(f"{state.phase}:ollama-stub:requests:{got}!={want}")
+    if len(completed) == len(states) and len(final) != wants[-1]:
+        reasons.append(f"ollama-stub:final-requests:{len(final)}!={wants[-1]}")
+    return reasons
+
+
 def evaluate(
     evidence: dict[str, dict[str, Any]], *, expected_receipt_sha256: str | None
 ) -> dict[str, object]:
@@ -1331,6 +1469,7 @@ def evaluate(
         failures += [f"{name}:tool-server:{r}" for r in HELPERS.kill_reasons(kill, sigkill=True)]
         if ev.get("webhook_errors"):
             failures.append(f"{name}:webhook-listener-errors")
+        failures += [f"{name}:{r}" for r in ollama_failures(states, ev)]
         for phase, run in _d(ev.get("runs")).items():
             if _d(run).get("group_survivors") is not False:
                 failures.append(f"{name}:{phase}:surviving-process-group")
@@ -1404,8 +1543,8 @@ def rehearse(
                 deadline,
                 fleet,
                 servers,
-                lambda capture, name=name, layout=layout, launch=launch: run_scenario(
-                    name, layout, launch, capture, deadline
+                lambda capture, ollama, name=name, layout=layout, launch=launch: run_scenario(
+                    name, layout, launch, capture, ollama, deadline
                 ),
             )
             evidence[name]["ledger_dir"] = str(layout.ledger_dir)
@@ -1500,8 +1639,8 @@ def run(
                 deadline,
                 fleet,
                 servers,
-                lambda capture, name=name, layout=layout, launch=launch: run_scenario(
-                    name, layout, launch, capture, deadline
+                lambda capture, ollama, name=name, layout=layout, launch=launch: run_scenario(
+                    name, layout, launch, capture, ollama, deadline
                 ),
             )
     report["evidence"] = evidence
