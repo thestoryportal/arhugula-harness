@@ -132,9 +132,9 @@ REFUSAL_REASON = "hitl-gate-config-changed"
 ROOT_FAMILY = "orchestrator-workers"
 AUDIT_SIGNING_FAILED = "audit-signing-failed"
 
-PHASES_P = ("run", "resume-1", "resume-2")
-PHASES_N1 = ("run", "resume-lowered", "resume-lowered-again")
-PHASES_N2 = ("run", "resume-child-handle")
+PHASES_P = ("provision", "run", "resume-1", "resume-2")
+PHASES_N1 = ("provision", "run", "resume-lowered", "resume-lowered-again")
+PHASES_N2 = ("provision", "run", "resume-child-handle")
 SCENARIOS: dict[str, tuple[str, ...]] = {"p": PHASES_P, "n1": PHASES_N1, "n2": PHASES_N2}
 
 PLAN = {
@@ -146,6 +146,10 @@ PLAN = {
     "overall_cap_seconds": OVERALL_CAP_SECONDS,
     "attempts": 1,
     "state_root": "one new non-tmpfs directory per scenario, outside every Git checkout",
+    "installation_state": (
+        "per scenario the parent, as installation operator, declares one pause-journal root "
+        "inside its state root; each child binds that declaration; not retained storage"
+    ),
     "outcome": "PASS needs every case; a single timed-out phase is INCONCLUSIVE; else FAIL",
     "s5": "process/filesystem behaviour only; says nothing about VM reset durability",
 }
@@ -168,6 +172,16 @@ class Layout:
     @property
     def ledger_dir(self) -> Path:
         return self.state_root / "state-ledger"
+
+    @property
+    def installation_root(self) -> Path:
+        """The declared pause-journal root: inside the state root, beside its ledger."""
+        return self.state_root / "installation-pause-journal"
+
+    @property
+    def installation_state(self) -> Path:
+        """The one installation-state declaration file the parent writes for every child."""
+        return self.root / "installation-state.json"
 
     @property
     def home(self) -> Path:
@@ -670,6 +684,7 @@ def hitl_audit_view(layout: Layout) -> dict[str, object]:
 def _observe_common(layout: Layout, config: RuntimeConfig) -> dict[str, object]:
     latest = _latest_root(config)
     return {
+        "journal_root": str(latest.journal_dir),
         "ref": latest.ref.model_dump(mode="json"),
         "depth": latest.depth,
         "chain": nested_chain(latest.snapshot),
@@ -770,6 +785,7 @@ def phase_resume_child_handle(layout: Layout) -> dict[str, object]:
     root = _latest_root(config)
     leaf = _latest_root(config, LEAF_ID)
     outcome: dict[str, object] = {
+        "journal_root": str(root.journal_dir),
         "leaf_depth": leaf.depth,
         "leaf_ref": leaf.ref.model_dump(mode="json"),
         "root_before_ref": root.ref.model_dump(mode="json"),
@@ -794,6 +810,9 @@ def phase_resume_child_handle(layout: Layout) -> dict[str, object]:
 
 
 PHASE_BODIES: dict[str, Callable[[Layout], dict[str, object]]] = {
+    # [LAW:one-source-of-truth] The B-104 witness owns provisioning: stamp the state root, then
+    # create the declared journal root inside it.
+    "provision": HELPERS.phase_provision,
     "run": phase_run,
     "resume-1": phase_resume,
     "resume-2": phase_resume,
@@ -845,7 +864,8 @@ def run_phase(layout: Layout, phase: str, prove: Callable[[], dict[str, object]]
                     "loaded_harness_modules": len(loaded_before),
                 },
             )
-        observed = PHASE_BODIES[phase](layout)
+        with HELPERS.installation_bound(layout):
+            observed = PHASE_BODIES[phase](layout)
         record: dict[str, object] = {"phase": phase, "ok": True, "observed": observed}
         if evidence is not None:
             record["provenance"] = evidence
@@ -866,6 +886,7 @@ def run_phase(layout: Layout, phase: str, prove: Callable[[], dict[str, object]]
 def prepare_layout(layout: Layout) -> None:
     for directory in (layout.root, layout.repo, layout.home, layout.tmp, layout.results):
         directory.mkdir(mode=0o700, parents=True)
+    HELPERS.write_json_new(layout.installation_state, HELPERS.installation_declaration(layout))
 
 
 Launcher = Callable[[str], Child]
@@ -1231,6 +1252,13 @@ def behaviour_failures(
     """Judge one scenario's completed phases; every reason names the property that broke."""
     svc = {p: _d(services.get(p)) for p in observed}
     reasons = _run_reasons(name, observed["run"], svc["run"])
+    provisioned = observed["provision"].get("installation_root")
+    reasons += [
+        f"{name}:{phase}:journal-not-at-provisioned-root"
+        for phase, seen in observed.items()
+        if phase != "provision"
+        and not (isinstance(provisioned, str) and seen.get("journal_root") == provisioned)
+    ]
     chain = observed["run"].get("chain")
     leaf_id = _d(chain[-1]).get("run_id") if chain else None
     keys = [KEY_A, KEY_C]

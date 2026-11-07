@@ -3,8 +3,13 @@
 One bounded attempt against a noneditable installed venv. The parent (stdlib only,
 `python -I`) verifies the pinned candidate, wheels and startup hooks, owns a loopback
 webhook listener and a fresh non-tmpfs scenario root, and runs each phase as its own
-installed-venv `python -I` child in a private process group:
+installed-venv `python -I` child in a private process group. As installation operator the
+parent first writes ONE installation-state declaration naming a pause-journal root inside the
+state root; every child binds the installed Runtime's `INSTALLATION_STATE` from that file
+around its phase (scenario-local functional proof, not retained storage or provisioning):
 
+0. `provision`: the installed state-root bootstrap stamps the state root, then the declared
+   root is created inside it; every later journal site must resolve exactly that root.
 1. `capture`: public `api.run` of a provider-free TOOL_STEP whose PRE_ACTION HITL gate is
    durable-async (TEAM_BINDING x RECONCILER_LOOP). The gate delivers one webhook and the
    run PAUSES; the durable journal holds the depth-0 root record. The tool never runs.
@@ -112,6 +117,7 @@ NON_DURABLE_FILESYSTEMS = frozenset({"tmpfs", "ramfs"})
 # this list against `harness_is.path_class_registry.PathClass`.
 PATH_CLASSES = ("SKILLS", "PROMPTS", "ROUTING_MANIFEST", "STATE_LEDGER")
 PHASES = (
+    "provision",
     "capture",
     "resume-a",
     "observe-held",
@@ -128,6 +134,10 @@ PLAN = {
     "overall_cap_seconds": OVERALL_CAP_SECONDS,
     "attempts": 1,
     "state_root": "new directory on a non-tmpfs filesystem outside every Git checkout",
+    "installation_state": (
+        "the parent, as installation operator, declares one pause-journal root inside the "
+        "state root; each child binds that declaration; scenario-local, not retained storage"
+    ),
     "s5": "process/filesystem behaviour only; says nothing about VM reset durability",
     "outcome": "PASS needs every case; a timeout is INCONCLUSIVE; anything else FAILs",
 }
@@ -190,6 +200,16 @@ class Layout:
     @property
     def ledger_dir(self) -> Path:
         return self.state_root / "state-ledger"
+
+    @property
+    def installation_root(self) -> Path:
+        """The declared pause-journal root: inside the state root, beside its ledger."""
+        return self.state_root / "installation-pause-journal"
+
+    @property
+    def installation_state(self) -> Path:
+        """The one installation-state declaration file the parent writes for every child."""
+        return self.root / "installation-state.json"
 
     @property
     def home(self) -> Path:
@@ -317,6 +337,31 @@ def write_new(path: Path, text: str, mode: int = 0o600) -> None:
 
 def write_json_new(path: Path, value: object) -> None:
     write_new(path, json.dumps(value, sort_keys=True, indent=2, default=str) + "\n")
+
+
+def installation_declaration(layout: Layout) -> dict[str, object]:
+    """The operator's installation state: exactly one pause-journal root declaration."""
+    return {
+        "pause_journal_root_declarations": [{"installation_root": str(layout.installation_root)}]
+    }
+
+
+@contextlib.contextmanager
+def installation_bound(layout: Layout) -> Generator[None]:
+    """Bind the installed Runtime's `INSTALLATION_STATE` to the scenario's declaration file."""
+    from harness_runtime.lifecycle.pause_journal_root_resolver import (
+        INSTALLATION_STATE,
+        InstallationState,
+    )
+
+    # [LAW:single-enforcer] The raw declarations pass through unjudged: the installed resolver
+    # alone parses them, so a missing, conflicting or overlapping root refuses there.
+    raw = json.loads(layout.installation_state.read_text(encoding="utf-8"))
+    token = INSTALLATION_STATE.set(InstallationState(tuple(raw["pause_journal_root_declarations"])))
+    try:
+        yield
+    finally:
+        INSTALLATION_STATE.reset(token)
 
 
 # --- child phases (installed Python only; harness imports stay inside) --------------------
@@ -532,6 +577,25 @@ def _resume_outcome(layout: Layout, marker: Path, *, hold: bool) -> dict[str, ob
     return outcome
 
 
+def phase_provision(layout: Layout) -> dict[str, object]:
+    from harness_runtime.config.state_placement import (
+        bootstrap_state_root,
+        transient_worktree_base,
+    )
+
+    config = _config(layout)
+    # [LAW:no-ambient-temporal-coupling] The state root is stamped BEFORE the declared root
+    # exists inside it: bootstrap refuses a non-empty unmarked root (MARKER_MISSING).
+    bootstrap_state_root(
+        config.state_placement,
+        repository_root=config.repository_root,
+        worktree_base=transient_worktree_base(config.repository_root),
+        path_bindings=config.path_bindings,
+    )
+    layout.installation_root.mkdir(mode=0o700)
+    return {"installation_root": os.path.realpath(layout.installation_root)}
+
+
 def phase_capture(layout: Layout) -> dict[str, object]:
     import asyncio
 
@@ -549,6 +613,7 @@ def phase_capture(layout: Layout) -> dict[str, object]:
         "snapshot_hash": None if snapshot is None else snapshot.snapshot_hash,
         "depth": record["depth"],
         "ref": _ref_json(record["ref"]),
+        "journal_root": str(record["journal_dir"]),
         "journal_file": str(journal_file),
         "journal_sha256": sha256(journal_file),
         "claim": _claim_view(store, record["ref"]),
@@ -564,7 +629,11 @@ def phase_observe_held(layout: Layout) -> dict[str, object]:
     config = _config(layout)
     record = _record(config)
     _placement, store = _store(record["journal_dir"], config)
-    return {"ref": _ref_json(record["ref"]), "claim": _claim_view(store, record["ref"])}
+    return {
+        "ref": _ref_json(record["ref"]),
+        "journal_root": str(record["journal_dir"]),
+        "claim": _claim_view(store, record["ref"]),
+    }
 
 
 def phase_resume_b(layout: Layout) -> dict[str, object]:
@@ -674,6 +743,7 @@ def phase_recover(layout: Layout) -> dict[str, object]:
 
 
 PHASE_BODIES: dict[str, Callable[[Layout], dict[str, object]]] = {
+    "provision": phase_provision,
     "capture": phase_capture,
     "resume-a": phase_resume_a,
     "observe-held": phase_observe_held,
@@ -708,7 +778,8 @@ def run_phase(layout: Layout, phase: str, prove: Callable[[], dict[str, object]]
                 "loaded_harness_modules": len(loaded_before),
             },
         )
-        observed = PHASE_BODIES[phase](layout)
+        with installation_bound(layout):
+            observed = PHASE_BODIES[phase](layout)
         loaded = loaded_harness_origins(verified) if verified else {}
         write_json_new(
             layout.result(phase),
@@ -1491,7 +1562,7 @@ def scenario(
         results[phase] = load_result(layout, phase)
         return not runs[phase]["timeout"] and runs[phase]["exit"] == 0
 
-    if complete("capture"):
+    if complete("provision") and complete("capture"):
         webhooks_after_capture = len(capture.requests)
         a = launch("resume-a")
         entered = wait_for_marker(a, layout.markers / "a-body.json", deadline)
@@ -1756,7 +1827,7 @@ def evaluate(evidence: dict[str, object], *, expected_receipt_sha256: str) -> di
     `Broken`, the phase sequence is invalid, a global fact fails, or a judged behaviour check
     fails. INCONCLUSIVE only if exactly one phase timed out, everything before it is proved
     and complete, cleanup is proved, nothing failed independently and no later phase ran.
-    PASS needs all six phases proved, every behaviour true and exactly one webhook.
+    PASS needs every phase proved, every behaviour true and exactly one webhook.
     """
     if not _is_sha256(expected_receipt_sha256):
         raise ValueError("expected receipt digest must be 64 lowercase hex characters")
@@ -1781,7 +1852,7 @@ def evaluate(evidence: dict[str, object], *, expected_receipt_sha256: str) -> di
         state = states[phase]
         return state.observed if isinstance(state, Completed) else {}
 
-    capture, held = observed("capture"), observed("observe-held")
+    provision, capture, held = observed("provision"), observed("capture"), observed("observe-held")
     b, recover, d = observed("resume-b"), observed("recover"), observed("resume-after-abandon")
     ref = capture.get("ref")
     webhooks = evidence.get("webhook_requests")
@@ -1813,6 +1884,19 @@ def evaluate(evidence: dict[str, object], *, expected_receipt_sha256: str) -> di
         }
 
     checks: dict[str, dict[str, tuple[bool, tuple[str, ...]]]] = {
+        "installation": {
+            # Two later processes resolve the one provisioned root through the installed resolver.
+            "capture_uses_provisioned_root": (
+                isinstance(provision.get("installation_root"), str)
+                and capture.get("journal_root") == provision.get("installation_root"),
+                ("provision", "capture"),
+            ),
+            "observer_uses_provisioned_root": (
+                isinstance(provision.get("installation_root"), str)
+                and held.get("journal_root") == provision.get("installation_root"),
+                ("provision", "observe-held"),
+            ),
+        },
         "capture": {
             "paused": (capture.get("status") == "paused", ("capture",)),
             "root_record": (capture.get("depth") == 0 and ref is not None, ("capture",)),
@@ -2016,6 +2100,9 @@ def run(
         layout.markers,
     ):
         directory.mkdir(mode=0o700)
+    # [LAW:one-source-of-truth] The parent is the installation operator: it writes the one
+    # declaration every child binds; no env, run TOML or CLI argument can select the root.
+    write_json_new(layout.installation_state, installation_declaration(layout))
     helper = Path(__file__).resolve(strict=True)
     fixed = [
         "--scenario",
