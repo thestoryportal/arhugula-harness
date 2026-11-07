@@ -2739,6 +2739,42 @@ def test_a_returned_refusal_under_fail_closed_signing_keeps_the_result_and_the_r
     assert store.read(None, carrier.result_ref) == child_result
 
 
+def test_a_returned_refusal_whose_store_write_fails_carries_the_unresolvable_ref(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Runtime plan v2.70 U-RT-159 criterion 2, the failed store write.
+
+    Mutation probe: dropping the carrier, or substituting a live-looking string for the
+    store's declaration, fails the discriminated `UnresolvableResultRef` assertion.
+    """
+    from harness_runtime.lifecycle.audit_signing_errors import (
+        RefusedChildResultAuditSigningError,
+    )
+    from harness_runtime.lifecycle.protected_result_store import (
+        ProtectedResultStore,
+        UnresolvableResultRef,
+    )
+
+    def _boom(self: ProtectedResultStore, entry_path: Path, data: bytes) -> None:
+        raise OSError("simulated disk-full during publication")
+
+    monkeypatch.setattr(ProtectedResultStore, "_publish_atomic", _boom)
+    child_result = _refused_result()
+    dispatcher, _r, _e = _dispatcher(
+        tmp_path,
+        child_result=child_result,
+        audit_writer_override=cast(Any, _FamilyRaisingAuditWriter()),
+        protected_result_store=_protected_store(tmp_path),
+    )
+    dispatcher.audit_signing_fail_closed = True
+    with pytest.raises(RefusedChildResultAuditSigningError) as exc:
+        dispatcher.dispatch(_binding(), _step(), step_context=_step_context())
+    assert exc.value.reasons == _TWO_REASONS.reasons
+    assert exc.value.result == child_result
+    assert isinstance(exc.value.result_ref, UnresolvableResultRef)
+    assert "store write failed" in exc.value.result_ref.reason
+
+
 class _RefusingChildRunner:
     """A child runner that refuses before any child step runs (the raised arm)."""
 

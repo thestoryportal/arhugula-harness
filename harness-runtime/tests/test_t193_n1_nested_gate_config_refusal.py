@@ -153,10 +153,11 @@ def test_a_dropped_root_placement_refuses_the_nested_resume_terminally_then_clai
     refusal = pw.parse_terminal_refusal(cause["validator_fail_class"])
     assert refusal is not None, cause
     assert refusal.family == pw.ROOT_FAMILY
-    assert pw.REFUSAL_REASON in refusal.reasons
+    assert refusal.reasons == frozenset({pw.REFUSAL_REASON}), refusal
     assert low["ref"] == low["before_ref"], "the refusal journaled a new root record"
     assert low["before_claim"]["phase"] == "started"
     assert n1.tools() == {"witness.b": 3}  # the refused resume ran no step
+    assert n1.webhook_keys() == [pw.KEY_A]  # and opened no gate
 
     again = pw.phase_resume(n1.layout, root_has_placement=False)
 
@@ -165,6 +166,7 @@ def test_a_dropped_root_placement_refuses_the_nested_resume_terminally_then_clai
     assert again["reason"] == "claim-refused"
     assert again["before_ref"] == low["before_ref"]
     assert n1.tools() == {"witness.b": 3}
+    assert n1.webhook_keys() == [pw.KEY_A]
 
 
 def test_an_unchanged_config_resume_runs_the_approved_step_and_pauses_at_the_next_gate(
