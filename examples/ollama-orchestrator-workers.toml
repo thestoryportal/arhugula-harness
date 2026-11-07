@@ -8,10 +8,12 @@
 # and receives the two worker outputs, in branch order, appended after its own
 # instruction.
 #
-# Current limits, stated rather than hidden: the worker set is the declared steps,
-# not chosen at run time, and workers do NOT receive the orchestrator's output, so
-# the orchestrator runs and is recorded as its own step but does not steer the
-# workers. The synthesis sees worker outputs only. Only local Ollama is
+# Current limits, stated rather than hidden: this manifest uses the default
+# declared-pool worker selection, because the manifest schema cannot select the
+# CP v1.130 lead plan yet. The worker set is the declared steps, not chosen at run
+# time, and workers do NOT receive the orchestrator's output, so the orchestrator
+# runs and is recorded as its own step but does not steer the workers. The
+# synthesis sees worker outputs only. Only local Ollama is
 # bound; the fallback chain is empty, so no hosted provider can be reached.
 version = 1
 
