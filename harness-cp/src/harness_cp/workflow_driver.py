@@ -42,6 +42,7 @@ import logging
 from collections.abc import Awaitable, Callable, Collection, Coroutine, Iterable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import ContextVar
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import Enum
 from types import MappingProxyType
@@ -169,6 +170,7 @@ from harness_cp.workflow_driver_types import (
     ChildResumeAuthority,
     ChildResumeRefusal,
     ChildResumeRefusedError,
+    ResumeRefusal,
     RunResult,
     RunStatus,
     StepExecutionContext,
@@ -3218,30 +3220,58 @@ def _emit_resume_attempted(
     emit_resume_attempted_span(snapshot, result, tracer=tracer, diff_policy=diff_policy)
 
 
-def _refused_fail_class(prefix: str, refusals: Mapping[int, ChildResumeRefusedError]) -> str:
-    """The terminal fail_class for a run ended by a refused durable paused child.
+#: CP v1.131 §0.4 items 1-2: a resume whose applicable HITL gate configuration differs from
+#: its capture is refused before any of its steps run.
+_HITL_GATE_CONFIG_REFUSAL = ResumeRefusal(
+    reasons=frozenset({ChildResumeRefusal.HITL_GATE_CONFIG_CHANGED})
+)
 
-    Keeps the stable `<family>-child-resume-refused` prefix and appends the distinct
-    refusal reasons, plus `audit-signing-failed` when composing a refusal's audit also
-    failed signing under fail-closed, so the run records what truly happened.
+
+@dataclass(frozen=True)
+class _GateConfigChanged:
+    """A fan-out resume-body mismatch that is a gate-owning branch's changed HITL gate
+    configuration: the refusal is typed where it is detected (CP v1.131 §0.4 item 2).
+
+    Every other body mismatch stays a plain `str`. [LAW:parse-dont-validate] The run's
+    `resume_refusal` comes from this variant, never from the rendered fail-class text.
     """
-    parts = sorted({reason.value for r in refusals.values() for reason in r.reasons})
-    if any(r.audit_signing_failed for r in refusals.values()):
+
+    detail: str
+
+    def __str__(self) -> str:
+        return self.detail
+
+
+def _body_mismatch_refusal(mismatch: str | _GateConfigChanged) -> ResumeRefusal | None:
+    return _HITL_GATE_CONFIG_REFUSAL if isinstance(mismatch, _GateConfigChanged) else None
+
+
+def _merged_refusal(refusals: Mapping[int, ChildResumeRefusedError]) -> ResumeRefusal:
+    """Every refusal recorded before the barrier ended, as one value (§0.4 item 3)."""
+    return ResumeRefusal.union(refusal.refusal for refusal in refusals.values())
+
+
+def _refused_fail_class(prefix: str, refusal: ResumeRefusal) -> str:
+    """The terminal fail_class for a run ended by refused durable paused children.
+
+    Keeps the stable `<family>-child-resume-refused` prefix and appends the sorted refusal
+    reasons, plus `audit-signing-failed` when composing a refusal's audit also failed
+    signing under fail-closed (the v1.124 §0.3 format).
+    """
+    parts = sorted(reason.value for reason in refusal.reasons)
+    if refusal.audit_signing_failed:
         parts.append("audit-signing-failed")
     return f"{prefix} ({'; '.join(parts)})"
 
 
-def _refused_finish(
-    finished: tuple[RunResult, int], refusals: Mapping[int, ChildResumeRefusedError]
-) -> tuple[RunResult, int]:
-    """Stamp a refused run's terminal result with its typed reasons for the level above.
+def _with_refusal(finished: tuple[RunResult, int], refusal: ResumeRefusal) -> tuple[RunResult, int]:
+    """Stamp a refused run's terminal result with the refusal its fail class renders.
 
-    [LAW:parse-dont-validate] The parent's dispatch reads these reasons as data; it never
-    parses the human `fail_class` built by `_refused_fail_class`.
+    [LAW:one-source-of-truth] The carrier and the fail-class text derive from the same
+    merged value, so the parent's dispatch reads data and never parses `fail_class`.
     """
     result, steps_executed = finished
-    reasons = frozenset(reason for r in refusals.values() for reason in r.reasons)
-    return RunResult(**{**dict(result), "resume_refusal_reasons": reasons}), steps_executed
+    return RunResult.model_validate({**dict(result), "resume_refusal": refusal}), steps_executed
 
 
 def execute_workflow(
@@ -5439,9 +5469,7 @@ def _execute_workflow_body(
                                 f"{resume_snapshot.hitl_gate_config_hash!r}, resume "
                                 f"recomputes {_resumed_linear_gate_config_hash!r}"
                             ),
-                            resume_refusal_reasons=frozenset(
-                                {ChildResumeRefusal.HITL_GATE_CONFIG_CHANGED}
-                            ),
+                            resume_refusal=_HITL_GATE_CONFIG_REFUSAL,
                         ),
                         0,
                     )
@@ -8455,7 +8483,7 @@ def _execute_parallelization(
     # output. NO orchestrator-identity check (PARALLELIZATION has no `steps[0]`).
     if _peer_resume is not None:
 
-        def _resume_body_mismatch() -> str | None:
+        def _resume_body_mismatch() -> str | _GateConfigChanged | None:
             if len(steps) != _peer_resume.branch_count:
                 return (
                     f"branch-count-mismatch: snapshot captured "
@@ -8651,7 +8679,7 @@ def _execute_parallelization(
                         inherited_hitl_placements=inherited_hitl_placements,
                     )
                     if _resumed_pg_gate_config_hash != pg.hitl_gate_config_hash:
-                        return (
+                        return _GateConfigChanged(
                             f"pre-dispatch-gate-owning-hitl-gate-config-changed at "
                             f"{pg.branch_index}: snapshot hitl_gate_config_hash="
                             f"{pg.hitl_gate_config_hash!r}, resume recomputes "
@@ -8669,6 +8697,7 @@ def _execute_parallelization(
                 partial_state=None,
                 final_state=None,
                 fail_class=f"parallelization-resume-body-mismatch: {_mismatch}",
+                resume_refusal=_body_mismatch_refusal(_mismatch),
             ), 0
 
     # Resolve cascade policy before the RECONCILER CAS gate so invalid effect-fence pause resumes
@@ -10043,15 +10072,14 @@ def _execute_parallelization(
             if not child_resume_refused_dispositions:
                 return None
             _synthesize_undispatched_terminals()
-            return _refused_finish(
+            refusal = _merged_refusal(child_resume_refused_dispositions)
+            return _with_refusal(
                 _finish(
                     RunStatus.FAILED,
-                    fail_class=_refused_fail_class(
-                        "parallelization-child-resume-refused", child_resume_refused_dispositions
-                    ),
+                    fail_class=_refused_fail_class("parallelization-child-resume-refused", refusal),
                     salvage=False,
                 ),
-                child_resume_refused_dispositions,
+                refusal,
             )
 
         try:
@@ -10749,15 +10777,14 @@ def _execute_parallelization(
     # FAILED before any policy branching so nothing re-pauses, re-dispatches or captures.
     if child_resume_refused_dispositions:
         _synthesize_undispatched_terminals()
-        return _refused_finish(
+        refusal = _merged_refusal(child_resume_refused_dispositions)
+        return _with_refusal(
             _finish(
                 RunStatus.FAILED,
-                fail_class=_refused_fail_class(
-                    "parallelization-child-resume-refused", child_resume_refused_dispositions
-                ),
+                fail_class=_refused_fail_class("parallelization-child-resume-refused", refusal),
                 salvage=False,
             ),
-            child_resume_refused_dispositions,
+            refusal,
         )
 
     if effect_fence_aborted_dispositions:
@@ -11824,9 +11851,7 @@ def _execute_evaluator_optimizer(
                             f"{resume_snapshot.hitl_gate_config_hash!r}, resume recomputes "
                             f"{_resumed_eo_gate_config_hash!r}"
                         ),
-                        resume_refusal_reasons=frozenset(
-                            {ChildResumeRefusal.HITL_GATE_CONFIG_CHANGED}
-                        ),
+                        resume_refusal=_HITL_GATE_CONFIG_REFUSAL,
                     ), 0
             hitl_delivery_cell = HITLDeliveryCell(_eo_resolved_hitl)
 
@@ -12596,7 +12621,7 @@ def _execute_orchestrator_workers(
             ), 0
         worker_steps = [assignment.step for assignment in worker_assignments]
 
-        def _resume_body_mismatch() -> str | None:
+        def _resume_body_mismatch() -> str | _GateConfigChanged | None:
             # orchestrator identity (its output is recovered + dispatch skipped —
             # Codex [P2]: a renamed/reordered steps[0] would apply stale output) ...
             if str(orchestrator_step.step_id) != _fan_out_resume.orchestrator_step_id:
@@ -12797,7 +12822,7 @@ def _execute_orchestrator_workers(
                         inherited_hitl_placements=inherited_hitl_placements,
                     )
                     if _resumed_pg_gate_config_hash != pg.hitl_gate_config_hash:
-                        return (
+                        return _GateConfigChanged(
                             f"pre-dispatch-gate-owning-hitl-gate-config-changed at "
                             f"{pg.branch_index}: snapshot hitl_gate_config_hash="
                             f"{pg.hitl_gate_config_hash!r}, resume recomputes "
@@ -12815,6 +12840,7 @@ def _execute_orchestrator_workers(
                 partial_state=None,
                 final_state=None,
                 fail_class=f"orchestrator-workers-resume-{_mismatch}",
+                resume_refusal=_body_mismatch_refusal(_mismatch),
             ), 0
 
     # Resolve cascade policy before the RECONCILER CAS gate so invalid effect-fence pause resumes
@@ -14801,16 +14827,16 @@ def _execute_orchestrator_workers(
             if not child_resume_refused_dispositions:
                 return None
             _synthesize_undispatched_terminals()
-            return _refused_finish(
+            refusal = _merged_refusal(child_resume_refused_dispositions)
+            return _with_refusal(
                 _finish(
                     RunStatus.FAILED,
                     fail_class=_refused_fail_class(
-                        "orchestrator-workers-child-resume-refused",
-                        child_resume_refused_dispositions,
+                        "orchestrator-workers-child-resume-refused", refusal
                     ),
                     salvage=False,
                 ),
-                child_resume_refused_dispositions,
+                refusal,
             )
 
         try:
@@ -15459,15 +15485,16 @@ def _execute_orchestrator_workers(
     # FAILED before any policy branching so nothing re-pauses, re-dispatches or captures.
     if child_resume_refused_dispositions:
         _synthesize_undispatched_terminals()
-        return _refused_finish(
+        refusal = _merged_refusal(child_resume_refused_dispositions)
+        return _with_refusal(
             _finish(
                 RunStatus.FAILED,
                 fail_class=_refused_fail_class(
-                    "orchestrator-workers-child-resume-refused", child_resume_refused_dispositions
+                    "orchestrator-workers-child-resume-refused", refusal
                 ),
                 salvage=False,
             ),
-            child_resume_refused_dispositions,
+            refusal,
         )
 
     if effect_fence_aborted_dispositions:
@@ -16237,9 +16264,7 @@ def _execute_decentralized_handoff(
                             f"{resume_snapshot.hitl_gate_config_hash!r}, resume recomputes "
                             f"{_resumed_handoff_gate_config_hash!r}"
                         ),
-                        resume_refusal_reasons=frozenset(
-                            {ChildResumeRefusal.HITL_GATE_CONFIG_CHANGED}
-                        ),
+                        resume_refusal=_HITL_GATE_CONFIG_REFUSAL,
                     ), 0
             hitl_delivery_cell = HITLDeliveryCell(_handoff_resolved_hitl)
 

@@ -156,6 +156,7 @@ from harness_runtime.lifecycle.audit_signing_errors import (
     PostEffectAuditSigningError,
     PostEffectClass,
     RefusedChildAuditSigningError,
+    RefusedChildResultAuditSigningError,
 )
 from harness_runtime.lifecycle.audit_writer import RuntimeAuditLedgerWriter
 from harness_runtime.lifecycle.child_workflow_runner import ChildWorkflowRunner
@@ -1191,7 +1192,7 @@ class RuntimeSubAgentDispatcher:
                     # compliance event). Carry BOTH facts: still a refusal for CP, still
                     # the typed signing family (U-RT-136), never a completed-effect carrier.
                     raise RefusedChildAuditSigningError(
-                        refusal.reason, refusal.detail
+                        refusal.refusal, refusal.detail
                     ) from sign_exc
                 raise
             except Exception:
@@ -1239,18 +1240,13 @@ class RuntimeSubAgentDispatcher:
                 span.set_attribute("subagent.tokens_in", 0)
                 span.set_attribute("subagent.tokens_out", 0)
                 span.set_attribute("subagent.cached_tokens_in", 0)
-                # A child (at any depth below) refused to resume before any step ran
-                # RETURNS that refusal as typed reasons; re-raise it typed so this
-                # parent fails terminally too. Ordinary FAILED children carry none.
-                returned_refusal = (
-                    ChildResumeRefusedError(
-                        min(child_result.resume_refusal_reasons),
-                        f"child sub-workflow {payload.child_workflow_id!r}: "
-                        f"{child_result.fail_class}",
-                        nested_reasons=child_result.resume_refusal_reasons,
-                    )
-                    if child_result.resume_refusal_reasons
-                    else None
+                # Runtime v1.142 §0.1 — a child (at any depth below) whose resume was
+                # refused RETURNS that refusal typed on its result; this parent re-raises the
+                # complete value so it fails terminally too. Genuinely failed children carry
+                # `None`, whatever their fail_class text says.
+                returned_refusal = child_result.resume_refusal
+                refusal_detail = (
+                    f"child sub-workflow {payload.child_workflow_id!r}: {child_result.fail_class}"
                 )
                 # --- Step 8: best-effort audit (FAILED path) ----------------
                 # v1.7 4-substep sequence runs best-effort on child FAILED;
@@ -1271,11 +1267,17 @@ class RuntimeSubAgentDispatcher:
                         raise_on_failure=False,
                     )
                 except AUDIT_SIGNING_HARD_FAILURES as sign_exc:
+                    result_ref = resolve_result_ref(
+                        self.protected_result_store, step_context.tenant_id, child_result
+                    )
                     if returned_refusal is not None:
-                        raise RefusedChildAuditSigningError(
-                            returned_refusal.reason,
-                            returned_refusal.detail,
-                            nested_reasons=returned_refusal.reasons,
+                        # The returned arm keeps the completed result AND the typed refusal;
+                        # never the refusal-only carrier, never a plain post-effect carrier.
+                        raise RefusedChildResultAuditSigningError(
+                            returned_refusal,
+                            refusal_detail,
+                            result=child_result,
+                            result_ref=result_ref,
                         ) from sign_exc
                     raise PostEffectAuditSigningError(
                         f"audit signing failed after child sub-workflow "
@@ -1283,12 +1285,10 @@ class RuntimeSubAgentDispatcher:
                         f"(fail_class={child_result.fail_class!r}): {sign_exc}",
                         effect_class=PostEffectClass.SUB_AGENT_RESULT,
                         result=child_result,
-                        result_ref=resolve_result_ref(
-                            self.protected_result_store, step_context.tenant_id, child_result
-                        ),
+                        result_ref=result_ref,
                     ) from sign_exc
                 if returned_refusal is not None:
-                    raise returned_refusal
+                    raise ChildResumeRefusedError(returned_refusal, refusal_detail)
                 raise SubAgentChildFailedError(
                     f"child sub-workflow {payload.child_workflow_id!r} "
                     f"terminated with RunStatus.FAILED; fail_class="

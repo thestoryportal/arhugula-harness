@@ -31,7 +31,13 @@ import hashlib
 import logging
 from enum import StrEnum
 
-from harness_cp.workflow_driver_types import ChildResumeRefusal, ChildResumeRefusedError
+from harness_cp.workflow_driver_types import (
+    ChildResumeRefusal,
+    ChildResumeRefusedError,
+    ResumeRefusal,
+    RunResult,
+    refusal_message,
+)
 from harness_od.audit_signing_errors import (
     AUDIT_SIGNING_HARD_FAILURES,
     AuditSigningBreakerOpenError,
@@ -47,6 +53,7 @@ __all__ = [
     "PostEffectAuditSigningError",
     "PostEffectClass",
     "RefusedChildAuditSigningError",
+    "RefusedChildResultAuditSigningError",
     "report_post_effect_audit_failure",
 ]
 
@@ -119,18 +126,46 @@ class RefusedChildAuditSigningError(ChildResumeRefusedError, AuditSigningFailedE
     B-104 Task 4c. Belongs to BOTH families on purpose: CP's typed `ChildResumeRefusedError`
     catches make the refusal terminal (no re-pause, no fresh child dispatch), and U-RT-136's
     rule that fail-closed signing failures surface as the typed `AUDIT_SIGNING_HARD_FAILURES`
-    family still holds. Deliberately NOT a `PostEffectAuditSigningError`: no child effect
-    completed, so there is no result to preserve and nothing to report as done.
+    family still holds. Deliberately NOT a `PostEffectAuditSigningError`: on this RAISED arm
+    (Runtime v1.142 §0.1) the child runner refused before any child step, so no child result
+    exists to preserve and nothing completed to report as done.
+    """
+
+    def __init__(self, reason: ChildResumeRefusal | ResumeRefusal, detail: str = "") -> None:
+        super().__init__(reason, detail, audit_signing_failed=True)
+
+
+class RefusedChildResultAuditSigningError(ChildResumeRefusedError, PostEffectAuditSigningError):
+    """A child RETURNED a refused FAILED result AND its audit record failed signing (fail-closed).
+
+    Runtime v1.142 §0.1 item 1, the returned arm. The child workflow completed and returned, so
+    steps below it may have completed effects that the dispatcher cannot rule out. This carrier
+    is therefore both CP's typed refusal (every reason, `audit_signing_failed` true) and a
+    `sub-agent-result` post-effect carrier preserving the child's `RunResult` and its
+    tenant-scoped `result_ref` for the outermost dispatch boundary's report.
     """
 
     def __init__(
         self,
-        reason: ChildResumeRefusal,
-        detail: str = "",
+        refusal: ResumeRefusal,
+        detail: str,
         *,
-        nested_reasons: frozenset[ChildResumeRefusal] = frozenset(),
+        result: RunResult,
+        result_ref: ResultRefValue,
     ) -> None:
-        super().__init__(reason, detail, audit_signing_failed=True, nested_reasons=nested_reasons)
+        signed = ResumeRefusal(reasons=refusal.reasons, audit_signing_failed=True)
+        # The two bases' initializers are not cooperative (each ends in its own message-only
+        # super call), so the post-effect base initializes the exception and the refusal
+        # value is bound here, exactly as `ChildResumeRefusedError.__init__` binds it.
+        PostEffectAuditSigningError.__init__(
+            self,
+            refusal_message(signed, detail),
+            effect_class=PostEffectClass.SUB_AGENT_RESULT,
+            result=result,
+            result_ref=result_ref,
+        )
+        self.refusal = signed
+        self.detail = detail
 
 
 def report_post_effect_audit_failure(exc: PostEffectAuditSigningError) -> None:
