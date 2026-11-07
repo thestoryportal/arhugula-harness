@@ -76,6 +76,7 @@ from harness_cp.topology_subagent_namespace import (
 )
 from harness_cp.workflow_driver import StepDispatcher
 from harness_cp.workflow_driver_types import (
+    ChildResumeRefusal,
     ChildResumeRefusedError,
     RunResult,
     RunStatus,
@@ -2654,3 +2655,61 @@ def test_effective_brief_reaches_every_reader(tmp_path: Path, lead: bool) -> Non
     assert spy.descent_briefs == [expected]
     assert spy.hashed_briefs == [expected]
     assert call["workflow_id"] == "child-wf"
+
+
+def _refused_result() -> RunResult:
+    """A child that refused its own resume before any step ran (T193 N1: a gate-config change)."""
+    return RunResult(
+        workflow_id="child-wf",
+        run_id="child-run-1",
+        status=RunStatus.FAILED,
+        terminal_step_index=0,
+        partial_state=None,
+        final_state=None,
+        fail_class="linear-resume-hitl-gate-config-changed at step 0",
+        resume_refusal_reasons=frozenset({ChildResumeRefusal.HITL_GATE_CONFIG_CHANGED}),
+    )
+
+
+def test_a_returned_child_resume_refusal_stays_typed_and_an_ordinary_failure_stays_ordinary(
+    tmp_path: Path,
+) -> None:
+    """T193 N1: a RETURNED refusal re-raises as the typed refusal the parent's catch makes terminal.
+
+    Mutation probe: dropping the dispatch FAILED-branch re-raise surfaces the refusal as
+    `SubAgentChildFailedError`, so the parent cannot tell it from an ordinary step failure.
+    """
+    refused, _r1, _e1 = _dispatcher(tmp_path, child_result=_refused_result())
+    with pytest.raises(ChildResumeRefusedError) as exc:
+        refused.dispatch(_binding(), _step(), step_context=_step_context())
+    assert exc.value.reasons == {ChildResumeRefusal.HITL_GATE_CONFIG_CHANGED}
+    assert not exc.value.audit_signing_failed
+
+    ordinary, _r2, _e2 = _dispatcher(tmp_path, child_result=_failed_result())
+    with pytest.raises(SubAgentChildFailedError):
+        ordinary.dispatch(_binding(), _step(), step_context=_step_context())
+
+
+def test_a_returned_child_resume_refusal_with_failed_signing_is_both_refused_and_signing_failed(
+    tmp_path: Path,
+) -> None:
+    """Fail-closed signing on a returned refusal keeps the refusal typed, as on the raised path.
+
+    No child effect completed, so it is NOT a `PostEffectAuditSigningError` carrying a result.
+    """
+    from harness_runtime.lifecycle.audit_signing_errors import (
+        PostEffectAuditSigningError,
+        RefusedChildAuditSigningError,
+    )
+
+    dispatcher, _r, _e = _dispatcher(
+        tmp_path,
+        child_result=_refused_result(),
+        audit_writer_override=cast(Any, _FamilyRaisingAuditWriter()),
+    )
+    dispatcher.audit_signing_fail_closed = True
+    with pytest.raises(RefusedChildAuditSigningError) as exc:
+        dispatcher.dispatch(_binding(), _step(), step_context=_step_context())
+    assert exc.value.reasons == {ChildResumeRefusal.HITL_GATE_CONFIG_CHANGED}
+    assert exc.value.audit_signing_failed
+    assert not isinstance(exc.value, PostEffectAuditSigningError)
