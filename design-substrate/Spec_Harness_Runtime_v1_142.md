@@ -1,4 +1,4 @@
-# Spec: Harness Runtime — v1.142 (PROPOSED delta over cleared v1.141)
+# Spec: Harness Runtime — v1.142 (delta over cleared v1.141)
 
 *Delta-only file. Amendment sites: the `RT-FAIL-SUB-AGENT-CHILD-FAILED` rows in the C-RT-17
 §14.7 failure-mode taxonomy and the C-RT-14 §14 Runtime-local fail-class taxonomy; the composer
@@ -7,7 +7,10 @@
 amended by v1.133 through v1.141). Every other v1.141 and earlier term remains in force. Cleared predecessor files
 are not edited.*
 
-**Status: PROPOSED — not cleared.** No clearance marker, artifact-head row or pointer is filed.
+**Status: CLEARED 2026-11-07 — ratified by the integration lead at LIT `cmt-756042fc-eb54-4a73-b152-61488707f1a2`
+on the frozen reviewed body `745f234f0000e9abcd0f87624e64883bd57e1494` (independent contract GREEN
+`cmt-553de0a0-3dcd-4af9-b87e-dd9987bad06e`); clearance `.harness/clearance/spec-harness-runtime-v1-142-cleared-2026-11-07.md`.
+Contract clearance only; source conformance, CI, landing and installed acceptance remain owed.**
 
 **Lineage:** folded onto cleared head v1.141 (`.harness/clearance/spec-harness-runtime-v1-141-cleared-2026-11-05.md`)
 by the integration lead's scope and numbering decision (LIT `arhugula-harness-trial-193` `cmt-7836db07-b27b-4248-849b-50101a522c0e`).

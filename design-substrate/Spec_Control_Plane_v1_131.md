@@ -1,11 +1,13 @@
-# Spec: Control Plane — v1.131 (PROPOSED delta over cleared v1.130)
+# Spec: Control Plane — v1.131 (delta over cleared v1.130)
 
 *Delta-only file. One amendment site: C-CP-25 §25.11/§25.15/§25.2, the typed resume refusal. Every
 other v1.130 and earlier C-CP-01 … C-CP-29 term remains in force. No `RunStatus` value, pause-snapshot
 hash byte or fail-class prefix is added or changed.*
 
-**Status: PROPOSED — not cleared.** No clearance marker, artifact-head row or pointer is filed by this
-draft.
+**Status: CLEARED 2026-11-07 — ratified by the integration lead at LIT `cmt-756042fc-eb54-4a73-b152-61488707f1a2`
+on the frozen reviewed body `745f234f0000e9abcd0f87624e64883bd57e1494` (independent contract GREEN
+`cmt-553de0a0-3dcd-4af9-b87e-dd9987bad06e`); clearance `.harness/clearance/spec-control-plane-v1-131-cleared-2026-11-07.md`.
+Contract clearance only; source conformance, CI, landing and installed acceptance remain owed.**
 
 **Lineage:** folded onto cleared head v1.130 (`.harness/clearance/Spec_Control_Plane-v1_130-cleared-2026-11-05.md`)
 by the integration lead's scope and numbering decision (LIT `arhugula-harness-trial-193` `cmt-7836db07-b27b-4248-849b-50101a522c0e`).

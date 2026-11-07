@@ -1,7 +1,7 @@
 # A4 contract authority record
 
-**Status:** Proposed provenance for CP spec v1.131 / plan v2.56 (U-CP-106) and Runtime spec v1.142 /
-plan v2.70 (U-RT-159), the A4 typed resume refusal; not cleared. It maps each authority and evidence
+**Status:** Provenance for CP spec v1.131 / plan v2.56 (U-CP-106) and Runtime spec v1.142 /
+plan v2.70 (U-RT-159), the A4 typed resume refusal, cleared 2026-11-07 by the ratifications in rows 15 and 17. It maps each authority and evidence
 citation in `.harness/class_1_fork_a4_typed_resume_refusal.md` to its filed copy in
 `.harness/review-evidence/a4-contract-authority/`, or marks it **GAP**. It is provenance, not
 normative content; the contracts live in the spec text. This record clears nothing.
@@ -17,7 +17,7 @@ evidence. They do not show that A4 works on main.
 ## Hashes
 
 For a Markdown wrapper that quotes one payload, the SHA256 is of the quoted payload as its header
-states, not of the wrapper. For the seven extracted LIT entries, it is of the one-line compact JSON
+states, not of the wrapper. For the twelve extracted LIT entries, it is of the one-line compact JSON
 entry, with no trailing newline. For the three older wrappers (rows 1, 3 and 4) it is of the payload
 followed by one newline; all three reproduce. Row 2 is an exact copy and its hash is of the whole file.
 
@@ -37,11 +37,17 @@ followed by one newline; all three reproduce. Row 2 is an exact copy and its has
 | 10 | Criterion 7 acceptance, LIT `cmt-0a04e5db-74a1-4d14-9ddd-5790077c0244` | `lit-cmt-0a04e5db.json.md` | payload `79f2d2a1d2b9bbfcba1dd97430f75fa22f4dcae59f2a73e6fd08bf34cfaec52d` | Buford disposition; LIT `created_by` is `unknown`. It carries root verification `1b59eb024025fc52f6b1be12d889d1b9f85697cace982eac6d21d65c376d15c7` in full, the only fork-record root digest in filed evidence. It names the independent source reviewer `bc16c7af-7062-456f-a76e-3732d06516b2`, the full UUID behind the fork record's `bc16c7af`. **GAP:** that reviewer's own result is not filed |
 | 11 | A5 normative fold acceptance, LIT `cmt-1953a86d-1182-4359-a2ad-1121ac6f9bda` | `lit-cmt-1953a86d.json.md` | payload `4f628ee9b6ca168e02eb122e50faa7cfc03ae2728d5c7b6635690542d20ca96b` | Buford acceptance of A5 preparation only; LIT `created_by` is `unknown`. A5 is now on main through PR #1635 as Proposed; see `.harness/a5_contract_authority.md` |
 | 12 | Pass-1 review of PR #1637 at `36493604356a9d088a173a128c18e774a81738b4`: accepted `merge-gate-concurrency:…:d72d7c6d848c:1` (P1), `…:e50f980e5e5d:1` (P2), `merge-gate-spec-conformance:…:f91f2ae5e755:1` (P2) and `merge-gate-witness-adequacy:…:fecae3316331:1` (P2); rejected `merge-gate-spec-conformance:…:cbea0209b6d6:1` | **GAP:** no copy in this pack | none | Recorded in the root-owned `.harness/merge-gate-log.jsonl`, which this correction commit does not include. Root dispositions; the rejection rests on fresh URL bytes reproducing both published Linux v7.2 hashes and anchors |
-| 13 | Criterion 3 conflict disposition, LIT `cmt-5dd4c286-9301-48ce-af16-80753940030b` | **GAP:** no copy in this pack | none | Buford disposition of the named conflict between plan v2.56 criterion 3 and B-39 sequential resume (raised by the independent reviewer at `cmt-70a3ed47-b596-4f46-abe7-80eedb64adde`, author analysis `cmt-8b861cb2-2ca3-4057-9621-496dbd72fd47`, reviewer concurrence `cmt-83c5d403-d800-4bd4-9a8e-5cfa7574f45d`). It authorizes preparing the split criterion; it ratifies no wording |
+| 13 | Criterion 3 conflict disposition, LIT `cmt-5dd4c286-9301-48ce-af16-80753940030b` | `lit-cmt-5dd4c286.json.md` | payload `189e83b638d2f8247d025a35cd0a53f109d85169af9275a318bdb53a85a970ab` | Buford disposition of the named conflict between plan v2.56 criterion 3 and B-39 sequential resume (raised by the independent reviewer at `cmt-70a3ed47-b596-4f46-abe7-80eedb64adde`, author analysis `cmt-8b861cb2-2ca3-4057-9621-496dbd72fd47`, reviewer concurrence `cmt-83c5d403-d800-4bd4-9a8e-5cfa7574f45d`); LIT `created_by` is `unknown`. It authorizes preparing the split criterion; it ratifies no wording (row 17 does) |
+| 14 | Independent normative review of the fold, GREEN with zero findings at exact delta `9835e15a4a8f437d6a566ce14b91507fabc1ed68..745f234f0000e9abcd0f87624e64883bd57e1494`, LIT `cmt-553de0a0-3dcd-4af9-b87e-dd9987bad06e` | `lit-cmt-553de0a0.json.md` | payload `32906607d444abeda240e44adf1a840be543f8627fe446f6f03a511546434030` | Reviewer facade-reviewer `01a1b610-2b06-77c1-b691-015100725357`; LIT `created_by` is `unknown`. Contract review only, not a source or execution PASS |
+| 15 | Integration-lead ratification of `745f234f0000e9abcd0f87624e64883bd57e1494` (tree `3db85ba4aeada24e87555a4a7b5bc0334a303c8c`) and the mechanical filing delegation, LIT `cmt-756042fc-eb54-4a73-b152-61488707f1a2` | `lit-cmt-756042fc.json.md` | payload `c4d74cfef63453ea2771e9b929eb0728a32b5cd68818c90067b995a4645b1a19` | Buford `01a1b616-990f-7410-9535-15c00b4115af`; LIT `created_by` is `unknown`. Clears CP v1.131, plan v2.56 (before row 17), Runtime v1.142 and plan v2.70; grants no source approval |
+| 16 | Independent additional normative review of the criterion 3 amendment, GREEN with zero findings at exact delta `46605451280a5a44a973b2e53d025bc86a495006..6270c548c9716ddd45eec0f7d54372f7bd44b234`, LIT `cmt-ae0b7212-8561-48f0-b2d8-89b21cc689a5` | `lit-cmt-ae0b7212.json.md` | payload `ea58108470cffced418e3bd148cc386be262a57fb57fd2af0698c231ff2a018c` | Reviewer facade-reviewer `01a1b621-6231-7120-80fb-2d7c2a6c6dbc`; LIT `created_by` is `unknown`. Accepted for contract coherence only; the reviewer's rerun had no output and earns no independent execution PASS (row 17) |
+| 17 | Integration-lead ratification of the criterion 3 delta (diff SHA256 `9e11704c712a558b440f1775cb4d3606824aa885b8021b7340497faa4d2e23bc`, tree `cc238d343deb2a4248fee3e910f1437c867fd202`), LIT `cmt-633ac3d9-9ba9-4e8d-8949-7ab589564986` | `lit-cmt-633ac3d9.json.md` | payload `c06b903df353850447d14316cd4477776fe7e22f64b14679cde079963b062a5b` | Buford `01a1b65e-f098-7da1-80e2-5f08b446cec5`; LIT `created_by` is `unknown`. Ratifies the four-witness criterion 3 split of plan v2.56; the author construction receipt it cites is author evidence |
 
 The seven extracts in rows 5–11 are exact six-line wrappers. Each holds one complete LIT entry,
 every field as exported, from a private root literal snapshot. Each was checked before filing:
-wrapper and payload hashes, and a parse-back that equals the literal entry.
+wrapper and payload hashes, and a parse-back that equals the literal entry. The five extracts in rows
+13–17 use the same wrapper and were checked the same way against a `lit export` snapshot taken
+2026-11-07, which also reproduced row 10's filed payload byte for byte.
 
 ## Source and version dependencies
 
@@ -95,7 +101,7 @@ v1.142 / v2.70 or v1.131 / v2.56 must update every citation of them in the same 
 
 ## Not in this record
 
-There is no clearance status, no clearance marker, no head or pointer row, and no claim that any
-item above clears v1.131, v2.56, v1.142 or v2.70. A Proposed document or a source GO is neither
-clearance nor installed acceptance. Installed N1 and the negative-provenance attempt remain
+Clearance of v1.131, v2.56, v1.142 and v2.70 is recorded by their four markers in `.harness/clearance/`
+(dated 2026-11-07), not by this record. Contract clearance is neither source conformance nor installed
+acceptance. Installed N1 and the negative-provenance attempt remain
 consent-gated.

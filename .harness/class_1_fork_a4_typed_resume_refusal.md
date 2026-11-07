@@ -1,6 +1,9 @@
 # Class 1 fork — A4 typed resume refusal (bundled design back-flow + implementation)
 
-**Status: PROPOSED.** Authorized bundled arc (LIT `arhugula-harness-trial-193` `cmt-7d8db0b5-6fe0-4f33-8529-9f1c9dd5e821`) under
+**Status: CONTRACTS CLEARED 2026-11-07** (CP v1.131 / plan v2.56, Runtime v1.142 / plan v2.70; ratified
+at LIT `cmt-756042fc-eb54-4a73-b152-61488707f1a2`, plan v2.56 criterion 3 as amended at
+`cmt-633ac3d9-9ba9-4e8d-8949-7ab589564986`; markers in `.harness/clearance/`). Source conformance, CI,
+landing and installed N1 remain owed. Authorized bundled arc (LIT `arhugula-harness-trial-193` `cmt-7d8db0b5-6fe0-4f33-8529-9f1c9dd5e821`) under
 the user's autonomous full-readiness instruction. Independent design GO:
 `.harness/review-evidence/a4-contract-authority/a4-opus-design-review.md` (exact copy, sha256 `4d2716df5f9847ee9a2d62c9b0e584042be8bbe97dfbf2a3ed06f7a20d288a81`) (reviewer `40cd9c0e`, end_turn 2026-10-01T08:01:23Z).
 Every cited authority and evidence item is mapped to its filed copy, or marked GAP, in
