@@ -34,6 +34,7 @@ from harness_runtime.config import state_placement
 from harness_runtime.lifecycle import journal_workflow_pause_store as journal_module
 from harness_runtime.lifecycle.pause_journal_root_resolver import (
     INSTALLATION_STATE,
+    STORAGE_UNSELECTED,
     InstallationState,
     PauseJournalRootUnresolvedError,
 )
@@ -61,6 +62,7 @@ REFUSED = {
     "claim": {**CLAIM, "lease": "free"},
 }
 KILL_DIGEST = "d" * 64
+JOURNAL_ROOT = "/scenario/state/installation-pause-journal"
 # The digest the PARENT computed from the receipt it verified; every proved record binds it.
 RECEIPT = "e" * 64
 WRONG_RECEIPT = "1" * 64
@@ -128,6 +130,7 @@ def passing_evidence() -> dict[str, Any]:
     inventory = {"journal": "f" * 64}
     return {
         "runs": {
+            "provision": dict(EXITED),
             "capture": dict(EXITED),
             "resume-a": {
                 "pid": A_PID,
@@ -146,18 +149,22 @@ def passing_evidence() -> dict[str, Any]:
             "webhooks_after_capture": 1,
         },
         "results": {
+            "provision": _ok("provision", {"installation_root": JOURNAL_ROOT}),
             "capture": _ok(
                 "capture",
                 {
                     "status": "paused",
                     "depth": 0,
                     "ref": REF,
+                    "journal_root": JOURNAL_ROOT,
                     "snapshot_hash": REF["snapshot_hash"],
                     "claim": {"phase": "absent"},
                 },
             ),
             "resume-a": None,
-            "observe-held": _ok("observe-held", {"ref": REF, "claim": CLAIM}),
+            "observe-held": _ok(
+                "observe-held", {"ref": REF, "journal_root": JOURNAL_ROOT, "claim": CLAIM}
+            ),
             "resume-b": _ok("resume-b", copy.deepcopy(REFUSED)),
             "recover": _ok(
                 "recover",
@@ -660,7 +667,7 @@ def stopped_at(phase: str) -> dict[str, Any]:
     for gone in later:
         evidence["runs"].pop(gone)
         evidence["results"].pop(gone)
-    if phase == "capture":
+    if phase in ("provision", "capture"):
         evidence["runs"].pop("webhooks_after_capture")
         evidence["webhook_requests"] = []
         evidence["held_provenance"] = None
@@ -2757,12 +2764,14 @@ def test_run_phase_writes_the_provenance_record_before_the_body_and_the_result_a
 ) -> None:
     layout = w.Layout(tmp_path)
     layout.results.mkdir()
+    w.write_json_new(layout.installation_state, w.installation_declaration(layout))
     seen: dict[str, Any] = {}
 
     def body(_layout: w.Layout) -> dict[str, object]:
         # The parent kills the held A here, so nothing after this line is guaranteed to run.
         seen["record_existed"] = layout.provenance_record("resume-a").exists()
         seen["result_existed"] = layout.result("resume-a").exists()
+        seen["installation"] = INSTALLATION_STATE.get()
         return {"body": "ran"}
 
     monkeypatch.setitem(w.PHASE_BODIES, "resume-a", body)
@@ -2770,7 +2779,13 @@ def test_run_phase_writes_the_provenance_record_before_the_body_and_the_result_a
     code = w.run_phase(layout, "resume-a", lambda: {"installed_origins": {}, "marker": "p"})
 
     assert code == 0
-    assert seen == {"record_existed": True, "result_existed": False}
+    assert seen == {
+        "record_existed": True,
+        "result_existed": False,
+        # The body ran under exactly the operator's one declaration, bound from its file.
+        "installation": InstallationState(({"installation_root": str(layout.installation_root)},)),
+    }
+    assert INSTALLATION_STATE.get() == STORAGE_UNSELECTED  # unbound again after the body
     record = json.loads(layout.provenance_record("resume-a").read_text())
     assert record["phase"] == "resume-a" and record["stage"] == "pre-body"
     assert (record["pid"], record["pgid"]) == (os.getpid(), os.getpgid(0))
@@ -2785,6 +2800,7 @@ def test_a_killed_held_a_leaves_its_provenance_record_and_no_result(
 ) -> None:
     layout = w.Layout(tmp_path)
     layout.results.mkdir()
+    w.write_json_new(layout.installation_state, w.installation_declaration(layout))
 
     class Killed(BaseException):
         """Stands in for SIGKILL: nothing after the body's start is recorded."""
@@ -3007,3 +3023,97 @@ def test_record_refuses_an_unresolved_installation_before_any_journal_access(
         w._record(witness_config(tmp_path))  # pyright: ignore[reportPrivateUsage]
 
     assert raised.value.cause is cause
+
+
+def test_a_phase_without_the_operator_declaration_fails_before_its_body(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    layout = w.Layout(tmp_path)
+    layout.results.mkdir()
+    monkeypatch.setitem(w.PHASE_BODIES, "capture", JournalUntouchable)
+
+    with pytest.raises(FileNotFoundError):
+        w.run_phase(layout, "capture", lambda: {"installed_origins": {}})
+
+    assert json.loads(layout.result("capture").read_text())["ok"] is False
+
+
+@pytest.mark.parametrize(
+    ("cause", "roots"),
+    UNRESOLVED_INSTALLATIONS.items(),
+    ids=[c.value for c in UNRESOLVED_INSTALLATIONS],
+)
+def test_an_unresolved_declaration_file_refuses_before_any_journal_access(
+    cause: UnresolvedCause,
+    roots: Callable[[Path], tuple[Path, ...]],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(journal_module, "JournalWorkflowPauseStore", JournalUntouchable)
+    layout = w.Layout(tmp_path)
+    declarations = [{"installation_root": str(root)} for root in roots(tmp_path)]
+    w.write_json_new(layout.installation_state, {"pause_journal_root_declarations": declarations})
+
+    with w.installation_bound(layout), pytest.raises(PauseJournalRootUnresolvedError) as raised:
+        w._record(witness_config(tmp_path))  # pyright: ignore[reportPrivateUsage]
+
+    assert raised.value.cause is cause
+
+
+def operator_layout(root: Path) -> w.Layout:
+    """A scenario root as the parent leaves it: real operator TOML and its one declaration."""
+    layout = w.Layout(root)
+    for directory in (layout.root, layout.repo, layout.home):
+        directory.mkdir(mode=0o700)
+    w.write_new(layout.config, w.config_text(layout, 4101, 4102))
+    w.write_json_new(layout.installation_state, w.installation_declaration(layout))
+    return layout
+
+
+def test_a_declared_root_overlapping_a_configured_binding_refuses_before_any_journal_access(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(journal_module, "JournalWorkflowPauseStore", JournalUntouchable)
+    layout = operator_layout(tmp_path / "scenario")
+    layout.ledger_dir.mkdir(parents=True)
+    # The operator TOML binds STATE_LEDGER to `ledger_dir`; declare the journal root on top of it.
+    overlapping = {
+        "pause_journal_root_declarations": [{"installation_root": str(layout.ledger_dir)}]
+    }
+    layout.installation_state.write_text(json.dumps(overlapping), encoding="utf-8")
+
+    with w.installation_bound(layout), pytest.raises(PauseJournalRootUnresolvedError) as raised:
+        w._record(w._config(layout))  # pyright: ignore[reportPrivateUsage]
+
+    assert raised.value.cause is UnresolvedCause.OVERLAPPING
+
+
+FRESH_RESOLVER = """
+import os, sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+import b104_installed_public_witness as w
+from harness_runtime.lifecycle.pause_journal_root_resolver import resolve_pause_journal_root
+
+layout = w.Layout(Path(sys.argv[2]))
+with w.installation_bound(layout):
+    print(os.path.realpath(resolve_pause_journal_root(w._config(layout))))
+"""
+
+
+def test_a_fresh_process_binding_the_same_declaration_resolves_the_provisioned_root(
+    tmp_path: Path,
+) -> None:
+    layout = operator_layout(tmp_path / "scenario")
+    with w.installation_bound(layout):
+        provisioned = w.phase_provision(layout)["installation_root"]
+
+    fresh = subprocess.run(
+        [sys.executable, "-c", FRESH_RESOLVER, str(Path(w.__file__).parent), str(layout.root)],
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=60,
+    )
+
+    assert fresh.stdout.strip() == provisioned == os.path.realpath(layout.installation_root)

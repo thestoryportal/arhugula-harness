@@ -24,7 +24,12 @@ import pytest
 from harness_is.pause_journal_root import UnresolvedCause
 from harness_runtime.config import state_placement
 from harness_runtime.lifecycle import journal_workflow_pause_store as journal_module
-from harness_runtime.lifecycle.pause_journal_root_resolver import PauseJournalRootUnresolvedError
+from harness_runtime.lifecycle.pause_journal_root_resolver import (
+    INSTALLATION_STATE,
+    STORAGE_UNSELECTED,
+    InstallationState,
+    PauseJournalRootUnresolvedError,
+)
 from harness_runtime.lifecycle.resume_claim_store import ResumeClaimStore
 from harness_runtime.types import RuntimeConfig
 
@@ -52,6 +57,7 @@ from test_installed_witness_provenance import Fixture
 
 TOOLS = Path(__file__).resolve().parent
 RECEIPT = "e" * 64
+JOURNAL_ROOT = "/scenario/state/installation-pause-journal"
 VENV = "/venv"
 SITE = f"{VENV}/lib/python3.12/site-packages"
 EXITED = {
@@ -231,6 +237,10 @@ def scenario(name: str) -> dict[str, Any]:
             "run": svc([pw.KEY_A], **{"witness.b": 3}),
             "resume-child-handle": svc([pw.KEY_A], **{"witness.b": 3}),
         }
+    results = {"provision": {"installation_root": JOURNAL_ROOT}} | {
+        phase: {**observed, "journal_root": JOURNAL_ROOT} for phase, observed in results.items()
+    }
+    services = {"provision": svc([])} | services
     return {
         "runs": {phase: {**EXITED, "pid": 5, "pgid": 5} for phase in results},
         "results": {phase: _ok(phase, observed) for phase, observed in results.items()},
@@ -252,7 +262,7 @@ def test_honest_installed_evidence_passes() -> None:
     result = verdict(honest())
 
     assert result["status"] == "PASS" and result["failure_reasons"] == []
-    assert result["phase_states"]["p"] == ["Completed"] * 3
+    assert result["phase_states"]["p"] == ["Completed"] * 4
 
 
 def test_rehearsal_evidence_without_provenance_is_labelled_and_never_an_installed_pass() -> None:
@@ -621,7 +631,7 @@ def test_a_phase_without_proved_installed_provenance_is_broken(
 
     assert result["status"] == "FAIL", name
     assert any(reason in r for r in result["failure_reasons"]), (name, result["failure_reasons"])
-    assert result["phase_states"]["p"][0] == "Broken"
+    assert result["phase_states"]["p"][pw.PHASES_P.index("run")] == "Broken"
 
 
 def test_a_phase_that_fails_or_times_out_uses_the_reviewed_grammar() -> None:
@@ -803,10 +813,39 @@ def test_the_installed_child_command_line_keeps_isolation() -> None:
 
 
 def test_the_scenario_plan_matches_the_reviewed_design() -> None:
-    assert pw.PHASES_P == ("run", "resume-1", "resume-2")
+    assert pw.PHASES_P == ("provision", "run", "resume-1", "resume-2")
+    assert all(phases[0] == "provision" for phases in pw.SCENARIOS.values())
     assert set(pw.SCENARIOS) == {"p", "n1", "n2"}
     assert (pw.CHILD_CAP_SECONDS, pw.OVERALL_CAP_SECONDS) == (60, 600)
     assert pw.KEY_A.endswith(":step:1:pre-action") and pw.KEY_C.endswith(":step:2:pre-action")
+
+
+@pytest.mark.parametrize("name", list(pw.SCENARIOS))
+def test_a_journal_outside_the_provisioned_root_fails_the_scenario(name: str) -> None:
+    evidence = honest()
+    later = pw.SCENARIOS[name][-1]
+    evidence[name]["results"][later]["observed"]["journal_root"] = "/elsewhere/journal"
+
+    verdict = pw.evaluate(evidence, expected_receipt_sha256=RECEIPT)
+
+    assert verdict["status"] == "FAIL"
+    assert verdict["failure_reasons"] == [f"{name}:{later}:journal-not-at-provisioned-root"]
+
+
+def test_every_phase_body_runs_under_the_one_declaration_its_layout_wrote(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    layout = pw.Layout(tmp_path / "scenario")
+    pw.prepare_layout(layout)
+    seen: list[object] = []
+    monkeypatch.setitem(
+        pw.PHASE_BODIES, "run", lambda _: seen.append(INSTALLATION_STATE.get()) or {}
+    )
+
+    assert pw.run_phase(layout, "run", None) == 0
+
+    assert seen == [InstallationState(({"installation_root": str(layout.installation_root)},))]
+    assert INSTALLATION_STATE.get() == STORAGE_UNSELECTED  # unbound again after the body
 
 
 def _start(fleet: Any, tmp_path: Path, argv: list[str], phase: str) -> Any:
@@ -1263,7 +1302,7 @@ def config_text(layout, webhook_port, mcp_port):
 
 
 def spawn(argv, env, cwd, logs, phase, own):
-    wanted = {"term-at-tool-server-spawn": "tool-server", "term-at-phase-spawn": "p-run"}
+    wanted = {"term-at-tool-server-spawn": "tool-server", "term-at-phase-spawn": "p-provision"}
 
     def owning(child):
         # The TERM lands between the group's creation and its registration.
@@ -1352,7 +1391,7 @@ def pidfd_open(pid, *rest):
         if phase != "tool-server":
             phase_pgids.add(pid)
     fail_at = {
-        "phase-acquisition-and-cleanup-kill-fail": "p-run",
+        "phase-acquisition-and-cleanup-kill-fail": "p-provision",
         "tool-server-acquisition-fails": "tool-server",
         "tool-server-acquisition-and-cleanup-kill-fail": "tool-server",
     }
