@@ -63,6 +63,81 @@ def read_transcript(path: Path) -> tuple[str, str | None]:
     return identity, final if complete else None
 
 
+def read_selected_turn(
+    path: Path, turn_id: str, expected: Mapping[str, str]
+) -> tuple[str, str, str]:
+    """Select one native completed turn, refusing a later verdict on the same head."""
+    session_id(turn_id)
+    identity = None
+    active = None
+    seen: set[str] = set()
+    selected_final = selected_model = None
+    selected_complete = False
+    later_finals: list[str] = []
+    for line in path.read_text().splitlines():
+        row = json.loads(line)
+        payload = row.get("payload", {})
+        if row.get("type") == "session_meta":
+            found = session_id(payload["id"])
+            if identity is not None and identity != found:
+                raise ValueError("conflicting native session identities")
+            identity = found
+        elif row.get("type") == "event_msg" and payload.get("type") == "task_started":
+            active = session_id(payload["turn_id"])
+            if active in seen:
+                raise ValueError("duplicate native turn ID")
+            seen.add(active)
+        elif row.get("type") == "turn_context" and active == turn_id:
+            if (
+                payload.get("turn_id") != turn_id
+                or not isinstance(payload.get("model"), str)
+                or not payload["model"]
+            ):
+                raise ValueError("selected turn context is invalid")
+            if selected_model is not None and selected_model != payload["model"]:
+                raise ValueError("conflicting selected turn models")
+            selected_model = payload["model"]
+        elif row.get("type") == "event_msg" and payload.get("type") == "task_complete":
+            if payload.get("turn_id") != active:
+                raise ValueError("native turn completion does not match its start")
+            if active == turn_id:
+                selected_complete = True
+            active = None
+        elif (
+            row.get("type") == "response_item"
+            and payload.get("type") == "message"
+            and payload.get("role") == "assistant"
+            and (payload.get("channel") == "final" or payload.get("phase") == "final_answer")
+        ):
+            text = "\n".join(
+                item["text"] for item in payload["content"] if item.get("type") == "output_text"
+            )
+            if active == turn_id:
+                if selected_final is not None:
+                    raise ValueError("multiple selected turn final answers")
+                selected_final = text
+            elif turn_id in seen and active is not None:
+                later_finals.append(text)
+    if identity is None:
+        raise ValueError("native session metadata missing")
+    if not selected_complete or selected_final is None or selected_model is None:
+        raise ValueError("selected native turn lacks completed final answer or model context")
+    # [LAW:no-ambient-temporal-coupling] Later review evidence of this candidate
+    # cannot be bypassed by choosing an older turn, even across a base change.
+    for text in later_finals:
+        raw = rw.extract_fenced_json(text)
+        if raw is not None:
+            try:
+                body = json.loads(raw)
+            except json.JSONDecodeError:
+                body = None
+            if isinstance(body, dict) and body.get("head_sha") == expected["head_sha"]:
+                raise ValueError("later verdict supersedes the selected candidate")
+        if expected["head_sha"] in text and ("verdict" in text or "findings" in text):
+            raise ValueError("later candidate review evidence requires reconciliation")
+    return identity, selected_final, selected_model
+
+
 def binding(repo: Path, base: str, participants: rw.ReviewParticipants) -> dict[str, str]:
     # [LAW:one-source-of-truth] participant provenance is part of the immutable
     # invocation binding; changing the reviewer or material authors invalidates it.
@@ -187,6 +262,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--transcript", required=True, type=Path)
     parser.add_argument("--authors", required=True, nargs="+")
     parser.add_argument("--base", default="origin/main")
+    parser.add_argument("--turn-id", help="select a completed native turn for record")
     args = parser.parse_args(argv)
     try:
         # [LAW:effects-at-boundaries] the CLI reads the actual native store, not an
@@ -195,6 +271,8 @@ def main(argv: list[str] | None = None) -> int:
         native_store = Path(os.environ.get("CODEX_HOME", str(Path.home() / ".codex"))) / "sessions"
         if not transcript.is_relative_to(native_store.resolve(strict=True)):
             raise ValueError("transcript is outside the native Codex session store")
+        if args.turn_id and args.action != "record":
+            raise ValueError("--turn-id applies to record only")
         reviewer, text = read_transcript(transcript)
         if reviewer not in transcript.name:
             raise ValueError("native transcript filename and metadata disagree")
@@ -203,10 +281,22 @@ def main(argv: list[str] | None = None) -> int:
         if args.action == "binding":
             print(json.dumps(expected, indent=2))
             return 0
+        if args.turn_id:
+            selected_reviewer, text, model = read_selected_turn(transcript, args.turn_id, expected)
+            if selected_reviewer != reviewer:
+                raise ValueError("selected turn session identity disagrees")
+            print(f"native-review: selected turn {args.turn_id}; model {model}", file=sys.stderr)
         if text is None:
             raise ValueError("latest native turn has no completed final answer")
         return record(Path.cwd(), text, expected, people)
-    except (ValueError, OSError, subprocess.CalledProcessError, gate.CycleRefusedError) as exc:
+    except (
+        ValueError,
+        TypeError,
+        KeyError,
+        OSError,
+        subprocess.CalledProcessError,
+        gate.CycleRefusedError,
+    ) as exc:
         print(f"native-review: GATE_REFUSED: {exc}", file=sys.stderr)
         return 3
 

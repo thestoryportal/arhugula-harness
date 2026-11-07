@@ -2404,9 +2404,9 @@ def test_append_refuses_unless_holder(tmp_path, monkeypatch, qdir_res):
     rs.reserve("pr-40", lane_id="A", branch="b", arc_type="inventing")
     rs.open_with_sensor("pr-40", "A")
     with pytest.raises(am.AbortError, match="holder"):
-        am.append(am.ArcRow(arc_id="pr-40", merged_at="t", merge_sha="s"))
+        am.append(am.ArcRow(arc_id="pr-40", merged_at="t", merge_sha="c" * 40))
     monkeypatch.setattr(am, "LANE_ID", "A")
-    am.append(am.ArcRow(arc_id="pr-40", merged_at="t", merge_sha="s"))
+    am.append(am.ArcRow(arc_id="pr-40", merged_at="t", merge_sha="c" * 40))
     assert [r["arc_id"] for r in am.read_ledger()] == ["pr-40"]
 
 
@@ -2429,7 +2429,7 @@ def test_drain_flips_before_append_and_folds_reservation_fields(tmp_path, monkey
         lambda row: (order.append(("append", rs.current("pr-1")[1]["state"])), real_append(row))[1],
     )
     monkeypatch.setattr(
-        am, "extract", lambda a: am.ArcRow(arc_id="pr-1", merged_at="t", merge_sha="s")
+        am, "extract", lambda a: am.ArcRow(arc_id="pr-1", merged_at="t", merge_sha="c" * 40)
     )
     am.drain(argparse.Namespace())
     assert order == [("append", "open")], (
@@ -2563,12 +2563,15 @@ def test_cmd_extract_backfill_reserves_first_and_holder_rule_stands(
     monkeypatch.setattr(am, "LEDGER", tmp_path / "l.jsonl")
     monkeypatch.setattr(am, "LANE_ID", "B")
     ns = argparse.Namespace(dry_run=False)
-    classified = am.ArcRow(arc_id="pr-70", pr=70, merged_at="t", merge_sha="s", arc_type="applying")
+    classified = am.ArcRow(
+        arc_id="pr-70", pr=70, merged_at="t", merge_sha="c" * 40, arc_type="applying"
+    )
     monkeypatch.setattr(am, "extract", lambda a: classified)
     assert am.cmd_extract(ns) == 0
     out = capsys.readouterr().out
     assert "reserved by this lane" in out and "terminalized merged" in out
     assert rs.current("pr-70")[1]["state"] == "merged"
+    assert rs.current("pr-70")[1]["merge_sha"] == "c" * 40
     assert rs.current("pr-70")[1]["lane_id"] == "B"
     folded = am.read_ledger()[0]
     assert folded["lane_id"] is None and folded["concurrent_lanes_at_open"] is None, (
@@ -2585,7 +2588,7 @@ def test_cmd_extract_backfill_reserves_first_and_holder_rule_stands(
         am,
         "extract",
         lambda a: am.ArcRow(
-            arc_id="pr-71", pr=71, merged_at="t", merge_sha="s", arc_type="applying"
+            arc_id="pr-71", pr=71, merged_at="t", merge_sha="c" * 40, arc_type="applying"
         ),
     )
     rs.reserve("pr-71", lane_id="A", branch="b", arc_type="inventing")
@@ -2618,7 +2621,7 @@ def test_merged_reservation_holds_entry_until_committed(tmp_path, monkeypatch):
     monkeypatch.setattr(am, "LANE_ID", "B")
     rs.reserve("pr-1", lane_id="A", branch="b", arc_type="applying")
     rs.open_with_sensor("pr-1", "A")
-    rs.transition("pr-1", "merged", lane_id="A")
+    rs.transition("pr-1", "merged", lane_id="A", updates={"merge_sha": "c" * 40})
     monkeypatch.setattr(am, "committed_arc_ids", lambda: set())
     rc = am.drain(argparse.Namespace())
     assert rc == 1 and (q / "pr-1.json").exists(), "sole capture held, never deleted"
@@ -2639,7 +2642,7 @@ def test_local_row_reconciliation_keeps_merged_without_committed_row(
     ledger.write_text(json.dumps({"arc_id": "pr-62", "record_kind": "arc"}) + "\n")
     rs.reserve("pr-62", lane_id="B", branch="b", arc_type="inventing")
     rs.open_with_sensor("pr-62", "B")
-    rs.transition("pr-62", "merged", lane_id="B")
+    rs.transition("pr-62", "merged", lane_id="B", updates={"merge_sha": "c" * 40})
     monkeypatch.setattr(am, "committed_arc_ids", lambda: set())
     am._reconcile_local_rows()
     assert [r["arc_id"] for r in am.read_ledger()] == ["pr-62"], "sole capture survives"
@@ -2655,10 +2658,10 @@ def test_merged_holder_own_capture_drains_normally(tmp_path, monkeypatch):
     rs.reserve("pr-1", lane_id="A", branch="b", arc_type="applying")
     rs.open_with_sensor("pr-1", "A")
     rs.record_phase("pr-1", "execute", "start", ts="2026-08-20T00:00:00Z")
-    rs.transition("pr-1", "merged", lane_id="A")
+    rs.transition("pr-1", "merged", lane_id="A", updates={"merge_sha": "c" * 40})
     monkeypatch.setattr(am, "committed_arc_ids", lambda: set())
     monkeypatch.setattr(
-        am, "extract", lambda a: am.ArcRow(arc_id="pr-1", merged_at="t", merge_sha="s")
+        am, "extract", lambda a: am.ArcRow(arc_id="pr-1", merged_at="t", merge_sha="c" * 40)
     )
     rc = am.drain(argparse.Namespace())
     assert rc == 1, "appended, held pending commit"
@@ -2700,7 +2703,7 @@ def test_local_row_reconciliation_drops_divergent_committed_duplicate(
     # reservation shows the arc was superseded -- reserve pr-81 as another lane's
     rs.reserve("pr-81", lane_id="B", branch="b", arc_type="inventing")
     rs.open_with_sensor("pr-81", "B")
-    rs.transition("pr-81", "merged", lane_id="B")
+    rs.transition("pr-81", "merged", lane_id="B", updates={"merge_sha": "c" * 40})
     monkeypatch.setattr(am, "committed_arc_ids", lambda: {"pr-80", "pr-81"})
     monkeypatch.setattr(
         am,
@@ -2730,7 +2733,7 @@ def test_cmd_extract_backfill_loses_the_reservation_race_loudly(tmp_path, monkey
         am,
         "extract",
         lambda a: am.ArcRow(
-            arc_id="pr-90", pr=90, merged_at="t", merge_sha="s", arc_type="applying"
+            arc_id="pr-90", pr=90, merged_at="t", merge_sha="c" * 40, arc_type="applying"
         ),
     )
     real_current = rs.current
@@ -2783,18 +2786,18 @@ def test_merged_append_refused_once_a_row_is_in_committed_history(tmp_path, monk
     monkeypatch.setattr(am, "LANE_ID", "A")
     rs.reserve("pr-95", lane_id="A", branch="b", arc_type="applying")
     rs.open_with_sensor("pr-95", "A")
-    rs.transition("pr-95", "merged", lane_id="A")
+    rs.transition("pr-95", "merged", lane_id="A", updates={"merge_sha": "c" * 40})
     committed_line = json.dumps({"arc_id": "pr-95", "record_kind": "arc"}, sort_keys=True)
     monkeypatch.setattr(am, "_committed_ledger_lines", lambda: {committed_line})
     with pytest.raises(am.AbortError, match="re-append refused"):
-        am.append(am.ArcRow(arc_id="pr-95", merged_at="t", merge_sha="s"))
+        am.append(am.ArcRow(arc_id="pr-95", merged_at="t", merge_sha="c" * 40))
     # UNREADABLE history is a tri-state unknown: HOLD, never fail open (codex r7 P1)
     monkeypatch.setattr(am, "_committed_ledger_lines", lambda: None)
     with pytest.raises(am.AbortError, match="unreadable"):
-        am.append(am.ArcRow(arc_id="pr-95", merged_at="t", merge_sha="s"))
+        am.append(am.ArcRow(arc_id="pr-95", merged_at="t", merge_sha="c" * 40))
     # KNOWN-empty committed history is the legitimate first capture
     monkeypatch.setattr(am, "_committed_ledger_lines", lambda: set())
-    am.append(am.ArcRow(arc_id="pr-95", merged_at="t", merge_sha="s"))
+    am.append(am.ArcRow(arc_id="pr-95", merged_at="t", merge_sha="c" * 40))
 
 
 def test_interrupted_terminalization_is_completed_on_the_held_retry(tmp_path, monkeypatch):
@@ -2810,12 +2813,16 @@ def test_interrupted_terminalization_is_completed_on_the_held_retry(tmp_path, mo
         json.dumps({"arc_id": "pr-1", "record_kind": "arc"}) + "\n"
     )  # ...and so did its appended local row
     monkeypatch.setattr(am, "committed_arc_ids", lambda: set())
+    monkeypatch.setattr(
+        rs, "_gh_view", lambda pr: {"state": "MERGED", "mergeCommit": {"oid": "c" * 40}}
+    )
     rc = am.drain(argparse.Namespace())
     assert rc == 1 and (q / "pr-1.json").exists(), "entry held pending commit"
     head = rs.current("pr-1")[1]
     assert head["state"] == "merged" and head["pr"] == 1, (
         "the deferred terminalization completed on the retry"
     )
+    assert head["merge_sha"] == "c" * 40
 
 
 def test_cmd_extract_refuses_a_normal_same_lane_reservation(tmp_path, monkeypatch, qdir_res):
@@ -2828,7 +2835,7 @@ def test_cmd_extract_refuses_a_normal_same_lane_reservation(tmp_path, monkeypatc
         am,
         "extract",
         lambda a: am.ArcRow(
-            arc_id="pr-96", pr=96, merged_at="t", merge_sha="s", arc_type="applying"
+            arc_id="pr-96", pr=96, merged_at="t", merge_sha="c" * 40, arc_type="applying"
         ),
     )
     rs.reserve("pr-96", lane_id="A", branch="feat/real-arc", arc_type="applying")
@@ -2850,7 +2857,7 @@ def test_late_accretion_is_refolded_into_the_local_row(tmp_path, monkeypatch):
     rs.reserve("pr-1", lane_id="A", branch="b", arc_type="applying")
     monkeypatch.setattr(am, "committed_arc_ids", lambda: set())
     monkeypatch.setattr(
-        am, "extract", lambda a: am.ArcRow(arc_id="pr-1", merged_at="t", merge_sha="s")
+        am, "extract", lambda a: am.ArcRow(arc_id="pr-1", merged_at="t", merge_sha="c" * 40)
     )
     real_append = am.append
 
@@ -2867,6 +2874,7 @@ def test_late_accretion_is_refolded_into_the_local_row(tmp_path, monkeypatch):
         "the late accretion reached the row via the re-fold"
     )
     assert rs.current("pr-1")[1]["state"] == "merged"
+    assert rs.current("pr-1")[1]["merge_sha"] == "c" * 40
 
 
 def test_reconciliation_keeps_a_legit_local_update_to_a_committed_row(
@@ -2919,10 +2927,10 @@ def test_merged_append_holds_on_unparseable_committed_history(tmp_path, monkeypa
     monkeypatch.setattr(am, "LANE_ID", "A")
     rs.reserve("pr-97", lane_id="A", branch="b", arc_type="applying")
     rs.open_with_sensor("pr-97", "A")
-    rs.transition("pr-97", "merged", lane_id="A")
+    rs.transition("pr-97", "merged", lane_id="A", updates={"merge_sha": "c" * 40})
     monkeypatch.setattr(am, "_committed_ledger_lines", lambda: {'{"arc_id": TRUNC'})
     with pytest.raises(am.AbortError, match="unparseable"):
-        am.append(am.ArcRow(arc_id="pr-97", merged_at="t", merge_sha="s"))
+        am.append(am.ArcRow(arc_id="pr-97", merged_at="t", merge_sha="c" * 40))
 
 
 def test_failed_refold_heals_on_the_next_held_pass(tmp_path, monkeypatch):
@@ -2934,7 +2942,7 @@ def test_failed_refold_heals_on_the_next_held_pass(tmp_path, monkeypatch):
     rs.reserve("pr-1", lane_id="A", branch="b", arc_type="applying")
     rs.open_with_sensor("pr-1", "A")
     rs.record_phase("pr-1", "execute", "start", ts="2026-08-20T00:00:00Z")
-    rs.transition("pr-1", "merged", lane_id="A")
+    rs.transition("pr-1", "merged", lane_id="A", updates={"merge_sha": "c" * 40})
     # the crashed drain appended a PRE-accretion row and never refolded
     (tmp_path / "l.jsonl").write_text(
         json.dumps({"arc_id": "pr-1", "record_kind": "arc", "phases": {}}) + "\n"
@@ -2959,7 +2967,7 @@ def test_backfill_resume_refuses_a_mismatched_reservation_payload(tmp_path, monk
         am,
         "extract",
         lambda a: am.ArcRow(
-            arc_id="pr-98", pr=99, merged_at="t", merge_sha="s", arc_type="applying"
+            arc_id="pr-98", pr=99, merged_at="t", merge_sha="c" * 40, arc_type="applying"
         ),
     )
     with pytest.raises(am.AbortError, match="not this command's reservation"):
@@ -2978,7 +2986,7 @@ def test_backfill_discriminator_cannot_be_a_real_branch(tmp_path, monkeypatch, q
         am,
         "extract",
         lambda a: am.ArcRow(
-            arc_id="pr-99", pr=99, merged_at="t", merge_sha="s", arc_type="applying"
+            arc_id="pr-99", pr=99, merged_at="t", merge_sha="c" * 40, arc_type="applying"
         ),
     )
     # a plausible-looking REAL branch name is still a normal reservation -> refused
@@ -3027,7 +3035,7 @@ def test_bootstrap_honors_the_entrys_declared_at(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(am, "committed_arc_ids", lambda: set())
     monkeypatch.setattr(
-        am, "extract", lambda a: am.ArcRow(arc_id="pr-1", merged_at="t", merge_sha="s")
+        am, "extract", lambda a: am.ArcRow(arc_id="pr-1", merged_at="t", merge_sha="c" * 40)
     )
     am.drain(argparse.Namespace())
     head = rs.current("pr-1")[1]
@@ -3067,7 +3075,7 @@ def test_backfill_retry_without_arc_type_takes_the_reservations_label(
         arc_type_declared_at="close",  # exactly as the backfill mints it
     )
     monkeypatch.setattr(
-        am, "extract", lambda a: am.ArcRow(arc_id="pr-73", pr=73, merged_at="t", merge_sha="s")
+        am, "extract", lambda a: am.ArcRow(arc_id="pr-73", pr=73, merged_at="t", merge_sha="c" * 40)
     )
     assert am.cmd_extract(argparse.Namespace(dry_run=False)) == 0
     row = am.read_ledger()[0]
@@ -3104,7 +3112,7 @@ def test_drain_never_hijacks_a_backfill_pending_reservation(tmp_path, monkeypatc
     )
     monkeypatch.setattr(am, "committed_arc_ids", lambda: set())
     monkeypatch.setattr(
-        am, "extract", lambda a: am.ArcRow(arc_id="pr-1", merged_at="t", merge_sha="s")
+        am, "extract", lambda a: am.ArcRow(arc_id="pr-1", merged_at="t", merge_sha="c" * 40)
     )
     rc = am.drain(argparse.Namespace())
     assert rc == 1 and (q / "pr-1.json").exists(), "entry held, not consumed"
@@ -3116,7 +3124,7 @@ def test_drain_never_hijacks_a_backfill_pending_reservation(tmp_path, monkeypatc
     rc = am.drain(argparse.Namespace())
     assert rc == 1 and (q / "pr-1.json").exists() and am.read_ledger() == []
     assert rs.current("pr-1")[1]["state"] == "open", "open backfill head untouched"
-    rs.transition("pr-1", "merged", lane_id="A")
+    rs.transition("pr-1", "merged", lane_id="A", updates={"merge_sha": "c" * 40})
     rc = am.drain(argparse.Namespace())
     assert rc == 1 and (q / "pr-1.json").exists() and am.read_ledger() == []
     assert rs.current("pr-1")[1]["state"] == "merged", "merged backfill head untouched"

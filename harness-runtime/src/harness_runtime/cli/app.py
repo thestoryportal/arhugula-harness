@@ -14,17 +14,22 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import math
 import sys
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Coroutine
 from contextlib import AsyncExitStack
 from datetime import timedelta
 from enum import StrEnum
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Any, cast
+from typing import TYPE_CHECKING, Annotated, Any, NoReturn, cast
 
 if TYPE_CHECKING:
     import httpx
+
+    from harness_runtime.api import RunResult
+    from harness_runtime.resume_refusal import ResumeRefusalError
+    from harness_runtime.types import RuntimeConfig
 
 import typer
 from harness_cp.cp_shared_types import ModelBinding
@@ -49,13 +54,16 @@ class OutputFormat(StrEnum):
     json = "json"
 
 
-# Exit code mapping per runtime spec v1.35 §14.18.2 (B-27 extended to 6-level at v1.100).
+# Exit code mapping per runtime spec v1.35 §14.18.2 (B-27 extended to 6-level at v1.100;
+# the two resume refusal codes added at v1.137 §F).
 EXIT_SUCCESS = 0
 EXIT_WORKFLOW_FAIL = 1
 EXIT_MANIFEST_ERROR = 2
 EXIT_CONFIG_ERROR = 3
 EXIT_BOOTSTRAP_ERROR = 4
 EXIT_PAUSED = 5
+EXIT_RESUME_REFUSED = 6
+EXIT_RESUME_CLAIM_REFUSED = 7
 
 
 app = typer.Typer(
@@ -147,6 +155,77 @@ def _emit_run_result(result: Any, *, output: OutputFormat) -> None:
 def _print_fail_class(fail_class: str, detail: str) -> None:
     """Emit ``RT-FAIL-*`` fail class + detail to stderr per spec §14.18.4."""
     typer.echo(f"{fail_class}: {detail}", err=True)
+
+
+def _load_admissible_workflow(
+    workflow_file: Path, *, config: Path | None, tenant_id: str | None
+) -> tuple[LoadedWorkflow, RuntimeConfig]:
+    """The one-shot stages ``run`` and ``resume`` share: config load (RT-FAIL-CLI-CONFIG-LOAD →
+    exit 3), manifest load (RT-FAIL-CLI-MANIFEST-* → exit 2) and the dispatch-site engine_class
+    admissibility check (NEW AC #4 → exit 2)."""
+    try:
+        runtime_config = RuntimeConfigSource.load(
+            config_file=config, cli_overrides=_build_cli_overrides(tenant_id=tenant_id)
+        )
+    except RuntimeConfigLoadError as exc:
+        _print_fail_class(exc.FAIL_CLASS, exc.reason)
+        raise typer.Exit(code=EXIT_CONFIG_ERROR) from exc
+    try:
+        workflow = WorkflowManifestLoader.load_workflow(workflow_file)
+        _check_engine_class_admissibility(workflow, config=runtime_config)
+    except WorkflowManifestLoadError as exc:
+        _print_fail_class(exc.FAIL_CLASS, exc.reason)
+        raise typer.Exit(code=EXIT_MANIFEST_ERROR) from exc
+    return workflow, runtime_config
+
+
+def _dispatch_one_shot(dispatch: Coroutine[Any, Any, RunResult]) -> RunResult:
+    """Run one in-process dispatch; a bootstrap failure is RT-FAIL-BOOTSTRAP → exit 4."""
+    # Lazy import to keep the CLI cold-path import budget small: bootstrap pulls the whole
+    # runtime transitively, and `harness --help` should not pay that cost.
+    from harness_runtime.bootstrap import BootstrapFailure
+
+    try:
+        return asyncio.run(dispatch)
+    except BootstrapFailure as exc:
+        _print_fail_class("RT-FAIL-BOOTSTRAP", str(exc))
+        raise typer.Exit(code=EXIT_BOOTSTRAP_ERROR) from exc
+
+
+def _exit_with_run_result(result: RunResult, *, output: OutputFormat) -> NoReturn:
+    """Emit the RunResult and exit per §14.18.2: completed 0, paused 5, anything else 1."""
+    _emit_run_result(result, output=output)
+    exit_codes = {"completed": EXIT_SUCCESS, "paused": EXIT_PAUSED}
+    raise typer.Exit(code=exit_codes.get(result.status, EXIT_WORKFLOW_FAIL))
+
+
+def _exit_with_refusal(error: ResumeRefusalError, *, output: OutputFormat) -> NoReturn:
+    """Present a resume refusal as its closed value (spec v1.137 §D.3, §F): JSON mode prints the
+    value once on stdout, text mode its kind, fail_class and typed facts on stderr. Both read
+    the projected value, never the exception message, so no path, secret or tenant reaches
+    the output; the exit code names only the refusal family."""
+    from harness_runtime.resume_refusal import (
+        ClaimRefusal,
+        DepthRefusal,
+        HandleRefusal,
+        ValidationRefusal,
+        project,
+        to_json,
+        wire_fields,
+    )
+
+    refusal = project(error)
+    if output is OutputFormat.json:
+        typer.echo(to_json(refusal))
+    else:
+        facts = " ".join(f"{name}={json.dumps(v)}" for name, v in wire_fields(refusal).items())
+        typer.echo(f"resume refused: {facts}", err=True)
+    match refusal:
+        case ClaimRefusal():
+            code = EXIT_RESUME_CLAIM_REFUSED
+        case ValidationRefusal() | HandleRefusal() | DepthRefusal():
+            code = EXIT_RESUME_REFUSED
+    raise typer.Exit(code=code) from error
 
 
 _DAEMON_CLIENT_STREAMABLE_HTTP_URL = "http://127.0.0.1/mcp"
@@ -433,52 +512,57 @@ def run_command(
         status = str(payload.get("status", "")).lower()
         raise typer.Exit(code=_CP_STATUS_TO_EXIT_CODE.get(status, EXIT_WORKFLOW_FAIL))
 
-    # --- Stage 1: config load (RT-FAIL-CLI-CONFIG-LOAD → exit 3) ----------
-    cli_overrides = _build_cli_overrides(tenant_id=tenant_id)
-    try:
-        runtime_config = RuntimeConfigSource.load(config_file=config, cli_overrides=cli_overrides)
-    except RuntimeConfigLoadError as exc:
-        _print_fail_class(exc.FAIL_CLASS, exc.reason)
-        raise typer.Exit(code=EXIT_CONFIG_ERROR) from exc
-
-    # --- Stage 2: manifest load (RT-FAIL-CLI-MANIFEST-* → exit 2) ---------
-    try:
-        workflow = WorkflowManifestLoader.load_workflow(workflow_file)
-    except WorkflowManifestLoadError as exc:
-        _print_fail_class(exc.FAIL_CLASS, exc.reason)
-        raise typer.Exit(code=EXIT_MANIFEST_ERROR) from exc
-
-    # --- Stage 3: workflow-level overrides (--provider / --model) ---------
+    workflow, runtime_config = _load_admissible_workflow(
+        workflow_file, config=config, tenant_id=tenant_id
+    )
+    # Overrides change only the model binding, never the engine_class admissibility checked above.
     workflow = _apply_workflow_overrides(workflow, provider=provider, model=model)
-
-    # --- Stage 4: admissibility check at dispatch site (NEW AC #4) --------
-    try:
-        _check_engine_class_admissibility(workflow, config=runtime_config)
-    except ManifestAdmissibilityError as exc:
-        _print_fail_class(exc.FAIL_CLASS, exc.reason)
-        raise typer.Exit(code=EXIT_MANIFEST_ERROR) from exc
-
-    # --- Stage 5: dispatch via api.run (synchronous one-shot) -------------
-    # Lazy import to keep the CLI cold-path import budget small: api.py pulls
-    # bootstrap + shutdown transitively, and `harness --help` should not pay
-    # that cost.
     from harness_runtime.api import run as _api_run
-    from harness_runtime.bootstrap import BootstrapFailure
 
+    _exit_with_run_result(
+        _dispatch_one_shot(_api_run(workflow, config=runtime_config)), output=output
+    )
+
+
+@app.command("resume")
+def resume_command(
+    workflow_file: Annotated[
+        Path,
+        typer.Argument(
+            help="Manifest of the paused workflow; its workflow_id is the resume handle",
+            show_default=False,
+        ),
+    ],
+    config: Annotated[
+        Path | None,
+        typer.Option("--config", help="Override default harness.toml config path"),
+    ] = None,
+    tenant_id: Annotated[
+        str | None,
+        typer.Option("--tenant-id", help="Override RuntimeConfig.tenant_id"),
+    ] = None,
+    output: Annotated[
+        OutputFormat,
+        typer.Option("--output", help="RunResult or refusal output format"),
+    ] = OutputFormat.text,
+) -> None:
+    """Resume the latest durable workflow-layer pause of the manifest's workflow (v1.137 §E)."""
+    workflow, runtime_config = _load_admissible_workflow(
+        workflow_file, config=config, tenant_id=tenant_id
+    )
+    from harness_runtime.api import resume as _api_resume
+    from harness_runtime.resume_refusal import REFUSAL_ERRORS
+
+    # [LAW:single-enforcer] `api.resume` owns the handle read, claim, journal and run_id; this
+    # surface only names the handle, so it holds no store, lease or snapshot input of its own.
+    dispatch = _api_resume(workflow, resume_handle=workflow.workflow_id, config=runtime_config)
     try:
-        run_result = asyncio.run(_api_run(workflow, config=runtime_config))
-    except BootstrapFailure as exc:
-        _print_fail_class("RT-FAIL-BOOTSTRAP", str(exc))
-        raise typer.Exit(code=EXIT_BOOTSTRAP_ERROR) from exc
-
-    # --- Stage 6: emit RunResult + exit per §14.18.2 ----------------------
-    _emit_run_result(run_result, output=output)
-    if run_result.status == "completed":
-        raise typer.Exit(code=EXIT_SUCCESS)
-    if run_result.status == "paused":
-        raise typer.Exit(code=EXIT_PAUSED)
-    # status ∈ {"drained", "failed", "partial"} → exit 1
-    raise typer.Exit(code=EXIT_WORKFLOW_FAIL)
+        run_result = _dispatch_one_shot(dispatch)
+    except REFUSAL_ERRORS as exc:
+        # REFUSAL_ERRORS is derived from the ResumeRefusalError alias, so the cast is exact; the
+        # type checker cannot narrow an `except` through a tuple read from an alias.
+        _exit_with_refusal(cast("ResumeRefusalError", exc), output=output)
+    _exit_with_run_result(run_result, output=output)
 
 
 def _default_daemon_socket_path() -> Path:

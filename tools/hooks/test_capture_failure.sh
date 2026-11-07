@@ -132,14 +132,25 @@ SIGLEN=$(tail -1 "$LOG" | jq -r .sig | wc -c | tr -d ' ')
 : > "$LOG"
 PAR='{"hook_event_name":"PostToolUseFailure","tool_name":"Bash","error_type":"par_test","session_id":"sess-PAR"}'
 run "$PAR" >/dev/null   # seed: recur=1 (below threshold) so every parallel run qualifies
+_PAR_PIDS=()
 for _i in 1 2 3 4 5 6 7 8 9 10 11 12; do
-  ( printf '%s' "$PAR" | CLAUDE_PROJECT_DIR="$REPO" bash "$HOOK" >/dev/null 2>&1 ) &
+  ( printf '%s' "$PAR" | CLAUDE_PROJECT_DIR="$REPO" bash "$HOOK" > "$REPO/parallel-$_i.stdout" 2> "$REPO/parallel-$_i.stderr" ) &
+  _PAR_PIDS+=("$!")
 done
-wait
+for _pid in "${_PAR_PIDS[@]}"; do
+  wait "$_pid" || bad "parallel hook $_pid failed with status $?"
+done
 EMITTED=$(grep -c '"emitted":true' "$LOG")
 [ "$EMITTED" = "2" ] && ok "parallel 12-way probe emits exactly 2 (lock holds the cap)" || bad "parallel cap broken: $EMITTED emitted"
 [ "$(wc -l < "$LOG" | tr -d ' ')" = "13" ] && ok "parallel probe: all 13 occurrences logged" || bad "parallel probe: log row count $(wc -l < "$LOG")"
-[ ! -d "$LOG.lock" ] && ok "lock released after parallel probe" || bad "lock directory leaked"
+if [ -d "$LOG.lock" ]; then
+  bad "lock directory leaked"
+  ls -la "$LOG.lock"
+  [ ! -f "$LOG.lock/owner" ] || cat "$LOG.lock/owner"
+  cat "$REPO"/parallel-*.stderr
+else
+  ok "lock released after parallel probe"
+fi
 
 # 12) codex round-2: when the lock CANNOT be acquired, the row is still logged but
 #     emission is SUPPRESSED — an unserialized cap decision re-opens the spam (a
@@ -239,6 +250,47 @@ _t1=$(date +%s)
 [ "$(wc -l < "$LOG" | tr -d ' ')" = "2" ] && ok "aged-lock fast path still logs" || bad "fast-path row missing"
 [ -d "$LOG.lock" ] && ok "fast path never reclaims (loop-gc's job)" || bad "fast path reaped the lock"
 rm -rf "$LOG.lock"
+
+# [LAW:behavior-not-structure] a utility reporting success on EEXIST must not
+# grant ownership of a foreign lock (uutils 0.10's concurrent mkdir behavior).
+: > "$LOG"
+mkdir "$LOG.lock"; printf '%s' "foreign-holder" > "$LOG.lock/owner"
+SHIM="$REPO/mkdir-shim"
+mkdir "$SHIM"
+REAL_MKDIR=$(command -v mkdir)
+cat > "$SHIM/mkdir" <<'SH'
+#!/usr/bin/env bash
+if [ "$#" -eq 1 ] && [ "$1" = ".harness/session-issues.jsonl.lock" ]; then
+  exit 0
+fi
+exec "$CAPTURE_TEST_MKDIR" "$@"
+SH
+chmod +x "$SHIM/mkdir"
+printf '%s' "$FO" | PATH="$SHIM:$PATH" CAPTURE_TEST_MKDIR="$REAL_MKDIR" \
+  CLAUDE_PROJECT_DIR="$REPO" CAPTURE_FAILURE_LOCK_TRIES=2 bash "$HOOK" > "$REPO/false-success.stdout" 2> "$REPO/false-success.stderr"
+[ -d "$LOG.lock" ] && [ "$(cat "$LOG.lock/owner")" = "foreign-holder" ] \
+  && ok "false-success mkdir cannot overwrite or remove a foreign lock" || bad "false-success mkdir acquired a foreign lock"
+[ "$(wc -l < "$LOG" | tr -d ' ')" = "1" ] && [ "$(tail -1 "$LOG" | jq -r .emitted)" = false ] \
+  && ok "false-success contention still logs without emission" || bad "false-success contention did not log safely"
+rm -rf "$LOG.lock"
+
+cat > "$SHIM/python3" <<'SH'
+#!/usr/bin/env bash
+echo "acquisition failed" >&2
+echo attempt >> "$CAPTURE_TEST_ATTEMPTS"
+exit 2
+SH
+chmod +x "$SHIM/python3"
+: > "$LOG"
+printf '%s' "$FO" | PATH="$SHIM:$PATH" CAPTURE_TEST_MKDIR="$REAL_MKDIR" \
+  CAPTURE_TEST_ATTEMPTS="$REPO/attempts" CLAUDE_PROJECT_DIR="$REPO" bash "$HOOK" \
+  > "$REPO/acquire-error.stdout" 2> "$REPO/acquire-error.stderr"
+[ "$(wc -l < "$REPO/attempts" | tr -d ' ')" = "1" ] \
+  && ok "acquisition error stops retrying" || bad "acquisition error retried"
+grep -q "acquisition failed" "$REPO/acquire-error.stderr" \
+  && ok "acquisition error remains visible" || bad "acquisition error suppressed"
+[ ! -d "$LOG.lock" ] && [ "$(tail -1 "$LOG" | jq -r .emitted)" = false ] \
+  && ok "acquisition error logs without ownership or emission" || bad "acquisition error failed open"
 
 echo "---"; echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1
