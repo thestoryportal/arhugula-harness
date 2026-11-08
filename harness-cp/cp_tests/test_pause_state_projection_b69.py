@@ -20,6 +20,7 @@ from pathlib import Path
 
 import pytest
 from harness_core.identity import EntryID
+from harness_cp.engine_class import EngineClass
 from harness_cp.handoff_context import StateSummary
 from harness_cp.hitl_placement import HITLResult
 from harness_cp.hitl_response_palette import HITLResponse
@@ -40,6 +41,7 @@ from harness_cp.pause_state_projection import (
     BranchEffectFenceAddressableLocation,
     CrashReconstructionEffectFenceAddressableLocation,
     DepthZeroRootUniformFallbackOnlyLocation,
+    EnginePausedState,
     HitlAddressableLocation,
     KeyAbsentLinearEffectFenceAddressableLocation,
     KeyAbsentOrchestratorEffectFenceAddressableLocation,
@@ -761,3 +763,48 @@ def test_a9_uniform_fallback_resolver_semantics_unchanged() -> None:
         ),
     )
     assert compute_hitl_uniform_fallback_eligible_run_id(two, ResumeContext()) is None
+
+
+# --------------------------------------------------------------------------
+# B-314 fork §5 — the pause layer discriminates the accessor's root claim
+# --------------------------------------------------------------------------
+
+
+def _engine_state(**overrides: object) -> dict[str, object]:
+    return {
+        "workflow_id": _WORKFLOW_ID,
+        "run_id": "run-engine",
+        "step_index": 2,
+        "engine_class": EngineClass.WAL_SEGMENT,
+        "staleness_token": "tok-engine",
+        **overrides,
+    }
+
+
+def test_the_resume_carrier_discriminates_both_pause_layers() -> None:
+    engine = EnginePausedState.model_validate(_engine_state())
+    workflow = _pause_state()
+    for state in (engine, workflow):
+        context = AccessorDerivedResumeContext.from_pause_state(state)
+        assert AccessorDerivedResumeContext.model_validate(context.model_dump()) == context
+    assert workflow.pause_layer == "workflow"
+    assert engine.pause_layer == "engine"
+    assert engine.depth == 0
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"depth": 1},
+        {"step_index": -1},
+        {"engine_class": EngineClass.PURE_PATTERN_NO_ENGINE},
+        {"staleness_token": ""},
+        {"journal_path": "/state/wf.jsonl"},
+        {"locator_hash": "0" * 64},
+    ],
+)
+def test_an_engine_projection_admits_only_root_engine_identity(
+    overrides: dict[str, object],
+) -> None:
+    with pytest.raises(ValidationError):
+        EnginePausedState.model_validate(_engine_state(**overrides))

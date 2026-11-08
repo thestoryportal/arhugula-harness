@@ -89,9 +89,11 @@ from harness_cp.cp_shared_types import ModelBinding
 from harness_cp.pause_resume_protocol_types import PauseSnapshot, ResumeContext
 from harness_cp.pause_state_projection import (
     AccessorDerivedResumeContext,
+    EnginePausedState,
     PausedWorkflowState,
     PauseLocationProjection,
     PauseLocationVariant,
+    PauseState,
     project_pause_locations,
 )
 from harness_cp.workflow_driver_types import RunResult as _CpRunResult
@@ -1003,7 +1005,7 @@ async def read_paused_workflow_state(
     *,
     resume_handle: str,
     config: RuntimeConfig | None = None,
-) -> PausedWorkflowState:
+) -> PauseState:
     """Read a workflow's LATEST DURABLE PAUSE record — what it was waiting on, NOT a liveness claim.
 
     Intended use is pre-flight: read BEFORE composing a resume context. See the
@@ -1071,12 +1073,14 @@ async def read_paused_workflow_state(
 
     Returns
     -------
-    PausedWorkflowState
-        The root claim: `workflow_id`, the journaled record's `created_at`, the
-        accessor-minted staleness token, and the ORDERED sequence of typed location
-        projections. Pass it to
-        `AccessorDerivedResumeContext.from_pause_state(...)` to compose a fenced
-        resume context.
+    PauseState
+        For a workflow-layer pause, `PausedWorkflowState`: `workflow_id`, the
+        journaled record's `created_at`, the accessor-minted staleness token, and
+        the ORDERED sequence of typed location projections. For an engine-native
+        pause (B-314 fork §5), `EnginePausedState`: the locator's `workflow_id`,
+        `run_id`, `step_index`, depth 0 and engine class, plus the token. Pass
+        either to `AccessorDerivedResumeContext.from_pause_state(...)` to compose a
+        fenced resume context.
 
     Raises
     ------
@@ -1131,14 +1135,15 @@ async def read_paused_workflow_state(
     read = (
         await asyncio.to_thread(_read_durable_pause_snapshot, resolved_config, resume_handle)
     ).result
-    snapshot = read.snapshot
+    # A causeless read carries exactly one record, a snapshot or an engine-pause locator.
+    record = read.snapshot if read.snapshot is not None else read.locator
     # The WORKFLOW-MATCH guard runs HERE, before any projection is returned
     # (§14.14.9.4) — not deferred to §30.
-    if snapshot is not None and snapshot.workflow_id != workflow.workflow_id:
-        snapshot = None
+    if record is not None and record.workflow_id != workflow.workflow_id:
+        record = None
         read = read._replace(cause=PauseJournalReadCause.WORKFLOW_MISMATCH, retryable=False)
-    token = mint_staleness_token(read) if snapshot is not None else None
-    if snapshot is None or token is None:
+    token = mint_staleness_token(read) if record is not None else None
+    if record is None or token is None:
         # Fail-closed: no-token-returned MUST mean no-projection-returned. A
         # projection carrying an absent token would be read by a subsequent
         # `resume()` as "no claim" — the precise failure §14.14.9.4 forbids.
@@ -1160,31 +1165,52 @@ async def read_paused_workflow_state(
             indeterminate=read.indeterminate,
         )
 
-    try:
-        locations = project_pause_locations(snapshot)
-    except (ValueError, ValidationError) as exc:
-        # A journal written by a NEWER deployment can carry a `step_kind` (or any
-        # other closed-vocabulary value) this runtime does not know: the snapshot
-        # itself still validates, because those source fields are plain `str`, but
-        # projecting it raises. Letting that escape would bypass BOTH the promised
-        # typed failure channel and §30.5.1's REQUIRED failed-read emission. The
-        # record we would resume from is unusable, which is exactly what
-        # `corrupt-latest` means. *(Out-of-family review [P2], round 3.)*
-        await asyncio.to_thread(
-            _emit_pause_state_read,
-            resolved_config,
-            workflow,
-            succeeded=False,
-            cause=PauseJournalReadCause.CORRUPT_LATEST,
-            token=None,
-            locations=(),
-        )
-        raise PausedWorkflowStateUnavailableError(
-            f"the durable pause record for resume_handle={resume_handle!r} could not "
-            f"be projected by this runtime; cause="
-            f"{PauseJournalReadCause.CORRUPT_LATEST.value} (§14.14.9.4).",
-            cause=PauseJournalReadCause.CORRUPT_LATEST,
-        ) from exc
+    # [LAW:types-are-the-program] The latest record's kind alone selects the projection's
+    # pause layer (B-314 fork §5). An engine pause has no locations to project.
+    state: PauseState
+    locations: tuple[PauseLocationProjection, ...]
+    match record:
+        case EnginePauseLocator():
+            locations = ()
+            state = EnginePausedState(
+                workflow_id=record.workflow_id,
+                run_id=record.run_id,
+                step_index=record.step_index,
+                engine_class=record.engine_class,
+                staleness_token=token,
+            )
+        case PauseSnapshot():
+            try:
+                locations = project_pause_locations(record)
+            except (ValueError, ValidationError) as exc:
+                # A journal written by a NEWER deployment can carry a `step_kind` (or any
+                # other closed-vocabulary value) this runtime does not know: the snapshot
+                # itself still validates, because those source fields are plain `str`, but
+                # projecting it raises. Letting that escape would bypass BOTH the promised
+                # typed failure channel and §30.5.1's REQUIRED failed-read emission. The
+                # record we would resume from is unusable, which is exactly what
+                # `corrupt-latest` means. *(Out-of-family review [P2], round 3.)*
+                await asyncio.to_thread(
+                    _emit_pause_state_read,
+                    resolved_config,
+                    workflow,
+                    succeeded=False,
+                    cause=PauseJournalReadCause.CORRUPT_LATEST,
+                    token=None,
+                    locations=(),
+                )
+                raise PausedWorkflowStateUnavailableError(
+                    f"the durable pause record for resume_handle={resume_handle!r} could not "
+                    f"be projected by this runtime; cause="
+                    f"{PauseJournalReadCause.CORRUPT_LATEST.value} (§14.14.9.4).",
+                    cause=PauseJournalReadCause.CORRUPT_LATEST,
+                ) from exc
+            state = PausedWorkflowState(
+                workflow_id=record.workflow_id,
+                created_at=record.created_at,
+                staleness_token=token,
+                locations=locations,
+            )
     await asyncio.to_thread(
         _emit_pause_state_read,
         resolved_config,
@@ -1194,12 +1220,7 @@ async def read_paused_workflow_state(
         token=token,
         locations=locations,
     )
-    return PausedWorkflowState(
-        workflow_id=snapshot.workflow_id,
-        created_at=snapshot.created_at,
-        staleness_token=token,
-        locations=locations,
-    )
+    return state
 
 
 def _emit_pause_state_read(
