@@ -2521,6 +2521,9 @@ def test_stage_twice_fails_closed_on_either_install_and_still_discards_the_repea
 
 
 _JOB = {key: f"job-{key}" for key in gate.JOB_BINDINGS}
+_VNG_HELP = "usage: vng [--run RUN] [--root ROOT] [--rodir RODIR] [--rwdir RWDIR]\n" + (
+    "  [--cpus CPUS] [--memory MEMORY] [--exec EXEC] [--net NET]\n"
+)
 
 
 class _Host:
@@ -2570,7 +2573,7 @@ class _Host:
             (meta / "stage-manifest.json").write_text('{"/a5/src": {}}')
             return record("verify", (root, a5, tuple(mounts)), list(problems))
 
-        stdout = {"dpkg-query": "virtme-ng 1.40-2 amd64 ii\n", "vng": "usage: vng"}
+        stdout = {"dpkg-query": "virtme-ng 1.40-2 amd64 ii\n", "vng": _VNG_HELP}
         staged = gate.Staged(doc["install"], manifests)
         monkeypatch.setattr(gate, "bootstrap", lambda *a: record("bootstrap", a, boot))
         monkeypatch.setattr(gate, "stage_twice", lambda *a: record("stage_twice", a, staged))
@@ -2593,7 +2596,9 @@ def test_q0_host_writes_records_binding_the_stage_it_built(
     host = _Host(tmp_path, monkeypatch)
     host.run(_JOB | {"UNRELATED": "x"})
     meta, evidence, at = host.at.a5 / "meta", host.at.evidence, host.at
-    assert [name for name, _ in host.calls][:7] == [
+    assert [name for name, _ in host.calls][:9] == [
+        "stdout",
+        "stdout",
         "run_steps",
         "bootstrap",
         "stage_twice",
@@ -2618,7 +2623,7 @@ def test_q0_host_writes_records_binding_the_stage_it_built(
     assert env["INPUTS_SHA256"] == host.inputs.sha256
     facts = json.loads((meta / "host.json").read_bytes())
     assert facts["host_packages"] == {"virtme-ng": "1.40-2"}
-    assert facts["gcc_version"] == "gcc 15" and facts["vng_help"] == "usage: vng"
+    assert facts["gcc_version"] == "gcc 15" and facts["vng_help"] == _VNG_HELP
     assert facts["guest_scripts"] == {
         gate.GUEST_RUN: _sha(gate.GUEST_RUN_SH.encode()),
         gate.Q0_PROBE: _sha(gate.Q0_PROBE_SH.encode()),
@@ -2627,7 +2632,7 @@ def test_q0_host_writes_records_binding_the_stage_it_built(
     stage = json.loads((evidence / "host-stage.json").read_bytes())
     assert stage["binding_env_sha256"] == _sha((meta / "binding.env").read_bytes())
     # Every sentinel is planted before bootstrap, and only its digest is recorded, host side.
-    (*writes, git), cwd = host.calls[0][1]
+    (*writes, git), cwd = host.calls[2][1]
     sites = {
         "$HOME/.a5-sentinel": tmp_path / "home" / ".a5-sentinel",
         "$RUNNER_TEMP/a5-sentinel": tmp_path / "temp" / "a5-sentinel",
@@ -2832,6 +2837,129 @@ def test_q0_host_refuses_an_unset_sentinel_base_before_planting_anything(
     with pytest.raises(gate.Q0Error, match=rf"lacks \['{base}'\]"):
         host.run(_JOB | {base: ""})
     assert host.calls == []
+
+
+def test_launcher_problems_pass_the_pinned_vng_with_every_launch_option() -> None:
+    assert gate.launcher_problems({"virtme-ng": "1.40-2"}, _VNG_HELP, "1.40-2") == []
+    assert gate.launcher_problems({"virtme-ng": "1.42-1"}, _VNG_HELP, "1.40-2") == [
+        "host virtme-ng '1.42-1' is not 1.40-2"
+    ]
+    assert gate.launcher_problems({}, _VNG_HELP, "1.40-2") == ["host virtme-ng None is not 1.40-2"]
+    # An option is present only as itself, never as the prefix of a longer one.
+    shadowed = _VNG_HELP.replace("--root ROOT", "--rootfs ROOT").replace("--run RUN", "--run-x X")
+    assert gate.launcher_problems({"virtme-ng": "1.40-2"}, shadowed, "1.40-2") == [
+        "vng --help lacks --run",
+        "vng --help lacks --root",
+    ]
+
+
+def test_q0_host_refuses_a_launcher_mismatch_before_planting_anything(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    host = _Host(tmp_path, monkeypatch)
+    stdout = {"dpkg-query": "virtme-ng 1.42-1 amd64 ii\n", "vng": "usage: vng [--run RUN]"}
+    monkeypatch.setattr(gate, "_stdout", lambda argv, cwd: stdout[argv[0]])
+    with pytest.raises(
+        gate.Q0Error,
+        match=r"launcher: host virtme-ng '1\.42-1' is not 1\.40-2; vng --help lacks --root;",
+    ):
+        host.run(_JOB)
+    assert host.calls == []
+
+
+def test_vng_argv_launches_the_built_kernel_with_exactly_the_checked_options(
+    tmp_path: Path,
+) -> None:
+    argv = gate.vng_argv(tmp_path / "work", Path("/a5-guest/root"), tmp_path / "out", gate.Q0_EXEC)
+    assert argv[:4] == ["timeout", "--kill-after=30s", "2700", "vng"]
+    options = dict(zip(argv[4::2], argv[5::2], strict=True))
+    assert tuple(options) == gate.VNG_OPTIONS
+    assert options == {
+        "--run": str(tmp_path / "work" / "kernel" / gate.KERNEL_SOURCE / gate.BZIMAGE),
+        "--root": "/a5-guest/root",
+        "--rodir": "/a5=/a5",
+        "--rwdir": f"/out={tmp_path / 'out'}",
+        "--cpus": "4",
+        "--memory": "12G",
+        "--exec": "/bin/sh /a5/meta/q0-probe.sh",
+    }
+
+
+def test_launch_records_its_scope_before_the_guest_runs_and_returns_the_guest_exit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    handles, out = tmp_path / "ev" / "handles.json", tmp_path / "out"
+    launched: list[Sequence[str]] = []
+
+    def run(argv: Sequence[str]) -> int:
+        assert json.loads(handles.read_bytes()) == {"scope": "a5-guest-41-2.scope"}
+        launched.append(argv)
+        return 7
+
+    monkeypatch.setattr(gate, "_exit_code", run)
+    run_env = {"GITHUB_RUN_ID": "41", "GITHUB_RUN_ATTEMPT": "2"}
+    root = Path("/a5-guest/root")
+    assert gate.launch(run_env, tmp_path / "work", root, out, handles) == 7
+    assert out.is_dir()
+    vng = gate.vng_argv(tmp_path / "work", root, out, gate.Q0_EXEC)
+    assert launched == [
+        ["systemd-run", "--user", "--scope", "--quiet", "--unit=a5-guest-41-2.scope", "--", *vng]
+    ]
+    assert gate.launch({"GITHUB_RUN_ID": "41"}, tmp_path, root, out, tmp_path / "h.json") == 1
+    assert not (tmp_path / "h.json").exists() and len(launched) == 1
+
+
+@pytest.mark.parametrize(
+    ("after_stop", "after_kill", "actions", "code"),
+    [
+        pytest.param([], [], ["stop"], 0, id="stopped"),
+        pytest.param([12], [], ["stop", "kill"], 0, id="killed"),
+        pytest.param([12], [12], ["stop", "kill"], 1, id="survivor"),
+    ],
+)
+def test_cleanup_signals_only_the_recorded_scope_and_fails_on_a_survivor(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    after_stop: list[int],
+    after_kill: list[int],
+    actions: list[str],
+    code: int,
+) -> None:
+    (handles := tmp_path / "handles.json").write_text('{"scope": "a5-guest-41-2.scope"}')
+    signalled: list[Sequence[str]] = []
+    settled = iter([after_stop, after_kill])
+    monkeypatch.setattr(gate, "scope_pids", lambda unit: [11, 12])
+    monkeypatch.setattr(gate, "_exit_code", lambda argv: signalled.append(argv) or 0)
+    monkeypatch.setattr(gate, "_settle", lambda pids, seconds: next(settled))
+    out = tmp_path / "ev" / "cleanup.json"
+    assert gate.cleanup(handles, out) == code
+    assert [argv[2] for argv in signalled] == actions
+    assert all(argv[-1] == "a5-guest-41-2.scope" for argv in signalled)
+    record = json.loads(out.read_bytes())
+    assert record["pids"] == {"11": "gone", "12": "alive" if after_kill else "gone"}
+    assert record["verdict"] == ("fail" if code else "pass")
+
+
+def test_cleanup_with_nothing_in_the_scope_signals_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (handles := tmp_path / "handles.json").write_text('{"scope": "a5-guest-41-2.scope"}')
+    monkeypatch.setattr(gate, "scope_pids", lambda unit: [])
+    monkeypatch.setattr(gate, "_exit_code", lambda argv: pytest.fail(f"signalled {argv}"))
+    assert gate.cleanup(handles, tmp_path / "cleanup.json") == 0
+    assert json.loads((tmp_path / "cleanup.json").read_bytes())["signals"] == []
+    (handles).write_text('{"scope": "user.slice"}')
+    assert gate.cleanup(handles, tmp_path / "refused.json") == 1
+
+
+def test_settle_returns_only_the_pids_still_running(tmp_path: Path) -> None:
+    child = subprocess.Popen(["sleep", "30"])
+    try:
+        assert gate._settle([child.pid], 0) == [child.pid]  # pyright: ignore[reportPrivateUsage]
+    finally:
+        child.kill()
+        child.wait()
+    assert gate._settle([child.pid], 1) == []  # pyright: ignore[reportPrivateUsage]
 
 
 def test_q0_host_refuses_an_unset_job_binding_before_fetching_anything(

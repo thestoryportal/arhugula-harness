@@ -2781,6 +2781,10 @@ def q0_host(
     """Build and stage everything the Q0 guest boots on, then write the four host records."""
     job = job_bindings(environ)
     files = sentinel_files(environ, at.workspace)
+    launcher = host_packages(inputs.launcher_packages, at.work)
+    vng_help = _stdout(["vng", "--help"], at.work)
+    if problems := launcher_problems(launcher, vng_help, inputs.virtme_ng_version):
+        raise Q0Error("launcher: " + "; ".join(problems))
     sentinels = {site: SENTINEL_MARKER + secrets.token_hex(32) for site in SENTINEL_SITES}
     # [LAW:no-ambient-temporal-coupling] Planted before anything is fetched, built or
     # staged, so a staging that copies host state copies a sentinel the guest scans for.
@@ -2788,9 +2792,9 @@ def q0_host(
     host_netns = os.readlink("/proc/self/ns/net")
     boot = bootstrap(gate, inputs, at.work, keys, host_netns, sentinels[SENTINEL_ENV])
     staged = stage_twice(gate, boot, at.root, at.work, host_netns)
-    (at.work / "kernel").mkdir()
+    kernel_work(at.work).mkdir()
     kernel = guest_kernel(
-        at.work / "kernel", boot.home, inputs.kernel, len(os.sched_getaffinity(0))
+        kernel_work(at.work), boot.home, inputs.kernel, len(os.sched_getaffinity(0))
     )
     stage_a5(at.a5, at.workspace, job["CI_TESTED"], at.uv_cache, inputs)
     meta = at.a5 / "meta"
@@ -2802,9 +2806,9 @@ def q0_host(
     facts = HostFacts(
         boot.base_packages,
         boot.closure,
-        host_packages(inputs.launcher_packages, at.work),
+        launcher,
         staged.manifests,
-        _stdout(["vng", "--help"], at.work),
+        vng_help,
         kernel.gcc_version,
         {name: _sha256(text.encode()) for name, text in GUEST_SCRIPTS.items()},
     )
@@ -2829,6 +2833,10 @@ def q0_host(
     )
 
 
+def kernel_work(work: Path) -> Path:
+    return work / "kernel"
+
+
 def host(inputs: Inputs, keys: tuple[Path, *tuple[Path, ...]], at: HostLayout) -> int:
     try:
         q0_host(Path(__file__).resolve(), inputs, os.environ, keys, at)
@@ -2836,6 +2844,130 @@ def host(inputs: Inputs, keys: tuple[Path, *tuple[Path, ...]], at: HostLayout) -
         print(f"a5-kernel-ci host: {exc}", file=sys.stderr)
         return 1
     return 0
+
+
+# --- guest launch and cleanup (launcher_runtime, resources_timeouts_cleanup) -----------
+
+GUEST_RUN_TIMEOUT = 2700  # seconds, inside the 47-minute step; KILL follows TERM by 30 s
+SETTLE_SECONDS = 30  # after the scope's stop, before KILL of the same scope
+KILL_SETTLE_SECONDS = 5
+# Every option the launch passes; launcher_runtime (a) requires each in this vng's --help.
+VNG_OPTIONS = ("--run", "--root", "--rodir", "--rwdir", "--cpus", "--memory", "--exec")
+Q0_EXEC = f"/bin/sh {A5}/meta/{Q0_PROBE}"
+
+
+def launcher_problems(packages: Mapping[str, str], vng_help: str, virtme_ng: str) -> list[str]:
+    """The pinned vng and every option the launch uses; a mismatch fails before any fetch."""
+    installed = packages.get("virtme-ng")
+    return [
+        f"host virtme-ng {installed!r} is not {virtme_ng}" for _ in [0] if installed != virtme_ng
+    ] + [
+        f"vng --help lacks {option}"
+        for option in VNG_OPTIONS
+        if not re.search(rf"(?<![\w-]){re.escape(option)}(?![\w-])", vng_help)
+    ]
+
+
+def vng_argv(work: Path, root: Path, out: Path, command: str) -> list[str]:
+    """The one guest launch: the built kernel, the staged root, /a5 read-only, /out writable."""
+    # [LAW:one-source-of-truth] Its options are VNG_OPTIONS in order, so the --help check
+    # judges exactly this launch; it never passes --force-9p or --net.
+    values = (
+        kernel_work(work) / KERNEL_SOURCE / BZIMAGE,
+        root,
+        f"{A5}={A5}",
+        f"/out={out}",
+        "4",
+        "12G",
+        command,
+    )
+    options = [str(arg) for pair in zip(VNG_OPTIONS, values, strict=True) for arg in pair]
+    return ["timeout", "--kill-after=30s", str(GUEST_RUN_TIMEOUT), "vng", *options]
+
+
+def scope_unit(environ: Mapping[str, str]) -> str:
+    """The run's own transient scope, named before it exists so cleanup needs no search."""
+    run = {key: environ.get(key, "") for key in ("GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT")}
+    if missing := [key for key, value in run.items() if not value]:
+        raise Q0Error(f"job environment lacks {missing}")
+    return f"a5-guest-{run['GITHUB_RUN_ID']}-{run['GITHUB_RUN_ATTEMPT']}.scope"
+
+
+def launch_argv(unit: str, vng: Sequence[str]) -> list[str]:
+    return ["systemd-run", "--user", "--scope", "--quiet", f"--unit={unit}", "--", *vng]
+
+
+def _exit_code(argv: Sequence[str]) -> int:
+    return subprocess.run(argv, check=False, close_fds=True).returncode
+
+
+def launch(environ: Mapping[str, str], work: Path, root: Path, out: Path, handles: Path) -> int:
+    """Boot the Q0 guest in its own scope; the exit code is the guest run's own."""
+    try:
+        unit = scope_unit(environ)
+    except Q0Error as exc:
+        print(f"a5-kernel-ci launch: {exc}", file=sys.stderr)
+        return 1
+    # [LAW:no-ambient-temporal-coupling] The handle is recorded before the scope can exist,
+    # so a cancelled or timed-out launch still leaves cleanup its exact target.
+    handles.parent.mkdir(parents=True, exist_ok=True)
+    handles.write_bytes(_canonical({"scope": unit}))
+    out.mkdir(parents=True, exist_ok=True)
+    return _exit_code(launch_argv(unit, vng_argv(work, root, out, Q0_EXEC)))
+
+
+def scope_pids(unit: str) -> list[int]:
+    """The processes in the scope's cgroup now; a scope that is not loaded holds none."""
+    show = ["systemctl", "--user", "show", "--property=ControlGroup", "--value", unit]
+    group = _stdout(show, Path("/")).strip()
+    procs = Path(f"/sys/fs/cgroup{group}/cgroup.procs")
+    return [int(pid) for pid in procs.read_text().split()] if group else []
+
+
+def _alive(pids: Sequence[int]) -> list[int]:
+    return [pid for pid in pids if Path(f"/proc/{pid}").exists()]
+
+
+def _settle(pids: Sequence[int], seconds: float) -> list[int]:
+    deadline = time.monotonic() + seconds
+    while (alive := _alive(pids)) and time.monotonic() < deadline:
+        time.sleep(0.5)
+    return alive
+
+
+def cleanup(handles: Path, out: Path) -> int:
+    """Stop, then KILL, only the recorded scope; a recorded pid left alive fails the leg."""
+    try:
+        scope = _object(_read(handles), handles.name).get("scope")
+        if type(scope) is not str or not scope.endswith(".scope"):
+            raise Q0Error(f"{handles.name} scope {scope!r} is not a scope unit")
+    except Q0Error as exc:
+        print(f"a5-kernel-ci cleanup: {exc}", file=sys.stderr)
+        return 1
+    pids = scope_pids(scope)
+    signals: list[dict[str, Any]] = []
+    survivors = pids
+    # No name- or user-wide kill: each signal names the recorded scope alone.
+    for action, seconds in (
+        (["stop", "--no-block"], SETTLE_SECONDS),
+        (["kill", "--signal=SIGKILL"], KILL_SETTLE_SECONDS),
+    ):
+        argv = ["systemctl", "--user", *action, scope]
+        signals += [{"argv": argv, "exit": _exit_code(argv)} for _ in [0] if survivors]
+        survivors = _settle(survivors, seconds)
+    problems = [f"pid {pid} of {scope} is alive after SIGKILL" for pid in survivors]
+    record = {
+        "scope": scope,
+        "pids": {str(pid): "alive" if pid in survivors else "gone" for pid in pids},
+        "signals": signals,
+        "problems": problems,
+        "verdict": "fail" if problems else "pass",
+    }
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_bytes(_canonical(record))
+    for problem in problems:
+        print(f"a5-kernel-ci cleanup: {problem}", file=sys.stderr)
+    return 1 if problems else 0
 
 
 # --- Q0 post-launch (after vng exits): collect, then both binding checks ---------------
@@ -2939,6 +3071,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     staging.add_argument("--key", type=Path, action="append", required=True)
     for name in ("work", "root", "evidence", "workspace", "uv-cache"):
         staging.add_argument(f"--{name}", type=Path, required=True)
+    boot = commands.add_parser("launch", parents=[common])
+    for name in ("work", "root", "out", "handles"):
+        boot.add_argument(f"--{name}", type=Path, required=True)
+    reap = commands.add_parser("cleanup", parents=[common])
+    for name in ("handles", "out"):
+        reap.add_argument(f"--{name}", type=Path, required=True)
     collect = commands.add_parser("q0-collect", parents=[common])
     for name in ("out", "launched", "evidence"):
         collect.add_argument(f"--{name}", type=Path, required=True)
@@ -2966,6 +3104,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         first, *rest = args.key
         layout = HostLayout(args.work, args.root, A5, args.evidence, args.workspace, args.uv_cache)
         return host(inputs, (first, *rest), layout)
+    if args.command == "launch":
+        return launch(os.environ, args.work, args.root, args.out, args.handles)
+    if args.command == "cleanup":
+        return cleanup(args.handles, args.out)
     if args.command == "q0-collect":
         return q0_collect_command(inputs, args.out, args.launched, args.evidence)
     if args.command == "guest-stage":
