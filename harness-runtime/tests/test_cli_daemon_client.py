@@ -474,7 +474,7 @@ async def test_primary_daemon_failure_survives_teardown_failure(
     def _failing_stream(*args: object, **kwargs: object) -> _FailingStream:
         return _FailingStream()
 
-    async def _failing_teardown(stack: Any, client: httpx.AsyncClient) -> None:
+    async def _failing_teardown(stack: Any, client: httpx.AsyncClient, session_id: Any) -> None:
         await stack.aclose()
         await client.aclose()
         raise DaemonResultError("secondary teardown expired")
@@ -789,3 +789,99 @@ async def test_real_mcp_teardown_deadline_after_received_result(
         uv_server.should_exit = True
         async with asyncio.timeout(3):
             await serve_task
+
+
+@pytest.mark.asyncio
+async def test_real_mcp_teardown_closes_get_stream_before_session_delete(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The daemon closes the GET stream on DELETE; its reader must already be gone.
+
+    AnyIO 4.13 reports ``Future.set_result`` InvalidStateError through the loop
+    exception handler when that close and the reader's cancellation meet.
+    """
+    from collections.abc import AsyncIterator
+
+    import httpx
+    import uvicorn
+    from mcp.server.fastmcp import FastMCP
+    from mcp.server.transport_security import TransportSecuritySettings
+
+    _reset_test_sse_state(monkeypatch)
+    wire: list[tuple[str, str]] = []
+    real_transport = httpx.AsyncHTTPTransport
+
+    class _RecordingStream(httpx.AsyncByteStream):
+        def __init__(self, inner: httpx.AsyncByteStream, method: str) -> None:
+            self._inner = inner
+            self._method = method
+
+        async def __aiter__(self) -> AsyncIterator[bytes]:
+            async for chunk in self._inner:
+                yield chunk
+
+        async def aclose(self) -> None:
+            await self._inner.aclose()
+            wire.append(("closed", self._method))
+
+    class _RecordingTransport(real_transport):  # type: ignore[misc,valid-type]
+        async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+            wire.append(("sent", request.method))
+            response = await super().handle_async_request(request)
+            wire.append((f"status {response.status_code}", request.method))
+            assert isinstance(response.stream, httpx.AsyncByteStream)
+            return httpx.Response(
+                response.status_code,
+                headers=response.headers,
+                stream=_RecordingStream(response.stream, request.method),
+                extensions=response.extensions,
+            )
+
+    monkeypatch.setattr(httpx, "AsyncHTTPTransport", _RecordingTransport)
+    mcp_server = FastMCP(
+        "teardown-order-test",
+        transport_security=TransportSecuritySettings(allowed_hosts=["127.0.0.1"]),
+    )
+
+    @mcp_server.tool()
+    async def run_workflow(workflow_id: str) -> str:
+        return f'{{"status":"success","workflow_id":"{workflow_id}"}}'
+
+    loop = asyncio.get_running_loop()
+    callback_errors: list[str] = []
+
+    def _record_and_forward(event_loop: asyncio.AbstractEventLoop, context: dict[str, Any]) -> None:
+        callback_errors.append(context["message"])
+        event_loop.default_exception_handler(context)
+
+    socket_path = tmp_path / "mcp.sock"
+    uv_server = uvicorn.Server(
+        uvicorn.Config(mcp_server.streamable_http_app(), uds=str(socket_path), log_level="error")
+    )
+    serve_task = asyncio.create_task(uv_server.serve())
+    previous_handler = loop.get_exception_handler()
+    loop.set_exception_handler(_record_and_forward)
+    try:
+        async with asyncio.timeout(15):
+            while not uv_server.started:
+                await asyncio.sleep(0.01)
+            payload = await _cli_app_mod._daemon_client_dispatch(
+                workflow_file=Path("workflow.toml"),
+                socket_path=socket_path,
+                result_timeout_seconds=10.0,
+            )
+    finally:
+        uv_server.should_exit = True
+        async with asyncio.timeout(3):
+            await serve_task
+        loop.set_exception_handler(previous_handler)
+
+    assert payload == {"status": "success", "workflow_id": "workflow.toml"}
+    delete_at = wire.index(("sent", "DELETE"))
+    before_delete = wire[:delete_at]
+    # [LAW:behavior-not-structure] The wire order is the contract: the GET
+    # stream opened, and it was closed before the session DELETE went out.
+    assert ("status 200", "GET") in before_delete, wire
+    assert before_delete.count(("sent", "GET")) == before_delete.count(("closed", "GET")), wire
+    assert ("status 200", "DELETE") in wire[delete_at:], wire
+    assert callback_errors == []

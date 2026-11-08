@@ -232,7 +232,9 @@ _DAEMON_CLIENT_STREAMABLE_HTTP_URL = "http://127.0.0.1/mcp"
 _DAEMON_CLIENT_TEARDOWN_TIMEOUT_SECONDS = 30.0
 
 
-async def _close_daemon_client(stack: AsyncExitStack, client: httpx.AsyncClient) -> None:
+async def _close_daemon_client(
+    stack: AsyncExitStack, client: httpx.AsyncClient, session_id: Callable[[], str | None]
+) -> None:
     """Bound session DELETE and HTTP close under one teardown deadline."""
     budget = _DAEMON_CLIENT_TEARDOWN_TIMEOUT_SECONDS
     deadline = asyncio.get_running_loop().time() + budget
@@ -242,7 +244,12 @@ async def _close_daemon_client(stack: AsyncExitStack, client: httpx.AsyncClient)
     expired = False
     try:
         async with asyncio.timeout_at(session_deadline):
+            # [LAW:no-ambient-temporal-coupling] The daemon closes the GET stream
+            # while answering DELETE. Stop that stream's reader first: AnyIO 4.13
+            # reports an InvalidStateError callback when the close and the
+            # reader's cancellation land in one event-loop pass.
             await stack.aclose()
+            await _terminate_daemon_session(client, session_id())
     except TimeoutError:
         expired = True
     finally:
@@ -253,6 +260,23 @@ async def _close_daemon_client(stack: AsyncExitStack, client: httpx.AsyncClient)
             expired = True
     if expired:
         raise DaemonResultError(f"daemon MCP teardown exceeded the {budget:g}s client budget")
+
+
+def _no_daemon_session() -> str | None:
+    """Session-id source until the MCP transport has opened."""
+    return None
+
+
+async def _terminate_daemon_session(client: httpx.AsyncClient, session_id: str | None) -> None:
+    """Send the MCP session DELETE once no transport stream is still reading."""
+    from mcp.client.streamable_http import MCP_SESSION_ID
+
+    if session_id is None:
+        return
+    response = await client.delete(
+        _DAEMON_CLIENT_STREAMABLE_HTTP_URL, headers={MCP_SESSION_ID: session_id}
+    )
+    response.raise_for_status()
 
 
 async def _daemon_client_dispatch(
@@ -295,11 +319,16 @@ async def _daemon_client_dispatch(
     )
 
     stack = AsyncExitStack()
+    session_id: Callable[[], str | None] = _no_daemon_session
     phase = "initialize"
     try:
         try:
-            read_stream, write_stream, _get_session_id = await stack.enter_async_context(
-                streamable_http_client(_DAEMON_CLIENT_STREAMABLE_HTTP_URL, http_client=http_client)
+            read_stream, write_stream, session_id = await stack.enter_async_context(
+                streamable_http_client(
+                    _DAEMON_CLIENT_STREAMABLE_HTTP_URL,
+                    http_client=http_client,
+                    terminate_on_close=False,
+                )
             )
             session = await stack.enter_async_context(
                 ClientSession(read_stream, write_stream, read_timeout_seconds=timedelta(seconds=30))
@@ -344,7 +373,7 @@ async def _daemon_client_dispatch(
     finally:
         primary_error = sys.exception()
         try:
-            await _close_daemon_client(stack, http_client)
+            await _close_daemon_client(stack, http_client, session_id)
         except Exception as exc:
             task = asyncio.current_task()
             # [LAW:no-ambient-temporal-coupling] AnyIO can cancel initialize
