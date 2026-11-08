@@ -32,6 +32,7 @@ import json
 import os
 import platform
 import re
+import socket
 import stat
 import subprocess
 import sys
@@ -839,12 +840,248 @@ def binding_verify(
     }
 
 
-def install_binding(install_ns: Path, binding_env: Path, guest_record: Path) -> dict[str, Any]:
-    # The step-3c boundary evaluator does not exist yet; install-ns.json must at least
-    # parse as an object, and its bytes are what INSTALL_NS_SHA256 names.
+# --- Install boundary (guest_package_closure step 3) --------------------------------
+
+# [LAW:one-source-of-truth] The capabilities the install may not hold, with their
+# linux/capability.h bit numbers. The setpriv --bounding-set argument and every mask
+# judgement below derive from this one tuple.
+FORBIDDEN_CAPS = (
+    ("sys_admin", 21),
+    ("net_admin", 12),
+    ("sys_ptrace", 19),
+    ("sys_module", 16),
+    ("bpf", 39),
+    ("sys_rawio", 17),
+)
+CAP_SETS = ("CapInh", "CapPrm", "CapEff", "CapBnd", "CapAmb")
+# env -i leaves exactly these three: the install's whole environment.
+INSTALL_ENV = {
+    "PATH": "/usr/sbin:/usr/bin:/sbin:/bin",
+    "LC_ALL": "C",
+    "DEBIAN_FRONTEND": "noninteractive",
+}
+DEB_CACHE = "var/cache/a5-debs"
+_CAP_MASK = re.compile(r"[0-9a-f]{16}")
+
+
+@dataclass(frozen=True)
+class Deb:
+    file: str
+    size: int
+    sha256: str
+
+
+def install_argv(
+    gate: Path, root: Path, host_netns: str, evidence: Path, debs: Sequence[Deb]
+) -> list[str]:
+    """Step 3b: the one entry argv, no shell. No variant omits the boundary."""
+    return [
+        *("sudo", "-n", "--", "/usr/bin/env", "-i"),
+        *(f"{name}={value}" for name, value in INSTALL_ENV.items()),
+        *("/usr/bin/unshare", "--net", "--pid", "--kill-child", "--"),
+        *("/usr/bin/setpriv", "--no-new-privs", "--inh-caps", "-all", "--ambient-caps", "-all"),
+        *("--bounding-set", ",".join(f"-{name}" for name, _ in FORBIDDEN_CAPS), "--"),
+        *("/usr/bin/python3", "-I", str(gate), "guest-stage", "ns-install"),
+        *("--root", str(root), "--host-netns", host_netns, "--evidence", str(evidence)),
+        *(deb.file for deb in debs),
+    ]
+
+
+def _masks(raw: object, where: str) -> dict[str, int]:
+    if type(raw) is not dict or sorted(cast(dict[str, object], raw)) != sorted(CAP_SETS):
+        raise Q0Error(f"{where} capabilities {raw!r} are not exactly {list(CAP_SETS)}")
+    masks = cast(dict[str, object], raw)
+    for name in CAP_SETS:
+        if type(masks[name]) is not str or not _CAP_MASK.fullmatch(cast(str, masks[name])):
+            raise Q0Error(f"{where} {name} {masks[name]!r} is not a hex mask")
+    return {name: int(cast(str, masks[name]), 16) for name in CAP_SETS}
+
+
+def _held(mask: int) -> list[str]:
+    return [name for name, bit in FORBIDDEN_CAPS if mask >> bit & 1]
+
+
+def namespace_problems(raw: object) -> list[str]:
+    """Step 3c: the pre-dpkg boundary ns-install recorded, judged as pure data."""
+    if type(raw) is not dict:
+        raise Q0Error(f"namespace record {raw!r} is not an object")
+    ns = cast(dict[str, object], raw)
+    problems = [
+        f"{name} holds forbidden {held}"
+        for name, mask in _masks(ns.get("capabilities"), "namespace").items()
+        if (held := _held(mask))
+    ]
+    host, inner = ns.get("host_netns"), ns.get("netns")
+    if type(host) is not str or type(inner) is not str or not host or host == inner:
+        problems.append(f"netns {inner!r} is not a namespace apart from the host's {host!r}")
+    if ns.get("interfaces") != ["lo"]:
+        problems.append(f"interfaces {ns.get('interfaces')!r} are not exactly ['lo']")
+    if ns.get("environment") != INSTALL_ENV:
+        problems.append(f"environment {ns.get('environment')!r} is not exactly {INSTALL_ENV}")
+    return problems
+
+
+def run_problems(raw: object, debs: Sequence[Deb]) -> list[str]:
+    """Step 3d: one install run, fail closed on any exit, boundary or package deviation."""
+    if type(raw) is not dict:
+        raise Q0Error(f"install run {raw!r} is not an object")
+    run = cast(dict[str, object], raw)
+    ns = run.get("namespace")
+    if type(ns) is not dict:
+        return [f"wrapper exit {run.get('wrapper_exit')!r}: no namespace record"]
+    record = cast(dict[str, object], ns)
+    exits = {"wrapper": run.get("wrapper_exit"), "dpkg": record.get("dpkg_exit")}
+    expected = [{"file": d.file, "size": d.size, "sha256": d.sha256} for d in debs]
+    return (
+        [f"{name} exit {code!r} is not 0" for name, code in exits.items() if code != 0]
+        + namespace_problems(record)
+        + ([] if record.get("debs") == expected else [f"debs {record.get('debs')!r} != {expected}"])
+    )
+
+
+def _proc_caps() -> dict[str, str]:
+    lines = Path("/proc/self/status").read_text().splitlines()
+    return {
+        key: value.strip()
+        for key, _, value in (line.partition(":") for line in lines)
+        if key.startswith("Cap")
+    }
+
+
+def _deb(path: Path) -> dict[str, Any]:
+    data = path.read_bytes()
+    return {"file": path.name, "size": len(data), "sha256": _sha256(data)}
+
+
+def ns_install(root: Path, host_netns: str, evidence: Path, files: Sequence[str]) -> int:
+    """Inside the namespace: record the boundary, prove it, then dpkg -i once in order."""
+    record: dict[str, Any] = {
+        "host_netns": host_netns,
+        "netns": os.readlink("/proc/self/ns/net"),
+        "interfaces": [name for _, name in socket.if_nameindex()],
+        "environment": dict(os.environ),
+        "debs": [_deb(root / DEB_CACHE / name) for name in files],
+        "dpkg_exit": None,
+    }
+    # Read last, immediately before dpkg is spawned: the exact pre-dpkg boundary.
+    record["capabilities"] = _proc_caps()
+    try:
+        crossed = namespace_problems(record)
+    except Q0Error as exc:
+        crossed = [str(exc)]
+    if not crossed:
+        dpkg = ["chroot", str(root), "/usr/bin/dpkg", "-i"]
+        record["dpkg_exit"] = subprocess.run(
+            [*dpkg, *(f"/{DEB_CACHE}/{name}" for name in files)],
+            env=INSTALL_ENV,
+            close_fds=True,
+            check=False,
+        ).returncode
+    evidence.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
+    return 0 if record["dpkg_exit"] == 0 else 1
+
+
+def install_run(argv: Sequence[str], namespace_record: Path) -> dict[str, Any]:
+    """Run one 3b argv on the host; its record is the wrapper exit plus ns-install's."""
+    if namespace_record.exists():
+        raise Q0Error(f"{namespace_record.name} exists before the run: not fresh")
+    wrapper_exit = subprocess.run(argv, close_fds=True, check=False).returncode
+    try:
+        namespace: object = _object(_read(namespace_record), namespace_record.name)
+    except Q0Error:
+        namespace = None
+    return {"wrapper_exit": wrapper_exit, "namespace": namespace}
+
+
+# Step 3g: the same bash probe runs as the host control and as the fixture postinst.
+NETPROBE_OUT = "a5-netprobe.out"
+
+
+def netprobe_script(address: str, port: int) -> str:
+    # Bash's own redirection opens /proc/self/status, so the masks are the probe's.
+    return (
+        "#!/bin/bash\n"
+        f"if exec 3<>/dev/tcp/{address}/{port}; then echo net=connected; "
+        "else echo net=failed; fi\n"
+        'echo "sentinel=${A5_SENTINEL_ENV-unset}"\n'
+        'while read -r key value; do case "$key" in Cap*:) echo "${key%:}=$value";; esac; '
+        "done < /proc/self/status\n"
+    )
+
+
+def netprobe_package(address: str, port: int) -> dict[str, str]:
+    """dpkg-deb --build content; the postinst writes its probe result into the root."""
+    probe = netprobe_script(address, port)
+    return {
+        "DEBIAN/control": (
+            "Package: a5-netprobe\nVersion: 1\nArchitecture: all\n"
+            "Maintainer: a5 gate <a5@invalid>\nDescription: A5 install boundary self-test\n"
+        ),
+        "DEBIAN/postinst": probe.replace(
+            "#!/bin/bash\n", f"#!/bin/bash\nexec > /{NETPROBE_OUT} 2>&1\n", 1
+        ),
+    }
+
+
+def _probe(text: object, where: str) -> tuple[str, str, dict[str, int]]:
+    if not isinstance(text, str):
+        raise Q0Error(f"{where} probe result {text!r} is absent")
+    fields = {key: value for key, _, value in (line.partition("=") for line in text.splitlines())}
+    caps = {key: value for key, value in fields.items() if key.startswith("Cap")}
+    return fields.get("net", ""), fields.get("sentinel", ""), _masks(caps, f"{where} probe")
+
+
+def netprobe_problems(raw: object) -> list[str]:
+    """Step 3g: a discriminating control, then a namespace probe that reaches nothing."""
+    if type(raw) is not dict:
+        raise Q0Error(f"self-test {raw!r} is not an object")
+    test = cast(dict[str, Any], raw)
+    sentinel = test.get("sentinel")
+    if type(sentinel) is not str or not sentinel:
+        raise Q0Error(f"self-test sentinel {sentinel!r} is empty")
+    deb = test.get("deb")
+    if type(deb) is not dict:
+        raise Q0Error(f"self-test deb {deb!r} is not recorded")
+    c_net, c_sentinel, c_caps = _probe(test.get("control"), "control")
+    i_net, i_sentinel, i_caps = _probe(test.get("inside"), "inside")
+    forbidden = [name for name, _ in FORBIDDEN_CAPS]
+    problems = [
+        f"non-discriminating control: {fact}"
+        for fact, ok in (
+            (f"net={c_net}", c_net == "connected"),
+            (f"sentinel={c_sentinel!r}", c_sentinel == sentinel),
+            ("CapBnd lacks a forbidden bit", _held(c_caps["CapBnd"]) == forbidden),
+        )
+        if not ok
+    ]
+    problems += [f"inside net={i_net}" for _ in [0] if i_net != "failed"]
+    problems += [f"inside sentinel={i_sentinel!r}" for _ in [0] if i_sentinel != "unset"]
+    problems += [f"inside {name} holds {held}" for name, m in i_caps.items() if (held := _held(m))]
+    if test.get("accepted") != 1:
+        problems.append(f"listener accepted {test.get('accepted')!r} connections, not 1")
+    return problems + run_problems(test.get("run"), [Deb(**cast(dict[str, Any], deb))])
+
+
+def evaluate_install_ns(data: bytes, debs: Sequence[Deb]) -> list[str]:
+    """Re-parse a retained install-ns.json: the real install and its passed self-test."""
+    raw = _object(data, "install-ns.json")
+    try:
+        self_test = netprobe_problems(raw.get("self_test"))
+    except Q0Error as exc:
+        raise Q0Error(f"self-test: {exc}") from exc
+    return [f"self-test: {p}" for p in self_test] + [
+        f"install: {p}" for p in run_problems(raw.get("install"), debs)
+    ]
+
+
+def install_binding(
+    install_ns: Path, binding_env: Path, guest_record: Path, debs: Sequence[Deb]
+) -> dict[str, Any]:
+    # [LAW:single-enforcer] The retained bytes are judged by the same step-3c evaluator,
+    # and they are also exactly what INSTALL_NS_SHA256 names on every side.
     try:
         ns_bytes = _read(install_ns)
-        _object(ns_bytes, "install-ns.json")
+        boundary = evaluate_install_ns(ns_bytes, debs)
         values = {
             "install_ns": _sha256(ns_bytes),
             "binding_env": parse_binding_env(_read(binding_env))["INSTALL_NS_SHA256"],
@@ -856,7 +1093,10 @@ def install_binding(install_ns: Path, binding_env: Path, guest_record: Path) -> 
         }
     except Q0Error as exc:
         return {"problems": [str(exc)]}
-    return {"INSTALL_NS_SHA256": values, "problems": _agreement(values, "INSTALL_NS_SHA256")}
+    return {
+        "INSTALL_NS_SHA256": values,
+        "problems": boundary + _agreement(values, "INSTALL_NS_SHA256"),
+    }
 
 
 def _persist(path: Path, record: dict[str, Any]) -> dict[str, Any]:
@@ -873,11 +1113,12 @@ def q0_observe(
     binding_env: Path,
     host_stage: Path,
     install_ns: Path,
+    debs: Sequence[Deb],
 ) -> dict[str, Any]:
     """Collect, binding-verify, install-binding: the host-side bindings of one observation.
 
-    A completed observation also needs the step-3c install-ns evaluator and the guest
-    producer (Q0b), so this result never claims one.
+    A completed observation also needs the F8-R1 sequencing and the guest producer (Q0b),
+    so this result never claims one.
     """
     try:
         observation = q0_collect(out, launched, identity, evidence)
@@ -892,7 +1133,8 @@ def q0_observe(
             binding_verify(binding_env, host_stage, guest, identity),
         ),
         "install-binding": _persist(
-            evidence / "install-binding.json", install_binding(install_ns, binding_env, guest)
+            evidence / "install-binding.json",
+            install_binding(install_ns, binding_env, guest, debs),
         ),
     }
     problems = [f"{name}: {p}" for name, check in checks.items() for p in check["problems"]]
@@ -907,13 +1149,23 @@ def q0_observe(
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("--expectations", type=Path, default=EXPECTATIONS)
     parser = argparse.ArgumentParser(description="A5 kernel CI venue gate")
-    parser.add_argument("command", choices=("preflight", "check"))
-    parser.add_argument("--venue", required=True)
-    parser.add_argument("--out", type=Path, required=True)
-    parser.add_argument("--expectations", type=Path, default=EXPECTATIONS)
-    parser.add_argument("--preflight", type=Path, help="check: this leg's preflight record")
-    parser.add_argument("--junit", type=Path, help="check: this leg's fresh JUnit file")
+    commands = parser.add_subparsers(dest="command", required=True)
+    for name in ("preflight", "check"):
+        leg = commands.add_parser(name, parents=[common])
+        leg.add_argument("--venue", required=True)
+        leg.add_argument("--out", type=Path, required=True)
+        leg.add_argument("--preflight", type=Path, help="check: this leg's preflight record")
+        leg.add_argument("--junit", type=Path, help="check: this leg's fresh JUnit file")
+    # [LAW:no-mode-explosion] ns-install has no option that skips or relaxes the boundary.
+    stages = commands.add_parser("guest-stage").add_subparsers(dest="stage", required=True)
+    ns = stages.add_parser("ns-install", parents=[common])
+    ns.add_argument("--root", type=Path, required=True)
+    ns.add_argument("--host-netns", required=True)
+    ns.add_argument("--evidence", type=Path, required=True)
+    ns.add_argument("debs", nargs="+")
     args = parser.parse_args(argv)
 
     raw_bytes = args.expectations.read_bytes()
@@ -927,6 +1179,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (ExpectationsError, ValueError) as exc:
         print(f"a5-kernel-ci: {exc}", file=sys.stderr)
         return 2
+    if args.command == "guest-stage":
+        return ns_install(args.root, args.host_netns, args.evidence, args.debs)
     if args.venue not in expectations.venues:
         print(f"a5-kernel-ci: unknown venue {args.venue!r}", file=sys.stderr)
         return 2

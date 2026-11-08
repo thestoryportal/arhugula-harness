@@ -611,6 +611,50 @@ def _sha(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+_FULL_CAPS = (1 << 41) - 1
+_FORBIDDEN = sum(1 << bit for _, bit in gate.FORBIDDEN_CAPS)
+_CLEAN = {name: _FULL_CAPS & ~_FORBIDDEN for name in gate.CAP_SETS}
+_DEBS = (gate.Deb("git_1_amd64.deb", 10, "d" * 64), gate.Deb("perl_2_amd64.deb", 20, "e" * 64))
+_PROBE_DEB = gate.Deb("a5-netprobe_1_all.deb", 5, "f" * 64)
+
+
+def _hexes(masks: dict[str, int]) -> dict[str, str]:
+    return {name: f"{mask:016x}" for name, mask in masks.items()}
+
+
+def _install_run_record(debs: tuple[gate.Deb, ...]) -> dict[str, Any]:
+    namespace = {
+        "host_netns": "net:[4026531840]",
+        "netns": "net:[4026532999]",
+        "interfaces": ["lo"],
+        "environment": dict(gate.INSTALL_ENV),
+        "capabilities": _hexes(_CLEAN),
+        "debs": [{"file": d.file, "size": d.size, "sha256": d.sha256} for d in debs],
+        "dpkg_exit": 0,
+    }
+    return {"wrapper_exit": 0, "namespace": namespace}
+
+
+def _probe_text(net: str, sentinel: str, masks: dict[str, int]) -> str:
+    caps = "".join(f"{name}={mask:016x}\n" for name, mask in masks.items())
+    return f"net={net}\nsentinel={sentinel}\n{caps}"
+
+
+def _install_ns_doc() -> dict[str, Any]:
+    control = _probe_text("connected", "s3nt", dict.fromkeys(gate.CAP_SETS, _FULL_CAPS))
+    return {
+        "install": _install_run_record(_DEBS),
+        "self_test": {
+            "sentinel": "s3nt",
+            "control": control,
+            "inside": _probe_text("failed", "unset", _CLEAN),
+            "accepted": 1,
+            "deb": {"file": _PROBE_DEB.file, "size": _PROBE_DEB.size, "sha256": _PROBE_DEB.sha256},
+            "run": _install_run_record((_PROBE_DEB,)),
+        },
+    }
+
+
 class Q0(dict[str, Path]):
     """One consistent Q0 fixture: retained host records, a pre-launch marker, a fresh /out."""
 
@@ -646,6 +690,7 @@ class Q0(dict[str, Path]):
             self["binding_env"],
             self["host_stage"],
             self["install_ns"],
+            _DEBS,
         )
 
 
@@ -660,7 +705,7 @@ def q0(tmp_path: Path) -> Q0:
         "host_stage": paths["host"] / "host-stage.json",
         "launched": paths["host"] / "launched",
     }
-    paths["install_ns"].write_text('{"dpkg_exit": 0}\n')
+    paths["install_ns"].write_text(json.dumps(_install_ns_doc()))
     env = paths.binding_env(_sha(paths["install_ns"].read_bytes()))
     paths["binding_env"].write_bytes(env)
     paths["host_stage"].write_text(json.dumps({"binding_env_sha256": _sha(env)}))
@@ -835,7 +880,9 @@ def test_q0_binding_verify_refuses_an_unbound_guest_record(
 _INSTALL_MUTATIONS = {
     "absent": lambda q: q["install_ns"].unlink(),
     "malformed": lambda q: q["install_ns"].write_text("{"),
-    "changed-after-binding": lambda q: q["install_ns"].write_text('{"dpkg_exit": 1}\n'),
+    "changed-after-binding": lambda q: q["install_ns"].write_bytes(
+        q["install_ns"].read_bytes() + b"\n"
+    ),
 }
 
 
@@ -905,13 +952,235 @@ def test_q0_binding_verify_refuses_a_binding_env_of_another_run(q0: Q0, key: str
     ]
 
 
-# FQ0a-2: agreeing hashes over an install the evaluator would refuse claim no completion.
+# FQ0a-2: agreeing hashes over an install the evaluator refuses claim no completion.
 def test_q0_bindings_over_a_failed_install_claim_no_completed_observation(q0: Q0) -> None:
-    q0["install_ns"].write_text('{"dpkg_exit": 1}\n')
+    doc = _install_ns_doc()
+    doc["install"]["namespace"]["dpkg_exit"] = 1
+    q0["install_ns"].write_text(json.dumps(doc))
     env = q0.binding_env(_sha(q0["install_ns"].read_bytes()))
     q0["binding_env"].write_bytes(env)
     q0["host_stage"].write_text(json.dumps({"binding_env_sha256": _sha(env)}))
     q0.observation()
     record = q0.observe()
-    assert record["bindings_verified"] is True
-    assert "completed_observation" not in record
+    _completed_nothing(record)
+    assert record["problems"] == ["install-binding: install: dpkg exit 1 is not 0"]
+
+
+# --- Install boundary (guest_package_closure step 3) ----------------------------------
+
+
+def _install_problems(doc: dict[str, Any]) -> list[str]:
+    try:
+        return gate.evaluate_install_ns(json.dumps(doc).encode(), _DEBS)
+    except gate.Q0Error as exc:
+        return [str(exc)]
+
+
+def _ns(doc: dict[str, Any]) -> dict[str, Any]:
+    return doc["install"]["namespace"]
+
+
+def test_the_exact_expected_install_ns_passes() -> None:
+    assert _install_problems(_install_ns_doc()) == []
+
+
+# Discriminating test 37: every deviation from the step-3c boundary fails.
+_BOUNDARY_MUTATIONS: dict[str, Callable[[dict[str, Any]], object]] = {
+    "netns-of-host": lambda d: _ns(d).update(netns=_ns(d)["host_netns"]),
+    "second-interface": lambda d: _ns(d).update(interfaces=["lo", "eth0"]),
+    "fourth-env-name": lambda d: _ns(d)["environment"].update(HOME="/root"),
+    "changed-env-value": lambda d: _ns(d)["environment"].update(LC_ALL="C.UTF-8"),
+    "sentinel-in-env": lambda d: _ns(d)["environment"].update(A5_SENTINEL_ENV="s3nt"),
+    "cap-line-missing": lambda d: _ns(d)["capabilities"].pop("CapAmb"),
+    "cap-not-hex": lambda d: _ns(d)["capabilities"].update(CapEff="not-a-mask"),
+    "wrapper-exit": lambda d: d["install"].update(wrapper_exit=1),
+    "dpkg-exit": lambda d: _ns(d).update(dpkg_exit=2),
+    "dpkg-never-ran": lambda d: _ns(d).update(dpkg_exit=None),
+    "no-namespace-record": lambda d: d["install"].update(namespace=None),
+    "deb-sha256-differs": lambda d: _ns(d)["debs"][1].update(sha256="0" * 64),
+    "deb-order-differs": lambda d: _ns(d)["debs"].reverse(),
+    "deb-missing": lambda d: _ns(d)["debs"].pop(),
+    "self-test-absent": lambda d: d.pop("self_test"),
+    "self-test-install-failed": lambda d: d["self_test"]["run"].update(wrapper_exit=1),
+}
+
+
+@pytest.mark.parametrize("mutate", _BOUNDARY_MUTATIONS.values(), ids=_BOUNDARY_MUTATIONS)
+def test_install_boundary_evaluator_refuses(mutate: Callable[[dict[str, Any]], object]) -> None:
+    doc = _install_ns_doc()
+    mutate(doc)
+    assert _install_problems(doc)
+
+
+# Discriminating test 40: one tuple derives the setpriv argument and every mask judgement.
+_LINUX_CAP_BITS = {
+    "net_admin": 12,
+    "sys_module": 16,
+    "sys_rawio": 17,
+    "sys_ptrace": 19,
+    "sys_admin": 21,
+    "bpf": 39,
+}
+
+
+def test_forbidden_caps_are_the_six_kernel_capabilities() -> None:
+    assert dict(gate.FORBIDDEN_CAPS) == _LINUX_CAP_BITS
+
+
+@pytest.mark.parametrize("cap_set", gate.CAP_SETS)
+@pytest.mark.parametrize("cap", [name for name, _ in gate.FORBIDDEN_CAPS])
+def test_each_forbidden_bit_in_each_set_is_refused(cap: str, cap_set: str) -> None:
+    doc = _install_ns_doc()
+    _ns(doc)["capabilities"] = _hexes(
+        _CLEAN | {cap_set: _CLEAN[cap_set] | 1 << _LINUX_CAP_BITS[cap]}
+    )
+    assert _install_problems(doc) == [f"install: {cap_set} holds forbidden {[cap]}"]
+
+
+def test_entry_argv_is_the_one_bounded_command(tmp_path: Path) -> None:
+    argv = gate.install_argv(
+        tmp_path / "gate.py", Path("/a5-guest/root"), "net:[1]", tmp_path / "ns.json", _DEBS
+    )
+    assert argv[: argv.index("/usr/bin/python3")] == [
+        "sudo", "-n", "--", "/usr/bin/env", "-i",
+        "PATH=/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL=C", "DEBIAN_FRONTEND=noninteractive",
+        "/usr/bin/unshare", "--net", "--pid", "--kill-child", "--",
+        "/usr/bin/setpriv", "--no-new-privs", "--inh-caps", "-all", "--ambient-caps", "-all",
+        "--bounding-set", "-sys_admin,-net_admin,-sys_ptrace,-sys_module,-bpf,-sys_rawio", "--",
+    ]  # fmt: skip
+    assert argv[-2:] == [deb.file for deb in _DEBS]
+
+
+# Discriminating test 38: the self-test must discriminate before the real install.
+def _test(doc: dict[str, Any]) -> dict[str, Any]:
+    return doc["self_test"]
+
+
+_ALL = dict.fromkeys(gate.CAP_SETS, _FULL_CAPS)
+_NETPROBE_MUTATIONS: dict[str, Callable[[dict[str, Any]], object]] = {
+    "inside-connected": lambda d: _test(d).update(inside=_probe_text("connected", "unset", _CLEAN)),
+    "inside-sentinel": lambda d: _test(d).update(inside=_probe_text("failed", "s3nt", _CLEAN)),
+    **{
+        f"inside-{cap_set}-forbidden": (
+            lambda d, s=cap_set: _test(d).update(
+                inside=_probe_text("failed", "unset", _CLEAN | {s: _FULL_CAPS})
+            )
+        )
+        for cap_set in gate.CAP_SETS
+    },
+    "inside-absent": lambda d: _test(d).pop("inside"),
+    "second-connection": lambda d: _test(d).update(accepted=2),
+    "control-cannot-connect": lambda d: _test(d).update(
+        control=_probe_text("failed", "s3nt", _ALL)
+    ),
+    "control-no-sentinel": lambda d: _test(d).update(
+        control=_probe_text("connected", "unset", _ALL)
+    ),
+    "control-capbnd-clean": lambda d: _test(d).update(
+        control=_probe_text("connected", "s3nt", _ALL | {"CapBnd": _CLEAN["CapBnd"]})
+    ),
+}
+
+
+@pytest.mark.parametrize("mutate", _NETPROBE_MUTATIONS.values(), ids=_NETPROBE_MUTATIONS)
+def test_netprobe_self_test_refuses(mutate: Callable[[dict[str, Any]], object]) -> None:
+    doc = _install_ns_doc()
+    mutate(doc)
+    assert any(p.startswith("self-test") for p in _install_problems(doc))
+
+
+def test_netprobe_postinst_is_the_control_probe_writing_into_the_root() -> None:
+    package = gate.netprobe_package("192.0.2.7", 4711)
+    probe = gate.netprobe_script("192.0.2.7", 4711)
+    assert "/dev/tcp/192.0.2.7/4711" in probe and "${A5_SENTINEL_ENV-unset}" in probe
+    assert package["DEBIAN/postinst"] == probe.replace(
+        "#!/bin/bash\n", f"#!/bin/bash\nexec > /{gate.NETPROBE_OUT} 2>&1\n"
+    )
+    assert "Package: a5-netprobe\n" in package["DEBIAN/control"]
+
+
+def test_netprobe_script_reports_its_own_boundary(tmp_path: Path) -> None:
+    script = tmp_path / "probe"
+    script.write_text(gate.netprobe_script("127.0.0.1", 9))  # discard port: nothing listens
+    env = {"PATH": os.environ["PATH"], "A5_SENTINEL_ENV": "s3nt"}
+    out = subprocess.run(["bash", str(script)], env=env, capture_output=True, text=True).stdout
+    net, sentinel, masks = gate._probe(out, "control")  # pyright: ignore[reportPrivateUsage]
+    assert (net, sentinel, sorted(masks)) == ("failed", "s3nt", sorted(gate.CAP_SETS))
+
+
+# Discriminating test 39: no un-namespaced install path exists.
+def test_failed_wrapper_never_reaches_dpkg(tmp_path: Path) -> None:
+    record = tmp_path / "ns.json"
+    argv = gate.install_argv(tmp_path / "gate.py", tmp_path / "root", "net:[1]", record, _DEBS)
+    rejects = [sys.executable, "-c", "raise SystemExit(1)", *argv]  # setpriv rejecting an option
+    run = gate.install_run(rejects, record)
+    assert run == {"wrapper_exit": 1, "namespace": None} and not record.exists()
+    assert gate.run_problems(run, _DEBS)
+
+
+def test_install_run_refuses_a_namespace_record_from_before_the_run(tmp_path: Path) -> None:
+    record = tmp_path / "ns.json"
+    record.write_text(json.dumps(_install_run_record(_DEBS)["namespace"]))
+    with pytest.raises(gate.Q0Error, match="not fresh"):
+        gate.install_run([sys.executable, "-c", "pass"], record)
+
+
+def _root(tmp_path: Path) -> Path:
+    cache = tmp_path / "root" / gate.DEB_CACHE
+    cache.mkdir(parents=True)
+    for deb in _DEBS:
+        (cache / deb.file).write_bytes(deb.file.encode())
+    return tmp_path / "root"
+
+
+def test_ns_install_outside_the_boundary_never_spawns_dpkg(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def no_dpkg(*args: object, **kwargs: object) -> None:
+        raise AssertionError("dpkg spawned outside the boundary")
+
+    monkeypatch.setattr(gate.subprocess, "run", no_dpkg)
+    evidence = tmp_path / "ns.json"
+    files = [deb.file for deb in _DEBS]
+    assert gate.ns_install(_root(tmp_path), "net:[1]", evidence, files) == 1
+    assert json.loads(evidence.read_text())["dpkg_exit"] is None
+
+
+def test_ns_install_inside_the_boundary_runs_dpkg_once_in_list_order(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[tuple[list[str], dict[str, Any]]] = []
+
+    def dpkg(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
+        calls.append((argv, kwargs))
+        return subprocess.CompletedProcess(argv, 0)
+
+    for name in list(os.environ):
+        monkeypatch.delenv(name)
+    for name, value in gate.INSTALL_ENV.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setattr(gate.os, "readlink", lambda path: "net:[2]")
+    monkeypatch.setattr(gate.socket, "if_nameindex", lambda: [(1, "lo")])
+    monkeypatch.setattr(gate, "_proc_caps", lambda: _hexes(_CLEAN))
+    monkeypatch.setattr(gate.subprocess, "run", dpkg)
+    root, evidence = _root(tmp_path), tmp_path / "ns.json"
+    assert gate.ns_install(root, "net:[1]", evidence, [deb.file for deb in _DEBS]) == 0
+    assert calls == [
+        (
+            ["chroot", str(root), "/usr/bin/dpkg", "-i"]
+            + [f"/{gate.DEB_CACHE}/{deb.file}" for deb in _DEBS],
+            {"env": gate.INSTALL_ENV, "close_fds": True, "check": False},
+        )
+    ]
+    actual = [gate.Deb(d.file, len(d.file), _sha(d.file.encode())) for d in _DEBS]
+    run = {"wrapper_exit": 0, "namespace": json.loads(evidence.read_text())}
+    assert gate.run_problems(run, actual) == []
+
+
+def test_ns_install_exposes_no_option_that_skips_the_boundary(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with pytest.raises(SystemExit):
+        main(["guest-stage", "ns-install", "--help"])
+    options = {word for word in capsys.readouterr().out.split() if word.startswith("-")}
+    assert options == {"-h,", "--help", "--expectations", "--root", "--host-netns", "--evidence"}
