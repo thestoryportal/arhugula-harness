@@ -160,19 +160,36 @@ $M approve <proposal-id> --source <source-id> --injection-policy retrieval_only
 $M deny <proposal-id> --source <source-id> --reason "<why>"
 $M tombstone <memory-id> --reason "<why>"          # dry run: reports, changes nothing
 $M tombstone <memory-id> --reason "<why>" --apply  # performs it
+$M migrate <legacy-root> /memories/<path> --migration-id <id>          # dry run
+$M migrate <legacy-root> /memories/<path> --migration-id <id> --apply
+$M compact <compaction-id> --source <source-id> --summary "<what>"      # lists candidates
+$M compact <compaction-id> --source <source-id> --summary "<what>" \
+   --disposition <candidate-id> keep_episodic "<why>" --apply
 ```
 
 - `propose` accepts the semantic kinds and `procedural_update`; the candidate
   keeps the source's scope and source references and stays `proposed`, which
   retrieval excludes. Preference candidates are not part of this recipe.
+- The memory policy must name the target: `propose_semantic`/`promote_semantic`
+  for semantic kinds, `propose_procedural`/`promote_procedural` for
+  `procedural_update`. The runtime policy is `propose_semantic`, so it refuses
+  procedural proposals. Review mode `forbidden` refuses both. `approve`
+  re-checks the policy at decision time.
 - `approve` and `deny` re-derive the proposal from the named source and refuse,
-  writing nothing, when the record is not `proposed` or was proposed from a
-  different source. A memory policy that discards candidates or forbids review
-  refuses `propose` and `approve`.
+  writing nothing, when the record is not `proposed`, was proposed from a
+  different source, or the source's scope has changed since the proposal.
 - `redact`, `tombstone` and `expire` take the same arguments (plus an optional
   `--replacement-summary`); without `--apply` the output has `"applied": false`.
-- Callback-memory migration (`CallbackMemoryMigrationService`) and compaction
-  dispositions (`CompactionSafetyHook`) remain library APIs with no command.
+- `migrate` reads legacy filesystem callback memory under `<legacy-root>` and,
+  with `--apply`, writes it through the canonical native-memory adapter under
+  `--visibility` (default `private`) in this project. The adapter requires a
+  policy with native-memory access and full capture; otherwise it is refused.
+- `compact` lists the promotion candidates carried by the sources; with
+  `--apply` it records exactly one `--disposition` per candidate (`discard`,
+  `keep_episodic`, `queue` or `promote`, the last also needing
+  `--promoted-to <candidate-id> <memory-id>`). It records decisions; it does not
+  promote or compact anything itself.
+- `migrate` and `compact` need `--run-id`.
 
 Output is JSON on stdout. Exit `0` is success, `1` is a refusal (reason on
 stderr) and `2` is argument usage.

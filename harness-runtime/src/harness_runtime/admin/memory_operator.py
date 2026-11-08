@@ -27,6 +27,8 @@ given; the output distinguishes `requested` from `applied`.
 from __future__ import annotations
 
 import argparse
+import asyncio
+import dataclasses
 import json
 import sys
 from collections.abc import Sequence
@@ -38,12 +40,33 @@ from pathlib import Path
 from harness_is.memory_operation_ledger import MemoryOperationEntry
 from harness_is.memory_path_registry import MemoryRootBinding
 from harness_is.memory_policy import MemoryPolicyResolver, PromotionDecision, ReviewMode
-from harness_is.memory_record_envelope import MemoryID, MemoryRecordKind
+from harness_is.memory_record_envelope import (
+    MemoryID,
+    MemoryRecordKind,
+    MemoryScope,
+    MemoryVisibility,
+)
 from harness_is.memory_redaction import MemoryRedactionResult, MemoryRedactionService
 from harness_is.memory_redaction_event import MemoryRedactionActor
 from harness_is.memory_store import CanonicalMemoryStore, MemoryStoreRecord
 from harness_is.state_ledger_entry_schema import Actor, ActorClass
 
+from harness_runtime.lifecycle.memory_migration import (
+    CallbackMemoryMigrationService,
+    MemoryMigrationReport,
+)
+from harness_runtime.lifecycle.memory_tool_filesystem import LocalFilesystemMemoryToolBackend
+from harness_runtime.lifecycle.memory_tool_types import (
+    MemoryCallbackIOError,
+    MemoryToolStorageBackend,
+)
+from harness_runtime.lifecycle.native_memory_adapter import CanonicalNativeMemoryToolBackend
+from harness_runtime.memory_compaction_safety import (
+    CompactionCandidateDisposition,
+    CompactionCandidateDispositionRecord,
+    CompactionDecisionResult,
+    CompactionSafetyHook,
+)
 from harness_runtime.memory_promotion import (
     PromotionCandidate,
     PromotionCandidateConfidence,
@@ -54,12 +77,20 @@ from harness_runtime.memory_promotion import (
     PromotionDecisionService,
     SemanticInjectionPolicy,
     SemanticRecordStatus,
+    canonical_candidate_scope,
+    promote_decision_for_kind,
 )
 
 _EXIT_OK = 0
 _EXIT_REFUSED = 1
 
 OPERATOR_PROPOSAL_KINDS = frozenset(PromotionCandidateKind) - {PromotionCandidateKind.PREFERENCE}
+
+# A target's PROPOSE_* decision permits review of the same target its PROMOTE_* names.
+_PROPOSE_FOR_PROMOTE = {
+    PromotionDecision.PROMOTE_SEMANTIC: PromotionDecision.PROPOSE_SEMANTIC,
+    PromotionDecision.PROMOTE_PROCEDURAL: PromotionDecision.PROPOSE_PROCEDURAL,
+}
 
 
 class MemoryOperatorRefusedError(ValueError):
@@ -107,6 +138,7 @@ class MemoryOperator:
         operator_id: str,
         policy_ref: str | None = None,
         run_id: str | None = None,
+        project: str | None = None,
     ) -> None:
         if not operator_id.strip():
             raise MemoryOperatorRefusedError("an operator identity is required")
@@ -115,6 +147,7 @@ class MemoryOperator:
         self._actor = Actor(actor_class=ActorClass.OPERATOR, actor_id=operator_id)
         self._policy_ref = policy_ref
         self._run_id = run_id
+        self._project = project
 
     def inspect(self, memory_id: MemoryID) -> MemoryStoreRecord:
         return self._store.read_record(
@@ -133,9 +166,9 @@ class MemoryOperator:
         confidence: PromotionCandidateConfidence,
         timestamp: datetime,
     ) -> PromotionDecisionResult:
-        self._require_promotion_policy()
         if kind not in OPERATOR_PROPOSAL_KINDS:
             raise MemoryOperatorRefusedError(f"{kind.value} candidates are not operator-proposable")
+        self._require_promotion_policy(kind)
         source = self._read_source(source_id)
         candidate = self._extractor().extract_from_hint(
             source,
@@ -159,8 +192,8 @@ class MemoryOperator:
         timestamp: datetime,
         rationale: str | None = None,
     ) -> PromotionDecisionResult:
-        self._require_promotion_policy()
         candidate = self._proposed_candidate(proposal_id, source_id)
+        self._require_promotion_policy(candidate.proposed_kind)
         return self._service().approve(
             candidate,
             timestamp=timestamp,
@@ -222,12 +255,81 @@ class MemoryOperator:
             replacement_summary=replacement_summary,
         )
 
-    def _require_promotion_policy(self) -> None:
+    async def migrate(
+        self,
+        legacy_root: Path,
+        paths: Sequence[str],
+        *,
+        migration_id: str,
+        visibility: MemoryVisibility,
+        apply: bool,
+    ) -> MemoryMigrationReport:
+        """Read legacy filesystem callback memory; write it to canonical memory only on apply."""
+
+        service = CallbackMemoryMigrationService(
+            source_backend=LocalFilesystemMemoryToolBackend(root=legacy_root),
+            canonical_backend=CanonicalNativeMemoryToolBackend(
+                store=self._store,
+                policy_resolver=self._policy_resolver,
+                scope=MemoryScope(project=self._project, visibility=visibility),
+                actor=self._actor,
+                run_id=self._require_run_id("migrate"),
+                policy_ref=self._policy_ref,
+            ),
+            migration_id=migration_id,
+            source_backend_name=MemoryToolStorageBackend.FILESYSTEM.value,
+        )
+        try:
+            return await (service.migrate(paths) if apply else service.dry_run(paths))
+        except MemoryCallbackIOError as exc:
+            raise MemoryOperatorRefusedError(f"migration refused: {exc}") from exc
+
+    def compact(
+        self,
+        compaction_id: str,
+        *,
+        source_ids: Sequence[MemoryID],
+        dispositions: Sequence[CompactionCandidateDispositionRecord],
+        summary: str,
+        timestamp: datetime,
+        apply: bool,
+    ) -> tuple[PromotionCandidate, ...] | CompactionDecisionResult:
+        """List the sources' compaction candidates; persist the dispositions only on apply."""
+
+        hook = CompactionSafetyHook(
+            store=self._store,
+            actor=self._actor,
+            run_id=self._require_run_id("compact"),
+            policy_ref=self._policy_ref,
+            extractor=self._extractor(),
+        )
+        candidates = hook.extract_candidates([self._read_source(s) for s in source_ids])
+        if not apply:
+            return candidates
+        return hook.complete_compaction(
+            compaction_id=compaction_id,
+            candidates=candidates,
+            dispositions=dispositions,
+            timestamp=timestamp,
+            summary=summary,
+        )
+
+    def _require_run_id(self, action: str) -> str:
+        if self._run_id is None:
+            raise MemoryOperatorRefusedError(f"{action} requires --run-id")
+        return self._run_id
+
+    def _require_promotion_policy(self, kind: PromotionCandidateKind) -> None:
+        # Resolved at every decision, so a policy changed since the proposal governs it.
         resolution = self._policy_resolver.resolve_promotion()
-        if resolution.promotion_decision is PromotionDecision.DISCARD:
-            raise MemoryOperatorRefusedError("memory promotion policy discards candidates")
         if resolution.review_mode is ReviewMode.FORBIDDEN:
             raise MemoryOperatorRefusedError("memory promotion review is forbidden")
+        promote = promote_decision_for_kind(kind)
+        if resolution.promotion_decision not in (promote, _PROPOSE_FOR_PROMOTE[promote]):
+            raise MemoryOperatorRefusedError(
+                f"memory promotion policy {resolution.promotion_decision.value} "
+                f"does not permit {kind.value} candidates"
+            )
 
     def _proposed_candidate(self, proposal_id: MemoryID, source_id: MemoryID) -> PromotionCandidate:
         proposal = self._store.read_record(
@@ -238,9 +340,14 @@ class MemoryOperator:
             raise MemoryOperatorRefusedError(
                 f"{proposal_id!s} is {content.get('status')!s}, not proposed"
             )
+        source = self._read_source(source_id)
+        if canonical_candidate_scope(source.envelope.scope) != proposal.envelope.scope:
+            raise MemoryOperatorRefusedError(
+                f"source {source_id!s} scope changed since {proposal_id!s} was proposed"
+            )
         procedural = "procedural_update" in content
         candidate = self._extractor().extract_from_hint(
-            self._read_source(source_id),
+            source,
             PromotionCandidateHint(
                 proposed_kind=(
                     PromotionCandidateKind.PROCEDURAL_UPDATE
@@ -327,6 +434,37 @@ def build_parser() -> argparse.ArgumentParser:
         lifecycle.add_argument("--reason", required=True)
         lifecycle.add_argument("--replacement-summary", default=None)
         lifecycle.add_argument("--apply", action="store_true", help="perform it (default: dry run)")
+
+    migrate = commands.add_parser("migrate", help="migrate legacy filesystem callback memory")
+    migrate.add_argument("legacy_root", type=Path)
+    migrate.add_argument("paths", nargs="+", metavar="/memories/PATH")
+    migrate.add_argument("--migration-id", required=True)
+    migrate.add_argument(
+        "--visibility",
+        default=MemoryVisibility.PRIVATE.value,
+        choices=[value.value for value in MemoryVisibility],
+    )
+    migrate.add_argument("--apply", action="store_true", help="write it (default: dry run)")
+
+    compact = commands.add_parser("compact", help="record compaction candidate dispositions")
+    compact.add_argument("compaction_id")
+    compact.add_argument("--source", required=True, action="append", dest="source_ids")
+    compact.add_argument("--summary", required=True)
+    compact.add_argument(
+        "--disposition",
+        nargs=3,
+        action="append",
+        default=[],
+        metavar=("CANDIDATE_ID", "DISPOSITION", "RATIONALE"),
+    )
+    compact.add_argument(
+        "--promoted-to",
+        nargs=2,
+        action="append",
+        default=[],
+        metavar=("CANDIDATE_ID", "MEMORY_ID"),
+    )
+    compact.add_argument("--apply", action="store_true", help="persist it (default: dry run)")
     return parser
 
 
@@ -369,6 +507,7 @@ def _operator_from_config(args: argparse.Namespace) -> MemoryOperator:
         operator_id=args.operator,
         policy_ref=policy.policy_id,
         run_id=args.run_id,
+        project=config.repository_root.name,
     )
 
 
@@ -406,6 +545,50 @@ def run(operator: MemoryOperator, args: argparse.Namespace, *, now: datetime) ->
             timestamp=now,
         )
         return _decision_json(result)
+    if command == "migrate":
+        report = asyncio.run(
+            operator.migrate(
+                args.legacy_root,
+                args.paths,
+                migration_id=args.migration_id,
+                visibility=MemoryVisibility(args.visibility),
+                apply=args.apply,
+            )
+        )
+        return {
+            "migration_id": report.migration_id,
+            "applied": not report.dry_run,
+            "items": [dataclasses.asdict(item) for item in report.items],
+        }
+    if command == "compact":
+        targets = dict(args.promoted_to)
+        compaction = operator.compact(
+            args.compaction_id,
+            source_ids=[MemoryID(source) for source in args.source_ids],
+            dispositions=[
+                CompactionCandidateDispositionRecord(
+                    candidate_id=candidate_id,
+                    disposition=CompactionCandidateDisposition(disposition),
+                    rationale=rationale,
+                    target_memory_ref=targets.get(candidate_id),
+                )
+                for candidate_id, disposition, rationale in args.disposition
+            ],
+            summary=args.summary,
+            timestamp=now,
+            apply=args.apply,
+        )
+        if isinstance(compaction, tuple):
+            return {
+                "applied": False,
+                "candidates": [candidate.model_dump() for candidate in compaction],
+            }
+        return {
+            "applied": True,
+            "memory_id": str(compaction.memory_id),
+            "candidate_count": compaction.candidate_count,
+            "content": compaction.record.content,
+        }
     outcome = operator.lifecycle(
         LifecycleTransition(command),
         MemoryID(args.memory_id),

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import UTC, datetime
 from pathlib import Path
@@ -11,6 +12,8 @@ from harness_core import DeploymentSurface
 from harness_is.memory_operation_ledger import MemoryOperationKind
 from harness_is.memory_path_registry import MemoryRootBinding
 from harness_is.memory_policy import (
+    AccessDecision,
+    CaptureDecision,
     MemoryPolicyDocument,
     MemoryPolicyResolver,
     PromotionDecision,
@@ -38,6 +41,12 @@ from harness_runtime.admin.memory_operator import (
     MemoryOperator,
     MemoryOperatorRefusedError,
 )
+from harness_runtime.lifecycle.memory_migration import MemoryMigrationItemStatus
+from harness_runtime.memory_compaction_safety import (
+    CompactionCandidateDisposition,
+    CompactionCandidateDispositionRecord,
+    CompactionDispositionRequiredError,
+)
 from harness_runtime.memory_promotion import (
     PromotionCandidateConfidence,
     PromotionCandidateKind,
@@ -52,11 +61,19 @@ _OTHER_SOURCE_ID = MemoryID("mem:episodic:episodic_turn:" + "2" * 64)
 _SOURCE_REF = SourceRef(ref_type=SourceRefType.TURN, ref="turn-1")
 
 
-def _seed_source(store: CanonicalMemoryStore, memory_id: MemoryID, turn: str) -> None:
+def _seed_source(
+    store: CanonicalMemoryStore,
+    memory_id: MemoryID,
+    turn: str,
+    *,
+    visibility: MemoryVisibility = MemoryVisibility.WORKFLOW,
+    extra: dict[str, object] | None = None,
+) -> None:
     content: dict[str, object] = {
         "event_type": "turn_completion",
         "run_id": _RUN_ID,
         "turn_id": turn,
+        **(extra or {}),
     }
     store.write_record(
         MemoryStoreRecord(
@@ -67,9 +84,7 @@ def _seed_source(store: CanonicalMemoryStore, memory_id: MemoryID, turn: str) ->
                 kind=MemoryRecordKind.EPISODIC_TURN,
                 created_at=_NOW,
                 source_refs=(SourceRef(ref_type=SourceRefType.TURN, ref=turn),),
-                scope=MemoryScope(
-                    project="arhugula", workflow="t01", visibility=MemoryVisibility.WORKFLOW
-                ),
+                scope=MemoryScope(project="arhugula", workflow="t01", visibility=visibility),
                 content_hash=compute_memory_content_hash(content),
                 captured_cross_family=CapturedCrossFamily.FALSE,
             ),
@@ -107,7 +122,14 @@ def _operator(
         operator_id="robbo",
         policy_ref="policy:t01",
         run_id=_RUN_ID,
+        project="arhugula",
     )
+
+
+def _permitting(kind: PromotionCandidateKind) -> PromotionDecision:
+    if kind is PromotionCandidateKind.PROCEDURAL_UPDATE:
+        return PromotionDecision.PROPOSE_PROCEDURAL
+    return PromotionDecision.PROPOSE_SEMANTIC
 
 
 def _propose(operator: MemoryOperator, kind: PromotionCandidateKind, statement: str) -> MemoryID:
@@ -133,7 +155,7 @@ def test_one_episode_feeds_semantic_and_procedural_proposals_with_source_ids(
         confidence=PromotionCandidateConfidence.HIGH,
         timestamp=_NOW,
     )
-    procedural = operator.propose(
+    procedural = _operator(store, decision=PromotionDecision.PROPOSE_PROCEDURAL).propose(
         _SOURCE_ID,
         kind=PromotionCandidateKind.PROCEDURAL_UPDATE,
         statement="Sync the worktree venv before running focused tests.",
@@ -166,7 +188,7 @@ def test_approve_activates_and_deny_records_inactive_decision(
     tmp_path: Path, kind: PromotionCandidateKind
 ) -> None:
     store = _store(tmp_path)
-    operator = _operator(store)
+    operator = _operator(store, decision=_permitting(kind))
     approved_proposal = _propose(operator, kind, "Approved statement.")
     denied_proposal = _propose(operator, kind, "Denied statement.")
 
@@ -241,23 +263,37 @@ def test_only_proposed_records_can_be_decided(tmp_path: Path) -> None:
     assert len(store.read_memory_operations()) == before
 
 
+_FACT = PromotionCandidateKind.FACT
+_PROCEDURAL = PromotionCandidateKind.PROCEDURAL_UPDATE
+
+
 @pytest.mark.parametrize(
-    ("decision", "review_mode", "message"),
+    ("decision", "review_mode", "kind", "message"),
     [
-        (PromotionDecision.DISCARD, ReviewMode.AUTOMATIC, "discards candidates"),
-        (PromotionDecision.PROPOSE_SEMANTIC, ReviewMode.FORBIDDEN, "review is forbidden"),
+        (PromotionDecision.DISCARD, ReviewMode.AUTOMATIC, _FACT, "does not permit fact"),
+        (PromotionDecision.KEEP_EPISODIC, ReviewMode.AUTOMATIC, _FACT, "does not permit fact"),
+        (PromotionDecision.PROPOSE_PROCEDURAL, ReviewMode.AUTOMATIC, _FACT, "does not permit"),
+        (PromotionDecision.PROMOTE_PROCEDURAL, ReviewMode.AUTOMATIC, _FACT, "does not permit"),
+        (PromotionDecision.PROPOSE_SEMANTIC, ReviewMode.AUTOMATIC, _PROCEDURAL, "does not permit"),
+        (PromotionDecision.PROMOTE_SEMANTIC, ReviewMode.AUTOMATIC, _PROCEDURAL, "does not permit"),
+        (PromotionDecision.PROPOSE_SEMANTIC, ReviewMode.FORBIDDEN, _FACT, "review is forbidden"),
     ],
 )
-def test_policy_that_forbids_promotion_refuses_propose_and_approve(
-    tmp_path: Path, decision: PromotionDecision, review_mode: ReviewMode, message: str
+def test_policy_that_does_not_name_the_target_refuses_propose_and_approve(
+    tmp_path: Path,
+    decision: PromotionDecision,
+    review_mode: ReviewMode,
+    kind: PromotionCandidateKind,
+    message: str,
 ) -> None:
     store = _store(tmp_path)
-    proposal = _propose(_operator(store), PromotionCandidateKind.FACT, "A fact.")
+    proposal = _propose(_operator(store, decision=_permitting(kind)), kind, "Proposed earlier.")
+    # The policy changed between proposal and decision; the decision obeys the new one.
     refusing = _operator(store, decision=decision, review_mode=review_mode)
     before = len(store.read_memory_operations())
 
     with pytest.raises(MemoryOperatorRefusedError, match=message):
-        _propose(refusing, PromotionCandidateKind.FACT, "Another fact.")
+        _propose(refusing, kind, "Another statement.")
     with pytest.raises(MemoryOperatorRefusedError, match=message):
         refusing.approve(
             proposal,
@@ -398,3 +434,190 @@ def test_cli_round_trip_through_the_configured_entrypoint(
         == 1
     )
     assert "was not proposed from source" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("decision", "kind"),
+    [
+        (PromotionDecision.PROMOTE_SEMANTIC, _FACT),
+        (PromotionDecision.PROMOTE_PROCEDURAL, _PROCEDURAL),
+    ],
+)
+def test_promote_decision_permits_operator_review_of_its_own_target(
+    tmp_path: Path, decision: PromotionDecision, kind: PromotionCandidateKind
+) -> None:
+    store = _store(tmp_path)
+    operator = _operator(store, decision=decision)
+
+    approved = operator.approve(
+        _propose(operator, kind, "Reviewed statement."),
+        source_id=_SOURCE_ID,
+        injection_policy=SemanticInjectionPolicy.RETRIEVAL_ONLY,
+        timestamp=_NOW,
+    )
+
+    assert approved.status is SemanticRecordStatus.ACTIVE
+
+
+def test_decision_refused_when_the_source_scope_changed_since_proposal(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    operator = _operator(store)
+    proposal = _propose(operator, _FACT, "A workflow-visible fact.")
+    _seed_source(store, _SOURCE_ID, "turn-1", visibility=MemoryVisibility.PRIVATE)
+    assert operator.inspect(_SOURCE_ID).envelope.scope.visibility is MemoryVisibility.PRIVATE
+    before = len(store.read_memory_operations())
+
+    with pytest.raises(MemoryOperatorRefusedError, match="scope changed since"):
+        operator.approve(
+            proposal,
+            source_id=_SOURCE_ID,
+            injection_policy=SemanticInjectionPolicy.TOOL_ALLOWED,
+            timestamp=_NOW,
+        )
+    with pytest.raises(MemoryOperatorRefusedError, match="scope changed since"):
+        operator.deny(proposal, source_id=_SOURCE_ID, reason="x", timestamp=_NOW)
+
+    assert len(store.read_memory_operations()) == before
+
+
+def _native_operator(store: CanonicalMemoryStore) -> MemoryOperator:
+    return MemoryOperator(
+        store=store,
+        policy_resolver=MemoryPolicyResolver(
+            MemoryPolicyDocument(
+                policy_id="policy:t01-native",
+                enabled=True,
+                capture_decision=CaptureDecision.CAPTURE_FULL,
+                native_memory_access=AccessDecision.NATIVE_PROVIDER,
+            )
+        ),
+        operator_id="robbo",
+        policy_ref="policy:t01-native",
+        run_id=_RUN_ID,
+        project="arhugula",
+    )
+
+
+def test_migration_is_dry_run_until_applied(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    legacy = tmp_path / "legacy"
+    (legacy / "project").mkdir(parents=True)
+    (legacy / "project" / "notes.txt").write_bytes(b"legacy memory\n")
+    operator = _native_operator(store)
+    paths = ["/memories/project/notes.txt"]
+
+    planned = asyncio.run(
+        operator.migrate(
+            legacy, paths, migration_id="m1", visibility=MemoryVisibility.PRIVATE, apply=False
+        )
+    )
+
+    assert planned.dry_run is True
+    assert [item.status for item in planned.items] == [MemoryMigrationItemStatus.READY]
+    assert store.read_memory_operations() == []
+
+    applied = asyncio.run(
+        operator.migrate(
+            legacy, paths, migration_id="m1", visibility=MemoryVisibility.PRIVATE, apply=True
+        )
+    )
+
+    assert [item.status for item in applied.items] == [MemoryMigrationItemStatus.MIGRATED]
+    entries = store.read_memory_operations()
+    assert entries
+    assert {entry.actor.actor_id for entry in entries} == {"robbo"}
+
+
+def test_migration_under_a_policy_without_native_access_writes_nothing(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    legacy = tmp_path / "legacy"
+    (legacy / "project").mkdir(parents=True)
+    (legacy / "project" / "notes.txt").write_bytes(b"legacy memory\n")
+
+    with pytest.raises(MemoryOperatorRefusedError, match="migration refused"):
+        asyncio.run(
+            _operator(store).migrate(
+                legacy,
+                ["/memories/project/notes.txt"],
+                migration_id="m1",
+                visibility=MemoryVisibility.PRIVATE,
+                apply=True,
+            )
+        )
+
+    assert store.read_memory_operations() == []
+
+
+_HINTED_ID = MemoryID("mem:episodic:episodic_turn:" + "3" * 64)
+
+
+def _seed_hinted_source(store: CanonicalMemoryStore) -> None:
+    _seed_source(
+        store,
+        _HINTED_ID,
+        "turn-3",
+        extra={
+            "promotion_candidates": [
+                {
+                    "proposed_kind": "fact",
+                    "statement": "A hint-carried fact.",
+                    "confidence": "medium",
+                    "suggested_scope": {
+                        "project": "arhugula",
+                        "workflow": "t01",
+                        "visibility": "workflow",
+                    },
+                }
+            ]
+        },
+    )
+
+
+def test_compaction_lists_candidates_then_persists_one_disposition_each(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    _seed_hinted_source(store)
+    operator = _operator(store)
+
+    planned = operator.compact(
+        "compaction-1",
+        source_ids=[_HINTED_ID],
+        dispositions=[],
+        summary="operator compaction",
+        timestamp=_NOW,
+        apply=False,
+    )
+
+    assert isinstance(planned, tuple)
+    (candidate,) = planned
+    assert candidate.source_memory_refs == (_HINTED_ID,)
+    assert store.read_memory_operations() == []
+    with pytest.raises(CompactionDispositionRequiredError):
+        operator.compact(
+            "compaction-1",
+            source_ids=[_HINTED_ID],
+            dispositions=[],
+            summary="operator compaction",
+            timestamp=_NOW,
+            apply=True,
+        )
+    assert store.read_memory_operations() == []
+
+    result = operator.compact(
+        "compaction-1",
+        source_ids=[_HINTED_ID],
+        dispositions=[
+            CompactionCandidateDispositionRecord(
+                candidate_id=candidate.candidate_id,
+                disposition=CompactionCandidateDisposition.KEEP_EPISODIC,
+                rationale="stays episodic",
+            )
+        ],
+        summary="operator compaction",
+        timestamp=_NOW,
+        apply=True,
+    )
+
+    assert not isinstance(result, tuple)
+    assert result.candidate_count == 1
+    (entry,) = store.read_memory_operations()
+    assert entry.actor.actor_id == "robbo"
