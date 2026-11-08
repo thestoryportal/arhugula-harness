@@ -624,16 +624,20 @@ def materialize_mcp_server_stage(
 
     @fastmcp.tool()
     async def resume_workflow(  # pyright: ignore[reportUnusedFunction] — registered via @fastmcp.tool() decorator
-        workflow_id: str, ctx: Context[Any, Any], resume_context: dict[str, Any] | None = None
+        workflow_id: str,
+        ctx: Context[Any, Any],
+        resume_context: dict[str, Any] | None = None,
+        operator_decision: dict[str, Any] | None = None,
     ) -> CallToolResult:
         """Resume the latest durable pause of one workflow (Runtime spec v1.141).
 
         `workflow_id` resolves exactly as for `run_workflow` and is the resume handle; the
         tenant and journal come from the daemon's own configuration. A recognized refusal
         replies `isError` with one closed refusal object (`harness.resume-refusal.v1`);
-        any other outcome is the `run_workflow` RunResult JSON.
+        any other outcome is the `run_workflow` RunResult JSON. `operator_decision` answers a
+        held HITL gate (Runtime v1.144 C4) and excludes `resume_context`.
         """
-        from harness_runtime.api import DurableHandle, admit_root_resume, parse_resume_context
+        from harness_runtime.api import DurableHandle, admit_root_resume, parse_resume_response
 
         harness_ctx = _bound_harness_ctx()
         workflow = _resolve_workflow(workflow_id)
@@ -641,7 +645,7 @@ def materialize_mcp_server_stage(
             entry = await admit_root_resume(
                 workflow,
                 DurableHandle(workflow.workflow_id),
-                parse_resume_context(resume_context),
+                parse_resume_response(resume_context, operator_decision),
                 harness_ctx.config,
             )
         except Exception as exc:

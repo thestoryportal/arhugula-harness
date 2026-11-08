@@ -9,14 +9,25 @@ the terminal operator reads.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
+import functools
 import json
+import os
+import threading
 from collections.abc import Awaitable, Callable, Mapping
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, TextIO
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
+if TYPE_CHECKING:
+    from mcp.client.session import ElicitationFnT
+    from mcp.types import ElicitRequestParams
+
 __all__ = [
+    "NONINTERACTIVE_REASON",
     "UNATTENDED_REASON",
+    "AttendedIngress",
     "HarnessIngress",
     "OperatorAction",
     "OperatorDecision",
@@ -26,10 +37,12 @@ __all__ = [
     "operator_elicitation_callback",
     "parse_operator_gate_message",
     "parse_operator_line",
+    "terminal_operator",
 ]
 
 OperatorAction = Literal["approve", "edit", "reject", "respond", "hold", "cancel", "refuse"]
-HarnessIngress = Literal["python", "cli-tty", "daemon-client-tty", "unattended"]
+AttendedIngress = Literal["python", "cli-tty", "daemon-client-tty"]
+HarnessIngress = AttendedIngress | Literal["unattended"]
 
 # Which optional field each action may carry, and which it must carry (C1 table).
 _ALLOWED_FIELDS: Mapping[str, frozenset[str]] = {
@@ -78,7 +91,9 @@ class OperatorDecision(BaseModel):
             raise ValueError(f"action {self.action!r} requires {required}")
         return self
 
-    def elicitation_content(self, ingress: HarnessIngress) -> dict[str, str]:
+    def elicitation_content(
+        self, ingress: HarnessIngress
+    ) -> dict[str, str | int | float | bool | list[str] | None]:
         """The `accept` data this decision sends under the elicitation schema (C1, C5)."""
         fields = self.model_dump(exclude_none=True, exclude={"action"})
         return {"response": self.action, "ingress": ingress, **fields}
@@ -180,8 +195,8 @@ _GATE_OPTIONS: tuple[str, ...] = ("approve", "edit", "reject", "respond", "hold"
 
 
 def operator_elicitation_callback(
-    operator: OperatorInput | None, ingress: HarnessIngress
-) -> Callable[[Any, Any], Awaitable[Any]]:
+    operator: OperatorInput | None, ingress: AttendedIngress
+) -> ElicitationFnT:
     """An MCP client `elicitation_callback` that answers every gate through `operator` (C2).
 
     No operator answers `refuse` from the `unattended` ingress. A failing operator (it
@@ -190,7 +205,7 @@ def operator_elicitation_callback(
     """
     from mcp.types import ElicitResult
 
-    async def _answer(context: Any, params: Any) -> ElicitResult:
+    async def _answer(context: Any, params: ElicitRequestParams) -> ElicitResult:
         _ = context
         if operator is None:
             decision = OperatorDecision(action="refuse", rejection_reason=UNATTENDED_REASON)
@@ -212,3 +227,57 @@ def operator_elicitation_callback(
         return ElicitResult(action="accept", content=decision.elicitation_content(ingress))
 
     return _answer
+
+
+NONINTERACTIVE_REASON = "noninteractive: no operator terminal"
+
+
+def _read_terminal_line(fd: int) -> str:
+    # Raw byte reads take no lock on Python's stdin buffer, so a reader still blocked here
+    # when the run has already ended cannot stall interpreter shutdown.
+    line = bytearray()
+    while not line.endswith(b"\n") and (byte := os.read(fd, 1)):
+        line += byte
+    return line.decode(errors="replace")
+
+
+async def _line_off_loop(fd: int) -> str:
+    """One terminal line, read in a daemon thread so the gate's deadline keeps running (C3a).
+
+    Nothing joins the thread: a run that ends first exits without waiting for the operator.
+    """
+    loop = asyncio.get_running_loop()
+    answer: asyncio.Future[str] = loop.create_future()
+
+    def _read() -> None:
+        try:
+            deliver = functools.partial(answer.set_result, _read_terminal_line(fd))
+        except OSError as exc:
+            deliver = functools.partial(answer.set_exception, exc)
+        # [LAW:no-ambient-temporal-coupling] the run may already be over: a cancelled wait or
+        # a closed loop means the line answers nothing, which is the C3a contract.
+        with contextlib.suppress(RuntimeError):
+            loop.call_soon_threadsafe(lambda: answer.done() or deliver())
+
+    threading.Thread(target=_read, daemon=True).start()
+    return await answer
+
+
+def terminal_operator(stdin: TextIO, stderr: TextIO) -> OperatorInput:
+    """The terminal operator both CLI ingresses bind (C2).
+
+    It prompts only when stdin and stderr are both terminals: the full C1a message goes to
+    stderr before one line is read under the shared grammar. Anywhere else every gate is
+    refused as noninteractive.
+    """
+
+    async def _refuse(request: OperatorRequest) -> OperatorDecision:
+        _ = request
+        return OperatorDecision(action="refuse", rejection_reason=NONINTERACTIVE_REASON)
+
+    async def _ask(request: OperatorRequest) -> OperatorDecision:
+        stderr.write(f"{request.message}\nanswer ({' | '.join(request.options)}): ")
+        stderr.flush()
+        return parse_operator_line(await _line_off_loop(stdin.fileno()))
+
+    return _ask if stdin.isatty() and stderr.isatty() else _refuse
