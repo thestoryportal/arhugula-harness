@@ -545,6 +545,15 @@ class PromotionCandidateExtractor:
                 candidates.append(_candidate_from_hint(record, hint, resolution))
         return candidates
 
+    def extract_from_hint(
+        self,
+        record: MemoryStoreRecord,
+        hint: PromotionCandidateHint,
+    ) -> PromotionCandidate:
+        """Extract one candidate from operator-authored hint material for a stored source."""
+
+        return _candidate_from_hint(record, hint, self._policy_resolver.resolve_promotion())
+
 
 class PromotionDecisionService:
     """Apply C-MEM-10 promotion decisions through the canonical store and ledger."""
@@ -612,8 +621,14 @@ class PromotionDecisionService:
         rationale: str | None = None,
         tags: Sequence[str] = (),
         supersedes: Sequence[MemoryID] = (),
+        activation_precondition: Callable[[], bool] | None = None,
     ) -> PromotionDecisionResult:
-        """Persist an active record when policy or operator review allows it."""
+        """Persist an active record when policy or operator review allows it.
+
+        `activation_precondition` is evaluated inside the same guarded write as
+        the provenance binding, so a caller's own authority check (the operator
+        entrypoint's source-scope binding) is atomic with the activation.
+        """
 
         provenance = self._provenance_snapshot(candidate)
         if not self._auto_promotable(candidate, provenance) and not operator_approved:
@@ -639,6 +654,7 @@ class PromotionDecisionService:
             review_reason=None,
             supersedes=supersedes,
             statement_override=None,
+            activation_precondition=activation_precondition,
         )
 
     def deny(
@@ -772,6 +788,7 @@ class PromotionDecisionService:
         review_reason: str | None,
         supersedes: Sequence[MemoryID],
         statement_override: str | None,
+        activation_precondition: Callable[[], bool] | None = None,
     ) -> PromotionDecisionResult:
         _validate_preference_promotion(
             candidate,
@@ -820,7 +837,13 @@ class PromotionDecisionService:
             policy_decision=status.value,
             record_count=1,
         ):
-            self._commit_record(record, candidate=candidate, provenance=provenance, status=status)
+            self._commit_record(
+                record,
+                candidate=candidate,
+                provenance=provenance,
+                status=status,
+                activation_precondition=activation_precondition,
+            )
             operation_result = self._store.append_memory_operation(
                 self._operation_payload(
                     candidate,
@@ -844,6 +867,7 @@ class PromotionDecisionService:
         candidate: PromotionCandidate,
         provenance: _EffectiveProvenance,
         status: SemanticRecordStatus,
+        activation_precondition: Callable[[], bool] | None = None,
     ) -> None:
         """Write the decision record, binding an ACTIVATION to its snapshot.
 
@@ -907,12 +931,17 @@ class PromotionDecisionService:
         def _provenance_unchanged() -> bool:
             return self._provenance_snapshot(candidate).per_source == provenance.per_source
 
+        def _activation_admitted() -> bool:
+            return _provenance_unchanged() and (
+                activation_precondition is None or activation_precondition()
+            )
+
         try:
-            self._store.write_record_guarded(record, precondition=_provenance_unchanged)
+            self._store.write_record_guarded(record, precondition=_activation_admitted)
         except MemoryStoreGuardedWriteConflictError as exc:
             raise PromotionProvenanceChangedError(
-                "cited source provenance changed after the promotion snapshot; "
-                "the activation was not committed"
+                "cited source provenance or caller precondition changed after the "
+                "promotion snapshot; the activation was not committed"
             ) from exc
 
     def _operation_payload(

@@ -54,6 +54,7 @@ prompt_packet_enabled = true
 standard_tools_enabled = true
 native_provider_enabled = false
 policy_id = "policy:automatic-local-memory"
+promotion_decision = "propose_semantic"  # or "propose_procedural"
 ```
 
 Use `root_path` only when you want memory stored outside `.harness/memory`.

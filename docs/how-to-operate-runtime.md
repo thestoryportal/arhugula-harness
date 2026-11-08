@@ -143,6 +143,59 @@ uv run harness-shutdown --help
 Use `inspect` for read-only state and trace summaries. Use `shutdown` to signal
 a running harness process to drain and exit through the admin shutdown path.
 
+## Review Captured Memory
+
+Captured memory becomes reusable only through an operator decision. The
+operator entrypoint wraps the existing promotion and redaction services; it
+loads `harness.toml` (or `--config`) for the memory root and the runtime's
+memory policy, and records `--operator` as the actor on every ledger entry:
+
+```sh
+M="uv run python -m harness_runtime.admin.memory_operator --operator <you> --run-id <run>"
+$M operations                                    # memory-operation ledger
+$M inspect <memory-id>                           # one record, audit view
+$M propose <source-id> --kind convention --statement "<what to keep>"
+$M propose <source-id> --kind procedural_update --statement "<how to work>"
+$M approve <proposal-id> --source <source-id> --injection-policy retrieval_only
+$M deny <proposal-id> --source <source-id> --reason "<why>"
+$M tombstone <memory-id> --reason "<why>"          # dry run: reports, changes nothing
+$M tombstone <memory-id> --reason "<why>" --apply  # performs it
+$M migrate <legacy-root> /memories/<path> --migration-id <id>          # dry run
+$M migrate <legacy-root> /memories/<path> --migration-id <id> --apply
+$M compact <compaction-id> --source <source-id> --summary "<what>"      # lists candidates
+$M compact <compaction-id> --source <source-id> --summary "<what>" \
+   --disposition <candidate-id> keep_episodic "<why>" --apply
+```
+
+- `propose` accepts the semantic kinds and `procedural_update`; the candidate
+  keeps the source's scope and source references and stays `proposed`, which
+  retrieval excludes. Preference candidates are not part of this recipe.
+- The memory policy must name the target: `propose_semantic`/`promote_semantic`
+  for semantic kinds, `propose_procedural`/`promote_procedural` for
+  `procedural_update`. The runtime policy takes its target from
+  `[runtime.memory] promotion_decision`: `propose_semantic` (default) or
+  `propose_procedural`; any other value fails config loading. Review mode
+  `forbidden` refuses both. `approve` re-checks the loaded policy at decision
+  time, so a proposal made under one target is refused under the other.
+- `approve` and `deny` re-derive the proposal from the named source and refuse,
+  writing nothing, when the record is not `proposed`, was proposed from a
+  different source, or the source's scope has changed since the proposal.
+- `redact`, `tombstone` and `expire` take the same arguments (plus an optional
+  `--replacement-summary`); without `--apply` the output has `"applied": false`.
+- `migrate` reads legacy filesystem callback memory under `<legacy-root>` and,
+  with `--apply`, writes it through the canonical native-memory adapter under
+  `--visibility` (default `private`) in this project. The adapter requires a
+  policy with native-memory access and full capture; otherwise it is refused.
+- `compact` lists the promotion candidates carried by the sources; with
+  `--apply` it records exactly one `--disposition` per candidate (`discard`,
+  `keep_episodic`, `queue` or `promote`, the last also needing
+  `--promoted-to <candidate-id> <memory-id>`). It records decisions; it does not
+  promote or compact anything itself.
+- `migrate` and `compact` need `--run-id`.
+
+Output is JSON on stdout. Exit `0` is success, `1` is a refusal (reason on
+stderr) and `2` is argument usage.
+
 ## Exit Codes
 
 | Code | Meaning |
@@ -171,6 +224,7 @@ This page is grounded in `harness-runtime/src/harness_runtime/cli/app.py`,
 `harness-runtime/src/harness_runtime/resume_refusal.py`, `harness-runtime/pyproject.toml`,
 `harness-runtime/src/harness_runtime/admin/inspect.py`,
 `harness-runtime/src/harness_runtime/admin/shutdown_cli.py`,
+`harness-runtime/src/harness_runtime/admin/memory_operator.py`,
 `harness-runtime/src/harness_runtime/lifecycle/installation_state.py`,
 `harness-runtime/src/harness_runtime/lifecycle/pause_journal_root_resolver.py`,
 `harness-is/src/harness_is/pause_journal_root.py`,
