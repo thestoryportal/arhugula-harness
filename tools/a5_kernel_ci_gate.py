@@ -43,6 +43,7 @@ from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, fields
 from datetime import UTC, datetime
+from itertools import pairwise
 from pathlib import Path, PurePosixPath
 from typing import Any, cast
 from urllib.parse import quote, unquote
@@ -1501,6 +1502,27 @@ def gpgv_argv(keyring: Path, *args: Path | str) -> list[str]:
     return ["gpgv", "--status-fd", "1", "--keyring", str(keyring.resolve()), *map(str, args)]
 
 
+def gpg_argv(home: Path, *args: Path | str) -> list[str]:
+    """gpg confined to a private homedir; --no-autostart leaves no agent running after it."""
+    return ["gpg", "--batch", "--no-autostart", "--homedir", str(home), *map(str, args)]
+
+
+def keyring_problems(listing: str, fingerprint: str) -> list[str]:
+    """A keyring's `--with-colons --show-keys` listing names only the pinned primary key."""
+    lines = listing.splitlines()
+    # A primary key's own fingerprint is the fpr record directly after its pub record.
+    primaries = [
+        fpr.split(":")[9]
+        for pub, fpr in pairwise(lines)
+        if pub.startswith("pub:") and fpr.startswith("fpr:")
+    ]
+    return [
+        f"keyring holds primary keys {primaries}, not only pinned {fingerprint}"
+        for _ in [0]
+        if primaries != [fingerprint]
+    ]
+
+
 def signature_problems(status: str, exit_code: int, fingerprint: str) -> list[str]:
     """gpgv's verdict: exit 0 and a VALIDSIG whose primary key is the pinned fingerprint."""
     # VALIDSIG's last field is the primary-key fingerprint, whichever subkey signed.
@@ -1727,6 +1749,31 @@ def _stdout(argv: Sequence[str], cwd: Path) -> str:
         raise Q0Error(f"{list(argv)} failed: {exc}") from exc
 
 
+def imported_keys(home: Path, sources: tuple[Path, *tuple[Path, ...]]) -> Path:
+    """A private gpg homedir holding every key in the host key files `sources`.
+
+    At least one source: with no file operand, `gpg --import` would read stdin.
+    """
+    home.mkdir(mode=0o700)
+    run_steps([gpg_argv(home, "--import", *sources)], home, BOOTSTRAP_TIMEOUT)
+    return home
+
+
+def pinned_keyring(home: Path, fingerprint: str, keyring: Path) -> Path:
+    """The keyring holding only the pinned key from `home`; an absent key fails Q0 closed.
+
+    gpg exports nothing and exits 0 for an absent key, so the check is the listing of
+    the exported file itself.
+    """
+    run_steps(
+        [gpg_argv(home, "--output", keyring, "--export", fingerprint)], home, BOOTSTRAP_TIMEOUT
+    )
+    listing = _stdout(gpg_argv(home, "--with-colons", "--show-keys", keyring), home)
+    if problems := keyring_problems(listing, fingerprint):
+        raise Q0Error(f"{keyring}: " + "; ".join(problems))
+    return keyring
+
+
 def verified_base(work: Path, keyring: Path, base: BaseInput) -> Path:
     """Step 1 before extraction: gpgv over SHA256SUMS, then the tarball's two-way pin."""
     sums = work / "SHA256SUMS"
@@ -1787,12 +1834,15 @@ def bootstrap(
     gate: Path,
     inputs: Inputs,
     work: Path,
-    keyrings: tuple[Path, Path],
+    key_sources: tuple[Path, *tuple[Path, ...]],
     host_netns: str,
     sentinel: str,
 ) -> Bootstrap:
-    """Steps 1, 2, 3a acquisition and 3g; `keyrings` hold only the base and archive keys."""
-    base_keyring, archive_keyring = keyrings
+    """Steps 1, 2, 3a acquisition and 3g; the pinned keys come from host `key_sources`."""
+    home = imported_keys(work / "gnupg", key_sources)
+    # [LAW:one-source-of-truth] Each keyring is derived from its `inputs` fingerprint.
+    base_keyring = pinned_keyring(home, inputs.base.signing_key, work / "base-keyring.gpg")
+    archive_keyring = pinned_keyring(home, inputs.archive.signing_key, work / "archive-keyring.gpg")
     run_steps(base_fetch(work, inputs.base), work, BOOTSTRAP_TIMEOUT)
     tarball = verified_base(work, base_keyring, inputs.base)
     with fresh_base(tarball, work / "base") as fresh:

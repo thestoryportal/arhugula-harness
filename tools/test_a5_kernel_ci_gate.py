@@ -1955,6 +1955,54 @@ def test_verified_base_requires_the_pinned_signer_and_the_pinned_tarball(tmp_pat
         gate.verified_base(tmp_path, keyring, base)
 
 
+def test_pinned_keyring_holds_only_the_pinned_key_and_refuses_an_absent_one(
+    tmp_path: Path,
+) -> None:
+    home, fpr, pinned_source = _signer(tmp_path, "pinned")
+    other_home, other, other_source = _signer(tmp_path, "other")
+    _gpg(home, "--passphrase", "", "--quick-add-key", fpr, "cv25519", "encr")
+    subkey = [
+        line.split(":")[9]
+        for line in _gpg(home, "--with-colons", "-k").splitlines()
+        if line.startswith("fpr:")
+    ][1]
+    pinned_source.write_bytes(
+        subprocess.run(
+            ["gpg", "--batch", "--homedir", str(home), "--export", fpr],
+            check=True,
+            capture_output=True,
+        ).stdout
+    )
+    keys = gate.imported_keys(tmp_path / "keys", (pinned_source, other_source))
+    keyring = gate.pinned_keyring(keys, fpr, tmp_path / "pinned-keyring.gpg")
+    data = tmp_path / "data"
+    data.write_text("signed\n")
+    for name, signer_home in (("pinned.sig", home), ("other.sig", other_home)):
+        _gpg(signer_home, "--detach-sign", "-o", str(tmp_path / name), str(data))
+    status, code = _gpgv(gate.gpgv_argv(keyring, tmp_path / "pinned.sig", data))
+    assert gate.signature_problems(status, code, fpr) == []
+    status, code = _gpgv(gate.gpgv_argv(keyring, tmp_path / "other.sig", data))
+    assert code != 0 and gate.signature_problems(status, code, other) != []
+    # gpg exports the whole primary key for a subkey fingerprint, exit 0.
+    with pytest.raises(gate.Q0Error, match=f"not only pinned {subkey}"):
+        gate.pinned_keyring(keys, subkey, tmp_path / "subkey-keyring.gpg")
+    with pytest.raises(gate.Q0Error, match="--show-keys"):
+        gate.pinned_keyring(keys, "F" * 40, tmp_path / "absent-keyring.gpg")
+
+
+def test_keyring_listing_must_name_only_the_pinned_primary_key() -> None:
+    primary, subkey, extra = "A" * 40, "B" * 40, "C" * 40
+    listing = f"pub:-:255:22:{primary[-16:]}:1::::::scSC:\nfpr:::::::::{primary}:\n"
+    with_subkey = listing + f"sub:-:255:18:{subkey[-16:]}:1::::::e:\nfpr:::::::::{subkey}:\n"
+    assert gate.keyring_problems(with_subkey, primary) == []
+    assert gate.keyring_problems(with_subkey, subkey) == [
+        f"keyring holds primary keys {[primary]}, not only pinned {subkey}"
+    ]
+    two = listing + f"pub:-:255:22:{extra[-16:]}:1::::::scSC:\nfpr:::::::::{extra}:\n"
+    assert gate.keyring_problems(two, primary) != []
+    assert gate.keyring_problems("", primary) != []
+
+
 def test_resolve_closure_reads_every_verified_component_index_after_update(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
