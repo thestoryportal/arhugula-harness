@@ -59,6 +59,43 @@ includes raw error text, paths, tenant identifiers or claim tokens. Read the
 A config that loads but does not bind the pause protocol is refused with kind
 `protocol-not-bound` and exit 6. A config file that fails to load still exits 3.
 
+## Declare The Pause-Journal Root
+
+Durable pause and resume need one pause-journal root per installation. You
+declare it in one file, at a fixed place under the environment of the
+interpreter that runs the harness:
+
+```text
+<sys.prefix>/etc/arhugula/installation-state.json
+```
+
+For a project checkout, `sys.prefix` is the `.venv` directory. Print it with:
+
+```sh
+uv run python -c 'import sys; print(sys.prefix)'
+```
+
+The file holds exactly one declaration naming an existing directory by an
+absolute path written without `.`, `..` or a trailing slash:
+
+```json
+{"pause_journal_root_declarations": [{"installation_root": "/srv/arhugula/pause-journal"}]}
+```
+
+You create and edit this file; the runtime never writes it. No flag,
+environment variable, working directory or config setting selects another file
+or another root. `harness run`, `harness resume` and `harness inspect` read it
+afresh on every invocation. The daemon reads it once at startup, so restart the
+daemon after you change it.
+
+Without the file, the root is unbound. The runtime never falls back to a
+default root: invalid JSON, a missing or non-list
+`pause_journal_root_declarations`, zero or several declarations, a relative or
+non-normalized path, a path that is not a directory, or a directory that
+overlaps one of the config's path bindings all leave the root unresolved. Then
+a run whose config enables durable pause-resume fails at bootstrap, and
+`harness resume` is refused with kind `protocol-not-bound`.
+
 ## Run The Daemon
 
 Start the FastMCP-backed daemon over a Unix socket:
@@ -134,5 +171,8 @@ This page is grounded in `harness-runtime/src/harness_runtime/cli/app.py`,
 `harness-runtime/src/harness_runtime/resume_refusal.py`, `harness-runtime/pyproject.toml`,
 `harness-runtime/src/harness_runtime/admin/inspect.py`,
 `harness-runtime/src/harness_runtime/admin/shutdown_cli.py`,
+`harness-runtime/src/harness_runtime/lifecycle/installation_state.py`,
+`harness-runtime/src/harness_runtime/lifecycle/pause_journal_root_resolver.py`,
+`harness-is/src/harness_is/pause_journal_root.py`,
 `harness-runtime/src/harness_runtime/config_source.py`, `harness.toml.example`,
 and `justfile`.
