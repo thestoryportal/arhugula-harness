@@ -75,6 +75,7 @@ from harness_runtime.memory_promotion import (
     PromotionCandidateKind,
     PromotionDecisionResult,
     PromotionDecisionService,
+    PromotionProvenanceChangedError,
     SemanticInjectionPolicy,
     SemanticRecordStatus,
     canonical_candidate_scope,
@@ -194,13 +195,26 @@ class MemoryOperator:
     ) -> PromotionDecisionResult:
         candidate = self._proposed_candidate(proposal_id, source_id)
         self._require_promotion_policy(candidate.proposed_kind)
-        return self._service().approve(
-            candidate,
-            timestamp=timestamp,
-            injection_policy=injection_policy,
-            operator_approved=True,
-            rationale=rationale,
-        )
+
+        # Re-checked inside the activation's guarded write: a source re-scoped after
+        # the check above must not activate the proposal under its old scope.
+        def _source_scope_unchanged() -> bool:
+            source = self._read_source(source_id)
+            return canonical_candidate_scope(source.envelope.scope) == candidate.suggested_scope
+
+        try:
+            return self._service().approve(
+                candidate,
+                timestamp=timestamp,
+                injection_policy=injection_policy,
+                operator_approved=True,
+                rationale=rationale,
+                activation_precondition=_source_scope_unchanged,
+            )
+        except PromotionProvenanceChangedError as exc:
+            raise MemoryOperatorRefusedError(
+                f"source {source_id!s} changed during approval; nothing was activated"
+            ) from exc
 
     def deny(
         self,

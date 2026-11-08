@@ -621,3 +621,41 @@ def test_compaction_lists_candidates_then_persists_one_disposition_each(tmp_path
     assert result.candidate_count == 1
     (entry,) = store.read_memory_operations()
     assert entry.actor.actor_id == "robbo"
+
+
+def test_source_rescoped_between_check_and_commit_is_not_activated(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    operator = _operator(store)
+    proposal = _propose(operator, _FACT, "A workflow-visible fact.")
+    before = len(store.read_memory_operations())
+    real_read = store.read_record
+    reads = 0
+
+    def _read_then_rescope(*args: object, **kwargs: object) -> MemoryStoreRecord:
+        # After the operator's pre-check read of the source, re-scope it so only the
+        # check inside the guarded activation write can see the change.
+        nonlocal reads
+        record = real_read(*args, **kwargs)  # type: ignore[arg-type]
+        if args[0] == _SOURCE_ID:
+            reads += 1
+            if reads == 1:
+                _seed_source(store, _SOURCE_ID, "turn-1", visibility=MemoryVisibility.PRIVATE)
+        return record
+
+    store.read_record = _read_then_rescope  # type: ignore[method-assign]
+
+    with pytest.raises(MemoryOperatorRefusedError, match="nothing was activated"):
+        operator.approve(
+            proposal,
+            source_id=_SOURCE_ID,
+            injection_policy=SemanticInjectionPolicy.TOOL_ALLOWED,
+            timestamp=_NOW,
+        )
+
+    store.read_record = real_read  # type: ignore[method-assign]
+    assert reads >= 2
+    assert len(store.read_memory_operations()) == before
+    assert not any(
+        entry.operation_kind is MemoryOperationKind.PROMOTE
+        for entry in store.read_memory_operations()
+    )
