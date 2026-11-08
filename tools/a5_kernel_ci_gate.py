@@ -1863,6 +1863,100 @@ def bootstrap(
     return Bootstrap(tarball, packages, added, pool, test)
 
 
+# --- guest kernel on the host (design.guest_kernel) -----------------------------------
+
+KERNEL_SOURCE = KERNEL_TARBALL.removesuffix(".tar.xz")
+BZIMAGE = "arch/x86/boot/bzImage"
+
+
+def verified_kernel(
+    work: Path, autosigner: Path, developer: Path, kernel: KernelInput, fragment: Path
+) -> Path:
+    """Before the build: both pinned signatures, the tarball's two-way pin and the fragment pin."""
+    sums = work / "sha256sums"
+    clearsigned = subprocess.run(
+        gpgv_argv(autosigner, "--output", sums, work / "sha256sums.asc"),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    tarball = work / KERNEL_TARBALL
+    # The developer signs the uncompressed tar, so gpgv reads the `xz -cd` stream on stdin.
+    with subprocess.Popen(["xz", "-cd", "--", str(tarball)], stdout=subprocess.PIPE) as xz:
+        detached = subprocess.run(
+            gpgv_argv(developer, work / KERNEL_TARBALL.replace(".xz", ".sign"), "-"),
+            stdin=xz.stdout,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    problems = signature_problems(clearsigned.stdout, clearsigned.returncode, kernel.autosigner_key)
+    problems += signature_problems(detached.stdout, detached.returncode, kernel.developer_key)
+    problems += [f"xz -cd exited {xz.returncode}" for _ in [0] if xz.returncode != 0]
+    if clearsigned.returncode == 0:
+        # Only gpgv's --output holds the signed entries; text outside the signature is unread.
+        problems += tarball_problems(
+            sums.read_text(), KERNEL_TARBALL, kernel.tarball_sha256, _sha256(_read(tarball))
+        )
+    problems += [
+        f"kernel fragment sha256 {digest} is not the pinned {kernel.config_sha256}"
+        for digest in [_sha256(_read(fragment))]
+        if digest != kernel.config_sha256
+    ]
+    if problems:
+        raise Q0Error("; ".join(problems))
+    return tarball
+
+
+@dataclass(frozen=True)
+class GuestKernel:
+    """The built guest kernel as host.json records it and binding.env binds it."""
+
+    bzimage: Path
+    source_sha256: str
+    config_sha256: str
+    bzimage_sha256: str
+    gcc_version: str
+
+    def bindings(self) -> dict[str, str]:
+        return {
+            "GUEST_SOURCE_SHA256": self.source_sha256,
+            "GUEST_CONFIG_SHA256": self.config_sha256,
+            "GUEST_BZIMAGE_SHA256": self.bzimage_sha256,
+        }
+
+
+def kernel_record(
+    bzimage: Path, source_sha256: str, config: bytes, image: bytes, gcc_version: str
+) -> GuestKernel:
+    """The hashes of one build; a final .config that permits modules fails before boot."""
+    if problems := kernel_config_problems(config.decode()):
+        raise Q0Error("; ".join(problems))
+    return GuestKernel(
+        bzimage, source_sha256, _sha256(config), _sha256(image), gcc_version.splitlines()[0]
+    )
+
+
+def guest_kernel(work: Path, home: Path, kernel: KernelInput, jobs: int) -> GuestKernel:
+    """Fetch, verify, extract and build the pinned kernel; the pinned keys come from `home`."""
+    # [LAW:one-source-of-truth] Each keyring is derived from its `inputs` fingerprint.
+    autosigner = pinned_keyring(home, kernel.autosigner_key, work / "kernel-autosigner.gpg")
+    developer = pinned_keyring(home, kernel.developer_key, work / "kernel-developer.gpg")
+    run_steps(kernel_fetch(work), work, BOOTSTRAP_TIMEOUT)
+    tarball = verified_kernel(work, autosigner, developer, kernel, GUEST_KERNEL_CONFIG)
+    run_steps([extract_argv(tarball, work)], work, BOOTSTRAP_TIMEOUT)
+    source = work / KERNEL_SOURCE
+    run_steps(kernel_build(source, GUEST_KERNEL_CONFIG, jobs), source, KERNEL_BUILD_TIMEOUT)
+    # verified_kernel proved the tarball equal to its pin, so the pin is its measured sha256.
+    return kernel_record(
+        source / BZIMAGE,
+        kernel.tarball_sha256,
+        _read(source / ".config"),
+        _read(source / BZIMAGE),
+        _stdout(["gcc", "--version"], source),
+    )
+
+
 def root_manifest(root: Path) -> dict[str, Mapping[str, Any]]:
     """One staged root as the guest will see it at /, by guest path."""
     return {guest: _node(host) for guest, host in _walk(root, "/", ())}

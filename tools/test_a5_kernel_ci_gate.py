@@ -14,6 +14,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -1962,6 +1963,116 @@ def test_verified_base_requires_the_pinned_signer_and_the_pinned_tarball(tmp_pat
     (tmp_path / base.tarball).write_bytes(b"other")
     with pytest.raises(gate.Q0Error, match=base.tarball):
         gate.verified_base(tmp_path, keyring, base)
+
+
+def _kernel_tarball(tmp_path: Path, content: str) -> Path:
+    """An xz'd source tree named like the pinned tarball, from an uncompressed `.tar`."""
+    tree = tmp_path / "tree" / content
+    (tree / gate.KERNEL_SOURCE).mkdir(parents=True)
+    (tree / gate.KERNEL_SOURCE / "Makefile").write_text(content)
+    tar = tree / "linux.tar"
+    subprocess.run(["tar", "-cf", str(tar), "-C", str(tree), gate.KERNEL_SOURCE], check=True)
+    return tar
+
+
+def _signed_kernel(tmp_path: Path) -> tuple[Path, Path, Path, gate.KernelInput]:
+    """The fetched kernel files in `tmp_path/work`, signed by two throwaway pinned keys."""
+    auto_home, auto_fpr, autosigner = _signer(tmp_path, "autosigner")
+    dev_home, dev_fpr, developer = _signer(tmp_path, "developer")
+    work = tmp_path / "work"
+    work.mkdir()
+    tar = _kernel_tarball(tmp_path, "kernel")
+    _gpg(dev_home, "--detach-sign", "-o", str(work / "linux-7.3.1.tar.sign"), str(tar))
+    xz = subprocess.run(["xz", "-c", str(tar)], check=True, capture_output=True).stdout
+    (work / gate.KERNEL_TARBALL).write_bytes(xz)
+    sums = tmp_path / "sums"
+    sums.write_text(f"{_sha(xz)}  {gate.KERNEL_TARBALL}\n")
+    _gpg(auto_home, "--clearsign", "-o", str(work / "sha256sums.asc"), str(sums))
+    pins = gate.KernelInput(
+        _sha(xz), auto_fpr, dev_fpr, _sha(gate.GUEST_KERNEL_CONFIG.read_bytes())
+    )
+    return work, autosigner, developer, pins
+
+
+def test_verified_kernel_requires_both_pinned_signers_and_both_pins(tmp_path: Path) -> None:
+    work, autosigner, developer, pins = _signed_kernel(tmp_path)
+
+    def verify(kernel: gate.KernelInput) -> Path:
+        (work / "sha256sums").unlink(missing_ok=True)
+        return gate.verified_kernel(work, autosigner, developer, kernel, gate.GUEST_KERNEL_CONFIG)
+
+    assert verify(pins) == work / gate.KERNEL_TARBALL
+    for change in ({"autosigner_key": "F" * 40}, {"developer_key": "F" * 40}):
+        with pytest.raises(gate.Q0Error, match=f"no valid signature by pinned {'F' * 40}"):
+            verify(replace(pins, **change))
+    with pytest.raises(gate.Q0Error, match=f"{gate.KERNEL_TARBALL} values differ"):
+        verify(replace(pins, tarball_sha256="7" * 64))
+    with pytest.raises(gate.Q0Error, match=r"kernel fragment sha256 \w+ is not the pinned"):
+        verify(replace(pins, config_sha256="7" * 64))
+    # Another tree under the same name: the developer signature over the stream fails too.
+    other = _kernel_tarball(tmp_path, "other")
+    xz = subprocess.run(["xz", "-c", str(other)], check=True, capture_output=True).stdout
+    (work / gate.KERNEL_TARBALL).write_bytes(xz)
+    with pytest.raises(gate.Q0Error, match=f"no valid signature by pinned {pins.developer_key}"):
+        verify(pins)
+
+
+def test_kernel_record_binds_the_build_hashes_and_refuses_a_modular_config(
+    tmp_path: Path,
+) -> None:
+    config = b"CONFIG_SECURITY=y\n# CONFIG_MODULES is not set\n"
+    record = gate.kernel_record(tmp_path, "5" * 64, config, b"image", "gcc (GCC) 15.2.0\nCopyright")
+    assert record == gate.GuestKernel(
+        tmp_path, "5" * 64, _sha(config), _sha(b"image"), "gcc (GCC) 15.2.0"
+    )
+    assert set(record.bindings()) == {
+        "GUEST_SOURCE_SHA256",
+        "GUEST_CONFIG_SHA256",
+        "GUEST_BZIMAGE_SHA256",
+    }
+    assert set(record.bindings()) < set(gate.BINDING_ENV_KEYS)
+    with pytest.raises(gate.Q0Error, match=re.escape("guest .config sets 'CONFIG_MODULES=y'")):
+        gate.kernel_record(tmp_path, "5" * 64, b"CONFIG_MODULES=y\n", b"image", "gcc")
+
+
+def test_guest_kernel_builds_only_the_verified_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fetched, autosigner, developer, pins = _signed_kernel(tmp_path)
+    home = gate.imported_keys(tmp_path / "home", (autosigner, developer))
+    work = tmp_path / "build"
+    work.mkdir()
+    config = "# CONFIG_MODULES is not set\n"
+    monkeypatch.setattr(
+        gate,
+        "kernel_fetch",
+        lambda target: [["cp", str(path), str(target)] for path in sorted(fetched.iterdir())],
+    )
+    built: list[Path] = []
+
+    def build(source: Path, fragment: Path, jobs: int) -> list[list[str]]:
+        built.append(source)
+        assert (source / "Makefile").read_text() == "kernel" and jobs == 3
+        script = f"mkdir -p arch/x86/boot && printf image > {gate.BZIMAGE}"
+        script += f" && printf '{config}' > .config"
+        return [["sh", "-c", script]]
+
+    monkeypatch.setattr(gate, "kernel_build", build)
+    record = gate.guest_kernel(work, home, pins, 3)
+    source = work / gate.KERNEL_SOURCE
+    assert built == [source]
+    assert record.bzimage == source / gate.BZIMAGE
+    assert (record.source_sha256, record.config_sha256, record.bzimage_sha256) == (
+        pins.tarball_sha256,
+        _sha(config.encode()),
+        _sha(b"image"),
+    )
+    assert record.gcc_version.startswith("gcc")
+    other = tmp_path / "rebuild"
+    other.mkdir()
+    with pytest.raises(gate.Q0Error, match="no valid signature by pinned"):
+        gate.guest_kernel(other, home, replace(pins, developer_key=pins.autosigner_key), 3)
+    assert built == [source]
 
 
 def test_pinned_keyring_holds_only_the_pinned_key_and_refuses_an_absent_one(
