@@ -86,8 +86,9 @@ from harness_core.cross_process_lock_deadline import (
     flock_until_deadline,
 )
 from harness_core.journal_record_ref import JournalRecordRef
+from harness_cp.engine_class import EngineClass
 from harness_cp.pause_resume_protocol_types import PauseSnapshot
-from pydantic import ValidationError
+from pydantic import BaseModel, ConfigDict, NonNegativeInt, ValidationError
 
 from harness_runtime.lifecycle.protected_result_store import normalize_tenant_scope
 
@@ -95,6 +96,7 @@ __all__ = [
     "PAUSE_JOURNAL_FILENAME_SUFFIX",
     "PAUSE_JOURNAL_LOCK_SUFFIX",
     "PAUSE_JOURNAL_SUBDIR",
+    "EnginePauseLocator",
     "JournalRecordAtRef",
     "JournalWorkflowPauseStore",
     "PauseJournalReadCause",
@@ -107,6 +109,33 @@ __all__ = [
 ]
 
 _IS_WINDOWS = sys.platform == "win32"
+
+_ENGINE_PAUSE_LOCATOR_KIND = "engine-pause-locator"
+
+
+class EnginePauseLocator(BaseModel):
+    """The durable address of a root engine-native pause (B-314 fork §2).
+
+    An address, not a snapshot: the engine's own store record stays the state, found at
+    `run_scoped_substrate_key(workflow_id, run_id)`. Steps `[0, step_index)` completed
+    before the capture. No store path or digest is held, so none can reach an operator.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+
+    workflow_id: str
+    run_id: str
+    # [LAW:types-are-the-program] Only the two engine-native classes are representable,
+    # serialized exactly as `EngineClass` defines them ("WAL-segment" / "reconciler-loop").
+    engine_class: Literal[EngineClass.WAL_SEGMENT, EngineClass.RECONCILER_LOOP]
+    step_index: NonNegativeInt
+
+    @property
+    def locator_hash(self) -> str:
+        """sha256 over the canonical locator fields at root depth: the claim's record hash."""
+        canonical = {**self.model_dump(mode="json"), "depth": 0}
+        encoded = json.dumps(canonical, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
 class PauseJournalReadCause(StrEnum):
@@ -238,10 +267,10 @@ class PauseJournalReadResult(NamedTuple):
     """
 
     snapshot: PauseSnapshot | None
-    """The latest journaled snapshot, or ``None`` on any of the five causes."""
+    """The latest journaled snapshot, or ``None`` on any of the five causes or a locator."""
 
     cause: PauseJournalReadCause | None
-    """``None`` iff :attr:`snapshot` is populated."""
+    """``None`` iff exactly one of :attr:`snapshot` and :attr:`locator` is populated."""
 
     retryable: bool
     """Whether re-invoking could plausibly succeed. ``True`` only for a
@@ -288,6 +317,10 @@ class PauseJournalReadResult(NamedTuple):
     malformed depth. Unknown is never inferred to be root, and it never alters
     :attr:`cause`, :attr:`record_count` or :attr:`latest_record_digest`."""
 
+    locator: EnginePauseLocator | None = None
+    """B-314 — the latest record when it is an engine-pause locator. The record kind is
+    decided by this SAME latest line, so a snapshot and a locator are never both set."""
+
 
 def _depth_is_wellformed(depth: object) -> bool:
     """A journaled ancestry depth is a nonnegative int, or `None` (unknown/legacy).
@@ -314,6 +347,13 @@ class JournalRecordAtRef(NamedTuple):
     """A verified exact journal position and its recorded ancestry depth."""
 
     snapshot: PauseSnapshot
+    depth: int | None
+
+
+class LocatorAtRef(NamedTuple):
+    """A verified exact engine-pause locator position and its recorded ancestry depth."""
+
+    locator: EnginePauseLocator
     depth: int | None
 
 
@@ -623,6 +663,25 @@ class JournalWorkflowPauseStore:
             snapshot_hash=snapshot.snapshot_hash,
         )
 
+    def capture_locator(self, locator: EnginePauseLocator) -> JournalRecordRef:
+        """Append a root engine-pause locator and return its exact identity (B-314 fork §2).
+
+        [LAW:single-enforcer] The same locked, fsynced append as a snapshot. A locator is
+        root-only, so its depth is always 0.
+        """
+        record_count, digest = self._append(
+            locator.workflow_id,
+            {"kind": _ENGINE_PAUSE_LOCATOR_KIND, **locator.model_dump(mode="json"), "depth": 0},
+        )
+        return JournalRecordRef(
+            tenant=self._tenant_scope,
+            workflow_id=locator.workflow_id,
+            run_id=locator.run_id,
+            record_count=record_count,
+            latest_digest=digest,
+            snapshot_hash=locator.locator_hash,
+        )
+
     def supersede(self, workflow_id: str, run_id: str) -> None:
         """Supersede the workflow's journal for the fresh run ``run_id``: its admission point.
 
@@ -730,15 +789,16 @@ class JournalWorkflowPauseStore:
                 record_count=len(lines),
                 latest_record_digest=digest,
             )
-        snapshot, cause = self._parse_snapshot_attributed(latest, workflow_id)
+        record, cause = self._parse_record_attributed(latest, workflow_id)
         return PauseJournalReadResult(
-            snapshot=snapshot,
+            snapshot=record if isinstance(record, PauseSnapshot) else None,
             cause=cause,
             retryable=False,
             indeterminate=cause is PauseJournalReadCause.CORRUPT_LATEST,
             record_count=len(lines),
             latest_record_digest=digest,
-            depth=_recorded_depth(latest) if snapshot is not None else None,
+            depth=_recorded_depth(latest) if record is not None else None,
+            locator=record if isinstance(record, EnginePauseLocator) else None,
         )
 
     def read_exact(self, ref: JournalRecordRef) -> JournalRecordAtRef | None:
@@ -748,6 +808,22 @@ class JournalWorkflowPauseStore:
         append-only, so a later append cannot move a completed earlier line.
         An in-flight or malformed target fails closed.
         """
+        exact = self._read_exact_record(ref)
+        if exact is None or not isinstance(exact[0], PauseSnapshot):
+            return None
+        return JournalRecordAtRef(snapshot=exact[0], depth=exact[1])
+
+    def read_exact_locator(self, ref: JournalRecordRef) -> LocatorAtRef | None:
+        """Read only the locator position named by ``ref``; never fall back to latest."""
+        exact = self._read_exact_record(ref)
+        if exact is None or not isinstance(exact[0], EnginePauseLocator):
+            return None
+        return LocatorAtRef(locator=exact[0], depth=exact[1])
+
+    def _read_exact_record(
+        self, ref: JournalRecordRef
+    ) -> tuple[PauseSnapshot | EnginePauseLocator, int | None] | None:
+        """The verified record of either kind at ``ref``, with its depth; ``None`` fails closed."""
         if ref.tenant != self._tenant_scope:
             return None
         try:
@@ -762,18 +838,21 @@ class JournalWorkflowPauseStore:
             return None
         try:
             text = line.decode("utf-8")
-            record = json.loads(text)
+            loaded = json.loads(text)
         except (UnicodeDecodeError, ValueError):
             return None
-        snapshot, cause = self._parse_snapshot_attributed(text, ref.workflow_id)
-        if cause is not None or snapshot is None:
+        record, cause = self._parse_record_attributed(text, ref.workflow_id)
+        if cause is not None or record is None:
             return None
-        if snapshot.run_id != ref.run_id or snapshot.snapshot_hash != ref.snapshot_hash:
+        record_hash = (
+            record.snapshot_hash if isinstance(record, PauseSnapshot) else record.locator_hash
+        )
+        if record.run_id != ref.run_id or record_hash != ref.snapshot_hash:
             return None
-        depth = record.get("depth")
+        depth = loaded.get("depth")
         if not _depth_is_wellformed(depth):
             return None
-        return JournalRecordAtRef(snapshot=snapshot, depth=depth)
+        return record, depth
 
     # -- durable journal I/O ------------------------------------------------
 
@@ -956,6 +1035,26 @@ class JournalWorkflowPauseStore:
             os.close(dir_fd)
 
     @staticmethod
+    def _parse_record_attributed(
+        line: str, expected_workflow_id: str
+    ) -> tuple[PauseSnapshot | EnginePauseLocator | None, PauseJournalReadCause | None]:
+        """Parse one journal line by its record kind: a snapshot or an engine-pause locator.
+
+        [LAW:single-enforcer] The one place the record kind is decided; every other line
+        keeps the snapshot parser's attribution.
+        """
+        try:
+            loaded: object = json.loads(line)
+        except ValueError:
+            return None, PauseJournalReadCause.CORRUPT_LATEST
+        if not isinstance(loaded, dict):
+            return None, PauseJournalReadCause.CORRUPT_LATEST
+        record = cast("dict[str, object]", loaded)
+        if record.get("kind") == _ENGINE_PAUSE_LOCATOR_KIND:
+            return _parse_locator_attributed(record, expected_workflow_id)
+        return JournalWorkflowPauseStore._parse_snapshot_attributed(line, expected_workflow_id)
+
+    @staticmethod
     def _parse_snapshot(line: str, expected_workflow_id: str) -> PauseSnapshot | None:
         """Parse one journal line into a ``PauseSnapshot``, or ``None`` if corrupt.
 
@@ -1000,6 +1099,26 @@ class JournalWorkflowPauseStore:
             # ValueError covers json.JSONDecodeError; any value-level failure
             # means a corrupt record → fail closed.
             return None, PauseJournalReadCause.CORRUPT_LATEST
+
+
+def _parse_locator_attributed(
+    record: dict[str, object], expected_workflow_id: str
+) -> tuple[EnginePauseLocator | None, PauseJournalReadCause | None]:
+    """Parse an exact engine-pause-locator line (B-314 fork §2); any other shape is corrupt."""
+    if record.keys() != {"kind", "workflow_id", "run_id", "engine_class", "step_index", "depth"}:
+        return None, PauseJournalReadCause.CORRUPT_LATEST
+    if not _depth_is_wellformed(record["depth"]):
+        return None, PauseJournalReadCause.CORRUPT_LATEST
+    fields = {key: value for key, value in record.items() if key not in {"kind", "depth"}}
+    try:
+        # [LAW:parse-dont-validate] JSON mode: the stored engine_class string is parsed
+        # into the enum member, and nothing outside the two engine-native values parses.
+        locator = EnginePauseLocator.model_validate_json(json.dumps(fields))
+    except ValidationError:
+        return None, PauseJournalReadCause.CORRUPT_LATEST
+    if locator.workflow_id != expected_workflow_id:
+        return None, PauseJournalReadCause.WORKFLOW_MISMATCH
+    return locator, None
 
 
 def _supersession_cause(
