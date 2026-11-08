@@ -139,18 +139,24 @@ to `approve`, `edit`, `reject`, `respond`), never a `HITLResult`:
   workflow_id is the handle. Python: `api.resume(resume_handle=..., operator_decision=...)`.
   Daemon: `resume_workflow(workflow_id, operator_decision={...})`. Supplying both
   `operator_decision` and `resume_context` is the caller's argument error (§4.2).
-- One runtime function, `operator_resume_context(snapshot, decision, now)`, called once inside the
-  root admission after the durable snapshot is read and before the claim is taken, builds
-  `ResumeContext(hitl_response=HITLResult(...))`:
-  - `response`, `edited_proposal`, `response_text` from the decision;
-  - `timestamp`: `now`, one UTC ISO-8601 clock read at the admission edge, the instant the
-    decision is admitted;
-  - `response_summary_hash`: `_compute_response_summary_hash` (`P/lifecycle/hitl_gate_composer.py:867`),
-    made the single shared definition for both the live gate and this function; a
-    `--rejection-reason` contributes only to this hash, since `HITLResult` has no reason field;
-  - `audit_ledger_entry_id`: the held pause's own `PauseSnapshot.state_ledger_anchor`, an existing
-    ledger reference that binds the decision to exactly that pause. No new audit identity is minted.
-    T03 verifies that the anchor is an `EntryID`; if it is not, the contract returns to review.
+- **Pending decision, no audit identity at admission.** `ResumeContext` (CP §26.8.1,
+  `harness-cp/src/harness_cp/pause_resume_protocol_types.py:1364`) gains
+  `operator_decision: OperatorDecision | None`, mutually exclusive with `hitl_response` (a model
+  validator refuses both). It carries only `response` (approve/edit/reject/respond),
+  `edited_proposal` payload, `response_text` and `rejection_reason`; it has no timestamp, hash or
+  audit ID. One runtime function, `operator_resume_context(snapshot, decision)`, called once inside
+  `api.admit_root_resume` after the durable snapshot is read and before the claim is taken, returns
+  `ResumeContext(operator_decision=decision)`. The CP driver delivers it through the existing
+  per-branch `HITLDeliveryCell` on the resumed step only, exactly as it delivers `hitl_response`.
+- **The resumed gate owns the identity.** Composer step 0 (`P/lifecycle/hitl_gate_composer.py:1906`)
+  is the single owner. On a delivered `operator_decision` it builds the `HITLResult` itself:
+  `audit_ledger_entry_id` is the `EntryID` under which it persists its own step-4h audit for this
+  response (the `hitl_action_id`-keyed entry it already writes), `timestamp` is its clock read at
+  consumption, and `response_summary_hash` comes from `_compute_response_summary_hash` (`:867`),
+  the shared definition. It then writes that audit and routes through step 4i as for a delivered
+  `hitl_response`. `PauseSnapshot.state_ledger_anchor` (the C-IS-05 state-ledger `entry_hash` at
+  the pause, `pause_resume_protocol_types.py:991-993`) is not used as, or relabelled to, any audit
+  identity; it stays the separate material-diff reference.
 - The function refuses, as an argument-class refusal that spends no claim, a snapshot whose
   `pause_reason` is not the HITL-gate pause. The resumed step consumes the context once through
   step 0. No pause-snapshot path is accepted from an operator surface (B-315 constraint 3), and
@@ -211,9 +217,13 @@ the gated step. "Audit" is the step-4h `CPAuditLedgerEntry`; "ingress" is the sp
    exit 5 (PAUSED) with a resume handle, zero effects; then one public
    `harness resume <manifest> --hitl-response approve` (and, for the daemon row,
    `resume_workflow(..., operator_decision={"action": "approve"})`). A spy on the root admission
-   asserts the built context before consumption: `response` approve, `timestamp` ISO-8601 within
-   the test window, `audit_ledger_entry_id` equal to the snapshot's `state_ledger_anchor`,
-   `response_summary_hash` equal to the shared helper's value. The marker is then written once.
+   asserts the admitted context has `operator_decision.response` approve, `hitl_response` None,
+   and no timestamp, hash or audit ID. After the run, the step-4h HITL audit entry read back from
+   the ledger has ID X; the `HITLResult` step 0 routed has `audit_ledger_entry_id == X`,
+   `response_summary_hash` equal to the shared helper's value and an ISO-8601 `timestamp` within
+   the test window; X differs from the snapshot's `state_ledger_anchor`, which is unchanged. The
+   marker is written once. A context carrying both `operator_decision` and `hitl_response` is
+   refused by the model validator.
    The same resume with `--hitl-response` against a non-HITL pause is an argument refusal, zero
    effects, and the handle stays resumable.
 10. `hold` without the durable pause binding: audited REJECT with reason
@@ -249,10 +259,13 @@ the gated step. "Audit" is the step-4h `CPAuditLedgerEntry`; "ingress" is the sp
   it needs nothing from A4. Child-workflow gates are excluded from T03 assertions.
 - **Pass 2 (`cmt-63153b06-7de4-42f2-82e1-e60b6eadebe3`):** D1 full payload display (no bound); D2
   typed ingress through cancel/timeout; D3 admission-built resume context; D4 attached idle TTY.
+- **Pass 3 (`cmt-6af8be74-16c0-4152-b133-bc17b54f2b1c`):** E1 the response-audit identity is
+  assigned by the resumed gate (step 0) from its own step-4h entry; admission carries a pending
+  decision only; `state_ledger_anchor` is never an audit identity.
 - **Open for Buford ratification:** the 900 s constant.
 
 ## Disposition (on ratification)
 
-The C1–C5 contract becomes the next free Runtime spec version's §14.8 amendment to C-RT-18, with
+The C1–C5 contract, with the CP §26.8.1 `ResumeContext.operator_decision` amendment, becomes the next free Runtime spec version's §14.8 amendment to C-RT-18, with
 one plan unit for T03 carrying assertions 1–16, materialized in P2 before T03 claims conformance.
 No source or test change is made by this stage.
