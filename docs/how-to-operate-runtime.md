@@ -143,6 +143,40 @@ uv run harness-shutdown --help
 Use `inspect` for read-only state and trace summaries. Use `shutdown` to signal
 a running harness process to drain and exit through the admin shutdown path.
 
+## Review Captured Memory
+
+Captured memory becomes reusable only through an operator decision. The
+operator entrypoint wraps the existing promotion and redaction services; it
+loads `harness.toml` (or `--config`) for the memory root and the runtime's
+memory policy, and records `--operator` as the actor on every ledger entry:
+
+```sh
+M="uv run python -m harness_runtime.admin.memory_operator --operator <you> --run-id <run>"
+$M operations                                    # memory-operation ledger
+$M inspect <memory-id>                           # one record, audit view
+$M propose <source-id> --kind convention --statement "<what to keep>"
+$M propose <source-id> --kind procedural_update --statement "<how to work>"
+$M approve <proposal-id> --source <source-id> --injection-policy retrieval_only
+$M deny <proposal-id> --source <source-id> --reason "<why>"
+$M tombstone <memory-id> --reason "<why>"          # dry run: reports, changes nothing
+$M tombstone <memory-id> --reason "<why>" --apply  # performs it
+```
+
+- `propose` accepts the semantic kinds and `procedural_update`; the candidate
+  keeps the source's scope and source references and stays `proposed`, which
+  retrieval excludes. Preference candidates are not part of this recipe.
+- `approve` and `deny` re-derive the proposal from the named source and refuse,
+  writing nothing, when the record is not `proposed` or was proposed from a
+  different source. A memory policy that discards candidates or forbids review
+  refuses `propose` and `approve`.
+- `redact`, `tombstone` and `expire` take the same arguments (plus an optional
+  `--replacement-summary`); without `--apply` the output has `"applied": false`.
+- Callback-memory migration (`CallbackMemoryMigrationService`) and compaction
+  dispositions (`CompactionSafetyHook`) remain library APIs with no command.
+
+Output is JSON on stdout. Exit `0` is success, `1` is a refusal (reason on
+stderr) and `2` is argument usage.
+
 ## Exit Codes
 
 | Code | Meaning |
@@ -171,6 +205,7 @@ This page is grounded in `harness-runtime/src/harness_runtime/cli/app.py`,
 `harness-runtime/src/harness_runtime/resume_refusal.py`, `harness-runtime/pyproject.toml`,
 `harness-runtime/src/harness_runtime/admin/inspect.py`,
 `harness-runtime/src/harness_runtime/admin/shutdown_cli.py`,
+`harness-runtime/src/harness_runtime/admin/memory_operator.py`,
 `harness-runtime/src/harness_runtime/lifecycle/installation_state.py`,
 `harness-runtime/src/harness_runtime/lifecycle/pause_journal_root_resolver.py`,
 `harness-is/src/harness_is/pause_journal_root.py`,

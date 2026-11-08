@@ -545,6 +545,15 @@ class PromotionCandidateExtractor:
                 candidates.append(_candidate_from_hint(record, hint, resolution))
         return candidates
 
+    def extract_from_hint(
+        self,
+        record: MemoryStoreRecord,
+        hint: PromotionCandidateHint,
+    ) -> PromotionCandidate:
+        """Extract one candidate from operator-authored hint material for a stored source."""
+
+        return _candidate_from_hint(record, hint, self._policy_resolver.resolve_promotion())
+
 
 class PromotionDecisionService:
     """Apply C-MEM-10 promotion decisions through the canonical store and ledger."""
