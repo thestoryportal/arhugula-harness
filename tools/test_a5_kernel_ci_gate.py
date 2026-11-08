@@ -1516,7 +1516,7 @@ def test_stage_accepts_symlinks_that_stay_in_a5_and_root_links_anywhere(tmp_path
     assert gate.stage_problems(_stage_scan(tmp_path)) == []
 
 
-@pytest.mark.parametrize("line", ["/usr/lib/python3/dist-packages", "../..", "import os"])
+@pytest.mark.parametrize("line", ["/usr/lib/python3/dist-packages", "../.."])
 def test_stage_refuses_a_pth_line_outside_a5_src(tmp_path: Path, line: str) -> None:
     _, a5 = _stage(tmp_path)
     (a5 / "venv" / "lib" / "a5.pth").write_text(f"../../src\n{line}\n")
@@ -1525,6 +1525,78 @@ def test_stage_refuses_a_pth_line_outside_a5_src(tmp_path: Path, line: str) -> N
         f"/a5/venv/lib/a5.pth line {line!r} resolves to "
         f"{gate.resolve(str(PurePosixPath('/a5/venv/lib') / line), {})}, outside /a5/src"
     ]
+
+
+def _coverage_startup_pth() -> bytes:
+    coverage = gate.importlib.metadata.distribution("coverage")
+    installed = next(file for file in coverage.files or () if str(file) == "a1_coverage.pth")
+    content = Path(coverage.locate_file(installed)).read_bytes()
+    assert installed.hash is not None and installed.hash.value == gate._record_digest(content)
+    return content
+
+
+def test_stage_admits_a_hashed_record_owned_executable_pth(tmp_path: Path) -> None:
+    _, a5 = _stage(tmp_path)
+    site_dir = a5 / "venv" / "lib" / "python3.12" / "site-packages"
+    site_dir.mkdir(parents=True)
+    content = _coverage_startup_pth()
+    (site_dir / "a1_coverage.pth").write_bytes(content)
+    dist = site_dir / "coverage-7.0.dist-info"
+    dist.mkdir()
+    (dist / "RECORD").write_text(
+        f"a1_coverage.pth,sha256={gate._record_digest(content)},{len(content)}\n"
+    )
+    stage = _stage_scan(tmp_path)
+    site_guest = "/a5/venv/lib/python3.12/site-packages"
+    assert stage.pth_owners == {
+        f"{site_guest}/a1_coverage.pth": f"{site_guest}/coverage-7.0.dist-info"
+    }
+    assert gate.stage_problems(stage) == []
+
+
+def test_stage_still_refuses_a_record_owned_pth_path_escape(tmp_path: Path) -> None:
+    _, a5 = _stage(tmp_path)
+    site_dir = a5 / "venv" / "lib" / "python3.12" / "site-packages"
+    site_dir.mkdir(parents=True)
+    content = _coverage_startup_pth() + b"../../../../../../etc\n"
+    (site_dir / "a1_coverage.pth").write_bytes(content)
+    dist = site_dir / "coverage-7.0.dist-info"
+    dist.mkdir()
+    (dist / "RECORD").write_text(
+        f"a1_coverage.pth,sha256={gate._record_digest(content)},{len(content)}\n"
+    )
+    problems = gate.stage_problems(_stage_scan(tmp_path))
+    assert len(problems) == 1 and "outside /a5/src" in problems[0]
+
+
+@pytest.mark.parametrize("record", ["missing", "wrong-hash", "tampered"])
+def test_stage_refuses_unowned_or_tampered_executable_pth(tmp_path: Path, record: str) -> None:
+    _, a5 = _stage(tmp_path)
+    site_dir = a5 / "venv" / "lib" / "python3.12" / "site-packages"
+    site_dir.mkdir(parents=True)
+    content = _coverage_startup_pth()
+    pth = site_dir / "a1_coverage.pth"
+    pth.write_bytes(content)
+    if record != "missing":
+        dist = site_dir / "coverage-7.0.dist-info"
+        dist.mkdir()
+        recorded = content if record == "tampered" else b"other"
+        (dist / "RECORD").write_text(
+            f"a1_coverage.pth,sha256={gate._record_digest(recorded)},{len(content)}\n"
+        )
+    if record == "tampered":
+        pth.write_bytes(content + b"import os\n")
+    executable_lines = sum(
+        line.startswith(("import ", "import\t")) for line in pth.read_text().splitlines()
+    )
+    assert (
+        gate.stage_problems(_stage_scan(tmp_path))
+        == [
+            "/a5/venv/lib/python3.12/site-packages/a1_coverage.pth "
+            "executable line is in no distribution's hashed RECORD"
+        ]
+        * executable_lines
+    )
 
 
 def test_stage_refuses_an_a5_meta_entry_beyond_the_four(tmp_path: Path) -> None:
@@ -2745,7 +2817,7 @@ class _Host:
         monkeypatch.setattr(gate, "guest_kernel", lambda *a: record("guest_kernel", a, kernel))
         monkeypatch.setattr(gate, "stage_a5", stage_a5)
         monkeypatch.setattr(gate, "run_steps", steps)
-        monkeypatch.setattr(gate, "privileged_stage", lambda *_: gate.Stage({}, {}, ()))
+        monkeypatch.setattr(gate, "privileged_stage", lambda *_: gate.Stage({}, {}, (), {}))
         monkeypatch.setattr(gate, "guest_stage_verify", verify)
         monkeypatch.setattr(
             gate, "_stdout", lambda argv, cwd: record("stdout", argv, stdout[argv[0]])
@@ -2777,7 +2849,7 @@ def test_q0_host_writes_records_binding_the_stage_it_built(
     assert calls["guest_kernel"][:2] == (at.work / "kernel", tmp_path)
     assert calls["stage_a5"][2] == "job-CI_TESTED"
     assert calls["run_steps"] == ([gate.host_env_origin_argv(at.a5)], at.a5 / "src")
-    assert calls["verify"] == (gate.Stage({}, {}, ()), at.a5)
+    assert calls["verify"] == (gate.Stage({}, {}, (), {}), at.a5)
     env = gate.parse_binding_env((meta / "binding.env").read_bytes())
     assert {key: env[key] for key in gate.JOB_BINDINGS} == _JOB
     assert env["STAGE_MANIFEST_SHA256"] == _sha((meta / "stage-manifest.json").read_bytes())

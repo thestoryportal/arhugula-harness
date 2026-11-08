@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import csv
 import enum
 import errno
 import hashlib
@@ -1432,6 +1433,7 @@ class Stage:
     manifest: Mapping[str, Mapping[str, Any]]
     pth: Mapping[str, str]  # each .pth file under /a5 -> its text
     meta: tuple[str, ...]  # the names present in /a5/meta
+    pth_owners: Mapping[str, str]  # executable .pth bytes named by a distribution RECORD
 
 
 def _within(path: str, top: str) -> bool:
@@ -1478,12 +1480,44 @@ def scan_stage(root: Path, a5: Path, mounts: Collection[str]) -> Stage:
         for top, at in ((root, "/"), (a5, "/a5"))
         for guest, host in _walk(top, at, skip)
     }
-    pth = {
-        guest: (a5 / guest.removeprefix("/a5/")).read_text()
-        for guest, node in manifest.items()
-        if _within(guest, "/a5") and node["type"] == "file" and guest.endswith(".pth")
-    }
-    return Stage(manifest, pth, tuple(sorted(p.name for p in (a5 / "meta").iterdir())))
+    pth: dict[str, str] = {}
+    for guest, node in manifest.items():
+        if _within(guest, "/a5") and node["type"] == "file" and guest.endswith(".pth"):
+            data = (a5 / guest.removeprefix("/a5/")).read_bytes()
+            if _sha256(data) != node["sha256"]:
+                raise Q0Error(f"{guest} changed during the stage scan")
+            pth[guest] = data.decode()
+    owners: dict[str, str] = {}
+    for record, node in manifest.items():
+        if (
+            not re.fullmatch(
+                r"/a5/venv/lib/python\d+\.\d+/site-packages/[^/]+\.dist-info/RECORD", record
+            )
+            or node["type"] != "file"
+        ):
+            continue
+        site_dir = str(PurePosixPath(record).parent.parent)
+        data = (a5 / record.removeprefix("/a5/")).read_bytes()
+        if _sha256(data) != node["sha256"]:
+            raise Q0Error(f"{record} changed during the stage scan")
+        for row in csv.reader(data.decode().splitlines(), strict=True):
+            if len(row) != 3 or not row[1].startswith("sha256="):
+                continue
+            if not row[0] or "/" in row[0] or row[0] in (".", ".."):
+                continue
+            path = f"{site_dir}/{row[0]}"
+            if path not in pth:
+                continue
+            digest = (
+                base64.urlsafe_b64encode(bytes.fromhex(manifest[path]["sha256"]))
+                .rstrip(b"=")
+                .decode()
+            )
+            if row[1] == f"sha256={digest}":
+                if path in owners:
+                    raise Q0Error(f"{path} has multiple distribution RECORD owners")
+                owners[path] = str(PurePosixPath(record).parent)
+    return Stage(manifest, pth, tuple(sorted(p.name for p in (a5 / "meta").iterdir())), owners)
 
 
 def resolve(path: str, links: Mapping[str, str]) -> str:
@@ -1535,11 +1569,18 @@ def stage_problems(stage: Stage) -> list[str]:
             for path in links
             if _within(path, "/a5") and (problem := outside(path, "/a5"))
         ]
-        # An `import` line names no path, so it resolves outside /a5/src and is refused.
+        # [LAW:single-enforcer] Executable startup bytes require the same RECORD hash
+        # ownership that the running interpreter's origin check requires.
         + [
             f"{path} line {line!r} {problem}"
             for path, line in pth_lines
+            if not line.startswith(("import ", "import\t"))
             if (problem := outside(str(PurePosixPath(path).parent / line), "/a5/src"))
+        ]
+        + [
+            f"{path} executable line is in no distribution's hashed RECORD"
+            for path, line in pth_lines
+            if line.startswith(("import ", "import\t")) and path not in stage.pth_owners
         ]
         + [
             f"/a5/meta/{name} is not one of {list(STAGE_META)}"
@@ -2137,20 +2178,28 @@ def privileged_root_manifest(gate: Path, root: Path) -> dict[str, Mapping[str, A
 
 def privileged_stage(gate: Path, root: Path, a5: Path) -> Stage:
     raw = _privileged_scan(gate, "scan-stage", root, a5)
-    manifest, pth, meta = raw.get("manifest"), raw.get("pth"), raw.get("meta")
+    manifest, pth, meta, owners = (
+        raw.get("manifest"),
+        raw.get("pth"),
+        raw.get("meta"),
+        raw.get("pth_owners"),
+    )
     if (
         type(manifest) is not dict
         or type(pth) is not dict
         or type(meta) is not list
+        or type(owners) is not dict
         or any(type(path) is not str or type(node) is not dict for path, node in manifest.items())
         or any(type(path) is not str or type(value) is not str for path, value in pth.items())
         or any(type(name) is not str for name in meta)
+        or any(type(path) is not str or type(owner) is not str for path, owner in owners.items())
     ):
         raise Q0Error("privileged scan-stage has malformed fields")
     return Stage(
         cast(dict[str, Mapping[str, Any]], manifest),
         cast(dict[str, str], pth),
         tuple(cast(list[str], meta)),
+        cast(dict[str, str], owners),
     )
 
 
