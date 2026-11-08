@@ -102,6 +102,7 @@ jobs:
       head: ${{ steps.bind.outputs.head }}
       base: ${{ steps.bind.outputs.base }}
       tested: ${{ steps.bind.outputs.tested }}
+      parents: ${{ steps.bind.outputs.parents }}
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -351,6 +352,136 @@ jobs:
             coverage.xml
             coverage-provenance.json
           if-no-files-found: warn
+
+  # A5 Q0 observation (qualification_sequence.Q0_observation): dispatch-only and never a
+  # required context. It builds, stages and boots the frozen Q0 candidate's guest once and
+  # records what it saw; it carries no verdict and no qualification credit, and
+  # tools/ci_aggregate.py never names it. The gate enforces every fail-closed Q0 check;
+  # these steps only provide the venue and keep the evidence.
+  a5-q0-observation:
+    name: A5 Q0 observation (dispatch-only, not required)
+    runs-on: ubuntu-26.04
+    needs: changes
+    if: github.event_name == 'workflow_dispatch'
+    timeout-minutes: 75
+    env:
+      # [LAW:one-source-of-truth] the `changes` binding and this run; host_records refuses
+      # any binding.env without every one of them.
+      CI_HEAD: ${{ needs.changes.outputs.head }}
+      CI_BASE: ${{ needs.changes.outputs.base }}
+      CI_TESTED: ${{ needs.changes.outputs.tested }}
+      CI_PARENTS: ${{ needs.changes.outputs.parents }}
+      CI_EVENT: ${{ github.event_name }}
+      CI_REF: ${{ github.ref }}
+    steps:
+      - name: Checkout (no persisted credentials)
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ needs.changes.outputs.tested }}
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Refuse a checkout that carries credentials
+        run: |
+          if git config --get-regexp '^http\..*extraheader' || git config --get-regexp '^includeif\.'; then
+            echo "a5-q0: the checkout carries credentials" >&2; exit 1
+          fi
+
+      # The pins come from the reviewed `inputs`; the gate re-checks every one it uses.
+      - name: Pins from the reviewed inputs
+        id: pins
+        run: |
+          set -eu
+          doc=tools/a5_kernel_ci_expectations.json
+          echo "uv=$(jq -er .inputs.interpreter.uv "$doc")" >> "$GITHUB_OUTPUT"
+          echo "keys=$(jq -er '[.inputs.base.signing_key, .inputs.archive.signing_key, .inputs.kernel.autosigner_key, .inputs.kernel.developer_key] | join(" ")' "$doc")" >> "$GITHUB_OUTPUT"
+
+      - name: Install the pinned uv
+        uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081 # v5
+        with:
+          version: ${{ steps.pins.outputs.uv }}
+          enable-cache: false
+
+      - name: KVM access for the runner user
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-a5-kvm.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      # The gate's launcher check refuses any virtme-ng other than the pinned version.
+      - name: Launcher packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends virtme-ng qemu-system-x86 virtiofsd
+
+      # `launch` runs the guest in a transient systemd user scope (owned_handles).
+      - name: User manager for the guest scope
+        run: |
+          set -eu
+          sudo loginctl enable-linger "$USER"
+          echo "XDG_RUNTIME_DIR=/run/user/$(id -u)" >> "$GITHUB_ENV"
+          XDG_RUNTIME_DIR="/run/user/$(id -u)" timeout 60 sh -c 'until systemctl --user show-environment > /dev/null; do sleep 1; done'
+
+      # No WKD: each key is fetched by its pinned fingerprint, and the gate exports only
+      # that fingerprint from what it imports.
+      - name: Pinned signing keys
+        run: |
+          set -eu
+          mkdir "$RUNNER_TEMP/a5-keys"
+          for fpr in ${{ steps.pins.outputs.keys }}; do
+            curl -fsS --retry 3 -o "$RUNNER_TEMP/a5-keys/$fpr.asc" "https://keyserver.ubuntu.com/pks/lookup?op=get&options=mr&search=0x$fpr"
+          done
+
+      - name: Stage directories
+        run: |
+          sudo install -d -o runner /a5 /a5-guest
+          mkdir "$RUNNER_TEMP/a5-work" "$RUNNER_TEMP/a5-evidence"
+
+      - name: Build and stage the guest (gate host)
+        run: |
+          set -eu
+          for key in "$RUNNER_TEMP"/a5-keys/*.asc; do set -- "$@" --key "$key"; done
+          /usr/bin/python3 tools/a5_kernel_ci_gate.py host "$@" --work "$RUNNER_TEMP/a5-work" --root /a5-guest/root --evidence "$RUNNER_TEMP/a5-evidence" --workspace "$GITHUB_WORKSPACE" --uv-cache "$RUNNER_TEMP/a5-uv-cache"
+
+      # grep exits 1 when nothing matches: only that passes.
+      - name: Host token scan
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          printf '%s\n' "$GITHUB_TOKEN" > "$RUNNER_TEMP/a5-token"
+          rc=0
+          sudo grep -rlF -f "$RUNNER_TEMP/a5-token" /a5 /a5-guest/root || rc=$?
+          rm "$RUNNER_TEMP/a5-token"
+          [ "$rc" = 1 ]
+
+      - name: Boot the Q0 guest
+        id: launch
+        timeout-minutes: 47
+        run: |
+          mkdir -p a5-kernel-ci-guest/out
+          touch "$RUNNER_TEMP/a5-evidence/launched"
+          /usr/bin/python3 tools/a5_kernel_ci_gate.py launch --work "$RUNNER_TEMP/a5-work" --root /a5-guest/root --out "$GITHUB_WORKSPACE/a5-kernel-ci-guest/out" --handles "$RUNNER_TEMP/a5-evidence/handles.json"
+
+      - name: Clean up the guest scope
+        if: always() && steps.launch.outcome != 'skipped'
+        run: /usr/bin/python3 tools/a5_kernel_ci_gate.py cleanup --handles "$RUNNER_TEMP/a5-evidence/handles.json" --out "$RUNNER_TEMP/a5-evidence/cleanup.json"
+
+      # A host failure is recorded here as "host: ..." by design.
+      - name: Collect and bind the observation
+        if: always()
+        run: /usr/bin/python3 tools/a5_kernel_ci_gate.py q0-collect --out "$GITHUB_WORKSPACE/a5-kernel-ci-guest/out" --launched "$RUNNER_TEMP/a5-evidence/launched" --evidence "$RUNNER_TEMP/a5-evidence"
+
+      - name: Upload Q0 evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: a5-q0-observation-${{ needs.changes.outputs.head }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            /a5/meta/binding.env
+            /a5/meta/host.json
+            ${{ runner.temp }}/a5-evidence/
+            a5-kernel-ci-guest/out/*.json
+            a5-kernel-ci-guest/out/*.rc
 
   parity-tests:
     runs-on: ubuntu-latest

@@ -416,6 +416,36 @@ def test_reducer_regressions_have_an_independently_required_blocking_job() -> No
     assert not step.get("continue-on-error", False)
 
 
+def test_a5_q0_observation_is_dispatch_only_and_never_required() -> None:
+    jobs = _jobs()
+    job = jobs["a5-q0-observation"]
+    assert job["if"] == "github.event_name == 'workflow_dispatch'"
+    assert job["name"] not in _REQUIRED_CONTEXTS and not job["name"].endswith("— blocking")
+    assert "a5-q0-observation" not in jobs[_aggregate_id(jobs)]["needs"]
+    assert "a5-q0-observation" not in (_REPO / "tools" / "ci_aggregate.py").read_text()
+    assert not job.get("continue-on-error", False)
+    steps = {step["name"]: step for step in job["steps"]}
+    checkout = steps["Checkout (no persisted credentials)"]["with"]
+    assert checkout["persist-credentials"] is False and checkout["fetch-depth"] == 0
+    # Evidence survives any failure: cleanup, collection and upload run whatever came before.
+    assert (
+        steps["Clean up the guest scope"]["if"] == "always() && steps.launch.outcome != 'skipped'"
+    )
+    for name in ("Collect and bind the observation", "Upload Q0 evidence"):
+        assert steps[name]["if"] == "always()"
+    paths = steps["Upload Q0 evidence"]["with"]["path"].splitlines()
+    assert paths == [
+        "/a5/meta/binding.env",
+        "/a5/meta/host.json",
+        "${{ runner.temp }}/a5-evidence/",
+        "a5-kernel-ci-guest/out/*.json",
+        "a5-kernel-ci-guest/out/*.rc",
+    ]
+    # The launched marker is touched immediately before the gate boots the guest.
+    launch = steps["Boot the Q0 guest"]["run"].splitlines()
+    assert launch[-2].startswith("touch ") and " launch " in launch[-1]
+
+
 def test_required_context_names_are_unchanged() -> None:
     names = (str(job.get("name", "")) for job in _jobs().values())
     blocking = {name for name in names if name.endswith("— blocking")}
