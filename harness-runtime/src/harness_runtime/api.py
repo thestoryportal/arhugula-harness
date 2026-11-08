@@ -115,6 +115,10 @@ from harness_runtime.lifecycle.journal_workflow_pause_store import (
     PauseJournalReadResult,
 )
 from harness_runtime.lifecycle.mcp_server import ResumedEntry
+from harness_runtime.lifecycle.operator_input import (
+    OperatorInput,
+    operator_elicitation_callback,
+)
 from harness_runtime.lifecycle.protected_result_store import normalize_tenant_scope
 from harness_runtime.lifecycle.root_resume_admission import (
     UNCLAIMED,
@@ -550,39 +554,10 @@ _run_lock: asyncio.Lock = asyncio.Lock()
 # ---------------------------------------------------------------------------
 
 
-async def _refuse_elicitation_in_api_run(context: Any, params: Any) -> Any:
-    """Elicitation callback for `api.run()`'s in-process ClientSession.
-
-    Per the operator-ratified Q2+Q3 reading at the C-RT-18 v1.12 fork:
-    `api.run()` is the carrier-preservation surface for the 4 existing
-    test callsites importing `from harness_runtime.api import run`.
-    Production HITL routes via Claude Code as the registered MCP client
-    per Reading α; `api.run()` is NOT structurally an HITL-bearing
-    entry point at v1.12 MVP.
-
-    If a workflow invoked via `api.run()` fires a HITL gate, this callback
-    runs on the in-process ClientSession side. We respond with `decline`
-    + a clear rejection reason — the composer at step 4i REJECT branch
-    maps this to a controlled workflow termination (rather than a hang
-    or silent absorption). Future arcs may bind a richer test-fixture
-    callback to exercise the elicitation surface from api.run-driven
-    integration tests.
-    """
-    _ = (context, params)
-    from mcp.shared.context import (
-        RequestContext,  # noqa: F401  # pyright: ignore[reportUnusedImport] — type-pin
-    )
-    from mcp.types import ElicitResult
-
-    return ElicitResult(
-        action="decline",
-        content=None,
-    )
-
-
 async def _invoke_run_workflow_via_in_process_mcp(
     fastmcp_server: Any,
     workflow_id: str,
+    operator: OperatorInput | None = None,
 ) -> _CpRunResult:
     """Open an in-memory MCP client session against `fastmcp_server` +
     call the `run_workflow` tool with `workflow_id`.
@@ -604,7 +579,9 @@ async def _invoke_run_workflow_via_in_process_mcp(
 
     async with create_connected_server_and_client_session(
         fastmcp_server,
-        elicitation_callback=_refuse_elicitation_in_api_run,
+        # Runtime v1.144 C2: gates are answered by the bound operator, or refused as
+        # unattended when none is bound.
+        elicitation_callback=operator_elicitation_callback(operator, "python"),
         raise_exceptions=True,
     ) as session:
         tool_result = await session.call_tool("run_workflow", {"workflow_id": workflow_id})
@@ -683,6 +660,7 @@ async def run(
     workflow: WorkflowObject,
     *,
     config: RuntimeConfig | None = None,
+    operator: OperatorInput | None = None,
 ) -> RunResult:
     """Execute one workflow end-to-end (C-RT-08 Track A operator-facing API).
 
@@ -793,7 +771,7 @@ async def run(
                     mcp_server.workflow_registry[workflow.workflow_id] = workflow
                     try:
                         cp_result = await _invoke_run_workflow_via_in_process_mcp(
-                            mcp_server.server, workflow.workflow_id
+                            mcp_server.server, workflow.workflow_id, operator
                         )
                     finally:
                         # Defensive cleanup — `_run_lock` serializes invocations but

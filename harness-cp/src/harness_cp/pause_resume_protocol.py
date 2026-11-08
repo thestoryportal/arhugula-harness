@@ -1026,8 +1026,11 @@ def _derive_resume_outcome(result: ResumeResult) -> str:
 # this module sits outside that cycle and rebuilds the model so runtime
 # validation resolves the field annotation.
 from harness_cp.hitl_placement import HITLResult as _HITLResult  # noqa: E402
+from harness_cp.hitl_placement import PendingHITLDecision as _PendingHITLDecision  # noqa: E402
 
-ResumeContext.model_rebuild(_types_namespace={"HITLResult": _HITLResult})
+ResumeContext.model_rebuild(
+    _types_namespace={"HITLResult": _HITLResult, "PendingHITLDecision": _PendingHITLDecision}
+)
 
 
 # --- U-CP-76 §16.5 greenfield composer — CP→IS state-ledger emission -------

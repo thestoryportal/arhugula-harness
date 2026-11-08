@@ -129,7 +129,7 @@ from typing import TYPE_CHECKING, Any, NoReturn, TypedDict, cast
 
 from harness_as import BlastRadiusTier, GateLevel
 from harness_core import PersonaTier
-from harness_core.identity import ActionID
+from harness_core.identity import ActionID, EntryID
 from harness_cp.audit_hitl_span_namespace import (
     AUDIT_NAMESPACE_SCHEMA,
     HITL_SPAN_NAMESPACE_SCHEMA,
@@ -151,6 +151,7 @@ from harness_cp.hitl_placement import (
     HITLPlacementKind,
     HITLResult,
     LoosenablePlacementKind,
+    PendingHITLDecision,
     select_governing_pre_action_placement,
 )
 from harness_cp.hitl_response_palette import HITLResponse
@@ -184,6 +185,7 @@ from harness_od.audit_ledger_types import SignatureAlgorithm, StateLedgerEntryRe
 from opentelemetry.trace import Status, StatusCode, get_current_span
 
 from harness_runtime.lifecycle.ask_user_question_surface import (
+    AskUserQuestionHoldRequestedError,
     AskUserQuestionResult,
     AskUserQuestionSurface,
     AskUserQuestionTimeoutError,
@@ -191,6 +193,7 @@ from harness_runtime.lifecycle.ask_user_question_surface import (
 from harness_runtime.lifecycle.audit_offload import run_audit_off_loop
 from harness_runtime.lifecycle.audit_signing_errors import AUDIT_SIGNING_HARD_FAILURES
 from harness_runtime.lifecycle.hitl_auto_approve_policy import HITLAutoApprovePolicy
+from harness_runtime.lifecycle.operator_input import compose_operator_gate_message
 from harness_runtime.lifecycle.webhook_delivery_composer import (
     WebhookDeliveryComposer,
     WebhookDeliveryResult,
@@ -894,6 +897,49 @@ def _compute_response_summary_hash(
     else:
         payload = b""
     return hashlib.sha256(payload).hexdigest()
+
+
+def _hitl_result_from_pending(
+    pending: PendingHITLDecision,
+    *,
+    step_context: StepExecutionContext,
+    step: WorkflowStep,
+    placement: HITLPlacement,
+) -> HITLResult:
+    """The `HITLResult` a resumed gate routes for an admitted pending decision (Runtime v1.144 C4).
+
+    The gate owns the identity: the audit ID is the `hitl_action_id` its own step-4h
+    entry is written under, and an EDIT keeps the live-derived `ProposedAction` with
+    only the payload replaced.
+    """
+    edited_proposal = (
+        None
+        if pending.edited_proposal_payload is None
+        else _compose_hitl_handoff_context(
+            step_context=step_context, step=step
+        ).proposed_action.model_copy(update={"payload": pending.edited_proposal_payload})
+    )
+    hitl_action_id = compose_hitl_action_id(
+        cast(ActionID, step_context.parent_action_id),
+        placement.position,
+        resolve_escalation_instance_id(step_context, placement.position),
+    )
+    return HITLResult(
+        response=pending.response,
+        edited_proposal=edited_proposal,
+        response_text=pending.response_text,
+        timestamp=datetime.now(UTC).isoformat(),
+        audit_ledger_entry_id=EntryID(str(hitl_action_id)),
+        response_summary_hash=_compute_response_summary_hash(
+            AskUserQuestionResult(
+                response=pending.response,
+                latency_ms=0.0,
+                response_text=pending.response_text,
+                rejection_reason=pending.rejection_reason,
+            ),
+            edited_payload=pending.edited_proposal_payload,
+        ),
+    )
 
 
 def _compose_hitl_handoff_context(
@@ -1948,6 +1994,15 @@ class RuntimeHITLGateComposer:
                 resumed_placements, self.applicable_placements, step
             )
             resumed_parent_action_id = cast(ActionID, step_context.parent_action_id)
+            # [LAW:one-source-of-truth] admission carried only the decision; this gate
+            # assigns the response identity it audits (Runtime v1.144 C4).
+            if isinstance(resumed_response, PendingHITLDecision):
+                resumed_response = _hitl_result_from_pending(
+                    resumed_response,
+                    step_context=step_context,
+                    step=step,
+                    placement=resumed_matching[0],
+                )
             # Step 0 re-evaluates the current gate without repeating the HITL request.
             # [LAW:single-enforcer] The same floor/palette helper serves first dispatch and resume.
             resolved_blast = (
@@ -2327,11 +2382,37 @@ class RuntimeHITLGateComposer:
                     options: list[HITLResponse] = sorted(palette)
                     try:
                         gate_result = await self.ask_user_question_surface.ask(
-                            prompt=f"HITL gate at {placement.position.value}",
+                            prompt=compose_operator_gate_message(
+                                position=placement.position.value,
+                                step_id=str(step.step_id),
+                                step_kind=str(step.step_kind),
+                                payload=step.step_payload,
+                                payload_sha256=post_mutation_payload_hash(step.step_payload),
+                            ),
                             options=options,
                             timeout=timeout_seconds,
                         )
+                    except AskUserQuestionHoldRequestedError as hold:
+                        if joint_binding_present:
+                            await self._escalate_to_secondary_channel(
+                                parent_action_id=parent_action_id,
+                                step=step,
+                                placement=placement,
+                                palette=palette,
+                                escalation_reason="operator_hold",
+                                tenant_id=step_context.tenant_id,
+                                step_context=step_context,
+                            )
+                        # No durable pause to hold in: the gate denies, audited as a
+                        # REJECT through the ordinary 4h/4i path (Runtime v1.144 C3).
+                        gate_result = AskUserQuestionResult(
+                            response=HITLResponse.REJECT,
+                            latency_ms=0.0,
+                            rejection_reason="hold unavailable: no durable pause binding",
+                            ingress=hold.ingress,
+                        )
                     except AskUserQuestionTimeoutError as timeout_exc:
+                        invocation_span.set_attribute("hitl.response.ingress", timeout_exc.ingress)
                         # --- G4a (U-RT-118) + G4b (U-RT-119; §14.8.9) ---------
                         # Resolve the per-persona-tier degradation MODE (vocab-A
                         # post-U-CP-92). persona_tier-None (test-fixture partial
@@ -2481,6 +2562,7 @@ class RuntimeHITLGateComposer:
                     with tracer.start_as_current_span("hitl.invocation.responded") as resp_span:
                         resp_span.set_attribute("hitl.response.class", gate_result.response.value)
                         resp_span.set_attribute("hitl.response.latency_ms", gate_result.latency_ms)
+                        resp_span.set_attribute("hitl.response.ingress", gate_result.ingress)
                         resp_span.set_attribute(
                             "hitl.response.summary_hash",
                             _compute_response_summary_hash(

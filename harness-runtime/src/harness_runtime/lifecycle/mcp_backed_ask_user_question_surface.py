@@ -53,17 +53,23 @@ only the `mcp_callback` impl changes.
 
 from __future__ import annotations
 
+import asyncio
 import time
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, cast
 
+import anyio
 from harness_cp.hitl_response_palette import HITLResponse
+from mcp.shared.exceptions import McpError
 from pydantic import BaseModel, ConfigDict
 
 from harness_runtime.lifecycle.ask_user_question_surface import (
+    HARNESS_OPERATOR_INGRESSES,
+    AskUserQuestionHoldRequestedError,
     AskUserQuestionResult,
     AskUserQuestionTimeoutError,
+    OperatorIngress,
 )
 from harness_runtime.lifecycle.mcp_host import MCPHost
 
@@ -73,6 +79,7 @@ if TYPE_CHECKING:
     from harness_runtime.lifecycle.mcp_server import HarnessMCPServer
 
 __all__ = [
+    "OPERATOR_ELICITATION_DEADLINE_SECONDS",
     "AskUserQuestionElicitationSchema",
     "MCPAskCallback",
     "MCPBackedAskUserQuestionSurface",
@@ -80,6 +87,11 @@ __all__ = [
     "ServerCtxElicitCallback",
     "materialize_mcp_backed_ask_user_question_surface_stage",
 ]
+
+
+OPERATOR_ELICITATION_DEADLINE_SECONDS = 900
+"""Bound on every elicitation wait when `placement.timeout` is unset (Runtime v1.144
+C3a), so a vanished or silent client ends the gate fail-closed instead of hanging."""
 
 
 # Type alias for the MCP-delivery callback.
@@ -206,6 +218,10 @@ class AskUserQuestionElicitationSchema(BaseModel):
     """Populated when `response == 'reject'` — operator-authored cancellation
     reason."""
 
+    ingress: str | None = None
+    """Harness ingress that produced the reply (Runtime v1.144 C5); absent from other
+    MCP clients."""
+
 
 @dataclass(frozen=True)
 class ServerCtxElicitCallback:
@@ -265,13 +281,7 @@ class ServerCtxElicitCallback:
         timeout: float | None,
     ) -> AskUserQuestionResult:
         """Deliver the HITL prompt via `ctx.elicit(...)`."""
-        _ = (options, timeout)  # options + timeout are placement-level
-        # concerns; the MCP elicit primitive carries them implicitly via
-        # the active server session lifetime. timeout enforcement at
-        # the surface adapter happens at the wrapping
-        # MCPBackedAskUserQuestionSurface.ask() body (via asyncio.wait_for
-        # on the callback if needed; v1.12 MVP relies on the MCP client's
-        # native elicitation UI to honor operator deadlines).
+        _ = options  # the palette is fixed by the elicitation schema
 
         ctx = self.mcp_server.get_current_tool_ctx()
         if ctx is None:
@@ -283,10 +293,16 @@ class ServerCtxElicitCallback:
                 "tool body per spec v1.12 §14.8.3 topology pin (Reading α)."
             )
 
-        elicit_result = await ctx.elicit(
-            message=prompt,
-            schema=AskUserQuestionElicitationSchema,
-        )
+        # [LAW:no-ambient-temporal-coupling] the server owns the deadline; no client
+        # behavior on disconnect can extend it (Runtime v1.144 C3a).
+        deadline = OPERATOR_ELICITATION_DEADLINE_SECONDS if timeout is None else timeout
+        try:
+            elicit_result = await asyncio.wait_for(
+                ctx.elicit(message=prompt, schema=AskUserQuestionElicitationSchema),
+                deadline,
+            )
+        except (anyio.ClosedResourceError, anyio.BrokenResourceError, McpError) as exc:
+            raise TimeoutError(f"operator elicitation transport closed: {exc!r}") from exc
 
         action = elicit_result.action
         if action == "accept":
@@ -301,31 +317,71 @@ class ServerCtxElicitCallback:
                     "ctx.elicit returned action='accept' but data is None — "
                     "MCP client did not populate the elicitation schema"
                 )
-            try:
-                response_class = HITLResponse(data.response)
-            except ValueError as exc:
-                raise MCPSurfaceCallbackNotBoundError(
-                    f"ctx.elicit returned response={data.response!r} not in "
-                    f"4-response palette per C-CP-16 §16.1"
-                ) from exc
-            return AskUserQuestionResult(
-                response=response_class,
-                latency_ms=0.0,  # filled by surface adapter via monotonic
-                edited_proposal=data.edited_proposal,
-                response_text=data.response_text,
-                rejection_reason=data.rejection_reason,
-            )
+            return _parse_accepted_reply(data)
         if action == "decline":
             return AskUserQuestionResult(
                 response=HITLResponse.REJECT,
                 latency_ms=0.0,
                 rejection_reason="operator declined elicitation",
+                ingress="unreported",
             )
         # action == "cancel"
         raise AskUserQuestionTimeoutError(
             "MCP elicitation cancelled by operator (ElicitResult.action == 'cancel'); "
-            "composer step 4f maps to RT-FAIL-HITL-GATE-TIMEOUT per spec §14.8."
+            "composer step 4f maps to RT-FAIL-HITL-GATE-TIMEOUT per spec §14.8.",
+            ingress="unreported",
         )
+
+
+def _parse_reply_ingress(raw: str | None) -> OperatorIngress:
+    if raw is None:
+        return "unreported"
+    if raw not in HARNESS_OPERATOR_INGRESSES:
+        raise MCPSurfaceCallbackNotBoundError(
+            f"ctx.elicit returned ingress={raw!r} outside the harness ingress set"
+        )
+    return cast("OperatorIngress", raw)
+
+
+def _parse_accepted_reply(data: AskUserQuestionElicitationSchema) -> AskUserQuestionResult:
+    """Map one accepted reply onto a palette result, a hold or a cancel (Runtime v1.144 C1/C3).
+
+    `hold`, `cancel` and `refuse` are surface values: they never become palette members.
+    """
+    ingress = _parse_reply_ingress(data.ingress)
+    if data.response == "hold":
+        raise AskUserQuestionHoldRequestedError(ingress=ingress)
+    if data.response == "cancel":
+        raise AskUserQuestionTimeoutError(
+            "operator cancelled the HITL elicitation", ingress=ingress
+        )
+    if data.response == "refuse":
+        if data.rejection_reason is None:
+            raise MCPSurfaceCallbackNotBoundError(
+                "ctx.elicit returned response='refuse' without a rejection_reason"
+            )
+        # [LAW:single-enforcer] an ingress refusal is audited as a reject, never an approval.
+        return AskUserQuestionResult(
+            response=HITLResponse.REJECT,
+            latency_ms=0.0,
+            rejection_reason=data.rejection_reason,
+            ingress=ingress,
+        )
+    try:
+        response_class = HITLResponse(data.response)
+    except ValueError as exc:
+        raise MCPSurfaceCallbackNotBoundError(
+            f"ctx.elicit returned response={data.response!r} not in "
+            f"4-response palette per C-CP-16 §16.1"
+        ) from exc
+    return AskUserQuestionResult(
+        response=response_class,
+        latency_ms=0.0,  # filled by surface adapter via monotonic
+        edited_proposal=data.edited_proposal,
+        response_text=data.response_text,
+        rejection_reason=data.rejection_reason,
+        ingress=ingress,
+    )
 
 
 @dataclass(frozen=True)
@@ -376,18 +432,13 @@ class MCPBackedAskUserQuestionSurface:
             result = await self.mcp_callback(prompt, options, timeout)
         except TimeoutError as exc:
             raise AskUserQuestionTimeoutError(
-                f"MCP-backed AskUserQuestion timed out after timeout={timeout}s"
+                f"MCP-backed AskUserQuestion timed out after timeout={timeout}s",
+                ingress="none",
             ) from exc
 
         if result.latency_ms <= 0.0:
             elapsed_ms = (time.monotonic() - start) * 1000.0
-            return AskUserQuestionResult(
-                response=result.response,
-                latency_ms=elapsed_ms,
-                edited_proposal=result.edited_proposal,
-                response_text=result.response_text,
-                rejection_reason=result.rejection_reason,
-            )
+            return result.model_copy(update={"latency_ms": elapsed_ms})
         return result
 
 
