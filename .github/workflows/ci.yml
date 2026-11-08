@@ -212,10 +212,7 @@ jobs:
           ref: ${{ needs.changes.outputs.tested }}
 
       - name: Install uv + Python 3.12
-        uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081 # v5
-        with:
-          python-version: "3.12"
-          enable-cache: true
+        run: bash .github/scripts/install-uv.sh
 
       - name: Sync workspace (all members)
         run: uv sync --locked --all-packages
@@ -323,10 +320,7 @@ jobs:
           fetch-depth: 0
 
       - name: Install uv + Python 3.12
-        uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081 # v5
-        with:
-          python-version: "3.12"
-          enable-cache: true
+        run: bash .github/scripts/install-uv.sh
 
       - name: Sync workspace (all members)
         run: uv sync --locked --all-packages
@@ -393,10 +387,7 @@ jobs:
           fetch-depth: 0
 
       - name: Install uv + Python 3.12
-        uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081 # v5
-        with:
-          python-version: "3.12"
-          enable-cache: true
+        run: bash .github/scripts/install-uv.sh
 
       - name: Sync workspace (all members)
         run: uv sync --locked --all-packages
@@ -423,10 +414,7 @@ jobs:
           ref: ${{ needs.changes.outputs.tested }}
 
       - name: Install uv + Python 3.12
-        uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081 # v5
-        with:
-          python-version: "3.12"
-          enable-cache: true
+        run: bash .github/scripts/install-uv.sh
 
       - name: Sync workspace (all members)
         run: uv sync --locked --all-packages
@@ -483,10 +471,7 @@ jobs:
           ref: ${{ needs.changes.outputs.tested }}
 
       - name: Install uv + Python 3.12
-        uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081 # v5
-        with:
-          python-version: "3.12"
-          enable-cache: true
+        run: bash .github/scripts/install-uv.sh
 
       - name: Sync ONLY harness-${{ matrix.axis }} (+ declared deps; prune siblings)
         run: uv sync --locked --package harness-${{ matrix.axis }}
@@ -519,10 +504,7 @@ jobs:
           ref: ${{ needs.changes.outputs.tested }}
 
       - name: Install uv + Python 3.12
-        uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081 # v5
-        with:
-          python-version: "3.12"
-          enable-cache: true
+        run: bash .github/scripts/install-uv.sh
 
       - name: Sync workspace (all members; provides pyyaml via harness-runtime)
         run: uv sync --locked --all-packages
@@ -561,10 +543,7 @@ jobs:
           ref: ${{ needs.changes.outputs.tested }}
 
       - name: Install uv + Python 3.12
-        uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081 # v5
-        with:
-          python-version: "3.12"
-          enable-cache: true
+        run: bash .github/scripts/install-uv.sh
 
       - name: Sync workspace (all members)
         run: uv sync --locked --all-packages
@@ -615,10 +594,7 @@ jobs:
           fetch-depth: 0
 
       - name: Install uv + Python 3.12
-        uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081 # v5
-        with:
-          python-version: "3.12"
-          enable-cache: true
+        run: bash .github/scripts/install-uv.sh
 
       - name: Sync workspace (all members; provides pyyaml via harness-runtime)
         run: uv sync --locked --all-packages
@@ -675,10 +651,7 @@ jobs:
           ref: ${{ needs.changes.outputs.tested }}
 
       - name: Install uv + Python 3.12
-        uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081 # v5
-        with:
-          python-version: "3.12"
-          enable-cache: true
+        run: bash .github/scripts/install-uv.sh
 
       - name: Sync workspace (all members; provides pyyaml via harness-runtime)
         run: uv sync --locked --all-packages
@@ -711,10 +684,7 @@ jobs:
           ref: ${{ needs.changes.outputs.tested }}
 
       - name: Install uv + Python 3.12
-        uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081 # v5
-        with:
-          python-version: "3.12"
-          enable-cache: true
+        run: bash .github/scripts/install-uv.sh
 
       - name: Sync workspace
         run: uv sync --locked --all-packages
@@ -760,10 +730,7 @@ jobs:
           ref: ${{ needs.changes.outputs.tested }}
 
       - name: Install uv + Python 3.12
-        uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081 # v5
-        with:
-          python-version: "3.12"
-          enable-cache: true
+        run: bash .github/scripts/install-uv.sh
 
       - name: Sync workspace
         run: uv sync --locked --all-packages
@@ -791,10 +758,7 @@ jobs:
           ref: ${{ needs.changes.outputs.tested }}
 
       - name: Install uv + Python 3.12
-        uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081 # v5
-        with:
-          python-version: "3.12"
-          enable-cache: true
+        run: bash .github/scripts/install-uv.sh
 
       - name: Sync workspace (all members; provides pyyaml via harness-runtime)
         run: uv sync --locked --all-packages
@@ -832,10 +796,7 @@ jobs:
           ref: ${{ needs.changes.outputs.tested }}
 
       - name: Install uv + Python 3.12
-        uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081 # v5
-        with:
-          python-version: "3.12"
-          enable-cache: true
+        run: bash .github/scripts/install-uv.sh
 
       - name: Sync workspace (all members)
         run: uv sync --locked --all-packages
@@ -870,10 +831,7 @@ jobs:
           fetch-depth: 0
 
       - name: Install uv + Python 3.12
-        uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081 # v5
-        with:
-          python-version: "3.12"
-          enable-cache: true
+        run: bash .github/scripts/install-uv.sh
 
       - name: Sync workspace
         run: uv sync --locked --all-packages
@@ -947,10 +905,7 @@ jobs:
           ref: ${{ needs.changes.outputs.tested }}
 
       - name: Install uv + Python 3.12
-        uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081 # v5
-        with:
-          python-version: "3.12"
-          enable-cache: true
+        run: bash .github/scripts/install-uv.sh
 
       - name: Sync workspace (all members; provides pyyaml via harness-runtime)
         run: uv sync --locked --all-packages
