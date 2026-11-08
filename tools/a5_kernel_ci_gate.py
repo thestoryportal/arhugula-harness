@@ -3154,7 +3154,16 @@ GUEST_RUN_TIMEOUT = 2700  # seconds, inside the 47-minute step; KILL follows TER
 SETTLE_SECONDS = 30  # after the scope's stop, before KILL of the same scope
 KILL_SETTLE_SECONDS = 5
 # Every option the launch passes; launcher_runtime (a) requires each in this vng's --help.
-VNG_OPTIONS = ("--run", "--root", "--rodir", "--rwdir", "--cpus", "--memory", "--exec")
+VNG_OPTIONS = (
+    "--run",
+    "--root",
+    "--rodir",
+    "--rwdir",
+    "--overlay-rwdir",
+    "--cpus",
+    "--memory",
+    "--exec",
+)
 Q0_EXEC = f"/bin/sh {A5}/meta/{Q0_PROBE}"
 
 
@@ -3179,6 +3188,7 @@ def vng_argv(work: Path, root: Path, out: Path, command: str) -> list[str]:
         root,
         f"{A5}={A5}",
         f"/out={out}",
+        "/",
         "4",
         "12G",
         command,

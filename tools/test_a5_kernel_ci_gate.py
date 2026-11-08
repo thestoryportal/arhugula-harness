@@ -2772,7 +2772,7 @@ def test_stage_twice_fails_closed_on_either_install_and_still_discards_the_repea
 
 _JOB = {key: f"job-{key}" for key in gate.JOB_BINDINGS}
 _VNG_HELP = "usage: vng [--run RUN] [--root ROOT] [--rodir RODIR] [--rwdir RWDIR]\n" + (
-    "  [--cpus CPUS] [--memory MEMORY] [--exec EXEC] [--net NET]\n"
+    "  [--overlay-rwdir OVERLAY_RWDIR]  [--cpus CPUS] [--memory MEMORY] [--exec EXEC] [--net NET]\n"
 )
 
 
@@ -3199,10 +3199,58 @@ def test_vng_argv_launches_the_built_kernel_with_exactly_the_checked_options(
         "--root": "/a5-guest/root",
         "--rodir": "/a5=/a5",
         "--rwdir": f"/out={tmp_path / 'out'}",
+        "--overlay-rwdir": "/",
         "--cpus": "4",
         "--memory": "12G",
         "--exec": "/bin/sh /a5/meta/q0-probe.sh",
     }
+
+
+def test_pinned_virtme_run_accepts_the_staged_mounts(tmp_path: Path) -> None:
+    runner = os.environ.get("A5_PINNED_VIRTME_RUN")
+    if runner is None:
+        pytest.skip("set A5_PINNED_VIRTME_RUN to the pinned virtme-run executable")
+    root, out, a5, kernel = (tmp_path / name for name in ("root", "out", "a5", "kernel"))
+    for path in (root, out, a5):
+        path.mkdir()
+    kernel.touch()
+    argv = gate.vng_argv(tmp_path / "work", root, out, gate.Q0_EXEC)
+    options = dict(zip(argv[4::2], argv[5::2], strict=True))
+    command = [
+        sys.executable,
+        runner,
+        "--kimg",
+        str(kernel),
+        "--mods",
+        "none",
+        "--root",
+        options["--root"],
+        "--rodir",
+        f"/a5={a5}",
+        "--rwdir",
+        options["--rwdir"],
+        "--dry-run",
+        "--show-command",
+        "--qemu-bin",
+        "/bin/true",
+        "--no-virtme-ng-init",
+    ]
+    # [LAW:behavior-not-structure] Check the pinned launcher's rejection and acceptance.
+    rejected = subprocess.run(command, capture_output=True, text=True, check=False)
+    assert rejected.returncode == 1
+    assert "cannot initialize /out inside the guest" in rejected.stderr
+    accepted = subprocess.run(
+        [*command, "--overlay-rwdir", options["--overlay-rwdir"]],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert accepted.returncode == 0, accepted.stderr
+    assert "virtme_rw_overlay0=/" in accepted.stdout
+    assert "virtme_initmount0=/out virtme_initmount1=/a5" in accepted.stdout
+    assert f"path={out},security_model=none" in accepted.stdout
+    assert f"path={a5},security_model=none,readonly=on" in accepted.stdout
+    assert f"path={root},security_model=none,readonly=on" in accepted.stdout
 
 
 def test_launch_records_its_scope_before_the_guest_runs_and_returns_the_guest_exit(
