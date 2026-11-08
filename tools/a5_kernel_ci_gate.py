@@ -28,6 +28,7 @@ from __future__ import annotations
 import argparse
 import base64
 import enum
+import errno
 import hashlib
 import importlib
 import importlib.metadata
@@ -41,6 +42,7 @@ import shutil
 import site
 import socket
 import stat
+import string
 import subprocess
 import sys
 import time
@@ -2527,11 +2529,158 @@ def env_origin(inputs: Inputs, a5: Path, hosts: Sequence[Path], out: Path) -> in
     return 1 if problems else 0
 
 
+# --- guest isolation check (isolation_check) -------------------------------------------
+
+# Assembled from bytes: the guest scans every share for it, so the tested tree must never
+# hold the literal (isolation_check (2)).
+SENTINEL_MARKER = bytes.fromhex("41354953 4f53454e 54494e45 4c31").decode()
+# Host-root files the guest must not see; the host plants each one before bootstrap.
+ROOT_SENTINELS = ("/etc/a5-sentinel", "/usr/a5-sentinel", "/opt/a5-sentinel")
+HOST_ONLY_PATHS = ("/home/runner", *ROOT_SENTINELS)
+_SCAN_CHUNK = 1 << 20
+
+
+@dataclass(frozen=True)
+class IsolationFacts:
+    """What the guest measures of its own isolation, at the edge, before anything is judged."""
+
+    mountinfo: str
+    environ: Mapping[str, str]
+    interfaces: tuple[str, ...]  # /sys/class/net
+    present: tuple[str, ...]  # the HOST_ONLY_PATHS that exist, as links or otherwise
+    write_errno: Mapping[str, int | None]  # mountpoint -> 0 when a new file was created
+    marker_hits: Mapping[str, str]  # path -> sha256 of a regular file holding the marker
+    unreadable: Mapping[str, str]  # path -> why the scan could not read it
+
+
+def write_targets(mountinfo: str) -> list[str]:
+    """Every host-backed mount the guest must not write, /a5 even when it is not detected."""
+    return sorted({"/a5", *(share["mountpoint"] for share in shares(mountinfo))} - {"/out"})
+
+
+def _write_errno(mountpoint: str) -> int | None:
+    probe = os.path.join(mountpoint, f".a5-write-probe-{secrets.token_hex(8)}")
+    try:
+        os.close(os.open(probe, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
+    except OSError as exc:
+        return exc.errno
+    os.unlink(probe)
+    return 0
+
+
+def _marker_digest(path: str, marker: bytes) -> str | None:
+    """The file's sha256 when it holds `marker`, read once in chunks."""
+    digest, tail, found = hashlib.sha256(), b"", False
+    with open(path, "rb") as stream:
+        while chunk := stream.read(_SCAN_CHUNK):
+            digest.update(chunk)
+            # The carried tail finds a marker split across two chunks.
+            found = found or marker in tail + chunk
+            tail = (tail + chunk)[1 - len(marker) :]
+    return digest.hexdigest() if found else None
+
+
+def _marker_scan(
+    mountpoints: Iterable[str], marker: bytes
+) -> tuple[dict[str, str], dict[str, str]]:
+    """Regular files holding `marker` under each mountpoint, never leaving its filesystem."""
+    hits: dict[str, str] = {}
+    unreadable: dict[str, str] = {}
+
+    def refused(exc: OSError) -> None:
+        unreadable[str(exc.filename)] = str(exc.strerror)
+
+    for top in mountpoints:
+        device = os.lstat(top).st_dev
+        for directory, dirs, files in os.walk(top, onerror=refused):
+            # [LAW:single-enforcer] Each other mount is scanned from its own mountpoint, and
+            # /proc, /sys and /dev are not host-backed.
+            dirs[:] = [d for d in dirs if os.lstat(os.path.join(directory, d)).st_dev == device]
+            for name in files:
+                path = os.path.join(directory, name)
+                try:
+                    regular = stat.S_ISREG(os.lstat(path).st_mode)
+                    digest = _marker_digest(path, marker) if regular else None
+                except OSError as exc:
+                    refused(exc)
+                    continue
+                if digest is not None:
+                    hits[path] = digest
+    return hits, unreadable
+
+
+def isolation_facts() -> IsolationFacts:
+    mountinfo = Path("/proc/self/mountinfo").read_text()
+    hits, unreadable = _marker_scan(
+        [share["mountpoint"] for share in shares(mountinfo)], SENTINEL_MARKER.encode()
+    )
+    return IsolationFacts(
+        mountinfo=mountinfo,
+        environ=dict(os.environ),
+        interfaces=tuple(sorted(os.listdir("/sys/class/net"))),
+        present=tuple(path for path in HOST_ONLY_PATHS if os.path.lexists(path)),
+        write_errno={target: _write_errno(target) for target in write_targets(mountinfo)},
+        marker_hits=hits,
+        unreadable=unreadable,
+    )
+
+
+def isolation_problems(facts: IsolationFacts) -> list[str]:
+    """Every way the guest reaches the host: env, network, host paths, writes, sentinels."""
+    # [LAW:single-enforcer] guest_env_problems is the one env-name allowlist; ACTIONS_*,
+    # *TOKEN* and RUNNER_TEMP are refused there by being outside it.
+    return [
+        *guest_env_problems(facts.environ),
+        *(
+            f"guest environment {name} holds the sentinel marker"
+            for name, value in sorted(facts.environ.items())
+            if SENTINEL_MARKER in value
+        ),
+        *(f"guest has network interface {name}" for name in facts.interfaces if name != "lo"),
+        *(f"guest sees host path {path}" for path in facts.present),
+        *(
+            f"{target} write probe errno {errno.errorcode.get(code, code)} is not EROFS"
+            for target, code in sorted(facts.write_errno.items())
+            if code != errno.EROFS
+        ),
+        *(
+            f"{path} holds the sentinel marker (sha256 {digest})"
+            for path, digest in sorted(facts.marker_hits.items())
+        ),
+        *(f"{path} unreadable: {why}" for path, why in sorted(facts.unreadable.items())),
+    ]
+
+
+def isolation(out: Path) -> int:
+    """Write the isolation record before its verdict exits; any problem fails the run."""
+    facts = isolation_facts()
+    problems = isolation_problems(facts)
+    record = asdict(facts) | {
+        # Names only: an env value that leaked must not be uploaded with the evidence.
+        "environ": sorted(facts.environ),
+        "shares": shares(facts.mountinfo),
+        "problems": problems,
+        "verdict": "fail" if problems else "pass",
+    }
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_bytes(_canonical(record))
+    for problem in problems:
+        print(f"a5-kernel-ci isolation: {problem}", file=sys.stderr)
+    return 1 if problems else 0
+
+
 # --- Q0 host run (qualification_sequence.Q0_observation, everything before vng) ---------
 
-# Assembled from bytes: the guest scans /a5/src for it, so the tested tree must never hold
-# the literal (isolation_check (2)).
-SENTINEL_MARKER = bytes.fromhex("41354953 4f53454e 54494e45 4c31").decode()
+SENTINEL_ENV, SENTINEL_GIT = "A5_SENTINEL_ENV", "git config a5.sentinel"
+# Each file site is a template over the job environment; its key is its name in records.
+SENTINEL_FILES = (
+    "$HOME/.a5-sentinel",
+    "$RUNNER_TEMP/a5-sentinel",
+    "$GITHUB_WORKSPACE/a5-sentinel",
+    "$GITHUB_WORKSPACE/.git/a5-sentinel",
+    *ROOT_SENTINELS,
+)
+SENTINEL_SITES = (SENTINEL_ENV, *SENTINEL_FILES, SENTINEL_GIT)
 # The binding.env keys the job's own environment supplies; measured_bindings and
 # host_records supply the rest, and host_records refuses any other union.
 JOB_BINDINGS = (
@@ -2582,6 +2731,28 @@ def host_env_origin_argv(a5: Path) -> list[str]:
     ]
 
 
+def sentinel_files(environ: Mapping[str, str], workspace: Path) -> dict[str, Path]:
+    """Each file sentinel site on this host; an unset base fails before anything is planted."""
+    # [LAW:one-source-of-truth] GITHUB_WORKSPACE is the workspace /a5/src is cloned from.
+    bases = {key: environ.get(key, "") for key in ("HOME", "RUNNER_TEMP")}
+    if missing := [key for key, value in bases.items() if not value]:
+        raise Q0Error(f"job environment lacks {missing}")
+    bases["GITHUB_WORKSPACE"] = str(workspace)
+    return {site: Path(string.Template(site).substitute(bases)) for site in SENTINEL_FILES}
+
+
+def sentinel_steps(
+    files: Mapping[str, Path], workspace: Path, sentinels: Mapping[str, str]
+) -> list[list[str]]:
+    """Write each file sentinel as root and the workspace's local git config one."""
+    # [LAW:one-type-per-behavior] One writer for every file site: /etc, /usr and /opt are
+    # root's, and the value travels as an argument, never through a shell word.
+    write = ["sudo", "-n", "--", "/bin/sh", "-c", 'printf %s "$1" > "$2"', "a5-sentinel"]
+    return [[*write, sentinels[site], str(path)] for site, path in files.items()] + [
+        ["git", "-C", str(workspace), "config", "--local", "a5.sentinel", sentinels[SENTINEL_GIT]]
+    ]
+
+
 def host_packages(packages: Sequence[str], cwd: Path) -> dict[str, str]:
     """The installed host version of each launcher package; an absent one fails Q0."""
     listing = _stdout(["dpkg-query", "-W", "-f", DPKG_QUERY_FORMAT, *packages], cwd)
@@ -2609,9 +2780,13 @@ def q0_host(
 ) -> None:
     """Build and stage everything the Q0 guest boots on, then write the four host records."""
     job = job_bindings(environ)
+    files = sentinel_files(environ, at.workspace)
+    sentinels = {site: SENTINEL_MARKER + secrets.token_hex(32) for site in SENTINEL_SITES}
+    # [LAW:no-ambient-temporal-coupling] Planted before anything is fetched, built or
+    # staged, so a staging that copies host state copies a sentinel the guest scans for.
+    run_steps(sentinel_steps(files, at.workspace, sentinels), at.work, BOOTSTRAP_TIMEOUT)
     host_netns = os.readlink("/proc/self/ns/net")
-    sentinel = SENTINEL_MARKER + secrets.token_hex(32)
-    boot = bootstrap(gate, inputs, at.work, keys, host_netns, sentinel)
+    boot = bootstrap(gate, inputs, at.work, keys, host_netns, sentinels[SENTINEL_ENV])
     staged = stage_twice(gate, boot, at.root, at.work, host_netns)
     (at.work / "kernel").mkdir()
     kernel = guest_kernel(
@@ -2641,7 +2816,7 @@ def q0_host(
         asdict(facts),
         staged.install,
         boot.self_test,
-        {"A5_SENTINEL_ENV": _sha256(sentinel.encode())},
+        {site: _sha256(value.encode()) for site, value in sentinels.items()},
     )
     write_host_records(
         records,
@@ -2755,6 +2930,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     probe = commands.add_parser("observe", parents=[common])
     probe.add_argument("--meta", type=Path, required=True)
     probe.add_argument("--out", type=Path, required=True)
+    isolated = commands.add_parser("isolation", parents=[common])
+    isolated.add_argument("--out", type=Path, required=True)
     origin = commands.add_parser("env-origin", parents=[common])
     origin.add_argument("--compare", type=Path, action="append", default=[])
     origin.add_argument("--out", type=Path, required=True)
@@ -2781,6 +2958,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     # no Q1 section can shape a Q0 observation and the Q0 inputs-only file serves them all.
     if args.command == "observe":
         return observe(inputs, args.meta, args.out)
+    if args.command == "isolation":
+        return isolation(args.out)
     if args.command == "env-origin":
         return env_origin(inputs, A5, args.compare, args.out)
     if args.command == "host":

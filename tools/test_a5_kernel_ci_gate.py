@@ -11,6 +11,7 @@ incomplete, stale against the reviewed expectations or not this leg's."""
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import os
@@ -2530,6 +2531,7 @@ class _Host:
     ) -> None:
         self.calls: list[tuple[str, Any]] = []
         self.inputs = parse_inputs(_RAW["inputs"])
+        self.bases = {"HOME": str(tmp_path / "home"), "RUNNER_TEMP": str(tmp_path / "temp")}
         self.at = gate.HostLayout(
             tmp_path / "work",
             tmp_path / "root",
@@ -2560,7 +2562,9 @@ class _Host:
 
         def steps(argv: Any, cwd: Path, timeout: float) -> None:
             record("run_steps", (argv, cwd))
-            (meta / "host-env-origin.json").write_text('{"verdict": "pass"}')
+            # The sentinel steps run before stage_a5 makes meta; only env-origin writes there.
+            if argv == [gate.host_env_origin_argv(self.at.a5)]:
+                (meta / "host-env-origin.json").write_text('{"verdict": "pass"}')
 
         def verify(root: Path, a5: Path, mounts: Any) -> list[str]:
             (meta / "stage-manifest.json").write_text('{"/a5/src": {}}')
@@ -2579,6 +2583,7 @@ class _Host:
         )
 
     def run(self, environ: Mapping[str, str]) -> None:
+        environ = self.bases | environ
         gate.q0_host(Path("gate.py"), self.inputs, environ, (Path("keys.asc"),), self.at)
 
 
@@ -2588,7 +2593,8 @@ def test_q0_host_writes_records_binding_the_stage_it_built(
     host = _Host(tmp_path, monkeypatch)
     host.run(_JOB | {"UNRELATED": "x"})
     meta, evidence, at = host.at.a5 / "meta", host.at.evidence, host.at
-    assert [name for name, _ in host.calls][:6] == [
+    assert [name for name, _ in host.calls][:7] == [
+        "run_steps",
         "bootstrap",
         "stage_twice",
         "guest_kernel",
@@ -2620,11 +2626,35 @@ def test_q0_host_writes_records_binding_the_stage_it_built(
     assert gate.evaluate_install_ns((evidence / "install-ns.json").read_bytes(), _DEBS) == []
     stage = json.loads((evidence / "host-stage.json").read_bytes())
     assert stage["binding_env_sha256"] == _sha((meta / "binding.env").read_bytes())
-    # Only the sentinel's digest is recorded, and on the host side only.
-    sentinel = calls["bootstrap"][5]
-    assert sentinel.startswith(gate.SENTINEL_MARKER) and len(sentinel) == 14 + 64
-    assert stage["sentinel_sha256"] == {"A5_SENTINEL_ENV": _sha(sentinel.encode())}
-    assert sentinel not in (meta / "binding.env").read_text() + (meta / "host.json").read_text()
+    # Every sentinel is planted before bootstrap, and only its digest is recorded, host side.
+    (*writes, git), cwd = host.calls[0][1]
+    sites = {
+        "$HOME/.a5-sentinel": tmp_path / "home" / ".a5-sentinel",
+        "$RUNNER_TEMP/a5-sentinel": tmp_path / "temp" / "a5-sentinel",
+        "$GITHUB_WORKSPACE/a5-sentinel": at.workspace / "a5-sentinel",
+        "$GITHUB_WORKSPACE/.git/a5-sentinel": at.workspace / ".git" / "a5-sentinel",
+        **{site: Path(site) for site in gate.ROOT_SENTINELS},
+    }
+    planted = {argv[-1]: argv[-2] for argv in writes}
+    assert cwd == at.work and sorted(planted) == sorted(str(path) for path in sites.values())
+    assert git[:-1] == ["git", "-C", str(at.workspace), "config", "--local", "a5.sentinel"]
+    values = {site: planted[str(path)] for site, path in sites.items()} | {
+        gate.SENTINEL_GIT: git[-1],
+        gate.SENTINEL_ENV: calls["bootstrap"][5],
+    }
+    assert len(set(values.values())) == len(gate.SENTINEL_SITES) == 9
+    assert all(v.startswith(gate.SENTINEL_MARKER) and len(v) == 14 + 64 for v in values.values())
+    assert stage["sentinel_sha256"] == {site: _sha(v.encode()) for site, v in values.items()}
+    crossing = (meta / "binding.env").read_text() + (meta / "host.json").read_text()
+    assert not [value for value in values.values() if value in crossing]
+    # The root writer itself, run without sudo, writes exactly the value it is handed.
+    at.workspace.mkdir()
+    (workspace_write,) = [
+        argv for argv in writes if argv[-1] == str(sites["$GITHUB_WORKSPACE/a5-sentinel"])
+    ]
+    assert workspace_write[:3] == ["sudo", "-n", "--"]
+    subprocess.run(workspace_write[3:], check=True)
+    assert (at.workspace / "a5-sentinel").read_text() == workspace_write[-2]
 
 
 def test_the_tested_tree_never_holds_the_sentinel_marker_the_guest_scans_for() -> None:
@@ -2636,6 +2666,172 @@ def test_the_tested_tree_never_holds_the_sentinel_marker_the_guest_scans_for() -
     )
     assert (found.returncode, found.stdout) == (1, ""), found.stderr
     assert gate.SENTINEL_MARKER == "A5ISO" + "SENTINEL1"
+
+
+_MARKED = gate.SENTINEL_MARKER + "f" * 64
+
+
+def _clean_facts() -> gate.IsolationFacts:
+    names = [*gate.BINDING_ENV_KEYS, *gate.FIXED_GUEST_ENV]
+    return gate.IsolationFacts(
+        mountinfo="22 1 0:20 / / ro,relatime - virtiofs ROOTFS ro\n",
+        environ={name: f"value-of-{name}" for name in names},
+        interfaces=("lo",),
+        present=(),
+        write_errno={"/": errno.EROFS, "/a5": errno.EROFS},
+        marker_hits={},
+        unreadable={},
+    )
+
+
+def test_isolation_problems_pass_a_guest_that_reaches_nothing() -> None:
+    assert gate.isolation_problems(_clean_facts()) == []
+
+
+@pytest.mark.parametrize(
+    ("change", "problem"),
+    [
+        pytest.param(
+            lambda f: replace(f, environ={**f.environ, "GITHUB_TOKEN": "t"}),
+            "guest environment has GITHUB_TOKEN outside the allowlist",
+            id="env-name",
+        ),
+        pytest.param(
+            lambda f: replace(f, environ={**f.environ, "CI_REF": "x" + _MARKED}),
+            "guest environment CI_REF holds the sentinel marker",
+            id="env-value",
+        ),
+        pytest.param(
+            lambda f: replace(f, interfaces=("eth0", "lo")),
+            "guest has network interface eth0",
+            id="interface",
+        ),
+        pytest.param(
+            lambda f: replace(f, present=("/etc/a5-sentinel",)),
+            "guest sees host path /etc/a5-sentinel",
+            id="host-path",
+        ),
+        pytest.param(
+            lambda f: replace(f, write_errno={**f.write_errno, "/a5": 0}),
+            "/a5 write probe errno 0 is not EROFS",
+            id="writable",
+        ),
+        pytest.param(
+            lambda f: replace(f, write_errno={**f.write_errno, "/": errno.EACCES}),
+            "/ write probe errno EACCES is not EROFS",
+            id="refused-not-read-only",
+        ),
+        pytest.param(
+            lambda f: replace(f, marker_hits={"/a5/src/x": "a" * 64}),
+            f"/a5/src/x holds the sentinel marker (sha256 {'a' * 64})",
+            id="marker-hit",
+        ),
+        pytest.param(
+            lambda f: replace(f, unreadable={"/x": "Permission denied"}),
+            "/x unreadable: Permission denied",
+            id="unreadable",
+        ),
+    ],
+)
+def test_isolation_problems_fail_closed_on_each_reach(
+    change: Callable[[gate.IsolationFacts], gate.IsolationFacts], problem: str
+) -> None:
+    assert gate.isolation_problems(change(_clean_facts())) == [problem]
+
+
+def test_write_targets_always_hold_a5_and_never_out() -> None:
+    lines = [
+        "22 1 0:20 / / ro,relatime - virtiofs ROOTFS ro",
+        "23 22 0:21 / /out rw,relatime - virtiofs out rw",
+        "24 22 0:22 / /proc rw - proc proc rw",
+    ]
+    assert gate.write_targets("\n".join(lines)) == ["/", "/a5"]
+    lines.append("25 22 0:23 / /a5 ro - 9p a5 ro")
+    assert gate.write_targets("\n".join(lines)) == ["/", "/a5"]
+
+
+def test_write_probe_reports_a_created_file_and_leaves_nothing(tmp_path: Path) -> None:
+    assert gate._write_errno(str(tmp_path)) == 0  # pyright: ignore[reportPrivateUsage]
+    assert list(tmp_path.iterdir()) == []
+    assert gate._write_errno(str(tmp_path / "absent")) == errno.ENOENT  # pyright: ignore[reportPrivateUsage]
+
+
+def test_marker_scan_finds_a_split_marker_and_follows_no_link(tmp_path: Path) -> None:
+    marker = gate.SENTINEL_MARKER.encode()
+    share, outside = tmp_path / "share", tmp_path / "outside"
+    (share / "sub").mkdir(parents=True)
+    outside.mkdir()
+    split = b"x" * (gate._SCAN_CHUNK - 5) + marker + b"tail"  # pyright: ignore[reportPrivateUsage]
+    (share / "split").write_bytes(split)
+    (share / "clean").write_bytes(b"x" * 10)
+    (share / "sub" / "deep").write_bytes(marker)
+    (outside / "leak").write_bytes(marker)
+    (share / "file-link").symlink_to(outside / "leak")
+    (share / "dir-link").symlink_to(outside)
+    hits, unreadable = gate._marker_scan([str(share)], marker)  # pyright: ignore[reportPrivateUsage]
+    assert hits == {str(share / "split"): _sha(split), str(share / "sub" / "deep"): _sha(marker)}
+    assert unreadable == {}
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root reads a mode-000 file")
+def test_marker_scan_records_what_it_cannot_read(tmp_path: Path) -> None:
+    (secret := tmp_path / "secret").write_bytes(b"x")
+    secret.chmod(0)
+    (closed := tmp_path / "closed").mkdir()
+    closed.chmod(0)
+    try:
+        hits, unreadable = gate._marker_scan([str(tmp_path)], b"marker")  # pyright: ignore[reportPrivateUsage]
+    finally:
+        closed.chmod(0o700)
+    assert hits == {}
+    assert unreadable == {str(closed): "Permission denied", str(secret): "Permission denied"}
+
+
+@pytest.mark.parametrize(
+    ("extra", "code", "problems"),
+    [
+        pytest.param({}, 0, [], id="isolated"),
+        pytest.param(
+            {"GITHUB_TOKEN": _MARKED},
+            1,
+            [
+                "guest environment has GITHUB_TOKEN outside the allowlist",
+                "guest environment GITHUB_TOKEN holds the sentinel marker",
+            ],
+            id="leaked",
+        ),
+    ],
+)
+def test_isolation_command_records_env_names_only_before_its_verdict_exits(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    extra: dict[str, str],
+    code: int,
+    problems: list[str],
+) -> None:
+    facts = _clean_facts()
+    facts = replace(facts, environ={**facts.environ, **extra})
+    monkeypatch.setattr(gate, "isolation_facts", lambda: facts)
+    # An inputs-only file: isolation runs before any Q1 section is parsed.
+    (doc := tmp_path / "inputs.json").write_text(json.dumps({"inputs": _RAW["inputs"]}))
+    out = tmp_path / "out" / "isolation.json"
+    assert main(["isolation", "--expectations", str(doc), "--out", str(out)]) == code
+    record = json.loads(out.read_bytes())
+    assert record["problems"] == problems
+    assert record["verdict"] == ("fail" if problems else "pass")
+    assert record["environ"] == sorted(facts.environ)
+    assert record["shares"] == gate.shares(facts.mountinfo)
+    assert "value-of-" not in out.read_text() and gate.SENTINEL_MARKER not in out.read_text()
+
+
+@pytest.mark.parametrize("base", ["HOME", "RUNNER_TEMP"])
+def test_q0_host_refuses_an_unset_sentinel_base_before_planting_anything(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, base: str
+) -> None:
+    host = _Host(tmp_path, monkeypatch)
+    with pytest.raises(gate.Q0Error, match=rf"lacks \['{base}'\]"):
+        host.run(_JOB | {base: ""})
+    assert host.calls == []
 
 
 def test_q0_host_refuses_an_unset_job_binding_before_fetching_anything(
