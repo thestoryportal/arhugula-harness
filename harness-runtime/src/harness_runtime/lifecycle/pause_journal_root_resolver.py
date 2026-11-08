@@ -3,9 +3,10 @@
 Capture, the pre-bootstrap read, the root claim and the fresh-run supersession append all take
 their journal directory from `resolve_pause_journal_root`, so no site derives it from a run's
 STATE_LEDGER binding. The installation-state declaration is read from `INSTALLATION_STATE`, the
-process's one installation-state source; IS spec v1.17 §1.1 leaves its storage to the
-storage-selection prerequisite, so the production value is `STORAGE_UNSELECTED`, which declares
-nothing and resolves `unbound`: every journal site fails closed until storage is bound.
+process's one installation-state source, which each public ingress binds from the operator's
+document (`installation_state`). Until the operator declares a root the document is absent, the
+value is `STORAGE_UNSELECTED`, which declares nothing and resolves `unbound`: every journal site
+fails closed until storage is bound.
 
 The decision is U-IS-21's pure `harness_is.pause_journal_root`; this module only observes the
 filesystem for it and turns an unresolved result into a typed refusal.
@@ -24,6 +25,7 @@ from harness_is.pause_journal_root import (
     ExistingDirectory,
     NotADirectory,
     ObservedRoot,
+    PauseJournalRootDeclaration,
     Resolved,
     Unresolved,
     UnresolvedCause,
@@ -41,6 +43,7 @@ __all__ = [
     "STORAGE_UNSELECTED",
     "InstallationState",
     "PauseJournalRootUnresolvedError",
+    "installation_root_declaration",
     "resolve_pause_journal_root",
 ]
 
@@ -55,9 +58,10 @@ class InstallationState:
 STORAGE_UNSELECTED: Final = InstallationState(pause_journal_root_declarations=())
 """No retained storage is selected, so nothing is declared (Buford cmt-8b76cb48: fail closed)."""
 
-# [LAW:no-shared-mutable-globals] One owner: the process composition binds it (tests through a
-# fixture); asyncio tasks and `to_thread` workers inherit the binding, and nothing else writes it.
-INSTALLATION_STATE: Final[ContextVar[InstallationState]] = ContextVar(
+# [LAW:no-shared-mutable-globals] One owner: each public ingress binds it from the operator's
+# document (`installation_state_bound`); asyncio tasks and `to_thread` workers inherit the
+# binding, and nothing else writes it. An unreadable document is carried as its typed cause.
+INSTALLATION_STATE: Final[ContextVar[InstallationState | Unresolved]] = ContextVar(
     "INSTALLATION_STATE", default=STORAGE_UNSELECTED
 )
 
@@ -76,13 +80,22 @@ class PauseJournalRootUnresolvedError(Exception):
         self.cause: Final = cause
 
 
+def installation_root_declaration() -> PauseJournalRootDeclaration | Unresolved:
+    """The bound installation state's one root declaration, or why there is none."""
+    match INSTALLATION_STATE.get():
+        case InstallationState(pause_journal_root_declarations=raw):
+            return parse_declarations(raw)
+        case Unresolved() as unreadable:
+            return unreadable
+
+
 def resolve_pause_journal_root(config: RuntimeConfig) -> Path:
     """The installation's pause-journal root as a real path, or `PauseJournalRootUnresolvedError`.
 
     `config` contributes only its bound path-binding directories, which can make resolution
     fail as overlapping but never choose the root.
     """
-    match parse_declarations(INSTALLATION_STATE.get().pause_journal_root_declarations):
+    match installation_root_declaration():
         case Unresolved(cause=cause):
             raise PauseJournalRootUnresolvedError(cause)
         case declaration:

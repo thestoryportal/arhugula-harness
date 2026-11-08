@@ -13,13 +13,11 @@ could otherwise leak occupied/budget state into an unrelated later test.
 
 from __future__ import annotations
 
+import sys
 from collections.abc import Iterator
 
 import pytest
-from harness_runtime.lifecycle.pause_journal_root_resolver import (
-    INSTALLATION_STATE,
-    STORAGE_UNSELECTED,
-)
+from harness_runtime.lifecycle.installation_state import installation_state_bound
 from harness_runtime.lifecycle.sub_agent_dispatch_executor import (
     reset_capacity_authority_for_tests,
 )
@@ -36,12 +34,16 @@ def _isolate_capacity_authority_for_tests() -> Iterator[None]:
 
 
 @pytest.fixture(autouse=True)
-def _storage_unselected() -> Iterator[None]:
+def _storage_unselected(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[None]:
     """Every test starts from production's unbound pause-journal root (U-RT-160b).
 
-    [LAW:no-shared-mutable-globals] This fixture owns restoration: `reset` returns the variable
-    to its pre-test value however many roots the test declared in this context.
+    Its interpreter prefix is its own empty directory, so no installation-state document exists
+    until the test declares one (`pause_journal_roots`), and every ingress reads that one.
+    [LAW:no-shared-mutable-globals] This fixture owns restoration: the binding's reset returns
+    the variable to its pre-test value however many roots the test declared in this context.
     """
-    token = INSTALLATION_STATE.set(STORAGE_UNSELECTED)
-    yield
-    INSTALLATION_STATE.reset(token)
+    monkeypatch.setattr(sys, "prefix", str(tmp_path_factory.mktemp("prefix")))
+    with installation_state_bound():
+        yield

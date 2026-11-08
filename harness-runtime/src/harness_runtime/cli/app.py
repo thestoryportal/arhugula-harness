@@ -39,6 +39,7 @@ from harness_runtime.config_source import (
     RuntimeConfigLoadError,
     RuntimeConfigSource,
 )
+from harness_runtime.lifecycle.installation_state import installation_state_bound
 from harness_runtime.lifecycle.workflow_manifest_loader import (
     LoadedWorkflow,
     ManifestAdmissibilityError,
@@ -858,7 +859,9 @@ def daemon_command(
 
     # --- Stage 2: daemon serve (RT-FAIL-CLI-DAEMON-CONNECTION → exit 4) ----
     try:
-        asyncio.run(_daemon_main(runtime_config=runtime_config, socket_path=resolved_socket))
+        # Every request task the daemon serves inherits the binding (spec IS v1.17 §1.1).
+        with installation_state_bound():
+            asyncio.run(_daemon_main(runtime_config=runtime_config, socket_path=resolved_socket))
     except DaemonStartupError as exc:
         _print_fail_class(exc.FAIL_CLASS, str(exc))
         raise typer.Exit(code=EXIT_BOOTSTRAP_ERROR) from exc
