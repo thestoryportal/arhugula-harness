@@ -110,11 +110,12 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 
 from harness_runtime.lifecycle.installation_state import installation_state_bound
 from harness_runtime.lifecycle.journal_workflow_pause_store import (
+    EnginePauseLocator,
     HandleUnknownCause,
     PauseJournalReadCause,
     PauseJournalReadResult,
 )
-from harness_runtime.lifecycle.mcp_server import ResumedEntry
+from harness_runtime.lifecycle.mcp_server import EngineResumedEntry, ResumedEntry
 from harness_runtime.lifecycle.protected_result_store import normalize_tenant_scope
 from harness_runtime.lifecycle.root_resume_admission import (
     UNCLAIMED,
@@ -1320,7 +1321,7 @@ async def admit_root_resume(
     source: RootResumeSource,
     resume_context: ResumeContext | None,
     config: RuntimeConfig,
-) -> ResumedEntry:
+) -> ResumedEntry | EngineResumedEntry:
     """The one pre-body root resume admission (Runtime spec v1.141 §2.2-§2.3).
 
     `api.resume` (inside `_run_lock`) and the daemon's `resume_workflow` (no process lock)
@@ -1353,13 +1354,12 @@ async def admit_root_resume(
             )
         _located = _read_durable_pause_snapshot(config, source.workflow_id)
         _read = _located.result
-        if _read.snapshot is None:
+        if _read.cause is not None:
             # spec v1.107 §30: the cause attribution is carried as a STABLE
             # IDENTIFIER on the EXISTING fail class, and the retry disposition is a
             # FUNCTION OF THE CAUSE rather than a flat "permanent" — a flat label
             # would suppress exactly the `read-error` retry the refinement exists
             # to enable. Cause class only: no exception text, no resolved path.
-            assert _read.cause is not None
             # [LAW:types-are-the-program] Runtime spec v1.137 Rule A3: supersession is its own
             # pre-bootstrap refusal, so the handle cause below narrows to the closed five.
             if _read.cause is PauseJournalReadCause.SUPERSEDED:
@@ -1376,13 +1376,22 @@ async def admit_root_resume(
                 retryable=_read.retryable,
                 indeterminate=_read.indeterminate,
             )
-        # B-104 Task 4d — the depth rides the SAME read as the snapshot; anything but an
+        # B-104 Task 4d — the depth rides the SAME read as the record; anything but an
         # exact depth of 0 (child, grandchild, legacy/unknown, malformed) is refused here,
         # pre-bootstrap. A depth-0 record continues to its claim below.
         if _read.depth != 0:
             raise ResumeDirectChildHandleError(depth=_read.depth)
-        snapshot = _read.snapshot
-        # A populated snapshot was parsed from a latest line, so that line has a digest.
+        # [LAW:types-are-the-program] A read with no cause carries exactly one record, and the
+        # latest record's kind alone selects workflow-layer or engine resume (B-314 fork §3.5).
+        record: PauseSnapshot | EnginePauseLocator
+        match _read.snapshot, _read.locator:
+            case PauseSnapshot() as record, None:
+                record_hash = record.snapshot_hash
+            case None, EnginePauseLocator() as record:
+                record_hash = record.locator_hash
+            case _:
+                raise AssertionError("a causeless pause-journal read carries exactly one record")
+        # A populated record was parsed from a latest line, so that line has a digest.
         assert _read.latest_record_digest is not None
         # B-104 — the root record's exact address: the directory this SAME read opened and
         # the ref from it (never a second derivation). The resume worker refuses unless its
@@ -1391,15 +1400,15 @@ async def admit_root_resume(
             journal_dir=_located.journal_dir,
             ref=JournalRecordRef(
                 tenant=normalize_tenant_scope(config.tenant_id),
-                workflow_id=snapshot.workflow_id,
-                run_id=snapshot.run_id,
+                workflow_id=record.workflow_id,
+                run_id=record.run_id,
                 record_count=_read.record_count,
                 latest_digest=_read.latest_record_digest,
-                snapshot_hash=snapshot.snapshot_hash,
+                snapshot_hash=record_hash,
             ),
         )
     else:
-        snapshot = source
+        record = source
         # A caller-supplied snapshot is outside the durable claim contract: no claim, no
         # authority, so its durable children still meet stage 5's refusing admission.
         admission = UNCLAIMED
@@ -1407,19 +1416,29 @@ async def admit_root_resume(
     # Detect-then-refuse: a snapshot's hash validates against its own embedded
     # fields, so a snapshot from another workflow would otherwise be applied
     # (its run_id + step_index) against THIS workflow's steps. C-RT-35.
-    if snapshot.workflow_id != workflow.workflow_id:
+    if record.workflow_id != workflow.workflow_id:
         raise ResumeWorkflowMismatchError(
-            f"snapshot.workflow_id={snapshot.workflow_id!r} != "
+            f"snapshot.workflow_id={record.workflow_id!r} != "
             f"workflow.workflow_id={workflow.workflow_id!r}; a snapshot may only "
             f"resume its own workflow (C-RT-35)."
+        )
+    # B-314 fork §3.1: an engine pause resumes only through the engine class that captured it,
+    # so a workflow whose manifest changed engine class is refused naming both classes only.
+    _manifest_engine = workflow.manifest_entry.engine_class
+    if isinstance(record, EnginePauseLocator) and record.engine_class != _manifest_engine:
+        raise ResumeEngineClassMismatchError(
+            f"RT-FAIL-RESUME-ENGINE-CLASS-MISMATCH: the pause was captured by engine class "
+            f"{record.engine_class.value!r}, but the workflow now declares "
+            f"{_manifest_engine.value if _manifest_engine else None!r}; the workflow changed "
+            f"since the pause (B-314 fork §4a)."
         )
     # Detect-then-refuse: a step_index outside the supplied workflow's steps
     # (the workflow changed since the pause) would slice `steps[resume_at:]`
     # to empty → a silent SUCCESS that executed nothing. C-RT-35.
     _step_count = len(workflow.steps)
-    if not (0 <= snapshot.step_index < _step_count):
+    if not (0 <= record.step_index < _step_count):
         raise ResumeStepIndexOutOfRangeError(
-            f"snapshot.step_index={snapshot.step_index} is not a "
+            f"snapshot.step_index={record.step_index} is not a "
             f"valid step of the resumed workflow (0 <= i < {_step_count}); the "
             f"workflow may have changed since the pause (C-RT-35)."
         )
@@ -1427,8 +1446,48 @@ async def admit_root_resume(
     # read is refused when the durably-journaled pause state changed since that
     # read (spec v1.107 §30, refusal-only, no value proceeds). Last, because it
     # performs its own journal read off the event loop (spec v1.141 §2.2).
-    await _enforce_pause_state_staleness_precondition(config, workflow, resume_context, snapshot)
-    return ResumedEntry(pause_snapshot=snapshot, admission=admission, resume_context=resume_context)
+    match record:
+        case PauseSnapshot():
+            await _enforce_pause_state_staleness_precondition(
+                config, workflow, resume_context, record
+            )
+            return ResumedEntry(
+                pause_snapshot=record, admission=admission, resume_context=resume_context
+            )
+        case EnginePauseLocator():
+            _require_engine_pause_record(config, record)
+            # The token alone binds the read: the locator is the journal's latest record.
+            await _enforce_pause_state_staleness_precondition(config, workflow, resume_context)
+            return EngineResumedEntry(
+                locator=record, admission=admission, resume_context=resume_context
+            )
+
+
+def _require_engine_pause_record(config: RuntimeConfig, locator: EnginePauseLocator) -> None:
+    """Refuse a locator whose engine store holds no pause record for its run (B-314 fork §3.1).
+
+    Read-only and pre-bootstrap: the stores are those the R-CXA-2 factory binds, at the same
+    state-path derivation, over the declared root probed without creating anything. Presence
+    is not validity; a corrupt engine record is the driver's `attempt_resume` abort.
+    """
+    from harness_runtime.config.state_placement import probe_declared_state_root
+    from harness_runtime.lifecycle.engine_recovery_loop import (
+        bind_engine_substrates,
+        has_engine_pause_record,
+    )
+
+    # [LAW:one-source-of-truth] The factory's own binder, so admission reads the captured store.
+    substrate = bind_engine_substrates(config, probe_declared_state_root(config))[
+        locator.engine_class
+    ]
+    if not has_engine_pause_record(
+        substrate, workflow_id=locator.workflow_id, run_id=locator.run_id
+    ):
+        raise ResumeEnginePauseRecordAbsentError(
+            f"RT-FAIL-RESUME-ENGINE-PAUSE-RECORD-ABSENT: the {locator.engine_class.value!r} "
+            f"engine holds no pause record for this resume_handle, so there is nothing to "
+            f"resume (B-314 fork §4a)."
+        )
 
 
 async def resume(

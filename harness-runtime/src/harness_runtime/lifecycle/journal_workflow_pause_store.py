@@ -808,17 +808,24 @@ class JournalWorkflowPauseStore:
         append-only, so a later append cannot move a completed earlier line.
         An in-flight or malformed target fails closed.
         """
-        exact = self._read_exact_record(ref)
-        if exact is None or not isinstance(exact[0], PauseSnapshot):
-            return None
-        return JournalRecordAtRef(snapshot=exact[0], depth=exact[1])
+        at_ref = self.read_exact_record(ref)
+        return at_ref if isinstance(at_ref, JournalRecordAtRef) else None
 
     def read_exact_locator(self, ref: JournalRecordRef) -> LocatorAtRef | None:
         """Read only the locator position named by ``ref``; never fall back to latest."""
+        at_ref = self.read_exact_record(ref)
+        return at_ref if isinstance(at_ref, LocatorAtRef) else None
+
+    def read_exact_record(self, ref: JournalRecordRef) -> JournalRecordAtRef | LocatorAtRef | None:
+        """The record of either kind at ``ref``: a root claim admits whichever kind is latest."""
         exact = self._read_exact_record(ref)
-        if exact is None or not isinstance(exact[0], EnginePauseLocator):
-            return None
-        return LocatorAtRef(locator=exact[0], depth=exact[1])
+        match exact:
+            case None:
+                return None
+            case PauseSnapshot() as snapshot, depth:
+                return JournalRecordAtRef(snapshot=snapshot, depth=depth)
+            case EnginePauseLocator() as locator, depth:
+                return LocatorAtRef(locator=locator, depth=depth)
 
     def _read_exact_record(
         self, ref: JournalRecordRef

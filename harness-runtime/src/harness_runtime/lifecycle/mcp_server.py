@@ -108,9 +108,11 @@ if TYPE_CHECKING:
     from harness_cp.pause_resume_protocol_types import PauseSnapshot, ResumeContext
 
     from harness_runtime.api import WorkflowObject
+    from harness_runtime.lifecycle.journal_workflow_pause_store import EnginePauseLocator
     from harness_runtime.resume_refusal import ResumeRefusalError
 
 __all__ = [
+    "EngineResumedEntry",
     "FreshEntry",
     "HarnessMCPServer",
     "ResumedEntry",
@@ -162,9 +164,25 @@ class ResumedEntry:
         return self.pause_snapshot.run_id
 
 
+@dataclass(frozen=True)
+class EngineResumedEntry:
+    """A resume of a root engine-native pause (B-314 fork §3.1): the run continues under the
+    locator's original `run_id`, and the engine's own store record is the state, so no
+    `PauseSnapshot` is carried or synthesized."""
+
+    locator: EnginePauseLocator
+    admission: ResumeAdmission
+    resume_context: ResumeContext | None
+    pause_snapshot: None = field(default=None, init=False)
+
+    @property
+    def run_id(self) -> str:
+        return self.locator.run_id
+
+
 # [LAW:types-are-the-program] Runtime spec v1.141 §3.1: the body receives exactly one of these,
 # so a snapshot with a fresh `run_id`, or a durable admission without a snapshot, has no value.
-type RootEntry = FreshEntry | ResumedEntry
+type RootEntry = FreshEntry | ResumedEntry | EngineResumedEntry
 
 # B-INTERSTEP-PERRUN-ISOLATION (runtime spec §14.21 C-RT-34 invariant 7;
 # B-INTERSTEP fork §3/§5) — SUPERSEDES B-INTERSTEP's per-loop single-flight
