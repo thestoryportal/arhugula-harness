@@ -451,6 +451,12 @@ def materialize_mcp_server_stage(
         _effect_fence_tree_wide_abort_present = _compute_effect_fence_tree_wide_abort_present(
             _resume_snapshot, _resume_context
         )
+        # [LAW:no-ambient-temporal-coupling] The gate composer sets this flag when it
+        # holds a durable pause and nothing consumes it, so it outlives the run it
+        # paused. In-process each run bootstraps a fresh flag; the daemon reuses one
+        # context, where a stale flag re-paused every later run as EXPLICIT_OPERATOR
+        # before its first step. A root invocation therefore starts with none pending.
+        harness_ctx.pause_requested_flag.clear()
         # B-INTERSTEP-PERRUN-ISOLATION (runtime spec §14.21 C-RT-34 invariant 7;
         # B-INTERSTEP fork §3/§5) — establish THIS run's isolated holders in their
         # ContextVars before dispatch. The set propagates into the

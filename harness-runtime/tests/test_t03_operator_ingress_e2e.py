@@ -809,7 +809,7 @@ def test_9_hold_through_the_daemon_pauses_then_its_resume_approves_once(
     reply = asyncio.run(_daemon_resume(daemon, gated.manifest(), {"action": "approve"}))
 
     assert not reply.isError, reply
-    assert reply.structuredContent["status"] == "completed", reply
+    assert reply.structuredContent["status"] == "success", reply  # the CP RunResult wire value
     assert gated.marker() == [_GATED_STEP]
     [audit] = gated.hitl_audits()
     assert audit["audit.cp.response"] == "approve", audit
