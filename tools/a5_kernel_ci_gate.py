@@ -40,7 +40,7 @@ import sys
 import time
 import xml.etree.ElementTree as ET
 from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
-from dataclasses import dataclass, fields
+from dataclasses import asdict, dataclass, fields
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any, cast
@@ -1600,6 +1600,117 @@ def run_steps(steps: Sequence[Sequence[str]], cwd: Path, timeout: float) -> None
 # --- CLI ----------------------------------------------------------------------------
 
 
+# Host facts Q0_observation names that only the host can measure. They reach the guest
+# only inside /a5/meta/host.json, the one host record that crosses into it.
+HOST_FACTS = ("base_packages", "closure", "host_packages", "root_manifests", "vng_help")
+# What the guest reads from its binding environment rather than computing itself.
+GUEST_BOUND = (*(key for key in Q0_IDENTITY if key != "INPUTS_SHA256"), "INSTALL_NS_SHA256")
+SHARE_FSTYPES = ("virtiofs", "9p")
+_MOUNT_ESCAPE = re.compile(r"\\([0-7]{3})")
+
+
+@dataclass(frozen=True)
+class GuestFacts:
+    """What the Q0 guest measures of itself, at the edge, before anything is judged."""
+
+    root_top_level: tuple[str, ...]
+    mountinfo: str
+    shares: tuple[Mapping[str, Any], ...]
+    packages: tuple[Package, ...]
+
+
+def shares(mountinfo: str) -> list[dict[str, str]]:
+    """The host-backed mounts in /proc/self/mountinfo: mountpoint, fstype, tag, options."""
+    rows = []
+    for line in mountinfo.splitlines():
+        mount, _, filesystem = line.partition(" - ")
+        fields_, (fstype, source, options) = mount.split(), filesystem.split()
+        mountpoint = _MOUNT_ESCAPE.sub(lambda m: chr(int(m[1], 8)), fields_[4])
+        rows.append(
+            {
+                "mountpoint": mountpoint,
+                "fstype": fstype,
+                "source": source,
+                "options": f"{fields_[5]} {options}",
+            }
+        )
+    return [row for row in rows if row["fstype"] in SHARE_FSTYPES]
+
+
+def guest_facts() -> GuestFacts:
+    mountinfo = Path("/proc/self/mountinfo").read_text()
+    listing = subprocess.run(
+        dpkg_query_argv(Path("/")), check=True, capture_output=True, text=True
+    ).stdout
+    return GuestFacts(
+        root_top_level=tuple(sorted(os.listdir("/"))),
+        mountinfo=mountinfo,
+        shares=tuple(
+            share | {"content": {g: _node(h) for g, h in _walk(Path(mp), mp, ())}}
+            for share in shares(mountinfo)
+            if (mp := share["mountpoint"])
+        ),
+        packages=base_packages(listing),
+    )
+
+
+def observation(
+    inputs: Inputs,
+    binding_env: bytes,
+    host_json: bytes,
+    environ: Mapping[str, str],
+    guest: GuestFacts,
+) -> bytes:
+    """The Q0 guest's observation.json: facts and bindings only, never a verdict.
+
+    [LAW:single-enforcer] The host's binding-verify and install-binding compare these
+    bindings; the guest records what it read and judges nothing.
+    """
+    parse_binding_env(binding_env)
+    host = _object(host_json, "host.json")
+    missing = [key for key in HOST_FACTS if key not in host] + [
+        key for key in GUEST_BOUND if not environ.get(key)
+    ]
+    if missing:
+        raise Q0Error(f"observation lacks {missing}")
+    manifests = host["root_manifests"]
+    if type(manifests) is not list or len(manifests) != 2:
+        raise Q0Error("host.json root_manifests is not the two stagings")
+    first, second = cast(list[Mapping[str, Mapping[str, Any]]], manifests)
+    return _canonical(
+        {key: environ[key] for key in GUEST_BOUND}
+        | {key: host[key] for key in HOST_FACTS}
+        | {
+            "INPUTS_SHA256": inputs.sha256,
+            # The record is of the bytes parsed here; no environment variable can name it.
+            "binding_env_sha256": _sha256(binding_env),
+            "root_manifest_diff": manifest_diff(first, second),
+            "root_top_level": list(guest.root_top_level),
+            "mountinfo": guest.mountinfo,
+            "shares": list(guest.shares),
+            "packages": [asdict(package) for package in guest.packages],
+        }
+    )
+
+
+def observe(inputs: Inputs, meta: Path, out: Path) -> int:
+    """Write out/observation.json from /a5/meta and the guest's own facts; nothing else."""
+    try:
+        record = observation(
+            inputs,
+            _read(meta / "binding.env"),
+            _read(meta / "host.json"),
+            os.environ,
+            guest_facts(),
+        )
+    except Q0Error as exc:
+        print(f"a5-kernel-ci observe: {exc}", file=sys.stderr)
+        return 1
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "observation.json").write_bytes(record)
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--expectations", type=Path, default=EXPECTATIONS)
@@ -1618,6 +1729,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     ns.add_argument("--host-netns", required=True)
     ns.add_argument("--evidence", type=Path, required=True)
     ns.add_argument("debs", nargs="+")
+    probe = commands.add_parser("observe", parents=[common])
+    probe.add_argument("--meta", type=Path, required=True)
+    probe.add_argument("--out", type=Path, required=True)
     args = parser.parse_args(argv)
 
     raw_bytes = args.expectations.read_bytes()
@@ -1626,7 +1740,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         document: Mapping[str, Any] = (
             cast(Mapping[str, Any], raw) if isinstance(raw, Mapping) else {}
         )
-        parse_inputs(document.get("inputs"))
+        inputs = parse_inputs(document.get("inputs"))
+    except (ExpectationsError, ValueError) as exc:
+        print(f"a5-kernel-ci: {exc}", file=sys.stderr)
+        return 2
+    # [LAW:one-way-deps] observe is dispatched before `expectations` is parsed, so no
+    # Q1 section can shape a Q0 observation.
+    if args.command == "observe":
+        return observe(inputs, args.meta, args.out)
+    try:
         expectations = parse_expectations(document)
     except (ExpectationsError, ValueError) as exc:
         print(f"a5-kernel-ci: {exc}", file=sys.stderr)

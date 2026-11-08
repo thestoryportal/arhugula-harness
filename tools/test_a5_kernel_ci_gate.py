@@ -1703,3 +1703,135 @@ def test_run_steps_fails_at_the_deadline_with_no_later_step(tmp_path: Path) -> N
     with pytest.raises(gate.Q0Error, match="timed out"):
         gate.run_steps([["sleep", "5"], ["touch", "after"]], tmp_path, 0.5)
     assert not (tmp_path / "after").exists()
+
+
+# Stage 5 part 2b(i): the Q0 guest observation (discriminating tests 31, 36, 44).
+_MOUNTINFO = (
+    "22 1 0:20 / / rw,relatime - ext4 /dev/vda rw\n"
+    "30 22 0:31 / /a5 ro,relatime - virtiofs a5 ro\n"
+    "31 22 0:32 / /out\\040dir rw shared:1 - 9p out rw,trans=virtio\n"
+)
+_GUEST = gate.GuestFacts(
+    ("a5", "bin", "out"), _MOUNTINFO, (), (gate.Package("git", "1:2.51", "amd64"),)
+)
+_HOST_FACTS: dict[str, Any] = {
+    "base_packages": [],
+    "closure": ["git"],
+    "host_packages": {"virtme-ng": "1.40-2"},
+    "root_manifests": [{"/x": {"type": "dir"}}, {"/x": {"type": "file"}}],
+    "vng_help": "usage: vng",
+}
+
+
+def _guest_inputs(**host: Any) -> tuple[bytes, bytes, dict[str, str]]:
+    records = _records(host={**_HOST_FACTS, **host})
+    env = dict(gate.parse_binding_env(records.binding_env)) | gate.FIXED_GUEST_ENV
+    return records.binding_env, records.host_json, env
+
+
+def _observation(**environ: str) -> bytes:
+    binding_env, host_json, env = _guest_inputs()
+    return gate.observation(
+        parse_inputs(_RAW["inputs"]), binding_env, host_json, env | environ, _GUEST
+    )
+
+
+def test_q0_shares_are_the_host_backed_mounts() -> None:
+    assert gate.shares(_MOUNTINFO) == [
+        {"mountpoint": "/a5", "fstype": "virtiofs", "source": "a5", "options": "ro,relatime ro"},
+        {
+            "mountpoint": "/out dir",
+            "fstype": "9p",
+            "source": "out",
+            "options": "rw rw,trans=virtio",
+        },
+    ]
+
+
+def test_q0_observation_records_bindings_facts_and_no_verdict() -> None:
+    binding_env, _, env = _guest_inputs()
+    data = _observation()
+    record = json.loads(data)
+    assert "verdict" not in record and "outcomes" not in record
+    assert record["INPUTS_SHA256"] == parse_inputs(_RAW["inputs"]).sha256
+    assert record["binding_env_sha256"] == _sha(binding_env)
+    assert record["INSTALL_NS_SHA256"] == env["INSTALL_NS_SHA256"]
+    assert record["root_manifest_diff"] == ["/x"]
+    assert record["packages"] == [{"name": "git", "version": "1:2.51", "architecture": "amd64"}]
+    # The host collector accepts what the guest writes, bound to the same run.
+    parsed = gate.parse_observation(data)
+    assert parsed.identity == {key: record[key] for key in gate.Q0_IDENTITY}
+    assert {key: env[key] for key in gate.GUEST_BOUND} == {k: record[k] for k in gate.GUEST_BOUND}
+
+
+# Test 44: the record is of the parsed bytes; no variable and no host field names it.
+def test_q0_binding_env_record_ignores_an_environment_claim() -> None:
+    assert _observation(binding_env_sha256="0" * 64) == _observation()
+    assert "binding_env_sha256" not in gate.BINDING_ENV_KEYS
+    host = json.loads(_guest_inputs()[1])
+    assert not [key for key in host if "binding" in key.lower()]
+
+
+@pytest.mark.parametrize(
+    ("host", "environ"),
+    [
+        ({"vng_help": None}, {}),
+        ({"root_manifests": [{}]}, {}),
+        ({}, {"INSTALL_NS_SHA256": ""}),
+        ({}, {"GITHUB_RUN_ID": ""}),
+    ],
+)
+def test_q0_observation_refuses_missing_facts(
+    host: dict[str, Any], environ: dict[str, str]
+) -> None:
+    binding_env, host_json, env = _guest_inputs()
+    raw = {**_HOST_FACTS, **host}
+    host_json = json.dumps({k: v for k, v in raw.items() if v is not None}).encode()
+    with pytest.raises(gate.Q0Error):
+        gate.observation(
+            parse_inputs(_RAW["inputs"]), binding_env, host_json, env | environ, _GUEST
+        )
+
+
+def _observe_cli(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, document: Any, name: str) -> int:
+    binding_env, host_json, env = _guest_inputs()
+    meta = tmp_path / "meta"
+    meta.mkdir(exist_ok=True)
+    (meta / "binding.env").write_bytes(binding_env)
+    (meta / "host.json").write_bytes(host_json)
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setattr(gate, "guest_facts", lambda: _GUEST)
+    doc = tmp_path / f"{name}.json"
+    doc.write_text(json.dumps(document))
+    return gate.main(
+        ["observe", "--expectations", str(doc), "--meta", str(meta), "--out", str(tmp_path / name)]
+    )
+
+
+# Tests 31 and 36: observe parses only `inputs`, writes only observation.json.
+def test_q0_observe_never_reads_expectations(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    conflicting = {**_RAW, "venues": {"conflict": True}, "expectations": {"bogus": [1]}}
+    assert _observe_cli(tmp_path, monkeypatch, _RAW, "a") == 0
+    assert _observe_cli(tmp_path, monkeypatch, conflicting, "b") == 0
+    assert os.listdir(tmp_path / "a") == ["observation.json"]
+    assert (tmp_path / "a" / "observation.json").read_bytes() == (
+        tmp_path / "b" / "observation.json"
+    ).read_bytes()
+    without_inputs = {key: value for key, value in _RAW.items() if key != "inputs"}
+    assert _observe_cli(tmp_path, monkeypatch, without_inputs, "c") == 2
+    assert not (tmp_path / "c").exists()
+
+
+# Test 31: an observation.json is refused where check expects JUnit outcomes.
+def test_q2_check_refuses_an_observation_as_outcomes(tmp_path: Path) -> None:
+    observation = tmp_path / "observation.json"
+    observation.write_bytes(_observation())
+    leg = Leg(HostReport("x86_64", 9, None), "k", "os", "c" * 40, ())
+    venue = next(iter(_EXPECTED.venues))
+    preflight_record = tmp_path / "preflight.json"
+    preflight_record.write_text(json.dumps(_record("e" * 64)))
+    record = gate.check(venue, _EXPECTED, "e" * 64, _IDENTITY, leg, preflight_record, observation)
+    assert any("junit" in problem.lower() for problem in record["problems"]), record["problems"]
