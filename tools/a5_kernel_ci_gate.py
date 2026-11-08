@@ -1591,6 +1591,9 @@ def apt_private(work: Path, root: Path, keyring: Path, archive: ArchiveInput) ->
     """
     source = f"{SNAPSHOT_URL}{archive.snapshot_id}"
     settings = {
+        # apt's own "none" value: no host apt.conf.d part or apt.conf is read after this file.
+        "Dir::Etc::parts": "/dev/null",
+        "Dir::Etc::main": "/dev/null",
         "Dir::State::status": f"{root}/var/lib/dpkg/status",
         "Dir::State::lists": f"{work}/lists",
         "Dir::Cache": f"{work}/cache",
@@ -1609,7 +1612,10 @@ def apt_private(work: Path, root: Path, keyring: Path, archive: ArchiveInput) ->
 
 
 def apt_argv(work: Path, *command: str) -> list[str]:
-    return ["apt-get", "-c", str(work / "apt.conf"), *command]
+    # [LAW:no-ambient-temporal-coupling] apt reads APT_CONFIG before the host's parts and main
+    # file (pkgInitConfig), so its Dir::Etc::parts/main decide whether they are read; `-c` is
+    # read after them, too late to keep host settings out.
+    return ["env", f"APT_CONFIG={work / 'apt.conf'}", "apt-get", *command]
 
 
 CLOSURE_COMMAND = ("--download-only", "--print-uris", "install", *GUEST_PACKAGES)

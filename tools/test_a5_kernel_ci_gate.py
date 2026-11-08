@@ -1598,8 +1598,17 @@ def test_apt_private_reads_only_the_pinned_snapshot_and_base_status(tmp_path: Pa
     assert f'Dir::State::status "{tmp_path}/root/var/lib/dpkg/status";' in conf
     assert f'Dir::State::lists "{tmp_path}/apt/lists";' in conf
     assert 'APT::Architecture "amd64";' in conf
-    assert all(f'"{tmp_path}/apt/' in line for line in conf.splitlines() if "::Etc::" in line)
-    assert gate.apt_argv(tmp_path, *gate.CLOSURE_COMMAND)[-4:] == [
+    host = {'Dir::Etc::parts "/dev/null";', 'Dir::Etc::main "/dev/null";'}
+    assert host <= set(conf.splitlines())
+    assert all(
+        f'"{tmp_path}/apt/' in line
+        for line in conf.splitlines()
+        if "::Etc::" in line and line not in host
+    )
+    argv = gate.apt_argv(tmp_path, *gate.CLOSURE_COMMAND)
+    assert argv[:3] == ["env", f"APT_CONFIG={tmp_path}/apt.conf", "apt-get"]
+    assert "-c" not in argv
+    assert argv[-4:] == [
         "--download-only",
         "--print-uris",
         "install",
