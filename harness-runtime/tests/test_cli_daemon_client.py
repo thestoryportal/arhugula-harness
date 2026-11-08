@@ -272,9 +272,11 @@ async def test_dispatch_uses_loopback_nominal_url_for_uds_transport(
             read_stream: object,
             write_stream: object,
             read_timeout_seconds: timedelta,
+            elicitation_callback: Any,
         ) -> None:
             captured["session_streams"] = (read_stream, write_stream)
             captured["session_timeout"] = read_timeout_seconds
+            captured["elicitation_callback"] = elicitation_callback
 
         async def __aenter__(self) -> _FakeClientSession:
             return self
@@ -322,6 +324,7 @@ async def test_dispatch_uses_loopback_nominal_url_for_uds_transport(
     assert captured["tool_name"] == "run_workflow"
     assert captured["tool_arguments"] == {"workflow_id": str(workflow)}
     assert captured["session_timeout"] == timedelta(seconds=30)
+    assert callable(captured["elicitation_callback"])
     assert captured["result_timeout"] == timedelta(seconds=120)
     assert captured["http_client"].timeout.read is None
     assert captured["http_client"].timeout.connect == 30

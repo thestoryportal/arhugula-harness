@@ -378,7 +378,7 @@ async def test_resume_workflow_takes_a_workflow_id_and_an_optional_resume_contex
         tools = {tool.name: tool for tool in (await session.list_tools()).tools}
 
     schema = tools["resume_workflow"].inputSchema
-    assert set(schema["properties"]) == {"workflow_id", "resume_context"}
+    assert set(schema["properties"]) == {"workflow_id", "resume_context", "operator_decision"}
     assert schema["required"] == ["workflow_id"]
 
 
