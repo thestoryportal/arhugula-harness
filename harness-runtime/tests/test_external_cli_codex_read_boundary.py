@@ -193,11 +193,16 @@ async def test_an_unsafe_home_is_refused_before_any_process(tmp_path: Path, defe
 
 
 @SUPPORTED_HOST
-@pytest.mark.parametrize("alias", ["dot-codex", "inside-dot-codex", "operator-codex-home-env"])
+@pytest.mark.parametrize(
+    "alias", ["dot-codex", "inside-dot-codex", "operator-codex-home-env", "dot-codex-other-env"]
+)
 async def test_the_operator_interactive_codex_home_is_not_a_dedicated_home(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _simulated_operator: Path, alias: str
 ) -> None:
-    """Review P2-2: a private 0700 ``.codex`` with ``auth.json`` is still the operator's."""
+    """Review P2-2: a private 0700 ``.codex`` with ``auth.json`` is still the operator's.
+
+    PR1688 P2: an inherited ``CODEX_HOME`` naming another directory seals that residence
+    too; it never unseals ``~/.codex``."""
     _, scratch = _homes(tmp_path)
     residence = _simulated_operator / ".codex"
     if alias == "inside-dot-codex":
@@ -207,6 +212,10 @@ async def test_the_operator_interactive_codex_home_is_not_a_dedicated_home(
         residence = tmp_path / "operator-chosen-codex"
         residence.mkdir(mode=0o700)
         monkeypatch.setenv("CODEX_HOME", str(residence))
+    if alias == "dot-codex-other-env":
+        elsewhere = tmp_path / "operator-chosen-codex"
+        elsewhere.mkdir(mode=0o700)
+        monkeypatch.setenv("CODEX_HOME", str(elsewhere))
     (residence / "auth.json").write_text("{}")  # fixture text only
     runner = provider._CodexReadBoundaryRunner(_boundary(residence, scratch))
     program = "import os, sys; os.close(os.open(sys.argv[1], os.O_RDONLY)); print('read')"

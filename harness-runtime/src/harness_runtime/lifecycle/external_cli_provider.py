@@ -738,12 +738,14 @@ class _CodexReadBoundaryRunner(_PrivateCwdSubprocessRunner):
 
         Allowances are declared by their canonical targets (the launcher re-proves each on
         the descriptor it grants). The executable stays as configured, so a moving symlink
-        pin refuses. This process's own HOME is protected and its interactive Codex home
-        (``$CODEX_HOME``, else ``~/.codex``) is sealed: neither is ever a dedicated home.
+        pin refuses. This process's own HOME is protected and every interactive Codex home
+        (``~/.codex`` and any ``$CODEX_HOME``) is sealed: none is ever a dedicated home.
         """
         config = self._config
         operator_home = Path.home()
-        interactive = os.environ.get("CODEX_HOME") or str(operator_home / ".codex")
+        # [LAW:dataflow-not-control-flow] both residences are always sealed; an unset
+        # CODEX_HOME contributes nothing and an absent root exposes nothing.
+        interactive = (str(operator_home / ".codex"), *filter(None, [os.environ.get("CODEX_HOME")]))
         spec = build_ruleset_spec(
             executable=str(config.executable),
             executable_sha256=config.executable_sha256,
@@ -752,7 +754,7 @@ class _CodexReadBoundaryRunner(_PrivateCwdSubprocessRunner):
             refusal_token=refusal_token,
             executable_paths=_canonical(config.executable_paths),
             protected_roots=(str(operator_home),),
-            sealed_roots=(interactive,),
+            sealed_roots=interactive,
         )
         return boundary_launcher_argv(spec, (str(config.executable), *argv[1:]))
 

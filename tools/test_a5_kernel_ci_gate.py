@@ -88,7 +88,7 @@ def test_guarded_ids_are_exactly_what_the_launcher_gated_markers_select(tmp_path
     marks = json.loads(out.read_text())
     assert marks["supported"] == [str(i) for i in _EXPECTED.supported_host_ids]
     assert marks["unsupported"] == [str(i) for i in _EXPECTED.unsupported_host_ids]
-    assert (len(marks["supported"]), len(marks["unsupported"])) == (36, 2)
+    assert (len(marks["supported"]), len(marks["unsupported"])) == (37, 2)
 
 
 def test_bound_blobs_are_the_current_files() -> None:
