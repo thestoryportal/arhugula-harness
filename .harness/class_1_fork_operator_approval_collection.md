@@ -73,9 +73,8 @@ payload sha256: <hex of post_mutation_payload_hash(step.step_payload)>
 payload: <canonical JSON of step.step_payload, sort_keys, compact>
 ```
 
-When the canonical payload exceeds 8192 bytes the `payload:` line carries the first 8192 bytes
-followed by `… (truncated; <n> bytes total)`; the hash line always covers the whole payload.
-`OperatorRequest` (Python) carries the same fields structurally: `position`, `step_id`,
+The `payload:` line always carries the complete canonical payload; there is no display bound or
+truncation, so nothing the operator approves is unseen. `OperatorRequest` (Python) carries the same fields structurally: `position`, `step_id`,
 `step_kind`, `payload` (the full mapping), `payload_sha256`, `options`, `message`. Both TTY
 ingresses print the whole message to stderr before reading any answer.
 
@@ -123,19 +122,39 @@ deadline `placement.timeout` when set, otherwise the fixed contract constant
 raises `TimeoutError`, which `MCPBackedAskUserQuestionSurface.ask` already maps to
 `AskUserQuestionTimeoutError`, so a vanished, killed or silent client ends the run fail-closed,
 with zero effects, no later than the deadline, whatever the SDK does on disconnect. The in-process
-`api.run` path and both TTY readers are under the same server deadline. A transport error raised by
+`api.run` path and both TTY readers are under the same server deadline. Each TTY reader runs off
+the event loop (for example in a worker thread), so a blocked read never stops the deadline timer;
+when the run result arrives first, the CLI stops waiting for input and exits with that result. A transport error raised by
 `ctx.elicit` (closed session) is mapped the same way. Earlier termination on session closure is
 permitted but not promised.
 
 ### C4. Resume of a held gate (single pass-through context)
 
-Resume uses only the existing root admissions: `harness resume <workflow manifest>` (its workflow_id is the handle) / `api.resume(
-resume_handle=..., resume_context=ResumeContext(hitl_response=HITLResult(...)))`, or the daemon
-tool `resume_workflow(workflow_id, resume_context={...})`. The CLI `resume` command gains
-`--hitl-response <approve|reject|edit|respond>` with `--edited-proposal`, `--response-text` and
-`--rejection-reason`, building exactly one `ResumeContext`. No pause-snapshot path is accepted from
-an operator surface (B-315 constraint 3), and nothing stores the decision outside the existing
-resume claim and journal (constraint 5). The resumed step consumes it once through step 0.
+Resume uses only the existing root admission, `api.admit_root_resume`, shared by `api.resume` and
+the daemon tool `resume_workflow`. An operator surface supplies an `OperatorDecision` (C1, limited
+to `approve`, `edit`, `reject`, `respond`), never a `HITLResult`:
+
+- CLI: `harness resume <workflow manifest> --hitl-response <approve|reject|edit|respond>` with
+  `--edited-proposal`, `--response-text` or `--rejection-reason` as C1 requires; the manifest's
+  workflow_id is the handle. Python: `api.resume(resume_handle=..., operator_decision=...)`.
+  Daemon: `resume_workflow(workflow_id, operator_decision={...})`. Supplying both
+  `operator_decision` and `resume_context` is the caller's argument error (§4.2).
+- One runtime function, `operator_resume_context(snapshot, decision, now)`, called once inside the
+  root admission after the durable snapshot is read and before the claim is taken, builds
+  `ResumeContext(hitl_response=HITLResult(...))`:
+  - `response`, `edited_proposal`, `response_text` from the decision;
+  - `timestamp`: `now`, one UTC ISO-8601 clock read at the admission edge, the instant the
+    decision is admitted;
+  - `response_summary_hash`: `_compute_response_summary_hash` (`P/lifecycle/hitl_gate_composer.py:867`),
+    made the single shared definition for both the live gate and this function; a
+    `--rejection-reason` contributes only to this hash, since `HITLResult` has no reason field;
+  - `audit_ledger_entry_id`: the held pause's own `PauseSnapshot.state_ledger_anchor`, an existing
+    ledger reference that binds the decision to exactly that pause. No new audit identity is minted.
+    T03 verifies that the anchor is an `EntryID`; if it is not, the contract returns to review.
+- The function refuses, as an argument-class refusal that spends no claim, a snapshot whose
+  `pause_reason` is not the HITL-gate pause. The resumed step consumes the context once through
+  step 0. No pause-snapshot path is accepted from an operator surface (B-315 constraint 3), and
+  nothing stores the decision outside the existing resume claim and journal (constraint 5).
 
 ### C5. Attribution
 
@@ -147,9 +166,15 @@ resume claim and journal (constraint 5). The resumed step consumes it once throu
   validates it against that closed set and returns it on `AskUserQuestionResult` (new optional
   field `ingress`); MCP-native `decline`/`cancel` and replies without the field give `unreported`.
 - **Server-side setter.** The composer sets `hitl.response.ingress` from that field on the
-  `hitl.invocation.responded` span (`P/lifecycle/hitl_gate_composer.py:2480-2489`). For the
-  `cancel`/timeout path, which has no responded span today, it sets the attribute on the
-  `hitl.invocation.opened` span.
+  `hitl.invocation.responded` span (`P/lifecycle/hitl_gate_composer.py:2480-2489`).
+- **Cancel/timeout carrier.** `AskUserQuestionTimeoutError` (`P/lifecycle/ask_user_question_surface.py:45`,
+  an `Exception`, not a `TimeoutError`, so `MCPBackedAskUserQuestionSurface.ask` passes it through
+  unchanged) gains a required keyword `ingress`. `ServerCtxElicitCallback` raises it with the
+  reply's validated ingress for `accept cancel`, with `unreported` for an MCP-native `cancel`, and
+  `MCPBackedAskUserQuestionSurface.ask` raises it with `none` when the C3a deadline expires (a
+  silent deadline). The composer's step-4f `except AskUserQuestionTimeoutError` branch (`:2334`)
+  sets `hitl.response.ingress` on the `hitl.invocation.opened` span from that attribute, since the
+  cancel/timeout path never opens the responded span.
 - **Refusal reasons.** Ingress refusals carry their literal reasons through `accept refuse` (C3),
   so the audited `rejection_reason_hash` discriminates operator rejection, unattended refusal,
   noninteractive refusal, invalid input and callback failure.
@@ -183,21 +208,35 @@ the gated step. "Audit" is the step-4h `CPAuditLedgerEntry`; "ingress" is the sp
    `approve`: daemon run SUCCEEDED, marker written, ingress `daemon-client-tty`; input `reject`:
    REJECTED, zero effects. Same daemon, both runs, no restart.
 9. `hold` on each ingress with the durable pause binding demonstrated bound in the fixture config:
-   exit 5 (PAUSED) with a resume handle, zero effects; then one resume with
-   `--hitl-response approve` writes the marker once.
+   exit 5 (PAUSED) with a resume handle, zero effects; then one public
+   `harness resume <manifest> --hitl-response approve` (and, for the daemon row,
+   `resume_workflow(..., operator_decision={"action": "approve"})`). A spy on the root admission
+   asserts the built context before consumption: `response` approve, `timestamp` ISO-8601 within
+   the test window, `audit_ledger_entry_id` equal to the snapshot's `state_ledger_anchor`,
+   `response_summary_hash` equal to the shared helper's value. The marker is then written once.
+   The same resume with `--hitl-response` against a non-HITL pause is an argument refusal, zero
+   effects, and the handle stays resumable.
 10. `hold` without the durable pause binding: audited REJECT with reason
     `hold unavailable: no durable pause binding`, zero effects.
 11. A second resume of the same handle after assertion 9's successful resume is refused by the
     existing root claim refusal class, and the marker is still written once.
-12. `cancel` on each ingress: fail-closed REJECTED, zero effects, ingress on the opened span.
+12. `cancel` on each ingress: fail-closed REJECTED, zero effects, and the opened span's
+    `hitl.response.ingress` equals that ingress exactly (`python`, `cli-tty`,
+    `daemon-client-tty`). An MCP-native `cancel` gives `unreported`; a silent deadline gives `none`.
 13. Bounded wait, `placement.timeout` unset, `OPERATOR_ELICITATION_DEADLINE_SECONDS` patched to
     2 s in the source test: (a) `api.run` whose callback never returns ends REJECTED within 2 s
     plus slack, zero effects; (b) a daemon client killed while the prompt is open: the daemon's
     run ends REJECTED within 2 s plus slack, zero effects, and the same daemon then serves a
-    following run. With the constant unpatched, a separate check asserts its value is 900.
+    following run; (c) a pseudo-TTY that stays attached with no line entered, for one-shot
+    `harness run` and for `harness run --daemon`: the CLI exits within 2 s plus slack with the
+    REJECTED exit code, zero effects, opened-span ingress `none`. With the constant unpatched, a
+    separate check asserts its value is 900.
 14. A non-harness reply `accept` with `ingress="root"` or `response="refuse"` lacking a reason is
     refused as outside C1/C5 with zero effects.
 15. Existing workflow-layer pause/resume, root-claim and HITL composer regressions stay green.
+16. A pseudo-TTY run whose step payload exceeds 8192 bytes of canonical JSON, with a key
+    `danger_tail` placed last: stderr contains `danger_tail` and its value before any answer is
+    read, and `approve` dispatches only after that full display.
 
 ## Fork rulings (review pass 1, `cmt-53ad3553-8352-47a3-b855-d19c9239b45e`)
 
@@ -208,10 +247,12 @@ the gated step. "Audit" is the step-4h `CPAuditLedgerEntry`; "ingress" is the sp
 - **F4 prompt content.** Settled in C1a; no longer deferred.
 - **F5 inherited-gate refusal (A4).** Accepted: this contract changes no inherited-gate rule, so
   it needs nothing from A4. Child-workflow gates are excluded from T03 assertions.
-- **Open for Buford ratification:** the 900 s constant and the 8192-byte payload display bound.
+- **Pass 2 (`cmt-63153b06-7de4-42f2-82e1-e60b6eadebe3`):** D1 full payload display (no bound); D2
+  typed ingress through cancel/timeout; D3 admission-built resume context; D4 attached idle TTY.
+- **Open for Buford ratification:** the 900 s constant.
 
 ## Disposition (on ratification)
 
 The C1–C5 contract becomes the next free Runtime spec version's §14.8 amendment to C-RT-18, with
-one plan unit for T03 carrying assertions 1–15, materialized in P2 before T03 claims conformance.
+one plan unit for T03 carrying assertions 1–16, materialized in P2 before T03 claims conformance.
 No source or test change is made by this stage.
