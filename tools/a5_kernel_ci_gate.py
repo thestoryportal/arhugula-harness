@@ -1569,6 +1569,13 @@ def stage_problems(stage: Stage) -> list[str]:
             for path in links
             if _within(path, "/a5") and (problem := outside(path, "/a5"))
         ]
+        # [LAW:single-enforcer] Python follows .pth symlinks that the regular-file
+        # scan excludes, so refuse them at the stage admission boundary.
+        + [
+            f"{path} is a symlinked .pth file"
+            for path in links
+            if _within(path, "/a5") and path.endswith(".pth")
+        ]
         # [LAW:single-enforcer] Executable startup bytes require the same RECORD hash
         # ownership that the running interpreter's origin check requires.
         + [

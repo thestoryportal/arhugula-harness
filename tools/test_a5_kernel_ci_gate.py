@@ -1516,6 +1516,19 @@ def test_stage_accepts_symlinks_that_stay_in_a5_and_root_links_anywhere(tmp_path
     assert gate.stage_problems(_stage_scan(tmp_path)) == []
 
 
+def test_stage_refuses_an_internal_symlinked_executable_pth(tmp_path: Path) -> None:
+    _, a5 = _stage(tmp_path)
+    site_dir = a5 / "venv" / "lib" / "python3.12" / "site-packages"
+    site_dir.mkdir(parents=True)
+    payload = a5 / "src" / "pkg" / "payload.py"
+    payload.write_text("import os\n")
+    (site_dir / "evil.pth").symlink_to("../../../../src/pkg/payload.py")
+    stage = _stage_scan(tmp_path)
+    guest = "/a5/venv/lib/python3.12/site-packages/evil.pth"
+    assert guest not in stage.pth
+    assert gate.stage_problems(stage) == [f"{guest} is a symlinked .pth file"]
+
+
 @pytest.mark.parametrize("line", ["/usr/lib/python3/dist-packages", "../.."])
 def test_stage_refuses_a_pth_line_outside_a5_src(tmp_path: Path, line: str) -> None:
     _, a5 = _stage(tmp_path)
