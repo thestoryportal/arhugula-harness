@@ -200,11 +200,32 @@ jobs:
   # required context `pytest (all axis packages) — blocking` is the `test` aggregate below,
   # which decides from both terminal results. Coverage comes from the one package-suite
   # run: the separate informational job that re-ran the whole suite is gone.
+  #
+  # Two required real-host venues (A5 Landlock read boundary, trial-193 ci-venue-v2). The
+  # launcher's host check decides which canaries run, so one host proves only half: the
+  # supported leg must accept and pass all SUPPORTED_HOST canaries, the unsupported-abi8
+  # leg must measure ABI exactly 8, be refused for it and pass both real-refusal tests.
+  # The runner label is only the selected candidate; tools/a5_kernel_ci_gate.py measures
+  # the allocation and fails a leg that is not the venue it was selected as. A failed leg
+  # fails `needs.package-tests.result`, so the required aggregate below fails with it.
   package-tests:
-    runs-on: ubuntu-latest
-    name: package tests (all axis packages, with coverage)
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - venue: supported
+            runner: ubuntu-26.04
+          - venue: unsupported-abi8
+            runner: ubuntu-24.04
+    runs-on: ${{ matrix.runner }}
+    name: package tests (all axis packages, with coverage) — ${{ matrix.venue }}
     needs: changes
     if: always() && (needs.changes.result != 'success' || needs.changes.outputs.bookkeeping != 'true')
+    env:
+      # [LAW:one-source-of-truth] the `changes` binding, read by the kernel gate's records.
+      CI_HEAD: ${{ needs.changes.outputs.head }}
+      CI_BASE: ${{ needs.changes.outputs.base }}
+      CI_TESTED: ${{ needs.changes.outputs.tested }}
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -220,15 +241,37 @@ jobs:
       - name: Sync workspace (all members)
         run: uv sync --locked --all-packages
 
+      # The real launcher check on this allocation, before the suite: an unknown image,
+      # a stale expectations binding or a host that is not this venue fails the leg here.
+      - name: A5 kernel venue preflight (real launcher capability)
+        id: kernel_preflight
+        run: uv run python tools/a5_kernel_ci_gate.py preflight --venue "${{ matrix.venue }}" --out a5-kernel-ci/preflight.json
+
       # Excludes the `e2e` marker — those tests exercise real external services
       # (Anthropic API etc.) and are gated on credentials not available in CI
       # per the marker definition in the root pyproject.toml. testpaths in
       # [tool.pytest.ini_options] cover all 7 workspace packages (the 5 axes +
       # harness-core + harness-runtime). Coverage config is the root pyproject
       # [tool.coverage.run]. This step's exit status is the package verdict; the
-      # advisory steps after it cannot change it.
+      # steps after it cannot change it. The JUnit file feeds the kernel venue gate.
       - name: Pytest with coverage (excludes e2e)
-        run: uv run pytest -m "not e2e" --cov --cov-report=term-missing --cov-report=xml --cov-report=json
+        run: uv run pytest -m "not e2e" --cov --cov-report=term-missing --cov-report=xml --cov-report=json --junitxml=a5-kernel-ci/junit.xml
+
+      # Required, not advisory: a count of passes cannot show WHICH tests ran, so this reads
+      # each guarded node ID from the fresh JUnit and fails on a missing, duplicate, skipped,
+      # xfailed or wrongly-held outcome.
+      - name: A5 kernel venue exact-outcome gate
+        id: kernel_gate
+        if: always()
+        run: uv run python tools/a5_kernel_ci_gate.py check --venue "${{ matrix.venue }}" --preflight a5-kernel-ci/preflight.json --junit a5-kernel-ci/junit.xml --out a5-kernel-ci/outcomes.json
+
+      - name: Upload A5 kernel venue evidence (required)
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: a5-kernel-ci-${{ matrix.venue }}-${{ needs.changes.outputs.head }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: a5-kernel-ci/
+          if-no-files-found: error
 
       # R-200-ci-coverage-gating — post-pytest publication is advisory (no threshold).
       # The primary coverage-enabled pytest process above retains its blocking exit.
@@ -244,7 +287,7 @@ jobs:
           COVERAGE_HEAD: ${{ needs.changes.outputs.head }}
           COVERAGE_BASE: ${{ needs.changes.outputs.base }}
           COVERAGE_TESTED: ${{ needs.changes.outputs.tested }}
-          COVERAGE_COMMAND: uv run pytest -m "not e2e" --cov --cov-report=term-missing --cov-report=xml --cov-report=json
+          COVERAGE_COMMAND: uv run pytest -m "not e2e" --cov --cov-report=term-missing --cov-report=xml --cov-report=json --junitxml=a5-kernel-ci/junit.xml
         run: |
           uv run python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
           import hashlib, json, os, pathlib, platform
@@ -303,7 +346,7 @@ jobs:
         continue-on-error: true
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: coverage-xml-${{ needs.changes.outputs.head }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: coverage-xml-${{ matrix.venue }}-${{ needs.changes.outputs.head }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             coverage.xml
             coverage-provenance.json
@@ -731,6 +774,9 @@ jobs:
 
       - name: Review-loop admission gate tests (B-215)
         run: uv run python -m pytest tools/test_review_loop_gate.py -q
+
+      - name: A5 kernel venue gate tests (trial-193 ci-venue-v2)
+        run: uv run python -m pytest tools/test_a5_kernel_ci_gate.py -q
 
       # [LAW:verifiable-goals] Native transcript provenance must run in required CI.
       - name: Native independent review provenance tests

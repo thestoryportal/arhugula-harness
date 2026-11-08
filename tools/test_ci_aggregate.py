@@ -30,6 +30,7 @@ _CI_YML = _REPO / ".github" / "workflows" / "ci.yml"
 _REQUIRED_NAME = "pytest (all axis packages) — blocking"
 _PRIMARY_PYTEST = (
     'uv run pytest -m "not e2e" --cov --cov-report=term-missing --cov-report=xml --cov-report=json'
+    " --junitxml=a5-kernel-ci/junit.xml"
 )
 # The 14 required contexts recorded by the WO-U01 inventory (reviewed 5a53b104).
 _REQUIRED_CONTEXTS = frozenset(
@@ -222,22 +223,60 @@ def test_one_provider_free_suite_execution_carries_coverage() -> None:
     assert "continue-on-error" not in jobs["package-tests"]
 
 
+def _uploads(steps: list[dict[str, Any]], path: str) -> list[dict[str, Any]]:
+    return [
+        s
+        for s in steps
+        if "upload-artifact" in str(s.get("uses", "")) and path in str(s["with"]["path"])
+    ]
+
+
 def test_coverage_publishing_is_advisory_and_names_its_binding() -> None:
     steps = _jobs()["package-tests"]["steps"]
-    after = steps[[s.get("run") for s in steps].index(_PRIMARY_PYTEST) + 1 :]
-    assert after, "coverage publishing follows the primary suite"
-    for step in after:
+    primary = [s.get("run") for s in steps].index(_PRIMARY_PYTEST)
+    [upload] = _uploads(steps, "coverage.xml")
+    for step in (_provenance_step(), upload):
+        assert steps.index(step) > primary, step.get("name")
         assert str(step.get("if")).startswith("always()"), step.get("name")
         assert step.get("continue-on-error") is True, step.get("name")
-    upload = next(s for s in after if "upload-artifact" in str(s.get("uses", "")))
     name = upload["with"]["name"]
     # WS-10 §12.4: a PR's github.sha is the synthetic merge commit, not the reviewed head.
-    for part in ("needs.changes.outputs.head", "run_id", "run_attempt"):
+    # Each matrix leg publishes its own coverage, so the venue keeps the names distinct.
+    for part in ("matrix.venue", "needs.changes.outputs.head", "run_id", "run_attempt"):
         assert part in name
     assert set(upload["with"]["path"].split()) == {"coverage.xml", "coverage-provenance.json"}
     # [LAW:verifiable-goals] A pathname alone cannot certify a complete manifest.
     assert upload["if"] == "always() && steps.coverage_provenance.outputs.valid == 'true'"
     assert _provenance_step()["id"] == "coverage_provenance"
+
+
+def test_kernel_venue_gate_fails_closed_around_the_primary_suite() -> None:
+    # trial-193 ci-venue-v2: the real launcher preflight gates the suite, and the
+    # exact-outcome gate plus its evidence upload are required steps, never advisory.
+    job = _jobs()["package-tests"]
+    steps = job["steps"]
+    runs = [str(s.get("run", "")) for s in steps]
+    primary = runs.index(_PRIMARY_PYTEST)
+    [preflight] = [i for i, r in enumerate(runs) if "a5_kernel_ci_gate.py preflight" in r]
+    [gate] = [i for i, r in enumerate(runs) if "a5_kernel_ci_gate.py check" in r]
+    [evidence] = _uploads(steps, "a5-kernel-ci/")
+    assert preflight < primary < gate < steps.index(evidence)
+    assert "if" not in steps[preflight], "preflight runs only on a synced workspace"
+    for step in (steps[preflight], steps[gate], evidence):
+        assert "continue-on-error" not in step, step.get("name")
+    assert steps[gate]["if"] == "always()"
+    assert evidence["if"] == "always()"
+    assert evidence["with"]["if-no-files-found"] == "error"
+    assert "--junit a5-kernel-ci/junit.xml" in runs[gate]
+    for part in ("matrix.venue", "needs.changes.outputs.head", "run_id", "run_attempt"):
+        assert part in evidence["with"]["name"]
+    # Both venues are required legs of the one job the aggregate reads.
+    assert job["runs-on"] == "${{ matrix.runner }}"
+    assert job["strategy"]["fail-fast"] is False
+    assert {(m["venue"], m["runner"]) for m in job["strategy"]["matrix"]["include"]} == {
+        ("supported", "ubuntu-26.04"),
+        ("unsupported-abi8", "ubuntu-24.04"),
+    }
 
 
 def _provenance_step() -> dict[str, Any]:
