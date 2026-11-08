@@ -50,6 +50,9 @@ from test_b104_installed_public_witness import (
 )
 from test_b104_installed_public_witness import alias as alias  # the shared alias fixture
 from test_b104_installed_public_witness import (
+    carrier as carrier,
+)  # the interpreter's carrier under a scratch prefix
+from test_b104_installed_public_witness import (
     declared_root as declared_root,
 )  # declared journal root
 from test_b104_installed_public_witness import orphans as orphans  # every test settles its orphans
@@ -1033,8 +1036,8 @@ def test_a_journal_outside_the_provisioned_root_fails_the_scenario(name: str) ->
     assert verdict["failure_reasons"] == [f"{name}:{later}:journal-not-at-provisioned-root"]
 
 
-def test_every_phase_body_runs_under_the_one_declaration_its_layout_wrote(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_every_phase_body_runs_under_the_one_declaration_its_carrier_holds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, carrier: Path
 ) -> None:
     layout = pw.Layout(tmp_path / "scenario")
     pw.prepare_layout(layout)
@@ -1043,7 +1046,10 @@ def test_every_phase_body_runs_under_the_one_declaration_its_layout_wrote(
         pw.PHASE_BODIES, "run", lambda _: seen.append(INSTALLATION_STATE.get()) or {}
     )
 
-    assert pw.run_phase(layout, "run", None) == 0
+    with pw.HELPERS.installation_state_provisioned(
+        carrier, pw.HELPERS.installation_declaration(layout)
+    ):
+        assert pw.run_phase(layout, "run", None) == 0
 
     assert seen == [InstallationState(({"installation_root": str(layout.installation_root)},))]
     assert INSTALLATION_STATE.get() == STORAGE_UNSELECTED  # unbound again after the body
@@ -1285,6 +1291,7 @@ time.sleep(600)
 pw.MCP_SERVER_SOURCE = STUB_SERVER
 marker = root / "phase.pgid"
 root.mkdir(parents=True)
+pw.HELPERS.installation_carrier = lambda *_: root / "etc" / "arhugula" / "installation-state.json"
 
 
 def argv(python, helper, name, phase, fixed):
@@ -1387,6 +1394,7 @@ import preaction_installed_witness as pw
 case, root, bystander_pgid = sys.argv[2], Path(sys.argv[3]), int(sys.argv[4])
 work = root / "work"
 work.mkdir(parents=True)
+pw.HELPERS.installation_carrier = lambda *_: root / "etc" / "arhugula" / "installation-state.json"
 facts = {
     "owned_pgids": [], "webhook_ports": [], "ollama_ports": [], "boundary": {}, "unreserved": [],
     "foreign": [], "kills": {},

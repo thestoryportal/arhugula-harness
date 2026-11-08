@@ -343,13 +343,14 @@ def installation_declaration(layout: Layout) -> dict[str, object]:
     }
 
 
-def installation_carrier(python: Path) -> Path:
-    """The carrier the installed Runtime reads under `python`, as that Runtime itself names it."""
-    # [LAW:one-source-of-truth] The installed reader owns the location; the parent never
-    # re-derives it from the venv layout.
+def installation_carrier(interpreter: list[str], env: dict[str, str]) -> Path:
+    """The carrier the Runtime reads when launched as `interpreter` under `env`, as it names it."""
+    # [LAW:one-source-of-truth] The Runtime's own reader owns the location; the parent never
+    # re-derives it from the venv layout. Asked exactly as the children are launched.
     query = "from harness_runtime.lifecycle.installation_state import installation_state_path as p"
     shown = subprocess.run(
-        [str(python), "-I", "-c", f"{query}; print(p())"],
+        [*interpreter, "-c", f"{query}; print(p())"],
+        env=env,
         check=True,
         capture_output=True,
         text=True,
@@ -359,6 +360,12 @@ def installation_carrier(python: Path) -> Path:
     if not carrier.is_absolute():
         raise ValueError(f"installed carrier is not absolute: {shown!r}")
     return carrier
+
+
+def document_identity(path: Path) -> tuple[int, int, bytes]:
+    """The file and its content: a rewrite in place, or a reused inode number, keeps the inode."""
+    status = path.lstat()
+    return status.st_dev, status.st_ino, path.read_bytes()
 
 
 @contextlib.contextmanager
@@ -373,12 +380,11 @@ def installation_state_provisioned(carrier: Path, declaration: object) -> Genera
     for directory in created:
         directory.mkdir(mode=0o755)
     write_json_new(carrier, declaration)
-    written = carrier.lstat()
+    written = document_identity(carrier)
     try:
         yield
     finally:
-        current = carrier.lstat()
-        if (current.st_dev, current.st_ino) != (written.st_dev, written.st_ino):
+        if document_identity(carrier) != written:
             raise RuntimeError(f"installation-state carrier was replaced: {carrier}")
         carrier.unlink()
         for directory in reversed(created):
@@ -2124,9 +2130,6 @@ def run(
         layout.markers,
     ):
         directory.mkdir(mode=0o700)
-    # [LAW:one-source-of-truth] The parent is the installation operator: it provisions the one
-    # carrier every child reads; no env, run TOML or CLI argument can select the root.
-    carrier = installation_carrier(python)
     helper = Path(__file__).resolve(strict=True)
     fixed = [
         "--scenario",
@@ -2141,6 +2144,9 @@ def run(
         expected_head,
     ]
     env = child_env(layout)
+    # [LAW:one-source-of-truth] The parent is the installation operator: it provisions the one
+    # carrier every child reads; no env, run TOML or CLI argument can select the root.
+    carrier = installation_carrier([str(python), "-I"], env)
     fleet, servers = Fleet(), Fleet()
 
     def launch(phase: str) -> Child:
