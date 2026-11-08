@@ -6,7 +6,13 @@
 as proposed Runtime spec v1.145 and plan v2.72 (U-RT-163): the integration lead renumbered the v1.144 of
 section 6 because P2 holds v1.144 and v2.71. Not cleared. T04 of the released T01–T20 plan, package P3,
 record LIT `arhugula-harness-trial-193` (dispatch `cmt-0c7d0f52`, claim `cmt-7a9b55b1`). Only this
-status paragraph changed after ratification.
+status paragraph changed after ratification. AMENDED by ruling `cmt-4b7f5252-ddff-4f56-9af9-12781e563253` on T05 review `cmt-54c6b7d2`,
+the controlling reading of the unchanged-shape and shared-store constraints: section 6 item 1's
+`RunResult.run_id` assertion reads as "the resumed execution uses the engine locator's original
+`run_id` and creates no new `run_id`; the public `RunResult` and CLI JSON shapes stay unchanged",
+and item 3 reads as "`claim-busy` while the exact record is unclaimed and another live attempt holds
+its canonical lease; `claim-refused` once its claim exists, during the body and after every outcome".
+Section 6 below keeps its reviewed T04 text.
 
 **Class:** 1 (design-substrate amendment), absorbed through one documented back-flow source arc in the
 P3 content package (CLAUDE.md §11.4), like `.harness/class_1_fork_runtime_resume_cli_supersession.md`.

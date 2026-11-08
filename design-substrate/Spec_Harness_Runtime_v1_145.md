@@ -128,8 +128,8 @@ existing claim or lease stands.
 | Stale composed `resume_context` | `ResumePauseStateStaleError`, `kind=pause-state-stale` | 6 |
 | Superseded by a later fresh run | `ResumePauseRecordSupersededError`, `kind=pause-record-superseded` | 6 |
 | Protocol not bound or not durable | the existing `ResumeProtocolNotBoundError` / `ResumeArgsError` | 6 |
-| Claim lease held | `ResumeClaimRefusedError`, reason `claim-busy`, `kind=claim` | 7 |
-| Record already claimed, any outcome | `ResumeClaimRefusedError`, reason `claim-refused`, `kind=claim` | 7 |
+| Record still unclaimed, its canonical lease held by another live attempt | `ResumeClaimRefusedError`, reason `claim-busy`, `kind=claim` | 7 |
+| Record already claimed (takes precedence over a held lease), during the body or after any outcome | `ResumeClaimRefusedError`, reason `claim-refused`, `kind=claim` | 7 |
 
 No refusal message or refusal value names an engine store path, a run-scoped digest or a `run_id`.
 

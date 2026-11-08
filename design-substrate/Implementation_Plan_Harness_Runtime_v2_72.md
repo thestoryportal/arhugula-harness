@@ -29,13 +29,17 @@ journal or claim record. Every admitted failure checks the claim is consumed, ze
 model or tool calls, no new `run_id` and its stated `cp.resume-attempted` count.
 
 1. **WAL resume.** A real WAL pause at step 1 through `api.run`, then `harness resume <wf>` in a new
-   process: exit 0 with the original `run_id`; step 0 not re-dispatched; exactly one
+   process: exit 0; the resumed execution uses the locator's original `run_id` and creates no new
+   `run_id`, verified against the durable locator and the resumed execution and audit evidence (the
+   public `RunResult` and CLI JSON shapes stay unchanged; ruling `cmt-4b7f5252-ddff-4f56-9af9-12781e563253`); step 0 not re-dispatched; exactly one
    `cp.resume-attempted` entry, `resume-clean`; the locator's serialized `engine_class` is the literal
    `"WAL-segment"` and parses back to `EngineClass.WAL_SEGMENT`.
 2. **Reconciler resume.** The same for `RECONCILER_LOOP` (`"reconciler-loop"`), through the daemon MCP
    `resume_workflow`.
-3. **Repeat.** Resuming the same handle again exits 7: `claim-busy` during the run, `claim-refused`
-   after it.
+3. **Repeat.** While the exact record is still unclaimed and another live attempt holds its canonical
+   lease, a repeat exits 7 `claim-busy`. Once that record's claim exists, a repeat exits 7
+   `claim-refused`, including during the resumed body and after every outcome. Existing-claim refusal
+   takes precedence over lease-busy; `started` stays durable before the body runs (ruling `cmt-4b7f5252-ddff-4f56-9af9-12781e563253`).
 4. **Superseded.** Pause, `harness run` of the same workflow, then resume: exit 6,
    `pause-record-superseded`.
 5. **Engine record removed.** Exit 6, `engine-pause-record-absent`.
@@ -58,8 +62,8 @@ model or tool calls, no new `run_id` and its stated `cp.resume-attempted` count.
 
 | Item | Witness | Limit recorded for review |
 | --- | --- | --- |
-| 1 | `test_engine_resume_end_to_end.py::test_an_engine_pause_resumes_once_under_its_run_id_without_redispatching_its_prefix` (both engine classes), `::test_harness_resume_in_a_new_process_continues_a_wal_pause_under_its_run_id`; `test_engine_pause_locator_journal.py::test_locator_round_trips_its_literal_engine_class` | The separate-process case runs the real `harness resume` command in a new OS process over the pausing process's on-disk stores, with the provider-free runtime, durable-filesystem and observation patches installed and the config and workflow bound at the CLI's two loaders (stage 5 binds no declarative-step dispatcher). `api.RunResult` carries no `run_id`, so run identity is read from the CP driver's result and the journaled locator, pending the T05 F1 ruling. |
-| 2, 3 | `test_engine_resume_end_to_end.py::test_the_daemon_resumes_a_reconciler_pause_once_and_refuses_a_repeat_during_and_after` | Item 3 literal: a repeat during the run is `claim-refused`, not `claim-busy`. The unchanged B-104 claim store makes the `started` frame durable before the body runs, so `claim-busy` arises only in the pre-claim lease window (`test_b104_root_resume_facade.py::test_a_live_lease_holder_makes_the_resume_busy_and_runs_nothing`). The test asserts the actual behavior; no claim store change is allowed. |
+| 1 | `test_engine_resume_end_to_end.py::test_an_engine_pause_resumes_once_under_its_run_id_without_redispatching_its_prefix` (both engine classes), `::test_harness_resume_in_a_new_process_continues_a_wal_pause_under_its_run_id`; `test_engine_pause_locator_journal.py::test_locator_round_trips_its_literal_engine_class` | The separate-process case runs the real `harness resume` command in a new OS process over the pausing process's on-disk stores, with the provider-free runtime, durable-filesystem and observation patches installed and the config and workflow bound at the CLI's two loaders (stage 5 binds no declarative-step dispatcher). `api.RunResult` carries no `run_id`, so run identity is read from the CP driver's result in the resuming process and the journaled locator, as ruling `cmt-4b7f5252` directs. |
+| 2, 3 | `test_engine_resume_end_to_end.py::test_the_daemon_resumes_a_reconciler_pause_once_and_refuses_a_repeat_during_and_after` (claimed record: `claim-refused` during the resumed body and after it); `test_b104_root_resume_facade.py::test_a_live_lease_holder_makes_the_resume_busy_and_runs_nothing` (unclaimed record under a live lease: `claim-busy`) | Item 3 as corrected by ruling `cmt-4b7f5252-ddff-4f56-9af9-12781e563253`: the existing B-104 claim store checks claim existence before probing the lease, so existing-claim refusal takes precedence over lease-busy. |
 | 4, 5, 8, 9 | `test_engine_resume_admission.py::test_an_engine_locator_refusal_runs_nothing_and_writes_nothing` (cases superseded, engine record removed, engine class changed, another workflow supplied, child depth, step out of range) | Item 4 arranges the supersession record directly rather than through `harness run`. |
 | 6 | `test_engine_resume_end_to_end.py::test_a_corrupt_engine_record_fails_its_one_attempt_and_consumes_the_claim` | |
 | 7 | `test_engine_resume_admission.py::test_a_corrupt_locator_line_is_the_existing_corrupt_handle_cause`, `::test_a_locator_naming_another_workflow_is_the_mismatch_handle_cause` | |
