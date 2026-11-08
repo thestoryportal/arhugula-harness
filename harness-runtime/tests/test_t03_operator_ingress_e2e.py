@@ -386,6 +386,12 @@ class Terminal:
     def answer(self, line: str) -> None:
         os.write(self.master, f"{line}\n".encode())
 
+    def __enter__(self) -> Terminal:
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self.close()
+
     def close(self) -> None:
         self.stdin.close()
         self.stderr.close()
@@ -401,7 +407,11 @@ def terminal() -> Iterator[Terminal]:
 
 
 def _harness_run(
-    gated: Scenario, stdin: Any, stderr: Any, payload: dict[str, Any] = _GATED_PAYLOAD
+    gated: Scenario,
+    stdin: Any,
+    stderr: Any,
+    payload: dict[str, Any] = _GATED_PAYLOAD,
+    socket_path: Path | None = None,
 ) -> int:
     """`harness run <manifest>` on the calling (main) thread; ingress installs signal wakeups."""
     # The command binds its terminal operator from `sys.stdin`/`sys.stderr`.
@@ -412,12 +422,12 @@ def _harness_run(
             cli.run_command(
                 gated.manifest(payload),
                 config=gated.layout.config,
-                daemon=False,
+                daemon=socket_path is not None,
                 output=cli.OutputFormat.json,
                 provider=None,
                 model=None,
                 tenant_id=None,
-                socket_path=None,
+                socket_path=socket_path,
                 daemon_result_timeout_seconds=None,
             )
     return exit_.value.exit_code
@@ -513,3 +523,50 @@ def test_16_a_large_payload_is_shown_in_full_before_the_answer(
     assert '"danger_tail":"rm -rf ~"' in operator.shown
     assert operator.marker_before_answer == []
     assert gated.marker() == [_GATED_STEP]
+
+
+# --- `harness run --daemon` (C2 daemon-client-tty) ----------------------------------------------
+
+# The daemon is its own process; it reads the fixture's provisioned installation state through the
+# same interpreter prefix the in-process rows use.
+_DAEMON_LAUNCH = (
+    "import sys; sys.prefix = sys.argv.pop(1); "
+    "from harness_runtime.cli.app import app; app(prog_name='harness')"
+)
+
+
+@pytest.fixture
+def daemon(gated: Scenario) -> Iterator[Path]:
+    socket_path = gated.layout.tmp / "harness-daemon.sock"
+    argv = [sys.executable, "-c", _DAEMON_LAUNCH, sys.prefix, "daemon"]
+    argv += ["--config", str(gated.layout.config), "--socket-path", str(socket_path)]
+    log = gated.layout.tmp / "daemon.log"
+    with log.open("wb") as sink:
+        server = subprocess.Popen(argv, cwd=gated.layout.tmp, stdout=sink, stderr=sink)
+    limit = time.monotonic() + pw.CHILD_CAP_SECONDS
+    while not socket_path.exists() and server.poll() is None and time.monotonic() < limit:
+        time.sleep(0.05)
+    assert socket_path.exists(), f"daemon never bound: {log.read_text()[-2000:]}"
+    yield socket_path
+    server.terminate()
+    assert server.wait(pw.CHILD_CAP_SECONDS) is not None
+
+
+def test_8_one_daemon_serves_an_approve_then_a_reject_on_a_terminal(
+    gated: Scenario, daemon: Path
+) -> None:
+    with Terminal() as first:
+        operator = Operator(gated, first, "approve")
+        code = _harness_run(gated, first.stdin, first.stderr, socket_path=daemon)
+        _assert_gate_shown(operator.done())
+    assert code == cli.EXIT_SUCCESS
+    assert gated.marker() == [_GATED_STEP]
+
+    with Terminal() as second:
+        operator = Operator(gated, second, "reject")
+        code = _harness_run(gated, second.stdin, second.stderr, socket_path=daemon)
+        assert operator.done().marker_before_answer == [_GATED_STEP]
+    assert code == cli.EXIT_WORKFLOW_FAIL
+    assert gated.marker() == [_GATED_STEP]
+    approve, reject = gated.hitl_audits()
+    assert (approve["audit.cp.response"], reject["audit.cp.response"]) == ("approve", "reject")
