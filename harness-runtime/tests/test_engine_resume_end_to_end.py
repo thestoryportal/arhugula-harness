@@ -2,12 +2,14 @@
 
 The pause is real: a WAL or reconciler workflow pauses before step 1 through the provider-free
 bootstrap, the CP driver and the engine substrate, and the root body journals its locator. Resume
-re-bootstraps over the same state root and the same F2 ledger. Both calls run in this process;
-nothing here is a separate-process or installed-host witness.
+re-bootstraps over the same state root and the same F2 ledger, in this process except for one
+WAL case that runs the `harness resume` command in a new OS process. Nothing here is an
+installed-host witness.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import sys
 from collections.abc import Callable, Sequence
@@ -174,6 +176,67 @@ async def test_an_engine_pause_resumes_once_under_its_run_id_without_redispatchi
     )
     assert again.steps == []
     _assert_refused(outcome, "claim-refused")
+
+
+# A separate OS process: it installs this module's provider-free runtime, durable-filesystem and
+# observation patches, reads the parent's installation-state document at the same interpreter
+# prefix, binds the parent's config and workflow at the CLI's two loaders, then runs
+# the real `harness resume` command, so its exit status is the CLI's own. Every store it resumes
+# from (pause journal, claim store, engine record, F2 ledger) is read from disk.
+_CLI_RESUME_CHILD = """
+import atexit, json, sys
+from pathlib import Path
+import pytest, typer
+sys.path.insert(0, sys.argv[1])
+from tests import test_b104_root_resume_facade as b104, test_engine_resume_end_to_end as e2e
+from harness_cp.engine_class import EngineClass
+from harness_runtime.cli.app import WorkflowManifestLoader, app
+from harness_runtime.config_source import RuntimeConfigSource
+from harness_runtime.types import RuntimeConfig
+
+config = RuntimeConfig.model_validate_json(Path(sys.argv[2]).read_text())
+mp = pytest.MonkeyPatch()
+mp.setattr(sys, "prefix", sys.argv[4])
+b104._durable_filesystem.__wrapped__(mp)
+next(e2e._patched_runtime.__wrapped__(mp))
+seen, dispatcher = e2e._Observed(mp), b104._Dispatcher()
+workflow = e2e._workflow(EngineClass.WAL_SEGMENT, dispatcher)
+mp.setattr(RuntimeConfigSource, "load", staticmethod(lambda **_: config))
+mp.setattr(WorkflowManifestLoader, "load_workflow", staticmethod(lambda _path: workflow))
+atexit.register(lambda: Path(sys.argv[3]).write_text(json.dumps(
+    {"run_ids": seen.run_ids, "outcomes": [o.value for o in seen.outcomes], "steps": dispatcher.steps}
+)))
+typer.main.get_command(app).main(["resume", "workflow.yaml", "--output", "json"], prog_name="harness")
+"""
+
+
+@pytest.mark.asyncio
+async def test_harness_resume_in_a_new_process_continues_a_wal_pause_under_its_run_id(
+    harness: Harness, seen: _Observed, tmp_path: Path
+) -> None:
+    run_id = await _paused_at_step_1(harness, seen, EngineClass.WAL_SEGMENT)
+    config, report = tmp_path / "config.json", tmp_path / "report.json"
+    config.write_text(harness.config.model_dump_json())
+
+    child = await asyncio.create_subprocess_exec(
+        *(sys.executable, "-c", _CLI_RESUME_CHILD, str(Path(__file__).parents[1])),
+        *(str(config), str(report), sys.prefix),
+        cwd=tmp_path,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await asyncio.wait_for(child.communicate(), timeout=300)
+
+    assert child.returncode == 0, stderr.decode()
+    assert json.loads(stdout)["status"] == "completed"
+    assert json.loads(report.read_text()) == {
+        "run_ids": [run_id],
+        "outcomes": [ResumeOutcomeKind.RESUME_CLEAN.value],
+        "steps": ["step-1"],
+    }
+    # This process's handle on the same F2 ledger file sees the child's one attempt.
+    assert seen.resume_attempts() == 1
+    assert [locator["run_id"] for locator in _journaled_locators(harness)] == [run_id]
 
 
 async def _admitted_failure(h: Harness, seen: _Observed, engine_class: EngineClass) -> None:
