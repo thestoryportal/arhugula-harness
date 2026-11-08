@@ -42,7 +42,16 @@ from dataclasses import dataclass
 from enum import Enum, StrEnum
 from pathlib import Path
 from types import MappingProxyType  # stdlib `types`, not this module (absolute import)
-from typing import TYPE_CHECKING, Any, ClassVar, NewType, Protocol, Self, runtime_checkable
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    ClassVar,
+    Literal,
+    NewType,
+    Protocol,
+    Self,
+    runtime_checkable,
+)
 from urllib.parse import urlsplit
 
 # ----------------------------------------------------------------------------
@@ -1808,6 +1817,10 @@ class RuntimeMemoryConfig(BaseModel):
 
     policy_id: str = "policy:automatic-local-memory"
     """Policy id recorded on local memory operations."""
+
+    promotion_decision: Literal["propose_semantic", "propose_procedural"] = "propose_semantic"
+    """Which reviewed-proposal target the memory policy names. Activation always
+    needs an operator decision, so no `promote_*` (automatic) value is accepted."""
 
 
 # ----------------------------------------------------------------------------

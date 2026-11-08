@@ -172,9 +172,11 @@ $M compact <compaction-id> --source <source-id> --summary "<what>" \
   retrieval excludes. Preference candidates are not part of this recipe.
 - The memory policy must name the target: `propose_semantic`/`promote_semantic`
   for semantic kinds, `propose_procedural`/`promote_procedural` for
-  `procedural_update`. The runtime policy is `propose_semantic`, so it refuses
-  procedural proposals. Review mode `forbidden` refuses both. `approve`
-  re-checks the policy at decision time.
+  `procedural_update`. The runtime policy takes its target from
+  `[runtime.memory] promotion_decision`: `propose_semantic` (default) or
+  `propose_procedural`; any other value fails config loading. Review mode
+  `forbidden` refuses both. `approve` re-checks the loaded policy at decision
+  time, so a proposal made under one target is refused under the other.
 - `approve` and `deny` re-derive the proposal from the named source and refuse,
   writing nothing, when the record is not `proposed`, was proposed from a
   different source, or the source's scope has changed since the proposal.

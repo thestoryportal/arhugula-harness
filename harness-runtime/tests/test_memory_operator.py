@@ -659,3 +659,60 @@ def test_source_rescoped_between_check_and_commit_is_not_activated(tmp_path: Pat
         entry.operation_kind is MemoryOperationKind.PROMOTE
         for entry in store.read_memory_operations()
     )
+
+
+def test_configured_target_selects_the_proposal_kind_for_one_source(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    store = _store(tmp_path)
+
+    def cli(decision: str, *argv: str) -> int:
+        config = tmp_path / f"{decision}.toml"
+        config.write_text(
+            "[runtime]\n"
+            'deployment_surface = "local-development"\n'
+            f'repository_root = "{tmp_path}"\n'
+            'default_topology = "single-threaded-linear"\n'
+            "\n[runtime.otel]\n"
+            'otlp_endpoint = "http://localhost:4317"\n'
+            "\n[runtime.memory]\n"
+            f'promotion_decision = "{decision}"\n',
+            encoding="utf-8",
+        )
+        common = ["--memory-root", str(tmp_path / "memory"), "--operator", "robbo"]
+        return memory_operator.main(["--config", str(config), *common, "--run-id", _RUN_ID, *argv])
+
+    def propose(decision: str, kind: str) -> int:
+        return cli(decision, "propose", _SOURCE_ID, "--kind", kind, "--statement", kind)
+
+    def refused(exit_code: int, reason: str) -> None:
+        assert exit_code == 1
+        assert reason in capsys.readouterr().err
+        assert len(store.read_memory_operations()) == writes
+
+    writes = 0
+    for decision in ("promote_semantic", "promote_procedural", "keep_episodic", "discard"):
+        refused(propose(decision, "convention"), "promotion_decision")
+
+    assert propose("propose_semantic", "convention") == 0
+    semantic = json.loads(capsys.readouterr().out)
+    writes = len(store.read_memory_operations())
+    refused(propose("propose_semantic", "procedural_update"), "does not permit")
+    assert propose("propose_procedural", "procedural_update") == 0
+    procedural = json.loads(capsys.readouterr().out)
+    writes = len(store.read_memory_operations())
+    refused(propose("propose_procedural", "convention"), "does not permit")
+
+    for proposal in (semantic, procedural):
+        assert proposal["status"] == "proposed"
+        assert proposal["source_refs"] == [_SOURCE_REF.model_dump(mode="json")]
+    assert semantic["content"]["source_memory_refs"] == [_SOURCE_ID]
+    assert procedural["content"]["evidence"] == [_SOURCE_REF.model_dump(mode="json")]
+
+    approve = ("approve", procedural["memory_id"], "--source", _SOURCE_ID)
+    refused(
+        cli("propose_semantic", *approve, "--injection-policy", "retrieval_only"),
+        "does not permit",
+    )
+    assert cli("propose_procedural", *approve, "--injection-policy", "retrieval_only") == 0
+    assert json.loads(capsys.readouterr().out)["status"] == "active"
