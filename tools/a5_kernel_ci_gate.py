@@ -2901,19 +2901,40 @@ def _exit_code(argv: Sequence[str]) -> int:
     return subprocess.run(argv, check=False, close_fds=True).returncode
 
 
+# What the user-manager route and vng need from the job; nothing else is inherited.
+LAUNCH_ENV = ("PATH", "HOME", "XDG_RUNTIME_DIR")
+
+
+def launch_env(environ: Mapping[str, str], sentinel: str) -> dict[str, str]:
+    """The whole environment vng starts under: LAUNCH_ENV from the job plus the leak canary."""
+    values = {key: environ.get(key, "") for key in LAUNCH_ENV}
+    if missing := [key for key, value in values.items() if not value]:
+        raise Q0Error(f"job environment lacks {missing}")
+    return values | {SENTINEL_ENV: sentinel}
+
+
+def _launch_exit(argv: Sequence[str], env: Mapping[str, str]) -> int:
+    # A --scope systemd-run execs its command itself, so this env is the one vng inherits.
+    return subprocess.run(argv, env=env, check=False, close_fds=True).returncode
+
+
 def launch(environ: Mapping[str, str], work: Path, root: Path, out: Path, handles: Path) -> int:
     """Boot the Q0 guest in its own scope; the exit code is the guest run's own."""
     try:
         unit = scope_unit(environ)
+        # A fresh marker value: the guest's isolation step refuses any env value holding it.
+        env = launch_env(environ, SENTINEL_MARKER + secrets.token_hex(32))
     except Q0Error as exc:
         print(f"a5-kernel-ci launch: {exc}", file=sys.stderr)
         return 1
     # [LAW:no-ambient-temporal-coupling] The handle is recorded before the scope can exist,
     # so a cancelled or timed-out launch still leaves cleanup its exact target.
     handles.parent.mkdir(parents=True, exist_ok=True)
-    handles.write_bytes(_canonical({"scope": unit}))
+    handles.write_bytes(
+        _canonical({"scope": unit, "sentinel_env_sha256": _sha256(env[SENTINEL_ENV].encode())})
+    )
     out.mkdir(parents=True, exist_ok=True)
-    return _exit_code(launch_argv(unit, vng_argv(work, root, out, Q0_EXEC)))
+    return _launch_exit(launch_argv(unit, vng_argv(work, root, out, Q0_EXEC)), env)
 
 
 def scope_pids(unit: str) -> list[int]:

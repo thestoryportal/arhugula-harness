@@ -2891,13 +2891,17 @@ def test_launch_records_its_scope_before_the_guest_runs_and_returns_the_guest_ex
     handles, out = tmp_path / "ev" / "handles.json", tmp_path / "out"
     launched: list[Sequence[str]] = []
 
-    def run(argv: Sequence[str]) -> int:
-        assert json.loads(handles.read_bytes()) == {"scope": "a5-guest-41-2.scope"}
+    def run(argv: Sequence[str], env: Mapping[str, str]) -> int:
+        record = json.loads(handles.read_bytes())
+        assert record == {
+            "scope": "a5-guest-41-2.scope",
+            "sentinel_env_sha256": hashlib.sha256(env[gate.SENTINEL_ENV].encode()).hexdigest(),
+        }
         launched.append(argv)
         return 7
 
-    monkeypatch.setattr(gate, "_exit_code", run)
-    run_env = {"GITHUB_RUN_ID": "41", "GITHUB_RUN_ATTEMPT": "2"}
+    monkeypatch.setattr(gate, "_launch_exit", run)
+    run_env = {"GITHUB_RUN_ID": "41", "GITHUB_RUN_ATTEMPT": "2"} | LAUNCH_JOB_ENV
     root = Path("/a5-guest/root")
     assert gate.launch(run_env, tmp_path / "work", root, out, handles) == 7
     assert out.is_dir()
@@ -2907,6 +2911,42 @@ def test_launch_records_its_scope_before_the_guest_runs_and_returns_the_guest_ex
     ]
     assert gate.launch({"GITHUB_RUN_ID": "41"}, tmp_path, root, out, tmp_path / "h.json") == 1
     assert not (tmp_path / "h.json").exists() and len(launched) == 1
+
+
+LAUNCH_JOB_ENV = {"PATH": "/usr/bin:/bin", "HOME": "/home/runner", "XDG_RUNTIME_DIR": "/run/u"}
+
+
+def test_launch_starts_systemd_run_under_only_the_launch_env_and_a_fresh_canary(
+    tmp_path: Path,
+) -> None:
+    # The fake records its own exec-time environment block, the env vng would inherit.
+    bin_dir, seen, handles = tmp_path / "bin", tmp_path / "seen", tmp_path / "handles.json"
+    bin_dir.mkdir()
+    (bin_dir / "systemd-run").write_text(f"#!/bin/sh\ncat /proc/$$/environ > {seen}\n")
+    (bin_dir / "systemd-run").chmod(0o755)
+    job = {"GITHUB_RUN_ID": "41", "GITHUB_RUN_ATTEMPT": "2", "GITHUB_TOKEN": "ghs_ambient"}
+    job |= {"ACTIONS_RUNTIME_TOKEN": "ambient", "RUNNER_TEMP": "/tmp/r"}
+    job |= LAUNCH_JOB_ENV | {"PATH": f"{bin_dir}:/usr/bin:/bin"}
+    root = Path("/a5-guest/root")
+    assert gate.launch(job, tmp_path / "work", root, tmp_path / "out", handles) == 0
+    received = dict(entry.split("=", 1) for entry in seen.read_text().split("\0") if entry)
+    canary = received.pop(gate.SENTINEL_ENV)
+    assert canary.startswith(gate.SENTINEL_MARKER) and len(canary) > len(gate.SENTINEL_MARKER)
+    assert received == {key: job[key] for key in gate.LAUNCH_ENV}
+    record = json.loads(handles.read_bytes())
+    assert record["sentinel_env_sha256"] == hashlib.sha256(canary.encode()).hexdigest()
+
+
+@pytest.mark.parametrize("absent", ["PATH", "HOME", "XDG_RUNTIME_DIR"])
+def test_launch_refuses_a_job_lacking_a_launch_variable_before_recording_a_scope(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, absent: str
+) -> None:
+    monkeypatch.setattr(gate, "_launch_exit", lambda argv, env: pytest.fail(f"ran {argv}"))
+    job = {"GITHUB_RUN_ID": "41", "GITHUB_RUN_ATTEMPT": "2"} | LAUNCH_JOB_ENV
+    del job[absent]
+    handles = tmp_path / "handles.json"
+    assert gate.launch(job, tmp_path, Path("/r"), tmp_path / "out", handles) == 1
+    assert not handles.exists()
 
 
 @pytest.mark.parametrize(
