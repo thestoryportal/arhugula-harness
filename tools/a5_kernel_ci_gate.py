@@ -32,15 +32,16 @@ import json
 import os
 import platform
 import re
+import shutil
 import socket
 import stat
 import subprocess
 import sys
 import xml.etree.ElementTree as ET
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, fields
 from datetime import UTC, datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, cast
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -1217,6 +1218,179 @@ def q0_observe(
         "completed_observation": not problems,
         "problems": problems,
     }
+
+
+# --- Stage manifest (host_guest_boundary.stage_manifest) and pool delivery (step 3a) ---
+
+# The only entries /a5/meta may hold; it is excluded from the manifest that names it.
+STAGE_META = ("binding.env", "host.json", "host-env-origin.json", "stage-manifest.json")
+_MAX_HOPS = 40  # the kernel's own symlink-follow limit
+
+
+@dataclass(frozen=True)
+class Stage:
+    """What one walk of the staged root and /a5 observed, keyed by guest path."""
+
+    manifest: Mapping[str, Mapping[str, Any]]
+    pth: Mapping[str, str]  # each .pth file under /a5 -> its text
+    meta: tuple[str, ...]  # the names present in /a5/meta
+
+
+def _within(path: str, top: str) -> bool:
+    return path == top or path.startswith(f"{top}/")
+
+
+def _node(path: Path) -> dict[str, Any]:
+    status = path.lstat()
+    node: dict[str, Any] = {
+        "mode": stat.S_IMODE(status.st_mode),
+        "uid": status.st_uid,
+        "gid": status.st_gid,
+    }
+    if stat.S_ISREG(status.st_mode):
+        with path.open("rb") as stream:
+            digest = hashlib.file_digest(stream, "sha256").hexdigest()
+        return node | {"type": "file", "size": status.st_size, "sha256": digest}
+    if stat.S_ISLNK(status.st_mode):
+        return node | {"type": "symlink", "target": os.readlink(path)}
+    if stat.S_ISDIR(status.st_mode):
+        return node | {"type": "dir"}
+    # A device, fifo or socket is recorded so the judgement below refuses it.
+    return node | {"type": stat.filemode(status.st_mode)[0]}
+
+
+def _walk(host: Path, guest: str, skip: Collection[str]) -> Iterator[tuple[str, Path]]:
+    yield guest, host
+    if stat.S_ISDIR(host.lstat().st_mode):
+        for child in sorted(host.iterdir()):
+            if (name := f"{guest.rstrip('/')}/{child.name}") not in skip:
+                yield from _walk(child, name, skip)
+
+
+def scan_stage(root: Path, a5: Path, mounts: Collection[str]) -> Stage:
+    """Walk the staged root as / and the /a5 tree as /a5, never entering a mountpoint.
+
+    [LAW:one-source-of-truth] The host (over /a5-guest/root and /a5) and the guest (over
+    / and /a5) run this same walk with the same mountpoints, so equal stages give equal
+    bytes and the comparison needs no translation.
+    """
+    skip = {"/a5", "/a5/meta", *mounts}
+    manifest = {
+        guest: _node(host)
+        for top, at in ((root, "/"), (a5, "/a5"))
+        for guest, host in _walk(top, at, skip)
+    }
+    pth = {
+        guest: (a5 / guest.removeprefix("/a5/")).read_text()
+        for guest, node in manifest.items()
+        if _within(guest, "/a5") and node["type"] == "file" and guest.endswith(".pth")
+    }
+    return Stage(manifest, pth, tuple(sorted(p.name for p in (a5 / "meta").iterdir())))
+
+
+def resolve(path: str, links: Mapping[str, str]) -> str:
+    """Resolve a guest path component by component through the staged symlinks."""
+    pending = [part for part in reversed(path.split("/")) if part]
+    current, hops = PurePosixPath("/"), 0
+    while pending:
+        part = pending.pop()
+        step = current.parent if part == ".." else current if part == "." else current / part
+        target = links.get(str(step))
+        if target is None:
+            current = step
+            continue
+        hops += 1
+        if hops > _MAX_HOPS:
+            raise Q0Error(f"symlink {step} does not resolve within {_MAX_HOPS} hops")
+        current = PurePosixPath("/") if target.startswith("/") else current
+        pending.extend(part for part in reversed(target.split("/")) if part)
+    return str(current)
+
+
+def stage_problems(stage: Stage) -> list[str]:
+    """The fail-closed stage checks that need no expectations (Q0_unavailable_checks)."""
+    links = {
+        path: node["target"] for path, node in stage.manifest.items() if node["type"] == "symlink"
+    }
+
+    def outside(path: str, top: str) -> str | None:
+        try:
+            resolved = resolve(path, links)
+        except Q0Error as exc:
+            return str(exc)
+        return None if _within(resolved, top) else f"resolves to {resolved}, outside {top}"
+
+    pth_lines = [
+        (path, line.strip())
+        for path, text in stage.pth.items()
+        for line in text.splitlines()
+        if line.strip() and not line.startswith("#")
+    ]
+    return (
+        [
+            f"{path} is a {node['type']!r} node: no device, fifo or socket may be staged"
+            for path, node in stage.manifest.items()
+            if node["type"] not in ("file", "dir", "symlink")
+        ]
+        + [
+            f"symlink {path} {problem}"
+            for path in links
+            if _within(path, "/a5") and (problem := outside(path, "/a5"))
+        ]
+        # An `import` line names no path, so it resolves outside /a5/src and is refused.
+        + [
+            f"{path} line {line!r} {problem}"
+            for path, line in pth_lines
+            if (problem := outside(str(PurePosixPath(path).parent / line), "/a5/src"))
+        ]
+        + [
+            f"/a5/meta/{name} is not one of {list(STAGE_META)}"
+            for name in stage.meta
+            if name not in STAGE_META
+        ]
+        + [
+            f"{path} is left in the stage (step 3e)"
+            for path in stage.manifest
+            if _within(path, f"/{DEB_CACHE}")
+        ]
+    )
+
+
+def manifest_diff(
+    first: Mapping[str, Mapping[str, Any]], second: Mapping[str, Mapping[str, Any]]
+) -> list[str]:
+    """Every path present in only one manifest or recorded differently in each."""
+    return sorted(
+        path for path in first.keys() | second.keys() if first.get(path) != second.get(path)
+    )
+
+
+def guest_stage_verify(root: Path, a5: Path, mounts: Collection[str]) -> list[str]:
+    """Write /a5/meta/stage-manifest.json and return why the stage may not boot."""
+    stage = scan_stage(root, a5, mounts)
+    # [LAW:effects-at-boundaries] The manifest is written as evidence whatever the
+    # judgement; its sha256 is STAGE_MANIFEST_SHA256 only on a stage with no problem.
+    (a5 / "meta" / "stage-manifest.json").write_bytes(_canonical(stage.manifest))
+    return stage_problems(stage)
+
+
+def deliver_debs(pool: Path, root: Path, debs: Sequence[Deb]) -> None:
+    """Step 3a: the downloaded pool equals the verified list exactly, then enters the root."""
+    present = {path.name: _deb(path) for path in pool.iterdir()}
+    expected = {
+        deb.file: {"file": deb.file, "size": deb.size, "sha256": deb.sha256} for deb in debs
+    }
+    problems = [
+        f"pool {name}: {present.get(name)} != verified {expected.get(name)}"
+        for name in sorted(present.keys() | expected.keys())
+        if present.get(name) != expected.get(name)
+    ]
+    if problems:
+        raise Q0Error("; ".join(problems))
+    cache = root / DEB_CACHE
+    cache.mkdir(parents=True)
+    for deb in debs:
+        shutil.copyfile(pool / deb.file, cache / deb.file)
 
 
 # --- CLI ----------------------------------------------------------------------------

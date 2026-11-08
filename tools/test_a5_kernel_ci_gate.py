@@ -14,11 +14,12 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import socket
 import subprocess
 import sys
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 import pytest
@@ -1293,3 +1294,174 @@ def test_ns_install_exposes_no_option_that_skips_the_boundary(
         main(["guest-stage", "ns-install", "--help"])
     options = {word for word in capsys.readouterr().out.split() if word.startswith("-")}
     assert options == {"-h,", "--help", "--expectations", "--root", "--host-netns", "--evidence"}
+
+
+# --- Stage manifest and pool delivery: discriminating tests 10, 27, 32 and the 38 stage item
+
+
+def _stage(tmp_path: Path) -> tuple[Path, Path]:
+    """A clean staged root and /a5 tree, with mountpoints the walk must not enter."""
+    root, a5 = tmp_path / "root", tmp_path / "a5"
+    for d in (root / "etc", root / "proc" / "1", a5 / "src" / "pkg", a5 / "venv" / "lib"):
+        d.mkdir(parents=True)
+    (root / "etc" / "passwd").write_text("root:x:0:0\n")
+    (root / "proc" / "1" / "status").write_text("mounted, never staged\n")
+    (root / "bin").symlink_to("usr/bin")
+    (a5 / "src" / "pkg" / "__init__.py").write_text("")
+    (a5 / "venv" / "lib" / "a5.pth").write_text("# comment\n../../src\n")
+    (a5 / "venv" / "python").symlink_to("/a5/src/pkg")
+    (a5 / "meta").mkdir()
+    for name in ("binding.env", "host.json", "host-env-origin.json"):
+        (a5 / "meta" / name).write_text(name)
+    return root, a5
+
+
+_MOUNTS = ("/proc",)
+
+
+def _stage_scan(tmp_path: Path) -> gate.Stage:
+    return gate.scan_stage(tmp_path / "root", tmp_path / "a5", _MOUNTS)
+
+
+def test_stage_manifest_records_the_stage_by_guest_path_and_judges_it_clean(
+    tmp_path: Path,
+) -> None:
+    root, a5 = _stage(tmp_path)
+    assert gate.guest_stage_verify(root, a5, _MOUNTS) == []
+    written = json.loads((a5 / "meta" / "stage-manifest.json").read_bytes())
+    assert sorted(written) == [
+        "/",
+        "/a5",
+        "/a5/src",
+        "/a5/src/pkg",
+        "/a5/src/pkg/__init__.py",
+        "/a5/venv",
+        "/a5/venv/lib",
+        "/a5/venv/lib/a5.pth",
+        "/a5/venv/python",
+        "/bin",
+        "/etc",
+        "/etc/passwd",
+    ]
+    status = (root / "etc" / "passwd").stat()
+    assert written["/etc/passwd"] == {
+        "type": "file",
+        "mode": status.st_mode & 0o7777,
+        "uid": status.st_uid,
+        "gid": status.st_gid,
+        "size": 11,
+        "sha256": _sha(b"root:x:0:0\n"),
+    }
+    assert written["/bin"]["target"] == "usr/bin"
+    # The guest's walk of the same tree gives the same bytes: equality needs no mapping.
+    assert gate.manifest_diff(_stage_scan(tmp_path).manifest, written) == []
+
+
+@pytest.mark.parametrize(
+    ("change", "path"),
+    [
+        (lambda r, a: (r / "etc" / "passwd").write_text("root:x:0:1\n"), "/etc/passwd"),
+        (lambda r, a: (r / "etc" / "passwd").chmod(0o600), "/etc/passwd"),
+        (lambda r, a: ((r / "bin").unlink(), (r / "bin").symlink_to("usr/sbin")), "/bin"),
+        (lambda r, a: (a / "src" / "extra.py").write_text(""), "/a5/src/extra.py"),
+        (lambda r, a: (a / "src" / "pkg" / "__init__.py").unlink(), "/a5/src/pkg/__init__.py"),
+    ],
+)
+def test_manifest_diff_names_one_changed_file_mode_or_symlink_target(
+    tmp_path: Path, change: Callable[[Path, Path], object], path: str
+) -> None:
+    root, a5 = _stage(tmp_path)
+    before = _stage_scan(tmp_path).manifest
+    change(root, a5)
+    assert gate.manifest_diff(before, _stage_scan(tmp_path).manifest) == [path]
+
+
+def test_stage_refuses_a_fifo_or_socket(tmp_path: Path) -> None:
+    root, a5 = _stage(tmp_path)
+    os.mkfifo(root / "etc" / "pipe")
+    with socket.socket(socket.AF_UNIX) as server:
+        server.bind(str(a5 / "src" / "sock"))
+        problems = gate.stage_problems(_stage_scan(tmp_path))
+    assert [p.split(" is ")[0] for p in problems] == ["/etc/pipe", "/a5/src/sock"]
+
+
+@pytest.mark.parametrize(
+    "target", ["/etc/passwd", "../../etc", "../venv/../..", "/a5/escape", "loop"]
+)
+def test_stage_refuses_a_symlink_under_a5_that_leaves_a5(tmp_path: Path, target: str) -> None:
+    _, a5 = _stage(tmp_path)
+    (a5 / "escape").symlink_to("/etc")  # judged on its own as well
+    (a5 / "src" / "link").symlink_to(target)
+    (a5 / "src" / "loop").symlink_to("loop")
+    problems = gate.stage_problems(_stage_scan(tmp_path))
+    assert any(p.startswith("symlink /a5/src/link ") for p in problems), problems
+    assert any(p.startswith("symlink /a5/escape ") for p in problems)
+
+
+def test_stage_accepts_symlinks_that_stay_in_a5_and_root_links_anywhere(tmp_path: Path) -> None:
+    root, a5 = _stage(tmp_path)
+    (a5 / "src" / "inside").symlink_to("../venv/python/__init__.py")
+    (root / "etc" / "abs").symlink_to("/usr/lib/os-release")
+    assert gate.stage_problems(_stage_scan(tmp_path)) == []
+
+
+@pytest.mark.parametrize("line", ["/usr/lib/python3/dist-packages", "../..", "import os"])
+def test_stage_refuses_a_pth_line_outside_a5_src(tmp_path: Path, line: str) -> None:
+    _, a5 = _stage(tmp_path)
+    (a5 / "venv" / "lib" / "a5.pth").write_text(f"../../src\n{line}\n")
+    problems = gate.stage_problems(_stage_scan(tmp_path))
+    assert problems == [
+        f"/a5/venv/lib/a5.pth line {line!r} resolves to "
+        f"{gate.resolve(str(PurePosixPath('/a5/venv/lib') / line), {})}, outside /a5/src"
+    ]
+
+
+def test_stage_refuses_an_a5_meta_entry_beyond_the_four(tmp_path: Path) -> None:
+    root, a5 = _stage(tmp_path)
+    (a5 / "meta" / "outcomes.json").write_text("{}")
+    assert gate.guest_stage_verify(root, a5, _MOUNTS) == [
+        f"/a5/meta/outcomes.json is not one of {list(gate.STAGE_META)}"
+    ]
+
+
+def test_stage_refuses_a_deb_cache_path_left_in_the_stage(tmp_path: Path) -> None:
+    root, _ = _stage(tmp_path)
+    (root / gate.DEB_CACHE).mkdir(parents=True)
+    assert gate.stage_problems(_stage_scan(tmp_path)) == [
+        "/var/cache/a5-debs is left in the stage (step 3e)"
+    ]
+
+
+def _pool(tmp_path: Path) -> tuple[Path, list[gate.Deb]]:
+    pool = tmp_path / "pool"
+    pool.mkdir()
+    for deb in _DEBS:
+        (pool / deb.file).write_bytes(deb.file.encode())
+    return pool, [gate.Deb(d.file, len(d.file), _sha(d.file.encode())) for d in _DEBS]
+
+
+def test_deliver_debs_copies_an_exactly_verified_pool_into_the_root(tmp_path: Path) -> None:
+    pool, debs = _pool(tmp_path)
+    gate.deliver_debs(pool, tmp_path / "root", debs)
+    cache = tmp_path / "root" / gate.DEB_CACHE
+    assert sorted(p.name for p in cache.iterdir()) == [d.file for d in debs]
+    assert all((cache / d.file).read_bytes() == d.file.encode() for d in debs)
+
+
+@pytest.mark.parametrize(
+    ("change", "name"),
+    [
+        (lambda pool: (pool / _DEBS[0].file).write_bytes(b"git_1_amd64.deX"), _DEBS[0].file),
+        (lambda pool: (pool / _DEBS[1].file).write_bytes(b"short"), _DEBS[1].file),
+        (lambda pool: (pool / "extra_1_all.deb").write_bytes(b"x"), "extra_1_all.deb"),
+        (lambda pool: (pool / _DEBS[0].file).unlink(), _DEBS[0].file),
+    ],
+)
+def test_deliver_debs_refuses_a_mismatched_extra_or_missing_file(
+    tmp_path: Path, change: Callable[[Path], object], name: str
+) -> None:
+    pool, debs = _pool(tmp_path)
+    change(pool)
+    with pytest.raises(gate.Q0Error, match=f"pool {name}:"):
+        gate.deliver_debs(pool, tmp_path / "root", debs)
+    assert not (tmp_path / "root").exists()
