@@ -655,6 +655,27 @@ def _install_ns_doc() -> dict[str, Any]:
     }
 
 
+def _binding_values() -> dict[str, str]:
+    """Run facts for every binding.env key the host writer does not derive itself."""
+    return {
+        key: ("9" * 64 if key.endswith("_SHA256") else f"v-{key}")
+        for key in gate.BINDING_ENV_KEYS
+        if key not in gate.DERIVED_BINDINGS
+    } | _IDENTITY
+
+
+def _records(**overrides: Any) -> gate.HostRecords[bytes]:
+    doc = _install_ns_doc()
+    args: dict[str, Any] = {
+        "values": _binding_values(),
+        "host": {"gcc": "gcc 15", "preflight": {"verdict": "fail"}},
+        "install": doc["install"],
+        "self_test": doc["self_test"],
+        "sentinel_sha256": {"home": "5" * 64},
+    }
+    return gate.host_records(**(args | overrides))
+
+
 class Q0(dict[str, Path]):
     """One consistent Q0 fixture: retained host records, a pre-launch marker, a fresh /out."""
 
@@ -671,14 +692,10 @@ class Q0(dict[str, Path]):
         )
 
     def binding_env(self, install_ns_sha256: str, **fields: str) -> bytes:
-        values = (
-            {
-                key: ("9" * 64 if key.endswith("_SHA256") else f"v-{key}")
-                for key in gate.BINDING_ENV_KEYS
-            }
-            | {k: v for k, v in _IDENTITY.items()}
-            | {"INSTALL_NS_SHA256": install_ns_sha256}
-        )
+        values = _binding_values() | {
+            "HOST_JSON_SHA256": "9" * 64,
+            "INSTALL_NS_SHA256": install_ns_sha256,
+        }
         return "".join(f"{k}={v}\n" for k, v in (values | fields).items()).encode()
 
     def observe(self) -> dict[str, Any]:
@@ -701,22 +718,25 @@ def q0(tmp_path: Path) -> Q0:
         directory.mkdir()
     paths |= {
         "install_ns": paths["host"] / "install-ns.json",
+        "host_json": paths["host"] / "host.json",
         "binding_env": paths["host"] / "binding.env",
         "host_stage": paths["host"] / "host-stage.json",
         "launched": paths["host"] / "launched",
     }
-    paths["install_ns"].write_text(json.dumps(_install_ns_doc()))
-    env = paths.binding_env(_sha(paths["install_ns"].read_bytes()))
-    paths["binding_env"].write_bytes(env)
-    paths["host_stage"].write_text(json.dumps({"binding_env_sha256": _sha(env)}))
+    # The real host writer produces the records every Q0 test starts from.
+    gate.write_host_records(
+        _records(),
+        gate.HostRecords(
+            paths["install_ns"], paths["host_json"], paths["binding_env"], paths["host_stage"]
+        ),
+    )
     paths["launched"].touch()
     paths.observation()
     return paths
 
 
 def _completed_nothing(record: dict[str, Any]) -> None:
-    assert record["bindings_verified"] is False and record["problems"]
-    assert "completed_observation" not in record
+    assert record["completed_observation"] is False and record["problems"]
 
 
 # Group 1: the passing control.
@@ -724,7 +744,7 @@ def test_q0_fresh_bound_observation_completes(q0: Q0) -> None:
     record = q0.observe()
     assert record == {
         "observation_sha256": _sha((q0["out"] / "observation.json").read_bytes()),
-        "bindings_verified": True,
+        "completed_observation": True,
         "problems": [],
     }
     verify = json.loads((q0["evidence"] / "binding-verify.json").read_text())
@@ -964,6 +984,95 @@ def test_q0_bindings_over_a_failed_install_claim_no_completed_observation(q0: Q0
     record = q0.observe()
     _completed_nothing(record)
     assert record["problems"] == ["install-binding: install: dpkg exit 1 is not 0"]
+
+
+# --- Host records (bindings_crossing_guest; reviewer F7, discriminating test 42) -------
+
+
+def test_host_records_round_trip_every_binding_key() -> None:
+    records = _records()
+    env = gate.parse_binding_env(records.binding_env)
+    assert list(env) == list(gate.BINDING_ENV_KEYS)
+    assert env == _binding_values() | {
+        "HOST_JSON_SHA256": _sha(records.host_json),
+        "INSTALL_NS_SHA256": _sha(records.install_ns),
+    }
+    host = json.loads(records.host_json)
+    assert host["INSTALL_NS_SHA256"] == env["INSTALL_NS_SHA256"]
+    assert "binding_env_sha256" not in host
+    assert json.loads(records.install_ns) == _install_ns_doc()
+    assert gate.evaluate_install_ns(records.install_ns, _DEBS) == []
+    assert json.loads(records.host_stage) == {
+        "binding_env_sha256": _sha(records.binding_env),
+        "sentinel_sha256": {"home": "5" * 64},
+    }
+
+
+def _without(key: str) -> dict[str, str]:
+    return {k: v for k, v in _binding_values().items() if k != key}
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        pytest.param(_without("CI_REF"), id="missing"),
+        pytest.param(_binding_values() | {"EXTRA": "1"}, id="extra"),
+        pytest.param(_binding_values() | {"INSTALL_NS_SHA256": "a" * 64}, id="derived-supplied"),
+        pytest.param(_binding_values() | {"HOST_ENV_SHA256": "A" * 64}, id="uppercase-hash"),
+        pytest.param(_binding_values() | {"CI_REF": ""}, id="empty"),
+        pytest.param(_binding_values() | {"CI_REF": "a\nCI_HEAD=b"}, id="multi-line"),
+    ],
+)
+def test_host_records_refuse_values_outside_the_schema(values: dict[str, str]) -> None:
+    with pytest.raises(gate.Q0Error):
+        _records(values=values)
+
+
+def test_host_records_refuse_a_supplied_host_json_install_hash() -> None:
+    with pytest.raises(gate.Q0Error, match="derived"):
+        _records(host={"INSTALL_NS_SHA256": "a" * 64})
+
+
+def _install_line(data: bytes) -> bytes:
+    return next(line for line in data.splitlines(True) if line.startswith(b"INSTALL_NS_SHA256="))
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        pytest.param(lambda d: d.replace(_install_line(d), b""), id="no-INSTALL_NS_SHA256"),
+        pytest.param(lambda d: d + b"EXTRA=1\n", id="extra-key"),
+        pytest.param(lambda d: d.replace(_install_line(d), _install_line(d).upper()), id="upper"),
+        pytest.param(lambda d: d.replace(_install_line(d), b"INSTALL_NS_SHA256=abc\n"), id="short"),
+    ],
+)
+def test_parse_binding_env_refuses_writer_output_altered(mutate: Callable[[bytes], bytes]) -> None:
+    with pytest.raises(gate.Q0Error):
+        gate.parse_binding_env(mutate(_records().binding_env))
+
+
+def test_guest_env_names_are_exactly_the_schema_plus_the_fixed_variables() -> None:
+    names = [*gate.BINDING_ENV_KEYS, *gate.FIXED_GUEST_ENV]
+    assert gate.guest_env_problems(names) == []
+    assert gate.guest_env_problems([n for n in names if n != "INSTALL_NS_SHA256"]) == [
+        "guest environment lacks INSTALL_NS_SHA256"
+    ]
+    assert gate.guest_env_problems([*names, "GITHUB_TOKEN"]) == [
+        "guest environment has GITHUB_TOKEN outside the allowlist"
+    ]
+
+
+def test_written_host_records_are_the_composed_bytes(tmp_path: Path) -> None:
+    records = _records()
+    names = ("install-ns.json", "host.json", "binding.env", "host-stage.json")
+    paths = gate.HostRecords(*(tmp_path / name for name in names))
+    gate.write_host_records(records, paths)
+    assert [(tmp_path / name).read_bytes() for name in names] == [
+        records.install_ns,
+        records.host_json,
+        records.binding_env,
+        records.host_stage,
+    ]
 
 
 # --- Install boundary (guest_package_closure step 3) ----------------------------------

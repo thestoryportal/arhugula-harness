@@ -37,8 +37,8 @@ import stat
 import subprocess
 import sys
 import xml.etree.ElementTree as ET
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass, fields
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
@@ -652,8 +652,8 @@ def check(
 #
 # Provisional record contract from correction-8 (proposal 09276d9f):
 # design.bindings_crossing_guest, guest_package_closure step 3h and
-# qualification_sequence.Q0_observation. The guest `observe` producer, reviewed input
-# pins and the CI job are not built yet, so nothing calls these outside their tests.
+# qualification_sequence.Q0_observation. The guest `observe` producer and the CI job
+# are not built yet, so nothing calls these outside their tests.
 
 # The one binding.env schema: the host writer, the guest and these checks share it.
 BINDING_ENV_KEYS = (
@@ -683,6 +683,19 @@ BINDING_ENV_KEYS = (
 # What binds one observation to one run: the host's tested commit, run and attempt, and
 # the reviewed inputs it was built from.
 Q0_IDENTITY = ("CI_TESTED", "GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT", "INPUTS_SHA256")
+# The guest's whole environment besides binding.env (pytest_and_aggregate.guest_workdir).
+FIXED_GUEST_ENV = {
+    "PATH": "/a5/venv/bin:/usr/bin:/bin",
+    "VIRTUAL_ENV": "/a5/venv",
+    "HOME": "/out/home",
+    "TMPDIR": "/out/tmp",
+    "COVERAGE_FILE": "/out/.coverage",
+    "PYTHONNOUSERSITE": "1",
+    "PYTHONDONTWRITEBYTECODE": "1",
+    "LANG": "C.UTF-8",
+}
+# Hashes of host records written before binding.env; only the writer computes them.
+DERIVED_BINDINGS = ("HOST_JSON_SHA256", "INSTALL_NS_SHA256")
 _HEX64 = re.compile(r"[0-9a-f]{64}")
 
 
@@ -735,6 +748,67 @@ def parse_binding_env(data: bytes) -> Mapping[str, str]:
         if key.endswith("_SHA256"):
             _hex64(env, key, "binding.env")
     return env
+
+
+def guest_env_problems(names: Iterable[str]) -> list[str]:
+    """The isolation env-name check: exactly the binding.env schema plus the fixed set."""
+    # [LAW:one-source-of-truth] Derived from BINDING_ENV_KEYS, so a name the schema drops
+    # is refused here too; any token or runner name is simply outside the set.
+    expected, actual = set(BINDING_ENV_KEYS) | FIXED_GUEST_ENV.keys(), set(names)
+    return [f"guest environment lacks {name}" for name in sorted(expected - actual)] + [
+        f"guest environment has {name} outside the allowlist" for name in sorted(actual - expected)
+    ]
+
+
+def _canonical(record: Mapping[str, Any]) -> bytes:
+    return (json.dumps(record, indent=2, sort_keys=True) + "\n").encode()
+
+
+@dataclass(frozen=True)
+class HostRecords[T]:
+    """The host's binding records, in write order: each one names the hashes before it."""
+
+    install_ns: T
+    host_json: T
+    binding_env: T
+    host_stage: T
+
+
+def host_records(
+    values: Mapping[str, str],
+    host: Mapping[str, Any],
+    install: Mapping[str, Any],
+    self_test: Mapping[str, Any],
+    sentinel_sha256: Mapping[str, str],
+) -> HostRecords[bytes]:
+    """Compose install-ns.json, host.json, binding.env and host-stage.json from run facts."""
+    supplied = sorted(values)
+    if supplied != sorted(set(BINDING_ENV_KEYS) - set(DERIVED_BINDINGS)):
+        raise Q0Error(f"binding values {supplied} are not the schema less {DERIVED_BINDINGS}")
+    install_ns = _canonical({"install": install, "self_test": self_test})
+    if "INSTALL_NS_SHA256" in host:
+        raise Q0Error("host.json INSTALL_NS_SHA256 is derived, not supplied")
+    host_json = _canonical({**host, "INSTALL_NS_SHA256": _sha256(install_ns)})
+    # [LAW:no-ambient-temporal-coupling] binding.env is built from the bytes of the two
+    # earlier records, so it cannot exist before them or name other bytes.
+    env = {
+        **values,
+        "HOST_JSON_SHA256": _sha256(host_json),
+        "INSTALL_NS_SHA256": _sha256(install_ns),
+    }
+    binding_env = "".join(f"{key}={env[key]}\n" for key in BINDING_ENV_KEYS).encode()
+    # [LAW:single-enforcer] The writer's output passes the one parser or no record is
+    # produced: a missing, empty, multi-line or malformed value fails here.
+    parse_binding_env(binding_env)
+    host_stage = _canonical(
+        {"binding_env_sha256": _sha256(binding_env), "sentinel_sha256": dict(sentinel_sha256)}
+    )
+    return HostRecords(install_ns, host_json, binding_env, host_stage)
+
+
+def write_host_records(records: HostRecords[bytes], paths: HostRecords[Path]) -> None:
+    for field in fields(HostRecords):
+        getattr(paths, field.name).write_bytes(getattr(records, field.name))
 
 
 @dataclass(frozen=True)
@@ -1115,15 +1189,15 @@ def q0_observe(
     install_ns: Path,
     debs: Sequence[Deb],
 ) -> dict[str, Any]:
-    """Collect, binding-verify, install-binding: the host-side bindings of one observation.
+    """Collect, then binding-verify, then install-binding (reviewer F8-R1).
 
-    A completed observation also needs the F8-R1 sequencing and the guest producer (Q0b),
-    so this result never claims one.
+    The observation is completed only when all three pass; the guest having written
+    observation.json is never enough.
     """
     try:
         observation = q0_collect(out, launched, identity, evidence)
     except Q0Error as exc:
-        return {"bindings_verified": False, "problems": [f"collect: {exc}"]}
+        return {"completed_observation": False, "problems": [f"collect: {exc}"]}
     guest = evidence / "observation.json"
     # [LAW:dataflow-not-control-flow] Both binding checks always run and persist their
     # evidence; a failure in either leaves the collected file but fails the bindings.
@@ -1140,7 +1214,7 @@ def q0_observe(
     problems = [f"{name}: {p}" for name, check in checks.items() for p in check["problems"]]
     return {
         "observation_sha256": observation.sha256,
-        "bindings_verified": not problems,
+        "completed_observation": not problems,
         "problems": problems,
     }
 
