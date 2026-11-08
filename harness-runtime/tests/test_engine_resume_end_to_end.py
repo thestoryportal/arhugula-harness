@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 import sys
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +24,7 @@ from harness_is.state_ledger_write import read_ledger
 from harness_runtime import bootstrap as bootstrap_module
 from harness_runtime.api import resume, run
 from harness_runtime.lifecycle.engine_recovery_loop import RuntimeEngineRecoveryLoop
+from harness_runtime.resume_refusal import ClaimRefusal
 
 from .integration.test_r_cc_1_api_resume import (
     _patched_runtime,  # noqa: F401  # pyright: ignore[reportPrivateUsage, reportUnusedImport]
@@ -36,6 +37,13 @@ from .test_b104_root_resume_facade import (
     _durable_filesystem,  # noqa: F401  # pyright: ignore[reportPrivateUsage, reportUnusedImport]
     _outcome,  # pyright: ignore[reportPrivateUsage]
     _Workflow,  # pyright: ignore[reportPrivateUsage]
+)
+from .test_daemon_mcp_resume import (
+    _daemon,  # pyright: ignore[reportPrivateUsage]
+    _from_body,  # pyright: ignore[reportPrivateUsage]
+    _refusal,  # pyright: ignore[reportPrivateUsage]
+    _resume,  # pyright: ignore[reportPrivateUsage]
+    _run_result,  # pyright: ignore[reportPrivateUsage]
 )
 from .test_state_placement import world  # noqa: F401  (fixture: scratch dir with no .git above)
 
@@ -262,3 +270,29 @@ async def test_a_later_snapshot_outranks_an_earlier_engine_locator(
     assert (result.status, seen.run_ids[-1]) == ("completed", "run-snapshot")
     assert seen.outcomes == []
     _assert_refused(again, "claim-refused")
+
+
+@pytest.mark.asyncio
+async def test_the_daemon_resumes_a_reconciler_pause_once_and_refuses_a_repeat_during_and_after(
+    harness: Harness, seen: _Observed
+) -> None:
+    run_id = await _paused_at_step_1(harness, seen, EngineClass.RECONCILER_LOOP)
+    during: list[Callable[[], None]] = []
+    resumed = _Dispatcher(lambda: during[0]())
+    replies: list[Any] = []
+
+    async with _daemon(harness.config, _workflow(EngineClass.RECONCILER_LOOP, resumed)) as session:
+        during.append(
+            _from_body(session, "resume_workflow", {"workflow_id": _WORKFLOW_ID}, replies)
+        )
+        result = _run_result(await _resume(session, _WORKFLOW_ID))
+        after = _refusal(await _resume(session, _WORKFLOW_ID))
+
+    assert (result["run_id"], resumed.steps) == (run_id, ["step-1"])
+    assert seen.outcomes == [ResumeOutcomeKind.RESUME_CLEAN]
+    assert seen.resume_attempts() == 1
+    # The body runs only after its claim's `started` frame is durable, so the shared claim store
+    # already reports the record as used while it runs; `claim-busy` is its pre-claim lease window.
+    during_run = _refusal(replies[0])
+    assert isinstance(during_run, ClaimRefusal) and isinstance(after, ClaimRefusal)
+    assert (during_run.reason.value, after.reason.value) == ("claim-refused", "claim-refused")
