@@ -59,6 +59,7 @@ from harness_runtime.lifecycle.audit_signing_fail_closed_validation import (
 )
 from harness_runtime.lifecycle.cacheable_epoch import select_cache_ttl
 from harness_runtime.lifecycle.child_workflow_runner import compose_child_workflow_runner
+from harness_runtime.lifecycle.declarative_step_dispatcher import DeclarativeStepDispatcher
 from harness_runtime.lifecycle.durable_child_admission import RefuseDurableChildAdmission
 from harness_runtime.lifecycle.engine_output_store import (
     EngineOutputStore,
@@ -803,7 +804,12 @@ async def execute(
     # chain). The CP driver then raises StepKindDispatcherNotBoundError if such a
     # step is ever dispatched — unreachable, because the `requires_inference`
     # predicate reads these same `workflow.steps`.
-    dispatchers: dict[StepKind, Any] = {StepKind.TOOL_STEP: tool_step_dispatcher}
+    # A DECLARATIVE_STEP returns its payload-declared output and touches nothing, so it is
+    # bound provider-free alongside TOOL_STEP rather than under `requires_inference`.
+    dispatchers: dict[StepKind, Any] = {
+        StepKind.TOOL_STEP: tool_step_dispatcher,
+        StepKind.DECLARATIVE_STEP: DeclarativeStepDispatcher(),
+    }
     if ctx.requires_inference:
         dispatchers[StepKind.INFERENCE_STEP] = inference_step_dispatcher
         dispatchers[StepKind.SUB_AGENT_DISPATCH] = sub_agent_step_dispatcher

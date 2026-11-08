@@ -1708,6 +1708,9 @@ def apt_private(work: Path, root: Path, keyring: Path, archive: ArchiveInput) ->
         "Dir::Etc::trustedparts": f"{work}/empty",
         "Dir::Etc::preferencesparts": f"{work}/empty",
         "APT::Architecture": "amd64",
+        # [LAW:one-source-of-truth] Match the strict URI/index SHA256 comparison;
+        # apt's print-uris otherwise selects MD5Sum for compatibility.
+        "Acquire::ForceHash": "SHA256",
     }
     return {
         "apt.conf": "".join(f'{key} "{value}";\n' for key, value in settings.items())

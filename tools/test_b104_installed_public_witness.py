@@ -32,6 +32,10 @@ from harness_is.pause_journal_root import UnresolvedCause
 from harness_is.state_ledger_entry_schema import Identifier
 from harness_runtime.config import state_placement
 from harness_runtime.lifecycle import journal_workflow_pause_store as journal_module
+from harness_runtime.lifecycle.installation_state import (
+    installation_state_bound,
+    installation_state_path,
+)
 from harness_runtime.lifecycle.pause_journal_root_resolver import (
     INSTALLATION_STATE,
     STORAGE_UNSELECTED,
@@ -2173,7 +2177,7 @@ while True:
 
 
 def test_b104_run_retries_a_tool_server_whose_acquisition_and_first_cleanup_failed(
-    tmp_path: Path, alias: Alias, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, alias: Alias, monkeypatch: pytest.MonkeyPatch, carrier: Path
 ) -> None:
     """R1: the server stays reachable by the later, independent finalizer of B104's own run."""
 
@@ -2190,6 +2194,7 @@ def test_b104_run_retries_a_tool_server_whose_acquisition_and_first_cleanup_fail
     monkeypatch.setattr(w, "checked_candidate", candidate)
     monkeypatch.setattr(w, "checked_provenance", no_wheels)
     monkeypatch.setattr(w, "checked_scenario_root", no_placement)
+    monkeypatch.setattr(w, "installation_carrier", lambda *_args: carrier)
     failures: list[int] = []
 
     def no_descriptor_left(pid: int) -> None:
@@ -2759,12 +2764,20 @@ def test_the_expected_distribution_version_is_the_workspace_version() -> None:
 # --- the recording seam: A's provenance exists before its held body ----------------------
 
 
+@pytest.fixture
+def carrier(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """This interpreter's carrier, relocated under a scratch `sys.prefix` the test owns."""
+    prefix = tmp_path / "prefix"
+    prefix.mkdir()
+    monkeypatch.setattr(sys, "prefix", str(prefix))
+    return installation_state_path()
+
+
 def test_run_phase_writes_the_provenance_record_before_the_body_and_the_result_after(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, carrier: Path
 ) -> None:
     layout = w.Layout(tmp_path)
     layout.results.mkdir()
-    w.write_json_new(layout.installation_state, w.installation_declaration(layout))
     seen: dict[str, Any] = {}
 
     def body(_layout: w.Layout) -> dict[str, object]:
@@ -2776,13 +2789,14 @@ def test_run_phase_writes_the_provenance_record_before_the_body_and_the_result_a
 
     monkeypatch.setitem(w.PHASE_BODIES, "resume-a", body)
 
-    code = w.run_phase(layout, "resume-a", lambda: {"installed_origins": {}, "marker": "p"})
+    with w.installation_state_provisioned(carrier, w.installation_declaration(layout)):
+        code = w.run_phase(layout, "resume-a", lambda: {"installed_origins": {}, "marker": "p"})
 
     assert code == 0
     assert seen == {
         "record_existed": True,
         "result_existed": False,
-        # The body ran under exactly the operator's one declaration, bound from its file.
+        # The body ran under exactly the operator's one declaration, read from the carrier.
         "installation": InstallationState(({"installation_root": str(layout.installation_root)},)),
     }
     assert INSTALLATION_STATE.get() == STORAGE_UNSELECTED  # unbound again after the body
@@ -2796,11 +2810,10 @@ def test_run_phase_writes_the_provenance_record_before_the_body_and_the_result_a
 
 
 def test_a_killed_held_a_leaves_its_provenance_record_and_no_result(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, carrier: Path
 ) -> None:
     layout = w.Layout(tmp_path)
     layout.results.mkdir()
-    w.write_json_new(layout.installation_state, w.installation_declaration(layout))
 
     class Killed(BaseException):
         """Stands in for SIGKILL: nothing after the body's start is recorded."""
@@ -2810,7 +2823,10 @@ def test_a_killed_held_a_leaves_its_provenance_record_and_no_result(
 
     monkeypatch.setitem(w.PHASE_BODIES, "resume-a", body)
 
-    with pytest.raises(Killed):
+    with (
+        w.installation_state_provisioned(carrier, w.installation_declaration(layout)),
+        pytest.raises(Killed),
+    ):
         w.run_phase(layout, "resume-a", lambda: {"installed_origins": {}})
 
     assert layout.provenance_record("resume-a").exists()
@@ -3025,16 +3041,23 @@ def test_record_refuses_an_unresolved_installation_before_any_journal_access(
     assert raised.value.cause is cause
 
 
-def test_a_phase_without_the_operator_declaration_fails_before_its_body(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_a_phase_without_an_operator_carrier_refuses_before_any_journal_access(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, carrier: Path
 ) -> None:
     layout = w.Layout(tmp_path)
     layout.results.mkdir()
-    monkeypatch.setitem(w.PHASE_BODIES, "capture", JournalUntouchable)
+    monkeypatch.setattr(journal_module, "JournalWorkflowPauseStore", JournalUntouchable)
+    monkeypatch.setitem(
+        w.PHASE_BODIES,
+        "capture",
+        lambda _layout: w._record(witness_config(tmp_path)),  # pyright: ignore[reportPrivateUsage]
+    )
 
-    with pytest.raises(FileNotFoundError):
+    with pytest.raises(PauseJournalRootUnresolvedError) as raised:
         w.run_phase(layout, "capture", lambda: {"installed_origins": {}})
 
+    assert not os.path.lexists(carrier)  # nothing provisioned it, and the Runtime never writes it
+    assert raised.value.cause is UnresolvedCause.UNBOUND
     assert json.loads(layout.result("capture").read_text())["ok"] is False
 
 
@@ -3043,35 +3066,38 @@ def test_a_phase_without_the_operator_declaration_fails_before_its_body(
     UNRESOLVED_INSTALLATIONS.items(),
     ids=[c.value for c in UNRESOLVED_INSTALLATIONS],
 )
-def test_an_unresolved_declaration_file_refuses_before_any_journal_access(
+def test_an_unresolved_carrier_refuses_before_any_journal_access(
     cause: UnresolvedCause,
     roots: Callable[[Path], tuple[Path, ...]],
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    carrier: Path,
 ) -> None:
     monkeypatch.setattr(journal_module, "JournalWorkflowPauseStore", JournalUntouchable)
-    layout = w.Layout(tmp_path)
     declarations = [{"installation_root": str(root)} for root in roots(tmp_path)]
-    w.write_json_new(layout.installation_state, {"pause_journal_root_declarations": declarations})
+    document = {"pause_journal_root_declarations": declarations}
 
-    with w.installation_bound(layout), pytest.raises(PauseJournalRootUnresolvedError) as raised:
+    with (
+        w.installation_state_provisioned(carrier, document),
+        installation_state_bound(),
+        pytest.raises(PauseJournalRootUnresolvedError) as raised,
+    ):
         w._record(witness_config(tmp_path))  # pyright: ignore[reportPrivateUsage]
 
     assert raised.value.cause is cause
 
 
 def operator_layout(root: Path) -> w.Layout:
-    """A scenario root as the parent leaves it: real operator TOML and its one declaration."""
+    """A scenario root as the parent leaves it: real operator TOML (its carrier is separate)."""
     layout = w.Layout(root)
     for directory in (layout.root, layout.repo, layout.home):
         directory.mkdir(mode=0o700)
     w.write_new(layout.config, w.config_text(layout, 4101, 4102))
-    w.write_json_new(layout.installation_state, w.installation_declaration(layout))
     return layout
 
 
 def test_a_declared_root_overlapping_a_configured_binding_refuses_before_any_journal_access(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, carrier: Path
 ) -> None:
     monkeypatch.setattr(journal_module, "JournalWorkflowPauseStore", JournalUntouchable)
     layout = operator_layout(tmp_path / "scenario")
@@ -3080,9 +3106,12 @@ def test_a_declared_root_overlapping_a_configured_binding_refuses_before_any_jou
     overlapping = {
         "pause_journal_root_declarations": [{"installation_root": str(layout.ledger_dir)}]
     }
-    layout.installation_state.write_text(json.dumps(overlapping), encoding="utf-8")
 
-    with w.installation_bound(layout), pytest.raises(PauseJournalRootUnresolvedError) as raised:
+    with (
+        w.installation_state_provisioned(carrier, overlapping),
+        installation_state_bound(),
+        pytest.raises(PauseJournalRootUnresolvedError) as raised,
+    ):
         w._record(w._config(layout))  # pyright: ignore[reportPrivateUsage]
 
     assert raised.value.cause is UnresolvedCause.OVERLAPPING
@@ -3093,27 +3122,154 @@ import os, sys
 from pathlib import Path
 sys.path.insert(0, sys.argv[1])
 import b104_installed_public_witness as w
+from harness_runtime.lifecycle.installation_state import installation_state_bound
 from harness_runtime.lifecycle.pause_journal_root_resolver import resolve_pause_journal_root
 
 layout = w.Layout(Path(sys.argv[2]))
-with w.installation_bound(layout):
+sys.prefix = sys.argv[3]  # the interpreter whose carrier the parent provisioned
+with installation_state_bound():
     print(os.path.realpath(resolve_pause_journal_root(w._config(layout))))
 """
 
 
-def test_a_fresh_process_binding_the_same_declaration_resolves_the_provisioned_root(
-    tmp_path: Path,
+def test_a_fresh_process_reading_the_same_carrier_resolves_the_provisioned_root(
+    tmp_path: Path, carrier: Path
 ) -> None:
     layout = operator_layout(tmp_path / "scenario")
-    with w.installation_bound(layout):
-        provisioned = w.phase_provision(layout)["installation_root"]
-
-    fresh = subprocess.run(
-        [sys.executable, "-c", FRESH_RESOLVER, str(Path(w.__file__).parent), str(layout.root)],
-        capture_output=True,
-        text=True,
-        check=True,
-        timeout=60,
-    )
+    with w.installation_state_provisioned(carrier, w.installation_declaration(layout)):
+        with installation_state_bound():
+            provisioned = w.phase_provision(layout)["installation_root"]
+        fresh = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                FRESH_RESOLVER,
+                str(Path(w.__file__).parent),
+                str(layout.root),
+                sys.prefix,
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=60,
+        )
 
     assert fresh.stdout.strip() == provisioned == os.path.realpath(layout.installation_root)
+
+
+# --- operator preparation: the parent provisions the Runtime's own carrier ---------------
+
+DECLARATION = {"pause_journal_root_declarations": [{"installation_root": "/declared"}]}
+
+
+def test_the_parent_asks_the_launched_runtime_for_its_carrier() -> None:
+    assert w.installation_carrier([sys.executable, "-I"], {}) == installation_state_path()
+
+
+def test_provisioning_creates_the_carrier_new_and_removes_only_what_it_created(
+    carrier: Path,
+) -> None:
+    prefix = Path(sys.prefix)
+    with w.installation_state_provisioned(carrier, DECLARATION):
+        assert json.loads(carrier.read_text()) == DECLARATION
+
+    assert list(prefix.iterdir()) == []  # etc/ and etc/arhugula/ were created here, so removed
+
+
+def test_provisioning_keeps_an_operator_directory_it_did_not_create(carrier: Path) -> None:
+    carrier.parent.mkdir(parents=True)
+    with w.installation_state_provisioned(carrier, DECLARATION):
+        pass
+
+    assert carrier.parent.is_dir() and not os.path.lexists(carrier)
+
+
+def test_an_existing_carrier_refuses_before_the_body_and_stays_untouched(carrier: Path) -> None:
+    carrier.parent.mkdir(parents=True)
+    carrier.write_text("the operator's own document")
+
+    with pytest.raises(FileExistsError), w.installation_state_provisioned(carrier, DECLARATION):
+        raise AssertionError("the body ran over an existing carrier")
+
+    assert carrier.read_text() == "the operator's own document"
+
+
+@pytest.mark.parametrize("how", ("renamed-over", "rewritten-in-place"))
+def test_a_replaced_carrier_refuses_removal_and_survives(carrier: Path, how: str) -> None:
+    with (
+        pytest.raises(RuntimeError, match="replaced"),
+        w.installation_state_provisioned(carrier, DECLARATION),
+    ):
+        if how == "renamed-over":
+            other = carrier.with_name("other.json")
+            other.write_text("someone else's document")
+            other.replace(carrier)
+        else:  # the same inode, so only its content shows the change
+            carrier.write_text("someone else's document")
+
+    assert carrier.read_text() == "someone else's document"
+
+
+def _failing_fsync(fd: int) -> None:
+    raise OSError(errno.EIO, "injected fsync failure")
+
+
+@pytest.mark.parametrize("existing", ([], ["etc", "etc/arhugula"]))
+def test_a_failed_carrier_write_leaves_only_what_existed_before(
+    carrier: Path, monkeypatch: pytest.MonkeyPatch, existing: list[str]
+) -> None:
+    prefix = Path(sys.prefix)
+    for directory in existing:
+        (prefix / directory).mkdir()
+    monkeypatch.setattr(os, "fsync", _failing_fsync)
+
+    with (
+        pytest.raises(OSError, match="injected"),
+        w.installation_state_provisioned(carrier, DECLARATION),
+    ):
+        raise AssertionError("the body ran without a carrier")
+
+    assert sorted(str(p.relative_to(prefix)) for p in prefix.rglob("*")) == existing
+
+
+@pytest.mark.parametrize("write_fails", (False, True))
+def test_a_carrier_replaced_while_it_is_written_survives(
+    carrier: Path, monkeypatch: pytest.MonkeyPatch, write_fails: bool
+) -> None:
+    carrier.parent.mkdir(parents=True)
+
+    def replace_then_return_or_fail(fd: int) -> None:
+        other = carrier.with_name("other.json")
+        other.write_text("someone else's document")
+        other.replace(carrier)
+        if write_fails:
+            _failing_fsync(fd)
+
+    monkeypatch.setattr(os, "fsync", replace_then_return_or_fail)
+
+    with (
+        pytest.raises(RuntimeError, match="replaced"),
+        w.installation_state_provisioned(carrier, DECLARATION),
+    ):
+        pass
+
+    assert carrier.read_text() == "someone else's document"
+
+
+def test_a_new_file_replaced_before_its_rollback_refuses_removal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "new.json"
+
+    def replace_then_fail(fd: int) -> None:
+        other = tmp_path / "other.json"
+        other.write_text("someone else's document")
+        other.replace(path)
+        _failing_fsync(fd)
+
+    monkeypatch.setattr(os, "fsync", replace_then_fail)
+
+    with pytest.raises(RuntimeError, match="replaced"):
+        w.write_new(path, "mine")
+
+    assert path.read_text() == "someone else's document"

@@ -172,8 +172,9 @@ PLAN = {
     "attempts": 1,
     "state_root": "one new non-tmpfs directory per scenario, outside every Git checkout",
     "installation_state": (
-        "per scenario the parent, as installation operator, declares one pause-journal root "
-        "inside its state root; each child binds that declaration; not retained storage"
+        "per scenario the parent, as installation operator, creates the interpreter's carrier "
+        "declaring one pause-journal root inside its state root, refusing an existing one, and "
+        "removes only what it created; children read it; not retained storage"
     ),
     "outcome": "PASS needs every case; a single timed-out phase is INCONCLUSIVE; else FAIL",
     "s5": "process/filesystem behaviour only; says nothing about VM reset durability",
@@ -202,11 +203,6 @@ class Layout:
     def installation_root(self) -> Path:
         """The declared pause-journal root: inside the state root, beside its ledger."""
         return self.state_root / "installation-pause-journal"
-
-    @property
-    def installation_state(self) -> Path:
-        """The one installation-state declaration file the parent writes for every child."""
-        return self.root / "installation-state.json"
 
     @property
     def home(self) -> Path:
@@ -960,7 +956,10 @@ def run_phase(layout: Layout, phase: str, prove: Callable[[], dict[str, object]]
                     "loaded_harness_modules": len(loaded_before),
                 },
             )
-        with HELPERS.installation_bound(layout):
+        from harness_runtime.lifecycle.installation_state import installation_state_bound
+
+        # Phases outside a public ingress read the same carrier the ingresses read.
+        with installation_state_bound():
             observed = PHASE_BODIES[phase](layout)
         record: dict[str, object] = {"phase": phase, "ok": True, "observed": observed}
         if evidence is not None:
@@ -982,7 +981,6 @@ def run_phase(layout: Layout, phase: str, prove: Callable[[], dict[str, object]]
 def prepare_layout(layout: Layout) -> None:
     for directory in (layout.root, layout.repo, layout.home, layout.tmp, layout.results):
         directory.mkdir(mode=0o700, parents=True)
-    HELPERS.write_json_new(layout.installation_state, HELPERS.installation_declaration(layout))
 
 
 Launcher = Callable[[str], Child]
@@ -1514,10 +1512,7 @@ def rehearse(
     deadline = time.monotonic() + OVERALL_CAP_SECONDS
     evidence: dict[str, dict[str, object]] = {}
     fleet, servers = Fleet(), Fleet()
-    with term_as_interrupt(), Owners() as outer:
-        # The later, independent finalizers: they retry any group whose first cleanup failed.
-        outer.callback(servers.settle_all)
-        outer.callback(fleet.settle_all)
+    with term_as_interrupt():
         for name in SCENARIOS:
             layout = Layout(root / name)
             prepare_layout(layout)
@@ -1527,6 +1522,7 @@ def rehearse(
                 **HELPERS.child_env(layout),
                 "PYTHONPATH": os.pathsep.join(str(p) for p in product_src),
             }
+            carrier = HELPERS.installation_carrier([str(python)], env)
             fixed = ["--scenario", str(layout.root)]
 
             def launch(
@@ -1541,17 +1537,27 @@ def rehearse(
                 argv = child_argv_source(python, helper, name, phase, fixed)
                 return HELPERS.spawn(argv, env, layout.tmp, logs, f"{name}-{phase}", fleet.own)
 
-            evidence[name] = with_services(
-                layout,
-                python,
-                logs,
-                deadline,
-                fleet,
-                servers,
-                lambda capture, ollama, name=name, layout=layout, launch=launch: run_scenario(
-                    name, layout, launch, capture, ollama, deadline
+            # The scenario's carrier outlives its fleets' independent finalizers, which retry
+            # any group whose first cleanup failed, so no child outlives the declaration it read.
+            with (
+                HELPERS.installation_state_provisioned(
+                    carrier, HELPERS.installation_declaration(layout)
                 ),
-            )
+                Owners() as outer,
+            ):
+                outer.callback(servers.settle_all)
+                outer.callback(fleet.settle_all)
+                evidence[name] = with_services(
+                    layout,
+                    python,
+                    logs,
+                    deadline,
+                    fleet,
+                    servers,
+                    lambda capture, ollama, name=name, layout=layout, launch=launch: run_scenario(
+                        name, layout, launch, capture, ollama, deadline
+                    ),
+                )
             evidence[name]["ledger_dir"] = str(layout.ledger_dir)
     return evidence
 
@@ -1599,17 +1605,18 @@ def run(
         "status": "INCONCLUSIVE",
     }
     evidence: dict[str, dict[str, object]] = {}
+    carriers: dict[str, str] = {}
+    report["installation_carriers"] = carriers
     fleet, servers = Fleet(), Fleet()
-    with term_as_interrupt(), Owners() as outer:
-        # The later, independent finalizers: they retry any group whose first cleanup failed.
-        outer.callback(servers.settle_all)
-        outer.callback(fleet.settle_all)
+    with term_as_interrupt():
         for name in SCENARIOS:
             layout = Layout(scenario_root / name)
             prepare_layout(layout)
             scenario_logs = logs / name
             scenario_logs.mkdir(mode=0o755)
             env = HELPERS.child_env(layout)
+            carrier = HELPERS.installation_carrier([str(python), "-I"], env)
+            carriers[name] = str(carrier)
             fixed = [
                 "--scenario-root",
                 str(layout.root),
@@ -1637,17 +1644,26 @@ def run(
                     argv, env, layout.tmp, scenario_logs, f"{name}-{phase}", fleet.own
                 )
 
-            evidence[name] = with_services(
-                layout,
-                python,
-                scenario_logs,
-                deadline,
-                fleet,
-                servers,
-                lambda capture, ollama, name=name, layout=layout, launch=launch: run_scenario(
-                    name, layout, launch, capture, ollama, deadline
+            # Same ownership as the rehearsal: the carrier outlives the fleets' finalizers.
+            with (
+                HELPERS.installation_state_provisioned(
+                    carrier, HELPERS.installation_declaration(layout)
                 ),
-            )
+                Owners() as outer,
+            ):
+                outer.callback(servers.settle_all)
+                outer.callback(fleet.settle_all)
+                evidence[name] = with_services(
+                    layout,
+                    python,
+                    scenario_logs,
+                    deadline,
+                    fleet,
+                    servers,
+                    lambda capture, ollama, name=name, layout=layout, launch=launch: run_scenario(
+                        name, layout, launch, capture, ollama, deadline
+                    ),
+                )
     report["evidence"] = evidence
     report.update(evaluate(evidence, expected_receipt_sha256=PROVER.sha256(receipt)))
     HELPERS.write_new(

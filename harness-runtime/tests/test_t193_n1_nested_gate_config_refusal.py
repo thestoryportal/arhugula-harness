@@ -24,6 +24,10 @@ from typing import Any
 import pytest
 from harness_runtime.bootstrap import stage_1_is
 from harness_runtime.config import state_placement as sp
+from harness_runtime.lifecycle.installation_state import (
+    installation_state_bound,
+    installation_state_path,
+)
 
 from .integration.test_r_cc_1_api_resume import (
     _patched_runtime,  # noqa: F401  # pyright: ignore[reportPrivateUsage, reportUnusedImport]
@@ -91,7 +95,17 @@ def n1(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Scenario]:
     pw.prepare_layout(layout)
     for name, value in pw.HELPERS.child_env(layout).items():
         monkeypatch.setenv(name, value)
-    with pw.Owners() as owners, pw.HELPERS.installation_bound(layout):
+    # The operator's carrier for this interpreter, relocated under a scratch prefix: the public
+    # ingresses read it themselves; the direct `phase_provision` call reads it through the bound.
+    prefix = tmp_path / "prefix"
+    prefix.mkdir()
+    monkeypatch.setattr(sys, "prefix", str(prefix))
+    declaration = pw.HELPERS.installation_declaration(layout)
+    with (
+        pw.HELPERS.installation_state_provisioned(installation_state_path(), declaration),
+        installation_state_bound(),
+        pw.Owners() as owners,
+    ):
         webhook = _serving(pw.WebhookCapture(), owners)
         ollama = _serving(pw.OllamaListStub(), owners)
         port = pw.HELPERS.free_loopback_port()

@@ -831,10 +831,7 @@ async def test_api_resume_by_handle_refuses_an_unbound_root_before_any_claim(
     installation stops declaring it, refuses protocol-not-bound before the root claim -- the
     journal directory is left exactly as the capture wrote it."""
     from harness_runtime.api import ResumeProtocolNotBoundError
-    from harness_runtime.lifecycle.pause_journal_root_resolver import (
-        INSTALLATION_STATE,
-        STORAGE_UNSELECTED,
-    )
+    from harness_runtime.lifecycle.installation_state import installation_state_path
 
     _ = _patched_runtime
     config = placed_config(_config_durable(placed_root), placed_root)
@@ -851,7 +848,7 @@ async def test_api_resume_by_handle_refuses_an_unbound_root_before_any_claim(
     captured = sorted((p.name, p.read_bytes()) for p in journal.iterdir())
     assert captured, "the capture wrote nothing, so the witness would be vacuous"
 
-    INSTALLATION_STATE.set(STORAGE_UNSELECTED)
+    installation_state_path().unlink()  # the operator withdraws the declaration
     with pytest.raises(ResumeProtocolNotBoundError):
         await resume(_Workflow(), resume_handle=_WORKFLOW_ID, config=config)
 

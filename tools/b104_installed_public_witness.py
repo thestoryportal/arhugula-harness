@@ -4,9 +4,10 @@ One bounded attempt against a noneditable installed venv. The parent (stdlib onl
 `python -I`) verifies the pinned candidate, wheels and startup hooks, owns a loopback
 webhook listener and a fresh non-tmpfs scenario root, and runs each phase as its own
 installed-venv `python -I` child in a private process group. As installation operator the
-parent first writes ONE installation-state declaration naming a pause-journal root inside the
-state root; every child binds the installed Runtime's `INSTALLATION_STATE` from that file
-around its phase (scenario-local functional proof, not retained storage or provisioning):
+parent first creates the installed interpreter's own installation-state carrier, declaring ONE
+pause-journal root inside the state root, and removes exactly that document afterwards; every
+child binds it through the installed Runtime's own carrier reader (scenario-local functional
+proof, not retained storage or provisioning):
 
 0. `provision`: the installed state-root bootstrap stamps the state root, then the declared
    root is created inside it; every later journal site must resolve exactly that root.
@@ -135,8 +136,9 @@ PLAN = {
     "attempts": 1,
     "state_root": "new directory on a non-tmpfs filesystem outside every Git checkout",
     "installation_state": (
-        "the parent, as installation operator, declares one pause-journal root inside the "
-        "state root; each child binds that declaration; scenario-local, not retained storage"
+        "the parent, as installation operator, creates the installed interpreter's carrier "
+        "declaring one pause-journal root inside the state root, refusing an existing one, and "
+        "removes only what it created; children read it; scenario-local, not retained storage"
     ),
     "s5": "process/filesystem behaviour only; says nothing about VM reset durability",
     "outcome": "PASS needs every case; a timeout is INCONCLUSIVE; anything else FAILs",
@@ -205,11 +207,6 @@ class Layout:
     def installation_root(self) -> Path:
         """The declared pause-journal root: inside the state root, beside its ledger."""
         return self.state_root / "installation-pause-journal"
-
-    @property
-    def installation_state(self) -> Path:
-        """The one installation-state declaration file the parent writes for every child."""
-        return self.root / "installation-state.json"
 
     @property
     def home(self) -> Path:
@@ -326,17 +323,32 @@ def config_text(layout: Layout, webhook_port: int, mcp_port: int) -> str:
     return "\n".join(lines) + "\n"
 
 
-def write_new(path: Path, text: str, mode: int = 0o600) -> None:
-    """Create `path` exactly once with `mode`, fsynced."""
+def write_new(path: Path, text: str, mode: int = 0o600) -> tuple[int, int, bytes]:
+    """Create `path` exactly once with `mode`, fsynced - or, when writing fails, not at all.
+
+    Returns the created file's `document_identity`, taken from its own descriptor and the bytes
+    written, never by reading back a path someone else may have replaced meanwhile.
+    """
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC, mode)
-    with os.fdopen(fd, "w", encoding="utf-8") as stream:
-        stream.write(text)
-        stream.flush()
-        os.fsync(stream.fileno())
+    made = os.fstat(fd)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            stream.write(text)
+            stream.flush()
+            os.fsync(stream.fileno())
+    except BaseException as failure:
+        # [LAW:no-silent-failure] Remove only the file this call created: another file renamed
+        # over it refuses the rollback rather than being deleted.
+        now = path.lstat()
+        if (now.st_dev, now.st_ino) != (made.st_dev, made.st_ino):
+            raise RuntimeError(f"new file was replaced before its rollback: {path}") from failure
+        path.unlink()
+        raise
+    return made.st_dev, made.st_ino, text.encode()
 
 
-def write_json_new(path: Path, value: object) -> None:
-    write_new(path, json.dumps(value, sort_keys=True, indent=2, default=str) + "\n")
+def write_json_new(path: Path, value: object) -> tuple[int, int, bytes]:
+    return write_new(path, json.dumps(value, sort_keys=True, indent=2, default=str) + "\n")
 
 
 def installation_declaration(layout: Layout) -> dict[str, object]:
@@ -346,22 +358,57 @@ def installation_declaration(layout: Layout) -> dict[str, object]:
     }
 
 
-@contextlib.contextmanager
-def installation_bound(layout: Layout) -> Generator[None]:
-    """Bind the installed Runtime's `INSTALLATION_STATE` to the scenario's declaration file."""
-    from harness_runtime.lifecycle.pause_journal_root_resolver import (
-        INSTALLATION_STATE,
-        InstallationState,
-    )
+def installation_carrier(interpreter: list[str], env: dict[str, str]) -> Path:
+    """The carrier the Runtime reads when launched as `interpreter` under `env`, as it names it."""
+    # [LAW:one-source-of-truth] The Runtime's own reader owns the location; the parent never
+    # re-derives it from the venv layout. Asked exactly as the children are launched.
+    query = "from harness_runtime.lifecycle.installation_state import installation_state_path as p"
+    shown = subprocess.run(
+        [*interpreter, "-c", f"{query}; print(p())"],
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    ).stdout.strip()
+    carrier = Path(shown)
+    if not carrier.is_absolute():
+        raise ValueError(f"installed carrier is not absolute: {shown!r}")
+    return carrier
 
-    # [LAW:single-enforcer] The raw declarations pass through unjudged: the installed resolver
-    # alone parses them, so a missing, conflicting or overlapping root refuses there.
-    raw = json.loads(layout.installation_state.read_text(encoding="utf-8"))
-    token = INSTALLATION_STATE.set(InstallationState(tuple(raw["pause_journal_root_declarations"])))
+
+def document_identity(path: Path) -> tuple[int, int, bytes]:
+    """The file and its content: a rewrite in place, or a reused inode number, keeps the inode."""
+    status = path.lstat()
+    return status.st_dev, status.st_ino, path.read_bytes()
+
+
+@contextlib.contextmanager
+def installation_state_provisioned(carrier: Path, declaration: object) -> Generator[None]:
+    """Operator preparation: create the carrier new for the body, then remove only what it made.
+
+    [LAW:no-silent-failure] An existing document - the operator's or anyone else's - refuses
+    before any child starts, and a carrier that is no longer the one written here refuses
+    removal instead of deleting an unrelated file.
+    """
+    created = [d for d in (carrier.parent.parent, carrier.parent) if not os.path.lexists(d)]
+    # A failed preparation removes only the directories it made, newest first; write_new
+    # already leaves no carrier of its own, and the written carrier's removal belongs to the
+    # body's teardown below, which compares it with what write_new created.
+    with contextlib.ExitStack() as rollback:
+        for directory in created:
+            directory.mkdir(mode=0o755)
+            rollback.callback(directory.rmdir)
+        written = write_json_new(carrier, declaration)
+        rollback.pop_all()
     try:
         yield
     finally:
-        INSTALLATION_STATE.reset(token)
+        if document_identity(carrier) != written:
+            raise RuntimeError(f"installation-state carrier was replaced: {carrier}")
+        carrier.unlink()
+        for directory in reversed(created):
+            directory.rmdir()
 
 
 # --- child phases (installed Python only; harness imports stay inside) --------------------
@@ -778,7 +825,10 @@ def run_phase(layout: Layout, phase: str, prove: Callable[[], dict[str, object]]
                 "loaded_harness_modules": len(loaded_before),
             },
         )
-        with installation_bound(layout):
+        from harness_runtime.lifecycle.installation_state import installation_state_bound
+
+        # Phases outside a public ingress read the same carrier the ingresses read.
+        with installation_state_bound():
             observed = PHASE_BODIES[phase](layout)
         loaded = loaded_harness_origins(verified) if verified else {}
         write_json_new(
@@ -2100,9 +2150,6 @@ def run(
         layout.markers,
     ):
         directory.mkdir(mode=0o700)
-    # [LAW:one-source-of-truth] The parent is the installation operator: it writes the one
-    # declaration every child binds; no env, run TOML or CLI argument can select the root.
-    write_json_new(layout.installation_state, installation_declaration(layout))
     helper = Path(__file__).resolve(strict=True)
     fixed = [
         "--scenario",
@@ -2117,6 +2164,9 @@ def run(
         expected_head,
     ]
     env = child_env(layout)
+    # [LAW:one-source-of-truth] The parent is the installation operator: it provisions the one
+    # carrier every child reads; no env, run TOML or CLI argument can select the root.
+    carrier = installation_carrier([str(python), "-I"], env)
     fleet, servers = Fleet(), Fleet()
 
     def launch(phase: str) -> Child:
@@ -2134,6 +2184,7 @@ def run(
         "installation_receipt_sha256": sha256(receipt),
         "wheel_sha256": {item["path"]: item["sha256"] for item in provenance["wheels"]},
         "scenario_root": placement,
+        "installation_carrier": str(carrier),
         "status": "INCONCLUSIVE",
     }
     previous_term = signal.getsignal(signal.SIGTERM)
@@ -2144,7 +2195,11 @@ def run(
     signal.signal(signal.SIGTERM, stop)
     try:
         # The later, independent finalizers: they retry any group whose first cleanup failed.
-        with Owners() as outer:
+        # The carrier outlives every child: it is removed only after both fleets settle.
+        with (
+            installation_state_provisioned(carrier, installation_declaration(layout)),
+            Owners() as outer,
+        ):
             outer.callback(servers.settle_all)
             outer.callback(fleet.settle_all)
             evidence = with_services(
