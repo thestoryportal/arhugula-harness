@@ -40,6 +40,7 @@ from harness_runtime import api
 from harness_runtime.bootstrap import stage_1_is
 from harness_runtime.config import state_placement as sp
 from harness_runtime.lifecycle import hitl_gate_composer as composer
+from harness_runtime.lifecycle import mcp_backed_ask_user_question_surface as surface
 from harness_runtime.lifecycle.ask_user_question_surface import AskUserQuestionResult
 from harness_runtime.lifecycle.hitl_gate_composer import post_mutation_payload_hash
 from harness_runtime.lifecycle.installation_state import (
@@ -538,18 +539,48 @@ def test_16_a_large_payload_is_shown_in_full_before_the_answer(
 # --- `harness run --daemon` (C2 daemon-client-tty) ----------------------------------------------
 
 # The daemon is its own process; it reads the fixture's provisioned installation state through the
-# same interpreter prefix the in-process rows use.
-_DAEMON_LAUNCH = (
-    "import sys; sys.prefix = sys.argv.pop(1); "
-    "from harness_runtime.cli.app import app; app(prog_name='harness')"
-)
+# same interpreter prefix the in-process rows use, writes the attributes of each span it finishes
+# as one JSON line, and waits on the elicitation deadline it is given.
+_DAEMON_LAUNCH = """
+import json, sys
+sys.prefix, spans, deadline = sys.argv.pop(1), sys.argv.pop(1), sys.argv.pop(1)
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import ConsoleSpanExporter, SimpleSpanProcessor
+from harness_runtime.bootstrap import stage_4_od
+from harness_runtime.lifecycle import mcp_backed_ask_user_question_surface as surface
+provider = TracerProvider()
+sink = open(spans, "a", buffering=1)
+provider.add_span_processor(SimpleSpanProcessor(ConsoleSpanExporter(
+    out=sink, formatter=lambda span: json.dumps(dict(span.attributes or {})) + "\\n"
+)))
+class Stage:
+    registered_globally = False
+Stage.provider = provider
+stage_4_od.materialize_tracer_provider_stage = lambda config, **_: Stage
+surface.OPERATOR_ELICITATION_DEADLINE_SECONDS = float(deadline)
+from harness_runtime.cli.app import app
+app(prog_name="harness")
+"""
+_PATCHED_DEADLINE_SECONDS = 2.0
+_DEADLINE_SLACK_SECONDS = 8.0
 
 
-@pytest.fixture
-def daemon(gated: Scenario) -> Iterator[Path]:
+def _daemon_spans(gated: Scenario) -> Path:
+    return gated.layout.tmp / "daemon-spans.jsonl"
+
+
+def _daemon_ingresses(gated: Scenario) -> list[str]:
+    """`hitl.response.ingress` of every HITL span the daemon finished, in end order."""
+    path = _daemon_spans(gated)
+    rows = [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
+    return [str(row["hitl.response.ingress"]) for row in rows if "hitl.response.ingress" in row]
+
+
+def _serve_daemon(gated: Scenario, deadline_seconds: float) -> Iterator[Path]:
     socket_path = gated.layout.tmp / "harness-daemon.sock"
-    argv = [sys.executable, "-c", _DAEMON_LAUNCH, sys.prefix, "daemon"]
-    argv += ["--config", str(gated.layout.config), "--socket-path", str(socket_path)]
+    argv = [sys.executable, "-c", _DAEMON_LAUNCH, sys.prefix, str(_daemon_spans(gated))]
+    argv += [str(deadline_seconds), "daemon", "--config", str(gated.layout.config)]
+    argv += ["--socket-path", str(socket_path)]
     log = gated.layout.tmp / "daemon.log"
     with log.open("wb") as sink:
         server = subprocess.Popen(argv, cwd=gated.layout.tmp, stdout=sink, stderr=sink)
@@ -560,6 +591,17 @@ def daemon(gated: Scenario) -> Iterator[Path]:
     yield socket_path
     server.terminate()
     assert server.wait(pw.CHILD_CAP_SECONDS) is not None
+
+
+@pytest.fixture
+def daemon(gated: Scenario) -> Iterator[Path]:
+    yield from _serve_daemon(gated, surface.OPERATOR_ELICITATION_DEADLINE_SECONDS)
+
+
+@pytest.fixture
+def hasty_daemon(gated: Scenario) -> Iterator[Path]:
+    """A daemon whose elicitation deadline is patched to 2 s (assertion 13)."""
+    yield from _serve_daemon(gated, _PATCHED_DEADLINE_SECONDS)
 
 
 def test_8_one_daemon_serves_an_approve_then_a_reject_on_a_terminal(
@@ -580,6 +622,175 @@ def test_8_one_daemon_serves_an_approve_then_a_reject_on_a_terminal(
     assert gated.marker() == [_GATED_STEP]
     approve, reject = gated.hitl_audits()
     assert (approve["audit.cp.response"], reject["audit.cp.response"]) == ("approve", "reject")
+    assert _daemon_ingresses(gated) == ["daemon-client-tty", "daemon-client-tty"]
+
+
+# --- `cancel`, the bounded wait and replies outside C1/C5 (C3, C3a, C5) -------------------------
+
+
+def _harness_client(gated: Scenario, socket_path: Path, terminal: Terminal) -> Any:
+    """`harness run --daemon` as its own process on `terminal`, so the test can kill it."""
+    argv = [sys.executable, "-c", _DAEMON_LAUNCH, sys.prefix, os.devnull, "0", "run"]
+    argv += [str(gated.manifest()), "--daemon", "--socket-path", str(socket_path)]
+    argv += ["--config", str(gated.layout.config)]
+    slave = terminal.stdin.fileno()
+    return subprocess.Popen(argv, cwd=gated.layout.tmp, stdin=slave, stdout=slave, stderr=slave)
+
+
+def _eliciting(monkeypatch: pytest.MonkeyPatch, reply: Any) -> None:
+    """Bind `api.run`'s in-process client to one raw MCP elicitation reply, as another client."""
+
+    async def answer(_context: Any, _params: Any) -> Any:
+        return reply
+
+    monkeypatch.setattr(api, "operator_elicitation_callback", lambda *_: answer)
+
+
+def test_12_cancel_through_api_run_refuses_under_the_python_ingress(gated: Scenario) -> None:
+    result = _run(gated, _answering(OperatorDecision(action="cancel"), []))
+
+    _assert_rejected(result)
+    assert gated.marker() == []
+    assert gated.ingresses() == ["python"]
+
+
+def test_12_cancel_on_a_terminal_refuses_under_the_cli_tty_ingress(
+    gated: Scenario, terminal: Terminal
+) -> None:
+    operator = Operator(gated, terminal, "cancel")
+
+    assert _harness_run(gated, terminal.stdin, terminal.stderr) == cli.EXIT_WORKFLOW_FAIL
+    _assert_gate_shown(operator.done())
+    assert gated.marker() == []
+    assert gated.ingresses() == ["cli-tty"]
+
+
+def test_12_cancel_through_the_daemon_refuses_under_the_daemon_client_tty_ingress(
+    gated: Scenario, daemon: Path
+) -> None:
+    with Terminal() as pty:
+        operator = Operator(gated, pty, "cancel")
+        code = _harness_run(gated, pty.stdin, pty.stderr, socket_path=daemon)
+        _assert_gate_shown(operator.done())
+
+    assert code == cli.EXIT_WORKFLOW_FAIL
+    assert gated.marker() == []
+    assert _daemon_ingresses(gated) == ["daemon-client-tty"]
+
+
+def test_12_an_mcp_native_cancel_refuses_as_unreported(
+    gated: Scenario, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from mcp.types import ElicitResult
+
+    _eliciting(monkeypatch, ElicitResult(action="cancel"))
+
+    _assert_rejected(_run(gated, None))
+    assert gated.marker() == []
+    assert gated.ingresses() == ["unreported"]
+
+
+def test_13_the_unpatched_elicitation_deadline_is_900_seconds() -> None:
+    assert surface.OPERATOR_ELICITATION_DEADLINE_SECONDS == 900
+
+
+@pytest.fixture
+def hasty(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(surface, "OPERATOR_ELICITATION_DEADLINE_SECONDS", _PATCHED_DEADLINE_SECONDS)
+
+
+def _within_deadline(started: float) -> None:
+    assert time.monotonic() - started < _PATCHED_DEADLINE_SECONDS + _DEADLINE_SLACK_SECONDS
+
+
+@pytest.mark.usefixtures("hasty")
+def test_13a_an_api_run_operator_that_never_answers_is_refused_at_the_deadline(
+    gated: Scenario,
+) -> None:
+    async def silent(_request: OperatorRequest) -> OperatorDecision:
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable")
+
+    started = time.monotonic()
+    result = _run(gated, silent)
+
+    _within_deadline(started)
+    _assert_rejected(result)
+    assert gated.marker() == []
+    assert gated.ingresses() == ["none"]
+
+
+def test_13b_a_daemon_client_killed_at_the_prompt_ends_its_run_then_the_daemon_serves_on(
+    gated: Scenario, hasty_daemon: Path
+) -> None:
+    with Terminal() as pty:
+        client = _harness_client(gated, hasty_daemon, pty)
+        pty.read_until("answer (")
+        started = time.monotonic()
+        client.kill()
+        assert client.wait(_CLI_BOUND_SECONDS) is not None
+        while not _daemon_ingresses(gated):
+            assert time.monotonic() - started < _CLI_BOUND_SECONDS, "the daemon's gate never ended"
+            time.sleep(0.05)
+    _within_deadline(started)
+    assert gated.marker() == []
+    assert _daemon_ingresses(gated) == ["none"]
+
+    with Terminal() as following:
+        operator = Operator(gated, following, "approve")
+        code = _harness_run(gated, following.stdin, following.stderr, socket_path=hasty_daemon)
+        operator.done()
+    assert code == cli.EXIT_SUCCESS
+    assert gated.marker() == [_GATED_STEP]
+
+
+@pytest.mark.usefixtures("hasty")
+def test_13c_an_attached_silent_terminal_is_refused_at_the_deadline(
+    gated: Scenario, terminal: Terminal
+) -> None:
+    started = time.monotonic()
+    code = _harness_run(gated, terminal.stdin, terminal.stderr)
+
+    _within_deadline(started)
+    assert code == cli.EXIT_WORKFLOW_FAIL
+    assert "answer (" in terminal.read_until("answer (")
+    assert gated.marker() == []
+    assert gated.ingresses() == ["none"]
+
+
+def test_13c_an_attached_silent_terminal_through_the_daemon_is_refused_at_the_deadline(
+    gated: Scenario, hasty_daemon: Path
+) -> None:
+    with Terminal() as pty:
+        started = time.monotonic()
+        code = _harness_run(gated, pty.stdin, pty.stderr, socket_path=hasty_daemon)
+        _within_deadline(started)
+        assert "answer (" in pty.read_until("answer (")
+
+    assert code == cli.EXIT_WORKFLOW_FAIL
+    assert gated.marker() == []
+    assert _daemon_ingresses(gated) == ["none"]
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        {"response": "approve", "ingress": "root"},
+        {"response": "refuse", "ingress": "python"},
+    ],
+    ids=["ingress-root", "refuse-without-reason"],
+)
+def test_14_a_reply_outside_c1_c5_is_refused_with_zero_effects(
+    gated: Scenario, monkeypatch: pytest.MonkeyPatch, content: dict[str, str]
+) -> None:
+    from mcp.types import ElicitResult
+
+    _eliciting(monkeypatch, ElicitResult(action="accept", content=content))
+
+    result = _run(gated, None)
+
+    assert result.status == "failed", result
+    assert gated.marker() == []
 
 
 # --- `hold` into the durable pause, then one public resume (C3, C4) ----------------------------
