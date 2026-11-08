@@ -122,9 +122,17 @@ EnginePauseLocator (journal record kind "engine-pause-locator")
 
 ## 4. Refusal and outcome table (contract item 3)
 
-**4a. Pre-admission refusals.** Each happens before the claim and before bootstrap. It writes no
-journal or claim record, makes no `attempt_resume` fire and no `cp.resume-attempted` entry, makes zero
-model calls, tool calls or step dispatches, and starts no fresh run.
+**4a. Pre-body refusals.** None runs the workflow body: no `attempt_resume` fire, no
+`cp.resume-attempted` entry, zero model calls, tool calls or step dispatches, and no fresh run. Their
+timing differs by stage:
+
+- **Admission stage (exit 6 rows).** Raised in `admit_root_resume` before bootstrap and before the
+  claim. They write no journal or claim record and have no bootstrap effects.
+- **Claim stage (exit 7 rows).** Raised after bootstrap, inside `DurableRootResume.run` in the
+  bootstrapped worker, during the claim attempt and before the body (`lifecycle/mcp_server.py:545-550`;
+  `lifecycle/root_resume_admission.py:167-189`, which creates `ResumeClaimStore` and calls
+  `run_started`). Bootstrap has happened, so zero bootstrap effects are not claimed. No new claim is
+  taken, and the existing claim or lease stands.
 
 | Case | Representation (exact) | Exit |
 | --- | --- | ---: |
@@ -194,9 +202,10 @@ repeat is `claim-refused`. Zero step dispatches and zero model or tool calls. No
 
 None of this is applied by T04.
 
-**T05 acceptance (literal).** Every §4a pre-admission refusal assertion also checks: no new journal
-or claim records, no `attempt_resume` fire, no new `cp.resume-attempted` entry, zero step dispatches,
-zero model or tool calls and no new `run_id`. Every §4b admitted failure checks the claim is consumed,
+**T05 acceptance (literal).** Every §4a refusal assertion also checks: no `attempt_resume` fire, no new
+`cp.resume-attempted` entry, zero step dispatches, zero model or tool calls and no new `run_id`.
+Admission-stage (exit 6) assertions also check no new journal or claim records. Claim-stage (exit 7)
+assertions also check that no new claim is taken and the body never starts. Every §4b admitted failure checks the claim is consumed,
 zero step dispatches, zero model or tool calls, no new `run_id`, and exactly the
 `cp.resume-attempted` count its §4b row states.
 
