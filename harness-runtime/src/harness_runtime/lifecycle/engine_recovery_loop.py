@@ -14,6 +14,7 @@ from typing import Protocol
 from harness_core import WorkflowID
 from harness_cp.cp_shared_types import ActorIdentity
 from harness_cp.engine_class import EngineClass
+from harness_cp.handoff_context import StateSummary
 from harness_cp.pause_resume_protocol import (
     EnginePauseResumeSubstrate,
     PauseEvent,
@@ -24,9 +25,18 @@ from harness_cp.pause_resume_protocol import (
     bind_engine_pause_resume_substrate,
     capture_pause_snapshot,
 )
+from harness_is.state_ledger_entry_schema import Identifier
 from harness_is.state_ledger_write import WriteResult
 
+from harness_runtime.config.state_placement import StateKind, VerifiedStateRoot, resolve_state_path
 from harness_runtime.lifecycle.cp_is_wiring import RuntimeCpIsWiring
+from harness_runtime.lifecycle.reconciler_pause_resume_substrate import (
+    ReconcilerEnginePauseResumeSubstrate,
+)
+from harness_runtime.lifecycle.wal_segment_pause_resume_substrate import (
+    WALSegmentEnginePauseResumeSubstrate,
+)
+from harness_runtime.types import RuntimeConfig
 
 
 def run_scoped_substrate_key(workflow_id: str, run_id: str) -> WorkflowID:
@@ -71,6 +81,48 @@ class ResumableEngineSubstrate(EnginePauseResumeSubstrate, Protocol):
     """
 
     def has_pause_record(self, workflow_id: WorkflowID) -> bool: ...
+
+
+def _default_engine_state_summary() -> StateSummary:
+    return StateSummary(
+        relevant_entries=(),
+        summary_text="",
+        summary_hash="0" * 64,
+        idempotency_key=Identifier("r-cxa-2-engine-state"),
+        external_references=(),
+    )
+
+
+def bind_engine_substrates(
+    config: RuntimeConfig, verified: VerifiedStateRoot | None
+) -> Mapping[EngineClass, ResumableEngineSubstrate]:
+    """The durable substrate for each firing engine class, at its one state-path derivation.
+
+    [LAW:one-source-of-truth] The R-CXA-2 factory binds the recovery loop from this map and
+    the pre-claim root resume admission probes engine presence through it (B-314 fork §3.1),
+    so the store a pause was captured in is the store admission reads. Distinct directories
+    per class keep the U-RT-124 no-cross-contamination property by construction; each store
+    is created lazily on first capture, so binding writes nothing.
+    """
+    return {
+        EngineClass.WAL_SEGMENT: WALSegmentEnginePauseResumeSubstrate(
+            journal_dir=resolve_state_path(StateKind.ENGINE_RECOVERY_SEGMENTS, config, verified),
+            state_summary_provider=_default_engine_state_summary,
+        ),
+        EngineClass.RECONCILER_LOOP: ReconcilerEnginePauseResumeSubstrate(
+            journal_dir=resolve_state_path(StateKind.ENGINE_RECOVERY_RECONCILER, config, verified),
+            state_summary_provider=_default_engine_state_summary,
+        ),
+    }
+
+
+def has_engine_pause_record(
+    substrate: ResumableEngineSubstrate, *, workflow_id: str, run_id: str
+) -> bool:
+    """Presence, not validity, of a run's pause record in one engine store (pure read)."""
+    # [LAW:one-source-of-truth] The one composition of the run-scoped key for a presence probe,
+    # shared by the driver-side loop and the pre-claim admission.
+    return substrate.has_pause_record(run_scoped_substrate_key(workflow_id, run_id))
 
 
 @dataclass(frozen=True, slots=True)
@@ -151,8 +203,8 @@ class RuntimeEngineRecoveryLoop:
         Routed to the substrate bound for ``engine_class`` so the probe reads only
         that engine class's durable store (the no-cross-contamination invariant).
         """
-        return self._substrate_for(engine_class).has_pause_record(
-            run_scoped_substrate_key(workflow_id, run_id)
+        return has_engine_pause_record(
+            self._substrate_for(engine_class), workflow_id=workflow_id, run_id=run_id
         )
 
     async def capture_pause(
