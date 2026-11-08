@@ -1465,3 +1465,241 @@ def test_deliver_debs_refuses_a_mismatched_extra_or_missing_file(
     with pytest.raises(gate.Q0Error, match=f"pool {name}:"):
         gate.deliver_debs(pool, tmp_path / "root", debs)
     assert not (tmp_path / "root").exists()
+
+
+# --- Bootstrap, closure and kernel: discriminating tests 16, 32 (closure items) and 35 -----
+
+
+def _gpg(home: Path, *args: str) -> str:
+    return subprocess.run(
+        ["gpg", "--batch", "--homedir", str(home), *args],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+
+
+def _signer(tmp_path: Path, name: str) -> tuple[Path, str, Path]:
+    """A throwaway key: its homedir, primary fingerprint and a keyring holding only it."""
+    home = tmp_path / name
+    home.mkdir(mode=0o700)
+    _gpg(home, "--passphrase", "", "--quick-gen-key", f"{name} <{name}@invalid>", "ed25519")
+    fpr = next(
+        line.split(":")[9]
+        for line in _gpg(home, "--with-colons", "-K").splitlines()
+        if line.startswith("fpr:")
+    )
+    keyring = tmp_path / f"{name}.gpg"
+    keyring.write_bytes(
+        subprocess.run(
+            ["gpg", "--batch", "--homedir", str(home), "--export", fpr],
+            check=True,
+            capture_output=True,
+        ).stdout
+    )
+    return home, fpr, keyring
+
+
+def _gpgv(argv: list[str]) -> tuple[str, int]:
+    run = subprocess.run(argv, capture_output=True, text=True, check=False)
+    return run.stdout, run.returncode
+
+
+def test_gpgv_judgement_requires_the_pinned_signer_over_unaltered_bytes(tmp_path: Path) -> None:
+    home, fpr, keyring = _signer(tmp_path, "pinned")
+    _, other, _ = _signer(tmp_path, "other")
+    data = tmp_path / "SHA256SUMS"
+    data.write_text(f"{'a' * 64} *ubuntu-base-26.04-base-amd64.tar.gz\n")
+    _gpg(home, "--detach-sign", "-o", str(tmp_path / "SHA256SUMS.gpg"), str(data))
+    status, code = _gpgv(gate.gpgv_argv(keyring, tmp_path / "SHA256SUMS.gpg", data))
+    assert gate.signature_problems(status, code, fpr) == []
+    assert gate.signature_problems(status, code, other) == [
+        f"no valid signature by pinned {other} (signers {[fpr]})"
+    ]
+    data.write_text(f"{'b' * 64} *ubuntu-base-26.04-base-amd64.tar.gz\n")
+    status, code = _gpgv(gate.gpgv_argv(keyring, tmp_path / "SHA256SUMS.gpg", data))
+    assert code != 0
+    assert gate.signature_problems(status, code, fpr) == [
+        f"gpgv exited {code}",
+        f"no valid signature by pinned {fpr} (signers [])",
+    ]
+
+
+def test_clearsigned_list_yields_only_its_signed_entries(tmp_path: Path) -> None:
+    home, fpr, keyring = _signer(tmp_path, "autosigner")
+    body = tmp_path / "sums"
+    body.write_text(f"{'c' * 64}  {gate.KERNEL_TARBALL}\n")
+    _gpg(home, "--clearsign", "-o", str(tmp_path / "sha256sums.asc"), str(body))
+    signed = tmp_path / "sha256sums.asc"
+    # Text prepended outside the signature is not signed content and never read.
+    signed.write_text(f"{'d' * 64}  {gate.KERNEL_TARBALL}\n" + signed.read_text())
+    status, code = _gpgv(gate.gpgv_argv(keyring, "--output", tmp_path / "out", signed))
+    assert gate.signature_problems(status, code, fpr) == []
+    assert gate.sums_entry((tmp_path / "out").read_text(), gate.KERNEL_TARBALL) == "c" * 64
+
+
+_TARBALL = "ubuntu-base-26.04-base-amd64.tar.gz"
+_SUMS = f"{'1' * 64} *{_TARBALL}\n{'2' * 64} *ubuntu-base-26.04-base-arm64.tar.gz\n".encode()
+
+
+def _base(**change: str) -> gate.BaseInput:
+    pins = {"tarball_sha256": "1" * 64, "sha256sums_sha256": _sha(_SUMS)} | change
+    return gate.BaseInput("https://x/", _TARBALL, signing_key="A" * 40, **pins)
+
+
+def test_base_tarball_is_its_signed_entry_and_the_pin() -> None:
+    assert gate.base_problems(_SUMS, "1" * 64, _base()) == []
+
+
+@pytest.mark.parametrize(
+    ("tarball", "base", "problem"),
+    [
+        ("3" * 64, _base(), f"{_TARBALL} values differ"),
+        ("1" * 64, _base(tarball_sha256="3" * 64), f"{_TARBALL} values differ"),
+        ("1" * 64, _base(sha256sums_sha256="4" * 64), "SHA256SUMS sha256"),
+    ],
+)
+def test_base_refuses_a_tarball_or_list_off_the_pin(
+    tarball: str, base: gate.BaseInput, problem: str
+) -> None:
+    assert [p for p in gate.base_problems(_SUMS, tarball, base) if p.startswith(problem)]
+
+
+def test_base_refuses_a_list_without_exactly_one_tarball_entry() -> None:
+    with pytest.raises(gate.Q0Error, match="2 times, not once"):
+        gate.base_problems(_SUMS + f"{'1' * 64} *{_TARBALL}\n".encode(), "1" * 64, _base())
+
+
+def test_base_packages_are_every_installed_status_entry() -> None:
+    listing = "base-files 14 amd64 ii \nlibc6 2.42-1 amd64 ii \n"
+    assert gate.base_packages(listing) == (
+        gate.Package("base-files", "14", "amd64"),
+        gate.Package("libc6", "2.42-1", "amd64"),
+    )
+    assert gate.dpkg_query_argv(Path("/r"))[:2] == ["dpkg-query", "--admindir=/r/var/lib/dpkg"]
+
+
+@pytest.mark.parametrize("listing", ["base-files 14 amd64 ii \nold 1 amd64 rc \n", "", "x 1 ii \n"])
+def test_base_packages_refuse_an_entry_not_installed(listing: str) -> None:
+    with pytest.raises(gate.Q0Error, match="not 'ii'"):
+        gate.base_packages(listing)
+
+
+def test_apt_private_reads_only_the_pinned_snapshot_and_base_status(tmp_path: Path) -> None:
+    archive = gate.ArchiveInput("20261101T000000Z", "resolute", ("main", "universe"), "F" * 40)
+    files = gate.apt_private(tmp_path / "apt", tmp_path / "root", tmp_path / "k.gpg", archive)
+    assert files["sources.list"] == (
+        f"deb [arch=amd64 signed-by={tmp_path}/k.gpg] "
+        "https://snapshot.ubuntu.com/ubuntu/20261101T000000Z resolute main universe\n"
+    )
+    conf = files["apt.conf"]
+    assert f'Dir::State::status "{tmp_path}/root/var/lib/dpkg/status";' in conf
+    assert f'Dir::State::lists "{tmp_path}/apt/lists";' in conf
+    assert 'APT::Architecture "amd64";' in conf
+    assert all(f'"{tmp_path}/apt/' in line for line in conf.splitlines() if "::Etc::" in line)
+    assert gate.apt_argv(tmp_path, *gate.CLOSURE_COMMAND)[-4:] == [
+        "--download-only",
+        "--print-uris",
+        "install",
+        "git",
+    ]
+
+
+_SNAP = "https://snapshot.ubuntu.com/ubuntu/20261101T000000Z/"
+_INDEX = """Package: git
+Version: 1:2.51.0-1
+Architecture: amd64
+Description: fast scm
+ continuation: line
+Filename: pool/main/g/git/git_2.51.0-1_amd64.deb
+Size: 10
+SHA256: {git}
+
+Package: liberror-perl
+Version: 0.17-1
+Architecture: all
+Filename: pool/main/libe/liberror-perl/liberror-perl_0.17-1_all.deb
+Size: 20
+SHA256: {perl}
+""".format(git="d" * 64, perl="e" * 64)
+_URIS = (
+    "Reading package lists...\nThe following NEW packages will be installed:\n  git\n"
+    f"'{_SNAP}pool/main/libe/liberror-perl/liberror-perl_0.17-1_all.deb' "
+    f"liberror-perl_0.17-1_all.deb 20 SHA256:{'e' * 64}\n"
+    f"'{_SNAP}pool/main/g/git/git_2.51.0-1_amd64.deb' git_1%3a2.51.0-1_amd64.deb 10 "
+    f"SHA256:{'d' * 64}\n"
+)
+_BASE_SET = (gate.Package("libc6", "2.42-1", "amd64"),)
+
+
+def test_closure_is_each_added_package_as_the_verified_index_records_it() -> None:
+    added = gate.closure(_URIS, gate.packages_index(_INDEX), "20261101T000000Z", _BASE_SET)
+    assert [(p.package.name, p.package.version, p.filename) for p in added] == [
+        ("liberror-perl", "0.17-1", "pool/main/libe/liberror-perl/liberror-perl_0.17-1_all.deb"),
+        ("git", "1:2.51.0-1", "pool/main/g/git/git_2.51.0-1_amd64.deb"),
+    ]
+    assert added[1].deb == gate.Deb("git_2.51.0-1_amd64.deb", 10, "d" * 64)
+
+
+@pytest.mark.parametrize(
+    ("uris", "base", "match"),
+    [
+        (_URIS.replace(_SNAP, "https://archive.ubuntu.com/ubuntu/"), _BASE_SET, "pinned snapshot"),
+        (_URIS.replace(" 20 SHA256", " 21 SHA256"), _BASE_SET, "disagrees with the verified"),
+        (_URIS.replace("libe/liberror-perl/", "libe/x/"), _BASE_SET, "disagrees with the verified"),
+        (_URIS.split("'")[0], _BASE_SET, "must add"),
+        (_URIS, (gate.Package("liberror-perl", "0.16", "all"),), "no base"),
+    ],
+)
+def test_closure_refuses_an_unpinned_unverified_or_base_overlapping_list(
+    uris: str, base: tuple[gate.Package, ...], match: str
+) -> None:
+    with pytest.raises(gate.Q0Error, match=match):
+        gate.closure(uris, gate.packages_index(_INDEX), "20261101T000000Z", base)
+
+
+def test_packages_index_refuses_a_stanza_without_its_hash() -> None:
+    with pytest.raises(gate.Q0Error, match=r"'git' lacks \['SHA256'\]"):
+        gate.packages_index(_INDEX.replace(f"SHA256: {'d' * 64}\n", ""))
+
+
+def test_kernel_tarball_must_equal_its_autosigned_entry_and_the_pin() -> None:
+    sums = f"{'5' * 64}  {gate.KERNEL_TARBALL}\n"
+    assert gate.tarball_problems(sums, gate.KERNEL_TARBALL, "5" * 64, "5" * 64) == []
+    for pin, tarball in (("6" * 64, "5" * 64), ("5" * 64, "6" * 64)):
+        assert gate.tarball_problems(sums, gate.KERNEL_TARBALL, pin, tarball) == [
+            f"{gate.KERNEL_TARBALL} values differ: "
+            f"{ {'pin': pin, 'sums': '5' * 64, 'tarball': tarball} }"
+        ]
+
+
+def test_kernel_steps_fetch_over_https_and_build_the_pinned_configuration(tmp_path: Path) -> None:
+    fetch = gate.kernel_fetch(tmp_path)
+    assert [argv[-1] for argv in fetch] == [
+        f"{gate.KERNEL_URL}linux-7.3.1.tar.xz",
+        f"{gate.KERNEL_URL}linux-7.3.1.tar.sign",
+        f"{gate.KERNEL_URL}sha256sums.asc",
+    ]
+    assert all(argv[:5] == ["curl", "-fsSL", "--proto", "=https", "-o"] for argv in fetch)
+    build = gate.kernel_build(tmp_path / "linux", gate.GUEST_KERNEL_CONFIG, 4)
+    assert [argv[-1] for argv in build] == [
+        "defconfig",
+        "--kconfig",
+        str(gate.GUEST_KERNEL_CONFIG),
+        "olddefconfig",
+        "bzImage",
+    ]
+    assert all("LOCALVERSION=-a5guest" in argv for argv in build if argv[0] == "make")
+
+
+def test_run_steps_stops_at_the_first_failure(tmp_path: Path) -> None:
+    steps = [["true"], ["false"], ["touch", "after"]]
+    with pytest.raises(gate.Q0Error, match=r"\['false'\] failed"):
+        gate.run_steps(steps, tmp_path, 30)
+    assert not (tmp_path / "after").exists()
+
+
+def test_run_steps_fails_at_the_deadline_with_no_later_step(tmp_path: Path) -> None:
+    with pytest.raises(gate.Q0Error, match="timed out"):
+        gate.run_steps([["sleep", "5"], ["touch", "after"]], tmp_path, 0.5)
+    assert not (tmp_path / "after").exists()

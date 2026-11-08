@@ -37,12 +37,14 @@ import socket
 import stat
 import subprocess
 import sys
+import time
 import xml.etree.ElementTree as ET
 from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, fields
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any, cast
+from urllib.parse import unquote
 
 ROOT = Path(__file__).resolve().parents[1]
 EXPECTATIONS = ROOT / "tools" / "a5_kernel_ci_expectations.json"
@@ -1391,6 +1393,208 @@ def deliver_debs(pool: Path, root: Path, debs: Sequence[Deb]) -> None:
     cache.mkdir(parents=True)
     for deb in debs:
         shutil.copyfile(pool / deb.file, cache / deb.file)
+
+
+# --- Bootstrap, closure (guest_package_closure steps 1-2) and the guest kernel ----------
+
+SNAPSHOT_URL = "https://snapshot.ubuntu.com/ubuntu/"
+KERNEL_TARBALL = "linux-7.3.1.tar.xz"
+KERNEL_URL = "https://cdn.kernel.org/pub/linux/kernel/v7.x/"
+KERNEL_LOCALVERSION = "-a5guest"
+KERNEL_BUILD_TIMEOUT = 35 * 60  # seconds; a miss fails the leg, with no prebuilt fallback
+DPKG_QUERY_FORMAT = "${Package} ${Version} ${Architecture} ${db:Status-Abbrev}\n"
+_SUMS_LINE = re.compile(r"([0-9a-f]{64}) [ *](\S+)")
+_URI_LINE = re.compile(r"'(\S+)' \S+ ([0-9]+) SHA256:([0-9a-f]{64})")
+_INDEX_FIELDS = ("Package", "Version", "Architecture", "Filename", "Size", "SHA256")
+
+
+def gpgv_argv(keyring: Path, *args: Path | str) -> list[str]:
+    """One gpgv call against a keyring holding only the pinned key; status on stdout."""
+    return ["gpgv", "--status-fd", "1", "--keyring", str(keyring.resolve()), *map(str, args)]
+
+
+def signature_problems(status: str, exit_code: int, fingerprint: str) -> list[str]:
+    """gpgv's verdict: exit 0 and a VALIDSIG whose primary key is the pinned fingerprint."""
+    # VALIDSIG's last field is the primary-key fingerprint, whichever subkey signed.
+    signers = [
+        line.split()[-1] for line in status.splitlines() if line.startswith("[GNUPG:] VALIDSIG ")
+    ]
+    return [f"gpgv exited {exit_code}" for _ in [0] if exit_code != 0] + [
+        f"no valid signature by pinned {fingerprint} (signers {signers})"
+        for _ in [0]
+        if fingerprint not in signers
+    ]
+
+
+def sums_entry(text: str, name: str) -> str:
+    """The one sha256 a verified checksum list gives for `name`."""
+    entries = [
+        match[1]
+        for line in text.splitlines()
+        if (match := _SUMS_LINE.fullmatch(line)) and match[2] == name
+    ]
+    if len(entries) != 1:
+        raise Q0Error(f"checksum list names {name} {len(entries)} times, not once")
+    return entries[0]
+
+
+def tarball_problems(sums: str, name: str, pin: str, tarball_sha256: str) -> list[str]:
+    """The tarball's sha256 equals both its signed checksum entry and the reviewed pin."""
+    return _agreement({"pin": pin, "sums": sums_entry(sums, name), "tarball": tarball_sha256}, name)
+
+
+def base_problems(sha256sums: bytes, tarball_sha256: str, base: BaseInput) -> list[str]:
+    """Step 1 after gpgv: the pinned SHA256SUMS bytes and the pinned base tarball."""
+    return [
+        f"SHA256SUMS sha256 {digest} is not the pinned {base.sha256sums_sha256}"
+        for digest in [_sha256(sha256sums)]
+        if digest != base.sha256sums_sha256
+    ] + tarball_problems(sha256sums.decode(), base.tarball, base.tarball_sha256, tarball_sha256)
+
+
+@dataclass(frozen=True)
+class Package:
+    name: str
+    version: str
+    architecture: str
+
+
+def dpkg_query_argv(root: Path) -> list[str]:
+    """Step 1: read the extracted base's own status database, not the host's."""
+    return ["dpkg-query", f"--admindir={root}/var/lib/dpkg", "-W", "-f", DPKG_QUERY_FORMAT]
+
+
+def base_packages(listing: str) -> tuple[Package, ...]:
+    # [LAW:parse-dont-validate] A base set exists only when every entry is installed.
+    rows = [line.split() for line in listing.splitlines()]
+    refused = [" ".join(row) for row in rows if len(row) != 4 or row[3] != "ii"]
+    if refused or not rows:
+        raise Q0Error(f"base status entries not 'ii': {refused or 'none listed'}")
+    return tuple(Package(*row[:3]) for row in rows)
+
+
+def apt_private(work: Path, root: Path, keyring: Path, archive: ArchiveInput) -> dict[str, str]:
+    """Step 2: the private apt configuration, as files to write under `work`.
+
+    Every Dir, source and trust key points into `work` or the extracted base, so the
+    resolution reads only the pinned snapshot, signed by the pinned archive key.
+    """
+    source = f"{SNAPSHOT_URL}{archive.snapshot_id}"
+    settings = {
+        "Dir::State::status": f"{root}/var/lib/dpkg/status",
+        "Dir::State::lists": f"{work}/lists",
+        "Dir::Cache": f"{work}/cache",
+        "Dir::Etc::sourcelist": f"{work}/sources.list",
+        "Dir::Etc::sourceparts": f"{work}/empty",
+        "Dir::Etc::trustedparts": f"{work}/empty",
+        "Dir::Etc::preferencesparts": f"{work}/empty",
+        "APT::Architecture": "amd64",
+    }
+    return {
+        "apt.conf": "".join(f'{key} "{value}";\n' for key, value in settings.items())
+        + 'APT::Architectures { "amd64"; };\n',
+        "sources.list": f"deb [arch=amd64 signed-by={keyring.resolve()}] {source} "
+        f"{archive.suite} {' '.join(archive.components)}\n",
+    }
+
+
+def apt_argv(work: Path, *command: str) -> list[str]:
+    return ["apt-get", "-c", str(work / "apt.conf"), *command]
+
+
+CLOSURE_COMMAND = ("--download-only", "--print-uris", "install", *GUEST_PACKAGES)
+
+
+@dataclass(frozen=True)
+class PoolPackage:
+    package: Package
+    filename: str  # the pool path in the verified Packages index
+    size: int
+    sha256: str
+
+    @property
+    def deb(self) -> Deb:
+        return Deb(PurePosixPath(self.filename).name, self.size, self.sha256)
+
+
+def packages_index(text: str) -> dict[str, PoolPackage]:
+    """A verified Packages index keyed by Filename."""
+    index: dict[str, PoolPackage] = {}
+    for stanza in filter(str.strip, text.split("\n\n")):
+        # A continuation line (leading space) belongs to a multi-line field the gate never reads.
+        raw = {
+            key: value
+            for key, _, value in (line.partition(": ") for line in stanza.splitlines())
+            if not key[:1].isspace()
+        }
+        if missing := [key for key in _INDEX_FIELDS if not raw.get(key)]:
+            raise Q0Error(f"Packages stanza {raw.get('Package')!r} lacks {missing}")
+        index[raw["Filename"]] = PoolPackage(
+            Package(raw["Package"], raw["Version"], raw["Architecture"]),
+            raw["Filename"],
+            int(raw["Size"]),
+            raw["SHA256"],
+        )
+    return index
+
+
+def closure(
+    print_uris: str, index: Mapping[str, PoolPackage], snapshot_id: str, base: Iterable[Package]
+) -> tuple[PoolPackage, ...]:
+    """Step 2: each package apt adds, as the verified index records it, in apt's order."""
+    source = f"{SNAPSHOT_URL}{snapshot_id}/"
+    lines = [line for line in print_uris.splitlines() if line.startswith("'")]
+    added: list[PoolPackage] = []
+    for line in lines:
+        if not (match := _URI_LINE.fullmatch(line)) or not match[1].startswith(source):
+            raise Q0Error(f"apt URI line {line!r} is not from the pinned snapshot")
+        entry = index.get(unquote(match[1].removeprefix(source)))
+        if entry is None or (entry.size, entry.sha256) != (int(match[2]), match[3]):
+            raise Q0Error(f"apt URI line {line!r} disagrees with the verified index ({entry})")
+        added.append(entry)
+    names = [entry.package.name for entry in added]
+    in_base = sorted(set(names) & {package.name for package in base})
+    if in_base or not set(GUEST_PACKAGES) <= set(names):
+        raise Q0Error(f"closure {names} must add {list(GUEST_PACKAGES)} and no base {in_base}")
+    return tuple(added)
+
+
+def kernel_fetch(work: Path) -> list[list[str]]:
+    """Acquire the tarball, its developer signature and the autosigned checksum list."""
+    names = (KERNEL_TARBALL, KERNEL_TARBALL.replace(".xz", ".sign"), "sha256sums.asc")
+    return [
+        ["curl", "-fsSL", "--proto", "=https", "-o", str(work / name), f"{KERNEL_URL}{name}"]
+        for name in names
+    ]
+
+
+def kernel_build(source: Path, fragment: Path, jobs: int) -> list[list[str]]:
+    """build_provenance: defconfig, vng --kconfig, the pinned fragment, then bzImage."""
+    make = ["make", f"-j{jobs}", f"LOCALVERSION={KERNEL_LOCALVERSION}"]
+    return [
+        [*make, "defconfig"],
+        ["vng", "--kconfig"],
+        ["scripts/kconfig/merge_config.sh", "-m", ".config", str(fragment.resolve())],
+        [*make, "olddefconfig"],
+        [*make, "bzImage"],
+    ]
+
+
+def run_steps(steps: Sequence[Sequence[str]], cwd: Path, timeout: float) -> None:
+    """Run each argv in order under one deadline; any failure or the deadline fails closed."""
+    deadline = time.monotonic() + timeout
+    for argv in steps:
+        try:
+            subprocess.run(
+                argv,
+                cwd=cwd,
+                check=True,
+                close_fds=True,
+                timeout=max(deadline - time.monotonic(), 0),
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            # [LAW:no-silent-failure] No retry and no fallback artifact.
+            raise Q0Error(f"step {list(argv)} failed: {exc}") from exc
 
 
 # --- CLI ----------------------------------------------------------------------------
