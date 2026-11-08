@@ -469,7 +469,7 @@ jobs:
       # A host failure is recorded here as "host: ..." by design.
       - name: Collect and bind the observation
         if: always()
-        run: /usr/bin/python3 tools/a5_kernel_ci_gate.py q0-collect --out "$GITHUB_WORKSPACE/a5-kernel-ci-guest/out" --launched "$RUNNER_TEMP/a5-evidence/launched" --evidence "$RUNNER_TEMP/a5-evidence"
+        run: /usr/bin/python3 tools/a5_kernel_ci_gate.py q0-collect --root /a5-guest/root --out "$GITHUB_WORKSPACE/a5-kernel-ci-guest/out" --launched "$RUNNER_TEMP/a5-evidence/launched" --evidence "$RUNNER_TEMP/a5-evidence"
 
       - name: Upload Q0 evidence
         if: always()

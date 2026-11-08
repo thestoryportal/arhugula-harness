@@ -2410,8 +2410,8 @@ class GuestFacts:
     packages: tuple[Package, ...]
 
 
-def shares(mountinfo: str) -> list[dict[str, str]]:
-    """The host-backed mounts in /proc/self/mountinfo: mountpoint, fstype, tag, options."""
+def mounts(mountinfo: str) -> list[dict[str, str]]:
+    """Every mount in /proc/self/mountinfo: mountpoint, fstype, tag, options."""
     rows: list[dict[str, str]] = []
     for line in mountinfo.splitlines():
         mount, _, filesystem = line.partition(" - ")
@@ -2425,7 +2425,45 @@ def shares(mountinfo: str) -> list[dict[str, str]]:
                 "options": f"{fields_[5]} {options}",
             }
         )
-    return [row for row in rows if row["fstype"] in SHARE_FSTYPES]
+    return rows
+
+
+def shares(mountinfo: str) -> list[dict[str, str]]:
+    """The host-backed mounts: the guest's ways back to host files."""
+    return [row for row in mounts(mountinfo) if row["fstype"] in SHARE_FSTYPES]
+
+
+def stage_mounts(mountinfo: str) -> tuple[str, ...]:
+    """The guest mountpoints a stage walk stops at: all but / and any at or inside /a5.
+
+    / and /a5 are the walk's own tops; a mount nested inside /a5 is walked through, so
+    whatever it shadows differs from the host manifest instead of being dropped.
+    """
+    points = {row["mountpoint"] for row in mounts(mountinfo)}
+    return tuple(sorted(m for m in points if m != "/" and not _within(m, str(A5))))
+
+
+def stage_view_problems(
+    named: str | None,
+    meta: bytes,
+    seen: Mapping[str, Mapping[str, Any]],
+    skip: Collection[str],
+) -> list[str]:
+    """The guest's stage equals the host manifest binding.env names (stage_manifest).
+
+    [LAW:one-source-of-truth] The host manifest is projected onto the guest's view by the
+    same mountpoints the guest walk stopped at, so the diff is the stage, not the mounts.
+    """
+    digest = _sha256(meta)
+    host = cast(Mapping[str, Mapping[str, Any]], json.loads(meta))
+    projected = {p: n for p, n in host.items() if not any(_within(p, m) for m in skip)}
+    return [
+        f"/a5/meta/stage-manifest.json sha256 {digest} is not STAGE_MANIFEST_SHA256 {named!r}"
+        for _ in [0]
+        if digest != named
+    ] + [
+        f"guest stage differs from the host manifest at {p}" for p in manifest_diff(projected, seen)
+    ]
 
 
 def guest_facts() -> GuestFacts:
@@ -2551,6 +2589,8 @@ class IsolationFacts:
     write_errno: Mapping[str, int | None]  # mountpoint -> 0 when a new file was created
     marker_hits: Mapping[str, str]  # path -> sha256 of a regular file holding the marker
     unreadable: Mapping[str, str]  # path -> why the scan could not read it
+    stage_meta: bytes  # /a5/meta/stage-manifest.json as the host wrote it
+    stage_seen: Mapping[str, Mapping[str, Any]]  # the guest's own walk of / and /a5
 
 
 def write_targets(mountinfo: str) -> list[str]:
@@ -2622,6 +2662,8 @@ def isolation_facts() -> IsolationFacts:
         write_errno={target: _write_errno(target) for target in write_targets(mountinfo)},
         marker_hits=hits,
         unreadable=unreadable,
+        stage_meta=(A5 / "meta" / "stage-manifest.json").read_bytes(),
+        stage_seen=scan_stage(Path("/"), A5, stage_mounts(mountinfo)).manifest,
     )
 
 
@@ -2648,6 +2690,12 @@ def isolation_problems(facts: IsolationFacts) -> list[str]:
             for path, digest in sorted(facts.marker_hits.items())
         ),
         *(f"{path} unreadable: {why}" for path, why in sorted(facts.unreadable.items())),
+        *stage_view_problems(
+            facts.environ.get("STAGE_MANIFEST_SHA256"),
+            facts.stage_meta,
+            facts.stage_seen,
+            stage_mounts(facts.mountinfo),
+        ),
     ]
 
 
@@ -2655,7 +2703,10 @@ def isolation(out: Path) -> int:
     """Write the isolation record before its verdict exits; any problem fails the run."""
     facts = isolation_facts()
     problems = isolation_problems(facts)
-    record = asdict(facts) | {
+    kept = {k: v for k, v in asdict(facts).items() if k not in ("stage_meta", "stage_seen")}
+    record = kept | {
+        "stage_meta_sha256": _sha256(facts.stage_meta),
+        "stage_seen_sha256": _sha256(_canonical(facts.stage_seen)),
         # Names only: an env value that leaked must not be uploaded with the evidence.
         "environ": sorted(facts.environ),
         "shares": shares(facts.mountinfo),
@@ -3022,25 +3073,46 @@ def closure_debs(host_json: bytes, binding_env: bytes) -> tuple[Deb, ...]:
     return tuple(_pool_package(entry).deb for entry in cast(list[object], entries))
 
 
+def stage_unchanged(
+    binding_env: bytes, manifest: Mapping[str, Mapping[str, Any]]
+) -> dict[str, Any]:
+    """The stage after the guest exits is the stage binding.env named (stage_manifest)."""
+    named = parse_binding_env(binding_env)["STAGE_MANIFEST_SHA256"]
+    post_run = _sha256(_canonical(manifest))
+    return {
+        "stage_manifest_sha256": {"binding_env": named, "post_run": post_run},
+        "problems": [
+            f"post-run stage {post_run} is not STAGE_MANIFEST_SHA256 {named}"
+            for _ in [0]
+            if post_run != named
+        ],
+    }
+
+
 def q0_post_launch(
     inputs: Inputs,
     environ: Mapping[str, str],
-    meta: Path,
+    root: Path,
+    a5: Path,
     out: Path,
     launched: Path,
     evidence: Path,
 ) -> dict[str, Any]:
     """Whether this run's Q0 observation completed, judged from the retained host records."""
+    meta = a5 / "meta"
     binding_env = meta / "binding.env"
     try:
         job = job_bindings(environ)
         debs = closure_debs(_read(meta / "host.json"), _read(binding_env))
-    except Q0Error as exc:
+        # [LAW:no-ambient-temporal-coupling] Rescanned after vng has exited, with the
+        # host's own walk, so any write the guest made to the stage changes the digest.
+        stage = scan_stage(root, a5, ()).manifest
+    except (Q0Error, OSError) as exc:
         return {"completed_observation": False, "problems": [f"host: {exc}"]}
     # [LAW:one-source-of-truth] The run's identity is the job's own bindings and the
     # inputs this gate parsed, the same values q0_host wrote into binding.env.
     run = job | {"INPUTS_SHA256": inputs.sha256}
-    return q0_observe(
+    observed = q0_observe(
         out,
         launched,
         {key: run[key] for key in Q0_IDENTITY},
@@ -3050,10 +3122,19 @@ def q0_post_launch(
         evidence / "install-ns.json",
         debs,
     )
+    # [LAW:dataflow-not-control-flow] The post-run check always runs and persists, whether
+    # or not the observation collected.
+    unchanged = _persist(
+        evidence / "stage-unchanged.json", stage_unchanged(_read(binding_env), stage)
+    )
+    problems = [*observed["problems"], *(f"stage-unchanged: {p}" for p in unchanged["problems"])]
+    return observed | {"completed_observation": not problems, "problems": problems}
 
 
-def q0_collect_command(inputs: Inputs, out: Path, launched: Path, evidence: Path) -> int:
-    record = q0_post_launch(inputs, os.environ, A5 / "meta", out, launched, evidence)
+def q0_collect_command(
+    inputs: Inputs, root: Path, out: Path, launched: Path, evidence: Path
+) -> int:
+    record = q0_post_launch(inputs, os.environ, root, A5, out, launched, evidence)
     # [LAW:effects-at-boundaries] The record is kept before the exit code reports it, so a
     # refused observation still uploads why; it carries no verdict (Q0_observation).
     (evidence / "q0-collect.json").write_bytes(_canonical(record))
@@ -3099,7 +3180,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     for name in ("handles", "out"):
         reap.add_argument(f"--{name}", type=Path, required=True)
     collect = commands.add_parser("q0-collect", parents=[common])
-    for name in ("out", "launched", "evidence"):
+    for name in ("root", "out", "launched", "evidence"):
         collect.add_argument(f"--{name}", type=Path, required=True)
     args = parser.parse_args(argv)
 
@@ -3130,7 +3211,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "cleanup":
         return cleanup(args.handles, args.out)
     if args.command == "q0-collect":
-        return q0_collect_command(inputs, args.out, args.launched, args.evidence)
+        return q0_collect_command(inputs, args.root, args.out, args.launched, args.evidence)
     if args.command == "guest-stage":
         return ns_install(args.root, args.host_netns, args.evidence, args.debs)
     try:

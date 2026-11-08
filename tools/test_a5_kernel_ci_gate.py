@@ -2676,17 +2676,84 @@ def test_the_tested_tree_never_holds_the_sentinel_marker_the_guest_scans_for() -
 _MARKED = gate.SENTINEL_MARKER + "f" * 64
 
 
+_DIR = {"type": "dir", "mode": 0o755, "uid": 0, "gid": 0}
+_FILE = {"type": "file", "mode": 0o644, "uid": 0, "gid": 0, "size": 1, "sha256": "1" * 64}
+# The host manifest as q0_host writes it: /proc and /out are empty mountpoint dirs there.
+_HOST_STAGE = {"/": _DIR, "/etc/x": _FILE, "/proc": _DIR, "/out": _DIR, "/a5": _DIR, "/a5/y": _FILE}
+_GUEST_MOUNTINFO = (
+    "22 1 0:20 / / ro,relatime - virtiofs ROOTFS ro\n"
+    "23 22 0:21 / /proc rw - proc proc rw\n"
+    "24 22 0:22 / /out rw - virtiofs out rw\n"
+    "25 22 0:23 / /a5 ro - virtiofs a5 ro\n"
+)
+_GUEST_SEEN = {p: n for p, n in _HOST_STAGE.items() if p not in ("/proc", "/out")}
+
+
 def _clean_facts() -> gate.IsolationFacts:
     names = [*gate.BINDING_ENV_KEYS, *gate.FIXED_GUEST_ENV]
+    meta = json.dumps(_HOST_STAGE).encode()
     return gate.IsolationFacts(
-        mountinfo="22 1 0:20 / / ro,relatime - virtiofs ROOTFS ro\n",
-        environ={name: f"value-of-{name}" for name in names},
+        mountinfo=_GUEST_MOUNTINFO,
+        environ={name: f"value-of-{name}" for name in names}
+        | {"STAGE_MANIFEST_SHA256": _sha(meta)},
         interfaces=("lo",),
         present=(),
         write_errno={"/": errno.EROFS, "/a5": errno.EROFS},
         marker_hits={},
         unreadable={},
+        stage_meta=meta,
+        stage_seen=_GUEST_SEEN,
     )
+
+
+def test_stage_mounts_stop_at_every_guest_mount_but_the_walk_tops() -> None:
+    nested = _GUEST_MOUNTINFO + "26 25 0:24 / /a5/src ro - tmpfs t ro\n"
+    assert gate.stage_mounts(nested) == ("/out", "/proc")
+
+
+@pytest.mark.parametrize(
+    ("change", "problem"),
+    [
+        pytest.param(
+            lambda f: replace(f, stage_seen={**f.stage_seen, "/etc/x": _FILE | {"size": 2}}),
+            "guest stage differs from the host manifest at /etc/x",
+            id="mutated-file",
+        ),
+        pytest.param(
+            lambda f: replace(f, stage_seen={**f.stage_seen, "/a5/z": _FILE}),
+            "guest stage differs from the host manifest at /a5/z",
+            id="added-path",
+        ),
+        pytest.param(
+            lambda f: replace(
+                f, stage_seen={k: v for k, v in f.stage_seen.items() if k != "/a5/y"}
+            ),
+            "guest stage differs from the host manifest at /a5/y",
+            id="missing-path",
+        ),
+        pytest.param(
+            lambda f: replace(
+                f,
+                mountinfo=f.mountinfo + "26 25 0:24 / /a5/y ro - 9p y ro\n",
+                stage_seen={**f.stage_seen, "/a5/y": _DIR},
+            ),
+            "guest stage differs from the host manifest at /a5/y",
+            id="mount-inside-a5-is-not-projected-away",
+        ),
+        pytest.param(
+            lambda f: replace(f, stage_meta=f.stage_meta + b" "),
+            "/a5/meta/stage-manifest.json sha256 {} is not STAGE_MANIFEST_SHA256 {!r}",
+            id="meta-not-the-named-manifest",
+        ),
+    ],
+)
+def test_isolation_problems_refuse_a_guest_stage_other_than_the_named_manifest(
+    change: Callable[[gate.IsolationFacts], gate.IsolationFacts], problem: str
+) -> None:
+    clean = _clean_facts()
+    facts = change(clean)
+    expected = problem.format(_sha(facts.stage_meta), clean.environ["STAGE_MANIFEST_SHA256"])
+    assert gate.isolation_problems(facts) == [expected]
 
 
 def test_isolation_problems_pass_a_guest_that_reaches_nothing() -> None:
@@ -2826,6 +2893,8 @@ def test_isolation_command_records_env_names_only_before_its_verdict_exits(
     assert record["verdict"] == ("fail" if problems else "pass")
     assert record["environ"] == sorted(facts.environ)
     assert record["shares"] == gate.shares(facts.mountinfo)
+    assert record["stage_meta_sha256"] == _sha(facts.stage_meta)
+    assert "stage_seen" not in record and "/etc/x" not in out.read_text()
     assert "value-of-" not in out.read_text() and gate.SENTINEL_MARKER not in out.read_text()
 
 
@@ -3067,8 +3136,12 @@ class PostLaunch(dict[str, Path]):
     """The host's retained records as q0_host lays them out, and one fresh guest /out."""
 
     def write(self, closure: Any) -> None:
+        manifest = (self["meta"] / "stage-manifest.json").read_bytes()
         gate.write_host_records(
-            _records(host={"closure": closure}),
+            _records(
+                values=_binding_values() | {"STAGE_MANIFEST_SHA256": _sha(manifest)},
+                host={"closure": closure},
+            ),
             gate.HostRecords(
                 self["evidence"] / "install-ns.json",
                 self["meta"] / "host.json",
@@ -3088,15 +3161,27 @@ class PostLaunch(dict[str, Path]):
         self, environ: Mapping[str, str] = _RUN_ENV, inputs: gate.Inputs = _Q0_INPUTS
     ) -> dict[str, Any]:
         return gate.q0_post_launch(
-            inputs, environ, self["meta"], self["out"], self["launched"], self["evidence"]
+            inputs,
+            environ,
+            self["root"],
+            self["a5"],
+            self["out"],
+            self["launched"],
+            self["evidence"],
         )
 
 
 @pytest.fixture
 def post(tmp_path: Path) -> PostLaunch:
-    paths = PostLaunch({name: tmp_path / name for name in ("meta", "out", "evidence")})
+    paths = PostLaunch({name: tmp_path / name for name in ("root", "a5", "out", "evidence")})
+    paths["meta"] = paths["a5"] / "meta"
     for directory in paths.values():
         directory.mkdir()
+    (paths["root"] / "etc").mkdir()
+    (paths["root"] / "etc" / "x").write_text("x")
+    (paths["a5"] / "src").mkdir()
+    (paths["a5"] / "src" / "y.py").write_text("y")
+    assert gate.guest_stage_verify(paths["root"], paths["a5"], ()) == []
     paths["launched"] = tmp_path / "launched"
     paths["launched"].touch()
     paths.write([asdict(package) for package in _CLOSURE])
@@ -3109,6 +3194,29 @@ def test_q0_post_launch_completes_from_the_retained_records_alone(post: PostLaun
     assert record["observation_sha256"] == _sha((post["out"] / "observation.json").read_bytes())
     install = json.loads((post["evidence"] / "install-binding.json").read_text())
     assert install["verdict"] == "pass"
+    unchanged = json.loads((post["evidence"] / "stage-unchanged.json").read_text())
+    assert unchanged["verdict"] == "pass"
+
+
+@pytest.mark.parametrize(
+    "write",
+    [
+        pytest.param(lambda post: (post["root"] / "etc" / "x").write_text("z"), id="mutated-file"),
+        pytest.param(lambda post: (post["root"] / "etc" / "new").write_text(""), id="added-root"),
+        pytest.param(lambda post: (post["a5"] / "src" / "new.py").write_text(""), id="added-a5"),
+        pytest.param(lambda post: (post["root"] / "etc" / "x").chmod(0o600), id="mode"),
+    ],
+)
+def test_q0_post_launch_refuses_a_stage_the_guest_run_changed(
+    post: PostLaunch, write: Callable[[PostLaunch], object]
+) -> None:
+    write(post)
+    record = post.run()
+    assert record["completed_observation"] is False
+    [problem] = record["problems"]
+    assert problem.startswith("stage-unchanged: post-run stage ")
+    unchanged = json.loads((post["evidence"] / "stage-unchanged.json").read_text())
+    assert unchanged["verdict"] == "fail"
 
 
 def test_closure_debs_are_the_closure_q0_host_installs() -> None:
@@ -3176,13 +3284,13 @@ def test_q0_post_launch_takes_inputs_sha256_from_the_parsed_inputs(post: PostLau
 def test_q0_collect_command_keeps_its_record_and_exits_on_completion(
     post: PostLaunch, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    monkeypatch.setattr(gate, "A5", post["meta"].parent)
+    monkeypatch.setattr(gate, "A5", post["a5"])
     for key, value in _RUN_ENV.items():
         monkeypatch.setenv(key, value)
     monkeypatch.setattr(gate, "parse_inputs", lambda raw: _Q0_INPUTS)
-    (doc := post["meta"].parent / "inputs.json").write_text(json.dumps({"inputs": _RAW["inputs"]}))
+    (doc := post["a5"].parent / "inputs.json").write_text(json.dumps({"inputs": _RAW["inputs"]}))
     argv = ["q0-collect", "--expectations", str(doc)]
-    argv += [f"--{name}={post[name]}" for name in ("out", "launched", "evidence")]
+    argv += [f"--{name}={post[name]}" for name in ("root", "out", "launched", "evidence")]
     assert main(argv) == 0
     kept = json.loads((post["evidence"] / "q0-collect.json").read_text())
     assert kept["completed_observation"] is True and "verdict" not in kept
