@@ -323,8 +323,12 @@ def config_text(layout: Layout, webhook_port: int, mcp_port: int) -> str:
     return "\n".join(lines) + "\n"
 
 
-def write_new(path: Path, text: str, mode: int = 0o600) -> None:
-    """Create `path` exactly once with `mode`, fsynced - or, when writing fails, not at all."""
+def write_new(path: Path, text: str, mode: int = 0o600) -> tuple[int, int, bytes]:
+    """Create `path` exactly once with `mode`, fsynced - or, when writing fails, not at all.
+
+    Returns the created file's `document_identity`, taken from its own descriptor and the bytes
+    written, never by reading back a path someone else may have replaced meanwhile.
+    """
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC, mode)
     made = os.fstat(fd)
     try:
@@ -340,10 +344,11 @@ def write_new(path: Path, text: str, mode: int = 0o600) -> None:
             raise RuntimeError(f"new file was replaced before its rollback: {path}") from failure
         path.unlink()
         raise
+    return made.st_dev, made.st_ino, text.encode()
 
 
-def write_json_new(path: Path, value: object) -> None:
-    write_new(path, json.dumps(value, sort_keys=True, indent=2, default=str) + "\n")
+def write_json_new(path: Path, value: object) -> tuple[int, int, bytes]:
+    return write_new(path, json.dumps(value, sort_keys=True, indent=2, default=str) + "\n")
 
 
 def installation_declaration(layout: Layout) -> dict[str, object]:
@@ -387,15 +392,14 @@ def installation_state_provisioned(carrier: Path, declaration: object) -> Genera
     removal instead of deleting an unrelated file.
     """
     created = [d for d in (carrier.parent.parent, carrier.parent) if not os.path.lexists(d)]
-    # A failed preparation undoes only its own steps, newest first; a prepared carrier's
-    # removal belongs to the body's teardown below.
+    # A failed preparation removes only the directories it made, newest first; write_new
+    # already leaves no carrier of its own, and the written carrier's removal belongs to the
+    # body's teardown below, which compares it with what write_new created.
     with contextlib.ExitStack() as rollback:
         for directory in created:
             directory.mkdir(mode=0o755)
             rollback.callback(directory.rmdir)
-        write_json_new(carrier, declaration)
-        rollback.callback(carrier.unlink)
-        written = document_identity(carrier)
+        written = write_json_new(carrier, declaration)
         rollback.pop_all()
     try:
         yield

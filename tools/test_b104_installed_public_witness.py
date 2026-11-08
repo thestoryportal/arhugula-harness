@@ -3232,6 +3232,30 @@ def test_a_failed_carrier_write_leaves_only_what_existed_before(
     assert sorted(str(p.relative_to(prefix)) for p in prefix.rglob("*")) == existing
 
 
+@pytest.mark.parametrize("write_fails", (False, True))
+def test_a_carrier_replaced_while_it_is_written_survives(
+    carrier: Path, monkeypatch: pytest.MonkeyPatch, write_fails: bool
+) -> None:
+    carrier.parent.mkdir(parents=True)
+
+    def replace_then_return_or_fail(fd: int) -> None:
+        other = carrier.with_name("other.json")
+        other.write_text("someone else's document")
+        other.replace(carrier)
+        if write_fails:
+            _failing_fsync(fd)
+
+    monkeypatch.setattr(os, "fsync", replace_then_return_or_fail)
+
+    with (
+        pytest.raises(RuntimeError, match="replaced"),
+        w.installation_state_provisioned(carrier, DECLARATION),
+    ):
+        pass
+
+    assert carrier.read_text() == "someone else's document"
+
+
 def test_a_new_file_replaced_before_its_rollback_refuses_removal(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
