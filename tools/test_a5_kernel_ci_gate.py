@@ -2622,9 +2622,20 @@ def test_q0_host_writes_records_binding_the_stage_it_built(
     assert stage["binding_env_sha256"] == _sha((meta / "binding.env").read_bytes())
     # Only the sentinel's digest is recorded, and on the host side only.
     sentinel = calls["bootstrap"][5]
-    assert sentinel.startswith("A5ISOSENTINEL1") and len(sentinel) == 14 + 64
+    assert sentinel.startswith(gate.SENTINEL_MARKER) and len(sentinel) == 14 + 64
     assert stage["sentinel_sha256"] == {"A5_SENTINEL_ENV": _sha(sentinel.encode())}
     assert sentinel not in (meta / "binding.env").read_text() + (meta / "host.json").read_text()
+
+
+def test_the_tested_tree_never_holds_the_sentinel_marker_the_guest_scans_for() -> None:
+    found = subprocess.run(
+        ["git", "grep", "-lF", gate.SENTINEL_MARKER],
+        cwd=Path(__file__).resolve().parent,
+        capture_output=True,
+        text=True,
+    )
+    assert (found.returncode, found.stdout) == (1, ""), found.stderr
+    assert gate.SENTINEL_MARKER == "A5ISO" + "SENTINEL1"
 
 
 def test_q0_host_refuses_an_unset_job_binding_before_fetching_anything(

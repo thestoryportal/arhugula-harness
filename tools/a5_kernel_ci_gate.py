@@ -2529,7 +2529,9 @@ def env_origin(inputs: Inputs, a5: Path, hosts: Sequence[Path], out: Path) -> in
 
 # --- Q0 host run (qualification_sequence.Q0_observation, everything before vng) ---------
 
-SENTINEL_MARKER = "A5ISOSENTINEL1"
+# Assembled from bytes: the guest scans /a5/src for it, so the tested tree must never hold
+# the literal (isolation_check (2)).
+SENTINEL_MARKER = bytes.fromhex("41354953 4f53454e 54494e45 4c31").decode()
 # The binding.env keys the job's own environment supplies; measured_bindings and
 # host_records supply the rest, and host_records refuses any other union.
 JOB_BINDINGS = (
