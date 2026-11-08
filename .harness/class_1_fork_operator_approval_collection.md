@@ -42,27 +42,51 @@ No new H_T primitive, CP palette value, approval store, claim store or HTTP oper
 
 ### C1. Operator input value
 
-One runtime value, `OperatorDecision`, is the only thing an ingress produces:
+One runtime value, `OperatorDecision`, is the only thing an ingress produces. Every decision from
+a harness ingress is sent as an elicitation `accept` whose data also carries `ingress` (C5):
 
-| `action` | Carried fields | Elicitation reply the ingress sends |
+| `action` | Carried fields | `response` in the `accept` data |
 |---|---|---|
-| `approve` | `response_text` optional | `accept`, `response="approve"` |
-| `edit` | `edited_proposal` (JSON object text) required | `accept`, `response="edit"` |
-| `reject` | `rejection_reason` optional | `accept`, `response="reject"` |
-| `respond` | `response_text` required | `accept`, `response="respond"` |
-| `hold` | none | `accept`, `response="hold"` |
-| `cancel` | none | `cancel` |
-| `refuse` | `rejection_reason` (ingress-generated) | `decline` |
+| `approve` | `response_text` optional | `"approve"` |
+| `edit` | `edited_proposal` (JSON object text) required | `"edit"` |
+| `reject` | `rejection_reason` optional | `"reject"` |
+| `respond` | `response_text` required | `"respond"` |
+| `hold` | none | `"hold"` |
+| `cancel` | none | `"cancel"` |
+| `refuse` | `rejection_reason` (ingress-generated literal) required | `"refuse"` |
 
-`refuse` is never operator-chosen; an ingress produces it for unattended or invalid input.
+`refuse` is never operator-chosen; an ingress produces it for unattended or invalid input. The
+schema `AskUserQuestionElicitationSchema` gains `ingress` (optional str); `hold`, `cancel` and
+`refuse` are surface values parsed by `ServerCtxElicitCallback` before palette validation and never
+become `HITLResponse` members. MCP-native `decline` and `cancel` from other clients (Claude Code)
+keep their current mapping.
+
+### C1a. Decision-relevant request
+
+The server's elicitation message stops being only `HITL gate at <position>`
+(`P/lifecycle/hitl_gate_composer.py:2329-2332`). It is the deterministic text:
+
+```
+HITL gate at <placement.position>
+step: <step.step_id> (<step.step_kind>)
+payload sha256: <hex of post_mutation_payload_hash(step.step_payload)>
+payload: <canonical JSON of step.step_payload, sort_keys, compact>
+```
+
+When the canonical payload exceeds 8192 bytes the `payload:` line carries the first 8192 bytes
+followed by `… (truncated; <n> bytes total)`; the hash line always covers the whole payload.
+`OperatorRequest` (Python) carries the same fields structurally: `position`, `step_id`,
+`step_kind`, `payload` (the full mapping), `payload_sha256`, `options`, `message`. Both TTY
+ingresses print the whole message to stderr before reading any answer.
 
 ### C2. Ingress bindings
 
 - **Python `api.run`.** A keyword-only `operator: OperatorInput | None = None`, an async callable
-  `(OperatorRequest) -> OperatorDecision`. `OperatorRequest` carries the server's elicitation
-  message and the offered options. `None` keeps today's `decline` exactly (the four existing
-  callsites stay byte-identical in behavior). A callable that raises or returns a non-
-  `OperatorDecision` yields `refuse` with reason `operator input callback failed: <type name>`.
+  `(OperatorRequest) -> OperatorDecision` (C1a). `None` yields `refuse` with reason
+  `unattended: no operator input bound` and ingress `unattended`; the outcome for the four existing
+  callsites is unchanged (REJECTED, zero effects) and only the recorded reason changes from
+  `operator declined elicitation`. A callable that raises or returns a non-`OperatorDecision`
+  yields `refuse` with reason `operator input callback failed: <type name>`, ingress `python`.
 - **One-shot `harness run` CLI.** Prompts on the controlling TTY only when stdin and stderr are
   both TTYs, writing the prompt to stderr and reading one line. Input grammar:
   `approve`, `reject [reason]`, `edit <JSON object>`, `respond <text>`, `hold`, `cancel`.
@@ -79,18 +103,29 @@ One runtime value, `OperatorDecision`, is the only thing an ingress produces:
 | `accept approve` | step dispatched (existing 4i APPROVE) | exactly once |
 | `accept edit`, valid JSON object | edited payload dispatched (existing 4i EDIT) | once, with the edited payload |
 | `accept edit`, undecodable | audited, then `RT-FAIL-HITL-GATE-EDIT-DECODE` (existing) | zero |
-| `accept reject` / `decline` | audited, then `RT-FAIL-HITL-GATE-REJECTED` (existing) | zero |
+| `accept reject` / MCP-native `decline` | audited, then `RT-FAIL-HITL-GATE-REJECTED` (existing) | zero |
+| `accept refuse` with `rejection_reason` | audited as response `reject` with that exact `rejection_reason` (never approval), then `RT-FAIL-HITL-GATE-REJECTED` | zero |
+| `accept refuse` without `rejection_reason` | as `accept` outside C1 below | zero |
 | `accept respond` | existing 4i RESPOND | per existing RESPOND |
 | `accept hold`, durable pause bound | escalate-pause sequence, run ends PAUSED with resume handle, no step-4h audit (§14.8.8.6) | zero until resumed |
 | `accept hold`, no durable pause binding | audited REJECT with reason `hold unavailable: no durable pause binding` | zero |
-| `cancel` | existing timeout path: degradation mode, fail-closed `RT-FAIL-HITL-GATE-REJECTED` | zero |
-| `accept` with a response outside C1 | `MCPSurfaceCallbackNotBoundError` (existing) | zero |
-| no reply by `placement.timeout` (or client disconnect) | `AskUserQuestionTimeoutError`, then as `cancel` | zero |
+| `accept cancel` / MCP-native `cancel` | existing timeout path: degradation mode, fail-closed `RT-FAIL-HITL-GATE-REJECTED` | zero |
+| `accept` with a response or `ingress` outside C1/C5 | `MCPSurfaceCallbackNotBoundError` (existing) | zero |
+| no reply by the elicitation deadline (C3a) | `AskUserQuestionTimeoutError`, then as `cancel` | zero |
 
-`hold` is parsed by `ServerCtxElicitCallback` before palette validation and surfaced to the
-composer as a typed hold request; it never becomes an `HITLResponse` member.
-The server bounds `ctx.elicit` by `placement.timeout` when set. A client disconnect must end the
-wait; see open fork F3 for the unset-timeout case.
+`hold` is surfaced to the composer as a typed hold request.
+
+### C3a. Bounded wait (every ingress, timeout set or unset)
+
+`ServerCtxElicitCallback` awaits `ctx.elicit` under `asyncio.wait_for` with the elicitation
+deadline `placement.timeout` when set, otherwise the fixed contract constant
+`OPERATOR_ELICITATION_DEADLINE_SECONDS = 900`. The constant is not configurable in T03. Expiry
+raises `TimeoutError`, which `MCPBackedAskUserQuestionSurface.ask` already maps to
+`AskUserQuestionTimeoutError`, so a vanished, killed or silent client ends the run fail-closed,
+with zero effects, no later than the deadline, whatever the SDK does on disconnect. The in-process
+`api.run` path and both TTY readers are under the same server deadline. A transport error raised by
+`ctx.elicit` (closed session) is mapped the same way. Earlier termination on session closure is
+permitted but not promised.
 
 ### C4. Resume of a held gate (single pass-through context)
 
@@ -104,64 +139,79 @@ resume claim and journal (constraint 5). The resumed step consumes it once throu
 
 ### C5. Attribution
 
-The step-4h audit keeps `actor=step_context.parent_actor`, the principal that launched the run
-(for the solo-developer persona, the operator who answers). Each ingress additionally records
-`hitl.response.ingress` on the `hitl.invocation.responded` span, one of `python`, `cli-tty`,
-`daemon-client-tty`, `unattended`. Refusal reasons in C2/C3 are literal, so the audited
-`rejection_reason_hash` discriminates operator rejection from ingress refusal.
+- **Audit actor.** The step-4h audit keeps `actor=step_context.parent_actor`, recorded and named as
+  the launching principal of the run. No human responder identity is recorded or claimed.
+- **Ingress carrier.** Each harness ingress sets the elicitation data field `ingress` to one of
+  `python`, `cli-tty`, `daemon-client-tty`, `unattended`. It is client-reported over the daemon's
+  local Unix socket or the in-process session, not authenticated. `ServerCtxElicitCallback`
+  validates it against that closed set and returns it on `AskUserQuestionResult` (new optional
+  field `ingress`); MCP-native `decline`/`cancel` and replies without the field give `unreported`.
+- **Server-side setter.** The composer sets `hitl.response.ingress` from that field on the
+  `hitl.invocation.responded` span (`P/lifecycle/hitl_gate_composer.py:2480-2489`). For the
+  `cancel`/timeout path, which has no responded span today, it sets the attribute on the
+  `hitl.invocation.opened` span.
+- **Refusal reasons.** Ingress refusals carry their literal reasons through `accept refuse` (C3),
+  so the audited `rejection_reason_hash` discriminates operator rejection, unattended refusal,
+  noninteractive refusal, invalid input and callback failure.
 
 ## Literal assertions for T03
 
 Each runs through the public ingress (in-process `api.run` / `harness run`, and a real daemon over
 its Unix socket for the `--daemon` rows), with a fixture workflow whose gated step writes one
 marker file. "Zero effects" means the marker is absent and the ledger has no dispatch entry for
-the gated step.
+the gated step. "Audit" is the step-4h `CPAuditLedgerEntry`; "ingress" is the span attribute (C5).
 
 1. `api.run` with `operator` returning `approve`: result SUCCEEDED, marker written once, audit
-   response `approve`.
+   response `approve`, ingress `python`. The callback received an `OperatorRequest` whose
+   `step_id`, `payload` and `payload_sha256` equal the gated step's.
 2. `api.run` with `edit` and `{"k": "edited"}`: marker content comes from the edited payload; the
    audit's `edited_proposal_hash` is the hash of the decoded payload.
-3. `api.run` with `reject "no"`: `RT-FAIL-HITL-GATE-REJECTED`, zero effects, audit `reject`.
-4. `api.run` with `operator=None`: same as 3 but reason `operator declined elicitation` (current
-   behavior preserved).
-5. `api.run` with a callback that raises: refuse, zero effects, reason names the exception type.
-6. `harness run` with stdin not a TTY: no prompt, exit code for REJECTED, zero effects, finishes
-   within the fixture's bound (no hang).
-7. `harness run` on a pseudo-TTY, input `approve`: exit 0 and marker written; input `bogus`: refuse
-   with `invalid operator input`, zero effects.
-8. `harness run --daemon` on a pseudo-TTY, input `approve`: daemon run SUCCEEDED, marker written;
-   input `reject`: REJECTED, zero effects. Same daemon, both runs, no restart.
-9. `hold` with the durable pause bound, on each ingress: exit 5 (PAUSED) with a resume handle,
-   zero effects; then one resume with `--hitl-response approve` writes the marker once.
+3. `api.run` with `reject "no"`: `RT-FAIL-HITL-GATE-REJECTED`, zero effects, audit `reject` with
+   `rejection_reason_hash` of `no`, ingress `python`.
+4. `api.run` with `operator=None`: REJECTED, zero effects, audit `reject` with the hash of
+   `unattended: no operator input bound`, ingress `unattended`.
+5. `api.run` with a callback that raises `ValueError`: REJECTED, zero effects, audit hash of
+   `operator input callback failed: ValueError`, ingress `python`.
+6. `harness run` with stdin not a TTY: no prompt read, the CLI's REJECTED exit code, zero effects,
+   audit hash of `noninteractive: no operator terminal`, ingress `cli-tty`, finishes within the
+   fixture's bound.
+7. `harness run` on a pseudo-TTY: before any answer is read, stderr contains the C1a message with
+   the gated `step_id` and payload hash. Input `approve`: exit 0, marker written, ingress
+   `cli-tty`. Input `bogus`: REJECTED, zero effects, audit hash of `invalid operator input`.
+   Assertions 4–7 give four pairwise distinct `rejection_reason_hash` values.
+8. `harness run --daemon` on a pseudo-TTY: the C1a message is shown before reading; input
+   `approve`: daemon run SUCCEEDED, marker written, ingress `daemon-client-tty`; input `reject`:
+   REJECTED, zero effects. Same daemon, both runs, no restart.
+9. `hold` on each ingress with the durable pause binding demonstrated bound in the fixture config:
+   exit 5 (PAUSED) with a resume handle, zero effects; then one resume with
+   `--hitl-response approve` writes the marker once.
 10. `hold` without the durable pause binding: audited REJECT with reason
     `hold unavailable: no durable pause binding`, zero effects.
-11. A second resume of the same handle after 10's successful resume is refused by the existing
-    root claim refusal class, and the marker is still written once.
-12. `cancel` on each ingress: fail-closed REJECTED, zero effects.
-13. Daemon client killed while the prompt is open: the daemon's run ends REJECTED (timeout path)
-    within the placement timeout, zero effects, and the daemon still serves a following run.
-14. Existing workflow-layer pause/resume, root-claim and HITL composer regressions stay green.
+11. A second resume of the same handle after assertion 9's successful resume is refused by the
+    existing root claim refusal class, and the marker is still written once.
+12. `cancel` on each ingress: fail-closed REJECTED, zero effects, ingress on the opened span.
+13. Bounded wait, `placement.timeout` unset, `OPERATOR_ELICITATION_DEADLINE_SECONDS` patched to
+    2 s in the source test: (a) `api.run` whose callback never returns ends REJECTED within 2 s
+    plus slack, zero effects; (b) a daemon client killed while the prompt is open: the daemon's
+    run ends REJECTED within 2 s plus slack, zero effects, and the same daemon then serves a
+    following run. With the constant unpatched, a separate check asserts its value is 900.
+14. A non-harness reply `accept` with `ingress="root"` or `response="refuse"` lacking a reason is
+    refused as outside C1/C5 with zero effects.
+15. Existing workflow-layer pause/resume, root-claim and HITL composer regressions stay green.
 
-## Open forks for reviewer judgment and Buford ratification
+## Fork rulings (review pass 1, `cmt-53ad3553-8352-47a3-b855-d19c9239b45e`)
 
-- **F1 hold mapping.** Recommended above: `hold` as a surface value mapped onto the existing
-  escalate-pause sequence. Alternative: no sync hold (hold only where step 4-bis already pauses),
-  which leaves solo sync gates without a hold. Recommendation: the mapping.
-- **F2 attribution.** Recommended: launching principal plus the ingress span attribute. A per-human
-  responder field would change the CP audit schema; recommended out of scope for the solo persona.
-- **F3 unset timeout.** When `placement.timeout` is None and the SDK does not end `ctx.elicit` on
-  client disconnect, the server can wait forever. Recommended: T03 first witnesses the SDK
-  behavior (assertion 13 with no placement timeout); if it hangs, bind the wait to the daemon
-  session's lifetime, adding no new configurable default.
-- **F4 prompt content.** The server's message is `HITL gate at <position>` and does not show the
-  proposed action. Recommended: out of T03 scope, registered as a follow-up; the operator decides
-  from the run's own context.
-- **F5 inherited-gate refusal (A4).** B-315 names A4 for the inherited-gate refusal. This contract
-  changes no inherited-gate rule, so it needs nothing from A4. Child-workflow gates are excluded
-  from T03 assertions.
+- **F1 hold mapping.** Accepted by the reviewer on condition that the durable binding is
+  demonstrated with zero-effect and one-shot resume behavior (assertions 9–11).
+- **F2 attribution.** Accepted as the launching principal, subject to the C5 ingress carrier.
+- **F3 unset timeout.** Settled in C3a: a fixed 900 s deadline whatever the SDK does.
+- **F4 prompt content.** Settled in C1a; no longer deferred.
+- **F5 inherited-gate refusal (A4).** Accepted: this contract changes no inherited-gate rule, so
+  it needs nothing from A4. Child-workflow gates are excluded from T03 assertions.
+- **Open for Buford ratification:** the 900 s constant and the 8192-byte payload display bound.
 
 ## Disposition (on ratification)
 
 The C1–C5 contract becomes the next free Runtime spec version's §14.8 amendment to C-RT-18, with
-one plan unit for T03 carrying assertions 1–14, materialized in P2 before T03 claims conformance.
+one plan unit for T03 carrying assertions 1–15, materialized in P2 before T03 claims conformance.
 No source or test change is made by this stage.
