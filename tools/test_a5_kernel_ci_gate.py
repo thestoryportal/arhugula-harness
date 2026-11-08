@@ -555,7 +555,8 @@ def q0(tmp_path: Path) -> Q0:
 
 
 def _completed_nothing(record: dict[str, Any]) -> None:
-    assert record["completed_observation"] is False and record["problems"]
+    assert record["bindings_verified"] is False and record["problems"]
+    assert "completed_observation" not in record
 
 
 # Group 1: the passing control.
@@ -563,7 +564,7 @@ def test_q0_fresh_bound_observation_completes(q0: Q0) -> None:
     record = q0.observe()
     assert record == {
         "observation_sha256": _sha((q0["out"] / "observation.json").read_bytes()),
-        "completed_observation": True,
+        "bindings_verified": True,
         "problems": [],
     }
     verify = json.loads((q0["evidence"] / "binding-verify.json").read_text())
@@ -705,11 +706,13 @@ def test_q0_binding_verify_refuses_an_unbound_guest_record(
     q0: Q0, mutate: Callable[[Path], None], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     guest = q0["out"] / "observation.json"
-    assert gate.binding_verify(q0["binding_env"], q0["host_stage"], guest)["problems"] == []
+    assert (
+        gate.binding_verify(q0["binding_env"], q0["host_stage"], guest, _IDENTITY)["problems"] == []
+    )
     mutate(guest)
     # An environment-supplied hash is never a substitute for the recorded one.
     monkeypatch.setenv("binding_env_sha256", _sha(q0["binding_env"].read_bytes()))
-    assert gate.binding_verify(q0["binding_env"], q0["host_stage"], guest)["problems"]
+    assert gate.binding_verify(q0["binding_env"], q0["host_stage"], guest, _IDENTITY)["problems"]
     _completed_nothing(q0.observe())
 
 
@@ -770,3 +773,30 @@ def test_q2_check_refuses_a_q0_observation(q0: Q0) -> None:
 def test_q0_collector_refuses_a_q2_preflight_record(q0: Q0) -> None:
     (q0["out"] / "observation.json").write_text(json.dumps(_record("e" * 64)))
     _completed_nothing(q0.observe())
+
+
+# FQ0a-1: every hash agrees, but the retained binding.env names another run.
+@pytest.mark.parametrize("key", _IDENTITY)
+def test_q0_binding_verify_refuses_a_binding_env_of_another_run(q0: Q0, key: str) -> None:
+    other = "2" * 64 if key == "INPUTS_SHA256" else "other"
+    env = q0.binding_env(_sha(q0["install_ns"].read_bytes()), **{key: other})
+    q0["binding_env"].write_bytes(env)
+    q0["host_stage"].write_text(json.dumps({"binding_env_sha256": _sha(env)}))
+    q0.observation()
+    record = q0.observe()
+    _completed_nothing(record)
+    assert record["problems"] == [
+        f"binding-verify: binding.env {key}={other!r} is not this run's {_IDENTITY[key]!r}"
+    ]
+
+
+# FQ0a-2: agreeing hashes over an install the evaluator would refuse claim no completion.
+def test_q0_bindings_over_a_failed_install_claim_no_completed_observation(q0: Q0) -> None:
+    q0["install_ns"].write_text('{"dpkg_exit": 1}\n')
+    env = q0.binding_env(_sha(q0["install_ns"].read_bytes()))
+    q0["binding_env"].write_bytes(env)
+    q0["host_stage"].write_text(json.dumps({"binding_env_sha256": _sha(env)}))
+    q0.observation()
+    record = q0.observe()
+    assert record["bindings_verified"] is True
+    assert "completed_observation" not in record

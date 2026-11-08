@@ -645,13 +645,16 @@ def _agreement(values: Mapping[str, str], key: str) -> list[str]:
     return [] if len(set(values.values())) == 1 else [f"{key} values differ: {dict(values)}"]
 
 
-def binding_verify(binding_env: Path, host_stage: Path, guest_record: Path) -> dict[str, Any]:
+def binding_verify(
+    binding_env: Path, host_stage: Path, guest_record: Path, identity: Mapping[str, str]
+) -> dict[str, Any]:
     # [LAW:one-source-of-truth] binding.env is hashed from its retained bytes on each side
-    # of the boundary; no hash supplied through the environment is consulted.
+    # of the boundary; no hash supplied through the environment is consulted. Its identity
+    # must be the run's too, or equal hashes would bind a record of another run.
     record: dict[str, Any] = {}
     try:
         env_bytes = _read(binding_env)
-        parse_binding_env(env_bytes)
+        env = parse_binding_env(env_bytes)
         stage_bytes, guest_bytes = _read(host_stage), _read(guest_record)
         record["host_stage_sha256"] = _sha256(stage_bytes)
         record["guest_record_sha256"] = _sha256(guest_bytes)
@@ -668,7 +671,12 @@ def binding_verify(binding_env: Path, host_stage: Path, guest_record: Path) -> d
         return record | {"problems": [str(exc)]}
     return record | {
         "binding_env_sha256": values,
-        "problems": _agreement(values, "binding_env_sha256"),
+        "problems": _agreement(values, "binding_env_sha256")
+        + [
+            f"binding.env {key}={env[key]!r} is not this run's {identity[key]!r}"
+            for key in Q0_IDENTITY
+            if env[key] != identity[key]
+        ],
     }
 
 
@@ -707,17 +715,22 @@ def q0_observe(
     host_stage: Path,
     install_ns: Path,
 ) -> dict[str, Any]:
-    """Collect, binding-verify, install-binding: completed only when all three pass."""
+    """Collect, binding-verify, install-binding: the host-side bindings of one observation.
+
+    A completed observation also needs the step-3c install-ns evaluator and the guest
+    producer (Q0b), so this result never claims one.
+    """
     try:
         observation = q0_collect(out, launched, identity, evidence)
     except Q0Error as exc:
-        return {"completed_observation": False, "problems": [f"collect: {exc}"]}
+        return {"bindings_verified": False, "problems": [f"collect: {exc}"]}
     guest = evidence / "observation.json"
     # [LAW:dataflow-not-control-flow] Both binding checks always run and persist their
-    # evidence; a failure in either leaves the collected file but withholds completion.
+    # evidence; a failure in either leaves the collected file but fails the bindings.
     checks = {
         "binding-verify": _persist(
-            evidence / "binding-verify.json", binding_verify(binding_env, host_stage, guest)
+            evidence / "binding-verify.json",
+            binding_verify(binding_env, host_stage, guest, identity),
         ),
         "install-binding": _persist(
             evidence / "install-binding.json", install_binding(install_ns, binding_env, guest)
@@ -726,7 +739,7 @@ def q0_observe(
     problems = [f"{name}: {p}" for name, check in checks.items() for p in check["problems"]]
     return {
         "observation_sha256": observation.sha256,
-        "completed_observation": not problems,
+        "bindings_verified": not problems,
         "problems": problems,
     }
 
