@@ -59,5 +59,44 @@
   "unsupported_host_ids": [
     "harness-runtime/tests/test_cli_read_boundary.py::test_this_unsupported_host_is_refused_by_the_real_launcher",
     "harness-runtime/tests/test_external_cli_codex_read_boundary.py::test_an_unsupported_host_is_a_typed_refusal_and_the_target_never_runs"
-  ]
+  ],
+  "inputs": {
+    "base": {
+      "release_dir": "https://cdimage.ubuntu.com/ubuntu-base/releases/26.04/release/",
+      "tarball": "ubuntu-base-26.04-base-amd64.tar.gz",
+      "tarball_sha256": "046fcabb7f16f45a80ae11824664f2a07e01386c6fb1ed9dc1e225a66a6553a2",
+      "sha256sums_sha256": "c70149f57ea126a96a21d4093b9c3fcff94ed2b9382508b8d888a32295b263f2",
+      "signing_key": "843938DF228D22F7B3742BC0D94AA3F0EFE21092"
+    },
+    "archive": {
+      "snapshot_id": "20261101T000000Z",
+      "suite": "resolute",
+      "components": [
+        "main",
+        "universe"
+      ],
+      "signing_key": "F6ECB3762474EDA9D21B7022871920D1991BC93C"
+    },
+    "guest_packages": [
+      "git"
+    ],
+    "launcher": {
+      "packages": [
+        "virtme-ng",
+        "qemu-system-x86",
+        "virtiofsd"
+      ],
+      "virtme_ng": "1.40-2"
+    },
+    "interpreter": {
+      "uv": "0.13.5",
+      "cpython": "3.12.15"
+    },
+    "kernel": {
+      "tarball_sha256": "fa595aad93734f829c963c2a90ef7c3673224fd7fdae7b49406e397cde2de231",
+      "autosigner_key": "B8868C80BA62A1FFFAF5FDA9632D3A06589DA6B1",
+      "developer_key": "647F28654894E3BD457199BE38DBBDC86092693E",
+      "config_sha256": "a9349f24cccf3454742a348693eccd8b14758dc2d2e54d58cc3df1bf52cb2150"
+    }
+  }
 }

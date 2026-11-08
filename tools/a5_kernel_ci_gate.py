@@ -141,6 +141,165 @@ def parse_expectations(raw: Mapping[str, Any]) -> Expectations:
     return Expectations(blobs, venues, supported, unsupported)
 
 
+# --- Q0 inputs ----------------------------------------------------------------------
+
+# Pins chosen from signed upstream artifacts and reviewed before Q0. Nothing here has a
+# default and nothing is taken from a run: base package set, closure, host package
+# versions, mounts and root manifests are outputs Q0 observes and Q1 freezes.
+GUEST_PACKAGES = ("git",)
+LAUNCHER_PACKAGES = ("virtme-ng", "qemu-system-x86", "virtiofsd")
+VIRTME_NG_VERSION = "1.40-2"
+GUEST_KERNEL_CONFIG = ROOT / "tools" / "a5_guest_kernel.config"
+
+_SHA256 = re.compile(r"[0-9a-f]{64}")
+_FINGERPRINT = re.compile(r"[0-9A-F]{40}")
+_SNAPSHOT_ID = re.compile(r"[0-9]{8}T[0-9]{6}Z")
+_VERSION = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+")
+_CPYTHON_312 = re.compile(r"3\.12\.[0-9]+")
+_TARBALL = re.compile(r"ubuntu-base-[0-9.]+-base-amd64\.tar\.gz")
+
+
+@dataclass(frozen=True)
+class BaseInput:
+    release_dir: str
+    tarball: str
+    tarball_sha256: str
+    sha256sums_sha256: str
+    signing_key: str
+
+
+@dataclass(frozen=True)
+class ArchiveInput:
+    snapshot_id: str
+    suite: str
+    components: tuple[str, ...]
+    signing_key: str
+
+
+@dataclass(frozen=True)
+class KernelInput:
+    tarball_sha256: str
+    autosigner_key: str
+    developer_key: str
+    config_sha256: str
+
+
+@dataclass(frozen=True)
+class Inputs:
+    base: BaseInput
+    archive: ArchiveInput
+    guest_packages: tuple[str, ...]
+    launcher_packages: tuple[str, ...]
+    virtme_ng_version: str
+    uv_version: str
+    cpython: str
+    kernel: KernelInput
+    sha256: str  # INPUTS_SHA256: sha256 of the canonical JSON of the raw `inputs` section
+
+
+def _section(raw: object, name: str, keys: Sequence[str]) -> Mapping[str, object]:
+    if not isinstance(raw, Mapping):
+        raise ExpectationsError(f"inputs {name} is absent or not an object")
+    section = cast(Mapping[str, object], raw)
+    if set(section) != set(keys):
+        raise ExpectationsError(f"inputs {name} has keys {sorted(section)}, needs {sorted(keys)}")
+    return section
+
+
+def _text(section: Mapping[str, object], key: str, form: re.Pattern[str] | None = None) -> str:
+    value = section[key]
+    if not isinstance(value, str) or not value:
+        raise ExpectationsError(f"inputs field {key} is empty or not a string")
+    if form is not None and not form.fullmatch(value):
+        raise ExpectationsError(f"inputs field {key}={value!r} is not a {form.pattern}")
+    return value
+
+
+def _names(section: Mapping[str, object], key: str) -> tuple[str, ...]:
+    value = section[key]
+    if not isinstance(value, list) or not value:
+        raise ExpectationsError(f"inputs field {key} is empty or not a list")
+    names = tuple(cast(list[object], value))
+    if not all(isinstance(n, str) and n for n in names) or len(set(names)) != len(names):
+        raise ExpectationsError(f"inputs field {key} needs distinct non-empty names")
+    return cast(tuple[str, ...], names)
+
+
+def inputs_sha256(raw_inputs: Mapping[str, object]) -> str:
+    canonical = json.dumps(raw_inputs, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(canonical.encode()).hexdigest()
+
+
+def parse_inputs(raw: object) -> Inputs:
+    # [LAW:parse-dont-validate] Every subcommand refuses a file whose Q0 inputs are absent,
+    # incomplete or empty; there is no fallback value for any field.
+    top = _section(
+        raw, "section", ("base", "archive", "guest_packages", "launcher", "interpreter", "kernel")
+    )
+    base = _section(
+        top["base"],
+        "base",
+        ("release_dir", "tarball", "tarball_sha256", "sha256sums_sha256", "signing_key"),
+    )
+    archive = _section(
+        top["archive"], "archive", ("snapshot_id", "suite", "components", "signing_key")
+    )
+    launcher = _section(top["launcher"], "launcher", ("packages", "virtme_ng"))
+    interpreter = _section(top["interpreter"], "interpreter", ("uv", "cpython"))
+    kernel = _section(
+        top["kernel"],
+        "kernel",
+        ("tarball_sha256", "autosigner_key", "developer_key", "config_sha256"),
+    )
+    release_dir = _text(base, "release_dir")
+    if not (release_dir.startswith("https://") and release_dir.endswith("/")):
+        raise ExpectationsError(f"inputs base release_dir {release_dir!r} is not an https dir")
+    if (guest := _names(top, "guest_packages")) != GUEST_PACKAGES:
+        raise ExpectationsError(f"inputs guest_packages {list(guest)} must be exactly ['git']")
+    if (packages := _names(launcher, "packages")) != LAUNCHER_PACKAGES:
+        raise ExpectationsError(f"inputs launcher packages {list(packages)} are not the plan's")
+    if (virtme_ng := _text(launcher, "virtme_ng")) != VIRTME_NG_VERSION:
+        raise ExpectationsError(f"inputs virtme_ng {virtme_ng!r} is not {VIRTME_NG_VERSION}")
+    return Inputs(
+        base=BaseInput(
+            release_dir,
+            _text(base, "tarball", _TARBALL),
+            _text(base, "tarball_sha256", _SHA256),
+            _text(base, "sha256sums_sha256", _SHA256),
+            _text(base, "signing_key", _FINGERPRINT),
+        ),
+        archive=ArchiveInput(
+            _text(archive, "snapshot_id", _SNAPSHOT_ID),
+            _text(archive, "suite"),
+            _names(archive, "components"),
+            _text(archive, "signing_key", _FINGERPRINT),
+        ),
+        guest_packages=guest,
+        launcher_packages=packages,
+        virtme_ng_version=virtme_ng,
+        uv_version=_text(interpreter, "uv", _VERSION),
+        cpython=_text(interpreter, "cpython", _CPYTHON_312),
+        kernel=KernelInput(
+            _text(kernel, "tarball_sha256", _SHA256),
+            _text(kernel, "autosigner_key", _FINGERPRINT),
+            _text(kernel, "developer_key", _FINGERPRINT),
+            _text(kernel, "config_sha256", _SHA256),
+        ),
+        sha256=inputs_sha256(top),
+    )
+
+
+def kernel_config_problems(config: str) -> list[str]:
+    """Judge the final guest .config before boot: no module loading, so no module share."""
+    lines = config.splitlines()
+    problems = [
+        f"guest .config sets {line!r}" for line in lines if line.startswith("CONFIG_MODULES=")
+    ]
+    if "# CONFIG_MODULES is not set" not in lines:
+        problems.append("guest .config does not record CONFIG_MODULES as unset")
+    return problems
+
+
 # --- preflight ----------------------------------------------------------------------
 
 
@@ -759,7 +918,12 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     raw_bytes = args.expectations.read_bytes()
     try:
-        expectations = parse_expectations(json.loads(raw_bytes))
+        raw: Any = json.loads(raw_bytes)
+        document: Mapping[str, Any] = (
+            cast(Mapping[str, Any], raw) if isinstance(raw, Mapping) else {}
+        )
+        parse_inputs(document.get("inputs"))
+        expectations = parse_expectations(document)
     except (ExpectationsError, ValueError) as exc:
         print(f"a5-kernel-ci: {exc}", file=sys.stderr)
         return 2

@@ -43,8 +43,10 @@ from a5_kernel_ci_gate import (
     git_blob,
     judge_outcomes,
     judge_preflight,
+    kernel_config_problems,
     main,
     parse_expectations,
+    parse_inputs,
     parse_junit,
     parse_preflight,
     preflight,
@@ -357,6 +359,7 @@ def _write_leg(
     tmp_path: Path, junit: str, mutate: Callable[[dict[str, Any]], object] = lambda r: None
 ) -> list[str]:
     raw = json.dumps({
+        "inputs": _RAW["inputs"],
         "bound_blobs": _BLOBS,
         "venues": {"x": {"kind": "supported", "image_os": _ENV["ImageOS"]}},
         "supported_host_ids": [str(_id("test_passes"))],
@@ -480,6 +483,118 @@ def test_unusable_expectations_exit_2(tmp_path: Path, monkeypatch: pytest.Monkey
     (tmp_path / "expectations.json").write_text('{"venues": {}}')
     assert main(argv) == 2
     assert main([*argv[:2], "nowhere", *argv[3:]]) == 2  # unknown venue
+
+
+# --- Q0 inputs ----------------------------------------------------------------------
+
+
+def _leaf_paths(node: Any, path: tuple[str, ...] = ()) -> list[tuple[str, ...]]:
+    if isinstance(node, dict):
+        return [p for key, value in node.items() for p in _leaf_paths(value, (*path, key))]
+    return [path]
+
+
+_INPUT_LEAVES = _leaf_paths(_RAW["inputs"])
+
+
+def _put_input(raw: dict[str, Any], path: tuple[str, ...], value: object) -> None:
+    for key in path[:-1]:
+        raw = raw[key]
+    raw[path[-1]] = value
+
+
+def _drop_input(raw: dict[str, Any], path: tuple[str, ...]) -> None:
+    for key in path[:-1]:
+        raw = raw[key]
+    del raw[path[-1]]
+
+
+def _input_value(path: tuple[str, ...]) -> Any:
+    node: Any = _RAW["inputs"]
+    for key in path:
+        node = node[key]
+    return node
+
+
+def test_committed_inputs_pin_the_committed_kernel_fragment() -> None:
+    inputs = parse_inputs(_RAW["inputs"])
+    fragment = (ROOT / "tools" / "a5_guest_kernel.config").read_bytes()
+    assert inputs.kernel.config_sha256 == hashlib.sha256(fragment).hexdigest()
+    assert inputs.guest_packages == ("git",)
+    assert inputs.virtme_ng_version == "1.40-2"
+    assert "expectations" not in _RAW  # Q1 freezes it; Q0 runs without it
+
+
+def test_inputs_sha256_is_canonical_and_byte_sensitive() -> None:
+    reordered = json.loads(json.dumps(_RAW["inputs"], sort_keys=True))
+    assert list(reordered) != list(_RAW["inputs"])
+    assert parse_inputs(reordered).sha256 == parse_inputs(_RAW["inputs"]).sha256
+    changed = json.loads(json.dumps(_RAW["inputs"]))
+    changed["archive"]["snapshot_id"] = "20261101T000001Z"
+    assert parse_inputs(changed).sha256 != parse_inputs(_RAW["inputs"]).sha256
+
+
+@pytest.mark.parametrize("path", _INPUT_LEAVES, ids=["/".join(p) for p in _INPUT_LEAVES])
+@pytest.mark.parametrize("change", ["empty", "absent"])
+def test_every_inputs_field_is_required_and_non_empty(path: tuple[str, ...], change: str) -> None:
+    raw = json.loads(json.dumps(_RAW["inputs"]))
+    if change == "absent":
+        _drop_input(raw, path)
+    else:
+        _put_input(raw, path, [] if isinstance(_input_value(path), list) else "")
+    with pytest.raises(ExpectationsError):
+        parse_inputs(raw)
+
+
+@pytest.mark.parametrize(
+    ("path", "value"),
+    [
+        (("guest_packages",), ["git", "curl"]),
+        (("launcher", "virtme_ng"), "1.42-1"),
+        (("launcher", "packages"), ["virtme-ng", "qemu-system-x86"]),
+        (("archive", "components"), ["main", "main"]),
+        (("archive", "snapshot_id"), "latest"),
+        (("archive", "signing_key"), "f6ecb3762474eda9d21b7022871920d1991bc93c"),
+        (("base", "tarball"), "ubuntu-base-26.04-base-arm64.tar.gz"),
+        (("base", "release_dir"), "http://cdimage.ubuntu.com/ubuntu-base/releases/26.04/release/"),
+        (("kernel", "tarball_sha256"), "fa595aad"),
+        (("interpreter", "cpython"), "3.13.1"),
+        (("interpreter", "uv"), 13),
+        (("extra",), "x"),
+    ],
+    ids=lambda v: "/".join(v) if isinstance(v, tuple) else None,
+)
+def test_inputs_refuse_substitutions(path: tuple[str, ...], value: object) -> None:
+    raw = json.loads(json.dumps(_RAW["inputs"]))
+    _put_input(raw, path, value)
+    with pytest.raises(ExpectationsError):
+        parse_inputs(raw)
+
+
+@pytest.mark.parametrize("command", ["preflight", "check"])
+@pytest.mark.parametrize("change", ["absent", "empty-field"])
+def test_every_subcommand_refuses_incomplete_inputs(
+    tmp_path: Path, command: str, change: str
+) -> None:
+    argv = _write_leg(tmp_path, _JUNIT)
+    path = tmp_path / "expectations.json"
+    raw = json.loads(path.read_text())
+    if change == "absent":
+        del raw["inputs"]
+    else:
+        raw["inputs"]["interpreter"]["cpython"] = ""
+    path.write_text(json.dumps(raw))
+    assert main([command, *argv[1:]]) == 2
+    assert not (tmp_path / "out").exists()
+
+
+def test_guest_kernel_config_must_leave_modules_unset() -> None:
+    fragment = (ROOT / "tools" / "a5_guest_kernel.config").read_text()
+    assert kernel_config_problems(fragment) == []
+    assert kernel_config_problems(
+        fragment.replace("# CONFIG_MODULES is not set", "CONFIG_MODULES=y")
+    )
+    assert kernel_config_problems("CONFIG_SECURITY=y\n")
 
 
 # --- Q0 observation (host side) -----------------------------------------------------
