@@ -63,6 +63,19 @@ def test_a_document_without_declarations_fails_closed_malformed(document: str) -
     assert installation_root_declaration() == Unresolved(UnresolvedCause.MALFORMED)
 
 
+@pytest.mark.parametrize(
+    "document",
+    [
+        '{"pause_journal_root_declarations": [{"installation_root": "/a"}],'
+        ' "pause_journal_root_declarations": [{"installation_root": "/b"}]}',
+        '{"pause_journal_root_declarations": [{"installation_root": "/a", "installation_root": "/b"}]}',
+    ],
+)
+def test_a_repeated_key_fails_closed_malformed_instead_of_keeping_the_last(document: str) -> None:
+    write_installation_state(document)
+    assert installation_root_declaration() == Unresolved(UnresolvedCause.MALFORMED)
+
+
 def test_undecodable_bytes_fail_closed_malformed() -> None:
     installation_state_path().parent.mkdir(parents=True)
     installation_state_path().write_bytes(b"\xff\xfe{")

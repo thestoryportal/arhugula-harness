@@ -44,7 +44,7 @@ def read_installation_state() -> InstallationState | Unresolved:
     except FileNotFoundError:
         return STORAGE_UNSELECTED
     try:
-        document: object = json.loads(content)
+        document: object = json.loads(content, object_pairs_hook=_unique_keys)
     except ValueError:
         return Unresolved(UnresolvedCause.MALFORMED)
     match document:
@@ -53,6 +53,18 @@ def read_installation_state() -> InstallationState | Unresolved:
             return InstallationState(tuple(declarations))  # pyright: ignore[reportUnknownArgumentType]
         case _:
             return Unresolved(UnresolvedCause.MALFORMED)
+
+
+def _unique_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    """A JSON object whose every key is distinct.
+
+    [LAW:no-silent-failure] `json.loads` would keep only a repeated key's last value, so a second
+    `pause_journal_root_declarations` could silently replace the first; it is malformed instead.
+    """
+    document = dict(pairs)
+    if len(document) != len(pairs):
+        raise ValueError("repeated JSON object key")
+    return document
 
 
 @contextmanager

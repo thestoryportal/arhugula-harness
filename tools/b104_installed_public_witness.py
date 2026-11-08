@@ -324,12 +324,22 @@ def config_text(layout: Layout, webhook_port: int, mcp_port: int) -> str:
 
 
 def write_new(path: Path, text: str, mode: int = 0o600) -> None:
-    """Create `path` exactly once with `mode`, fsynced."""
+    """Create `path` exactly once with `mode`, fsynced - or, when writing fails, not at all."""
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC, mode)
-    with os.fdopen(fd, "w", encoding="utf-8") as stream:
-        stream.write(text)
-        stream.flush()
-        os.fsync(stream.fileno())
+    made = os.fstat(fd)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            stream.write(text)
+            stream.flush()
+            os.fsync(stream.fileno())
+    except BaseException as failure:
+        # [LAW:no-silent-failure] Remove only the file this call created: another file renamed
+        # over it refuses the rollback rather than being deleted.
+        now = path.lstat()
+        if (now.st_dev, now.st_ino) != (made.st_dev, made.st_ino):
+            raise RuntimeError(f"new file was replaced before its rollback: {path}") from failure
+        path.unlink()
+        raise
 
 
 def write_json_new(path: Path, value: object) -> None:
@@ -377,10 +387,16 @@ def installation_state_provisioned(carrier: Path, declaration: object) -> Genera
     removal instead of deleting an unrelated file.
     """
     created = [d for d in (carrier.parent.parent, carrier.parent) if not os.path.lexists(d)]
-    for directory in created:
-        directory.mkdir(mode=0o755)
-    write_json_new(carrier, declaration)
-    written = document_identity(carrier)
+    # A failed preparation undoes only its own steps, newest first; a prepared carrier's
+    # removal belongs to the body's teardown below.
+    with contextlib.ExitStack() as rollback:
+        for directory in created:
+            directory.mkdir(mode=0o755)
+            rollback.callback(directory.rmdir)
+        write_json_new(carrier, declaration)
+        rollback.callback(carrier.unlink)
+        written = document_identity(carrier)
+        rollback.pop_all()
     try:
         yield
     finally:

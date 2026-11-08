@@ -3208,3 +3208,44 @@ def test_a_replaced_carrier_refuses_removal_and_survives(carrier: Path, how: str
             carrier.write_text("someone else's document")
 
     assert carrier.read_text() == "someone else's document"
+
+
+def _failing_fsync(fd: int) -> None:
+    raise OSError(errno.EIO, "injected fsync failure")
+
+
+@pytest.mark.parametrize("existing", ([], ["etc", "etc/arhugula"]))
+def test_a_failed_carrier_write_leaves_only_what_existed_before(
+    carrier: Path, monkeypatch: pytest.MonkeyPatch, existing: list[str]
+) -> None:
+    prefix = Path(sys.prefix)
+    for directory in existing:
+        (prefix / directory).mkdir()
+    monkeypatch.setattr(os, "fsync", _failing_fsync)
+
+    with (
+        pytest.raises(OSError, match="injected"),
+        w.installation_state_provisioned(carrier, DECLARATION),
+    ):
+        raise AssertionError("the body ran without a carrier")
+
+    assert sorted(str(p.relative_to(prefix)) for p in prefix.rglob("*")) == existing
+
+
+def test_a_new_file_replaced_before_its_rollback_refuses_removal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "new.json"
+
+    def replace_then_fail(fd: int) -> None:
+        other = tmp_path / "other.json"
+        other.write_text("someone else's document")
+        other.replace(path)
+        _failing_fsync(fd)
+
+    monkeypatch.setattr(os, "fsync", replace_then_fail)
+
+    with pytest.raises(RuntimeError, match="replaced"):
+        w.write_new(path, "mine")
+
+    assert path.read_text() == "someone else's document"
