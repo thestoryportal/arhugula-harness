@@ -26,19 +26,24 @@ can turn a failed pytest step into success.
 from __future__ import annotations
 
 import argparse
+import base64
 import enum
 import hashlib
+import importlib
+import importlib.metadata
 import json
 import os
 import platform
 import re
 import shlex
 import shutil
+import site
 import socket
 import stat
 import subprocess
 import sys
 import time
+import tomllib
 import xml.etree.ElementTree as ET
 from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
@@ -2124,6 +2129,224 @@ def stage_a5(a5: Path, workspace: Path, tested: str, cache: Path, inputs: Inputs
     (a5 / "meta" / GUEST_RUN).write_text(GUEST_RUN_SH)
 
 
+# --- Environment origin (pytest_and_aggregate.environment_origin) ---------------------
+
+TEST_TOOLS = ("pytest", "pytest_cov")
+
+
+@dataclass(frozen=True)
+class Pth:
+    path: str
+    owner: str | None  # the distribution whose RECORD lists these exact bytes
+    paths: tuple[str, ...]  # the resolved path lines site.py would add to sys.path
+
+
+@dataclass(frozen=True)
+class Distribution:
+    name: str
+    version: str
+    location: str
+    record_sha256: str | None
+
+
+@dataclass(frozen=True)
+class EnvOrigin:
+    """Where the running interpreter, its imports and its tools come from, as resolved paths."""
+
+    executable: str
+    prefix: str
+    executable_realpath: str
+    base_prefix_realpath: str
+    version: str
+    sys_path: tuple[str, ...]
+    user_site: bool | None
+    pyvenv_home: str
+    pth: tuple[Pth, ...]
+    links: tuple[tuple[str, str], ...]
+    distributions: tuple[Distribution, ...]
+    sources: tuple[tuple[str, str], ...]  # [tool.coverage.run] source package -> __file__
+    test_tools: tuple[tuple[str, str], ...]
+    pytest_shebang: str
+    git: str | None
+
+
+def site_packages(a5: Path, cpython: str) -> Path:
+    minor = ".".join(cpython.split(".")[:2])
+    return a5 / "venv" / "lib" / f"python{minor}" / "site-packages"
+
+
+def _record_digest(data: bytes) -> str:
+    return base64.urlsafe_b64encode(hashlib.sha256(data).digest()).rstrip(b"=").decode()
+
+
+def _pth(path: Path, owners: Mapping[tuple[str, str], str]) -> Pth:
+    data = path.read_bytes()
+    # site.py executes lines starting "import"; every other non-comment line is a path.
+    lines = [line.strip() for line in data.decode().splitlines()]
+    return Pth(
+        str(path),
+        owners.get((os.path.realpath(path), _record_digest(data))),
+        tuple(
+            os.path.realpath(path.parent / line)
+            for line in lines
+            if line and not line.startswith(("#", "import ", "import\t"))
+        ),
+    )
+
+
+def _raise(exc: OSError) -> None:
+    raise exc
+
+
+def _module_file(name: str) -> str:
+    file = importlib.import_module(name).__file__
+    if file is None:
+        raise Q0Error(f"{name} has no __file__")
+    return os.path.realpath(file)
+
+
+def measure_env_origin(a5: Path) -> EnvOrigin:
+    """The running interpreter's origin facts; judging them is env_origin_problems' job."""
+    dists = list(importlib.metadata.distributions())
+    owners = {
+        (os.path.realpath(str(dist.locate_file(file))), file.hash.value): dist.metadata["Name"]
+        for dist in dists
+        for file in dist.files or ()
+        if file.hash is not None and file.hash.mode == "sha256"
+    }
+    pyvenv = {
+        key.strip(): value.strip()
+        for key, _, value in (
+            line.partition("=") for line in (a5 / "venv" / "pyvenv.cfg").read_text().splitlines()
+        )
+    }
+    config = tomllib.loads((a5 / "src" / "pyproject.toml").read_text())
+    shebang = (a5 / "venv" / "bin" / "pytest").read_bytes().split(b"\n", 1)[0].decode()
+    git = shutil.which("git")
+    return EnvOrigin(
+        executable=sys.executable,
+        prefix=sys.prefix,
+        executable_realpath=os.path.realpath(sys.executable),
+        base_prefix_realpath=os.path.realpath(sys.base_prefix),
+        version=platform.python_version(),
+        sys_path=tuple(os.path.realpath(entry) for entry in sys.path),
+        user_site=site.ENABLE_USER_SITE,
+        pyvenv_home=os.path.realpath(pyvenv["home"]),
+        pth=tuple(
+            _pth(path, owners)
+            for path in sorted((a5 / "venv" / "lib").glob("*/site-packages/*.pth"))
+        ),
+        # [LAW:no-silent-failure] os.walk ignores an unreadable or absent top unless told.
+        links=tuple(
+            sorted(
+                (str(Path(base) / name), os.path.realpath(Path(base) / name))
+                for top in (a5 / "venv", a5 / "python")
+                for base, dirs, files in os.walk(top, onerror=_raise)
+                for name in (*dirs, *files)
+                if os.path.islink(Path(base) / name)
+            )
+        ),
+        distributions=tuple(
+            sorted(
+                (
+                    Distribution(
+                        dist.metadata["Name"],
+                        dist.version,
+                        os.path.realpath(str(dist.locate_file(""))),
+                        None
+                        if (record := dist.read_text("RECORD")) is None
+                        else _sha256(record.encode()),
+                    )
+                    for dist in dists
+                ),
+                key=lambda dist: (dist.name, dist.version, dist.location),
+            )
+        ),
+        sources=tuple(
+            (name, _module_file(name)) for name in config["tool"]["coverage"]["run"]["source"]
+        ),
+        test_tools=tuple((name, _module_file(name)) for name in TEST_TOOLS),
+        pytest_shebang=shebang,
+        git=None if git is None else os.path.realpath(git),
+    )
+
+
+def _member_src(path: str, src: str) -> bool:
+    """path is a module file under <src>/<member>/src/."""
+    top = PurePosixPath(src).parts
+    parts = PurePosixPath(path).parts
+    return parts[: len(top)] == top and parts[len(top) + 1 : len(top) + 2] == ("src",)
+
+
+def env_origin_problems(origin: EnvOrigin, a5: Path, cpython: str) -> list[str]:
+    """Every measured origin must lie in the staged /a5 tree, at the pinned CPython."""
+    src, venv, python = (str(a5 / name) for name in ("src", "venv", "python"))
+    site_dir = str(site_packages(a5, cpython))
+    facts = (
+        (origin.executable == f"{venv}/bin/python", f"sys.executable is {origin.executable}"),
+        (origin.prefix == venv, f"sys.prefix is {origin.prefix}"),
+        (
+            _within(origin.executable_realpath, python),
+            f"sys.executable resolves to {origin.executable_realpath}",
+        ),
+        (
+            _within(origin.base_prefix_realpath, python),
+            f"sys.base_prefix resolves to {origin.base_prefix_realpath}",
+        ),
+        (origin.version == cpython, f"CPython {origin.version} is not the pinned {cpython}"),
+        (origin.user_site is False, "the user site is not disabled"),
+        (_within(origin.pyvenv_home, python), f"pyvenv.cfg home resolves to {origin.pyvenv_home}"),
+        (origin.sources != (), "pyproject.toml [tool.coverage.run] names no source"),
+        (
+            origin.pytest_shebang == f"#!{venv}/bin/python",
+            f"{venv}/bin/pytest starts {origin.pytest_shebang!r}",
+        ),
+        (origin.git == "/usr/bin/git", f"git resolves to {origin.git}"),
+    )
+    return (
+        [problem for holds, problem in facts if not holds]
+        + [
+            f"sys.path entry {entry} is outside {src}, {venv} and {python}"
+            for entry in origin.sys_path
+            if not any(_within(entry, top) for top in (src, venv, python))
+        ]
+        # [LAW:single-enforcer] The lock admits what may run at startup: an import line is
+        # trusted only as the bytes a locked distribution's RECORD lists.
+        + [f"{pth.path} is in no distribution's RECORD" for pth in origin.pth if pth.owner is None]
+        + [
+            f"{pth.path} adds {path} outside {src}"
+            for pth in origin.pth
+            for path in pth.paths
+            if not _within(path, src)
+        ]
+        + [
+            f"{link} resolves outside {a5} to {target}"
+            for link, target in origin.links
+            if not _within(target, str(a5))
+        ]
+        + [
+            f"distribution {dist.name} lives in {dist.location}, not {site_dir}"
+            for dist in origin.distributions
+            if dist.location != site_dir
+        ]
+        + [
+            f"distribution {dist.name} has no RECORD"
+            for dist in origin.distributions
+            if dist.record_sha256 is None
+        ]
+        + [
+            f"coverage source {name} imports from {file}, not {src}/<member>/src"
+            for name, file in origin.sources
+            if not _member_src(file, src)
+        ]
+        + [
+            f"{name} imports from {file}, outside {site_dir}"
+            for name, file in origin.test_tools
+            if not _within(file, site_dir)
+        ]
+    )
+
+
 # --- CLI ----------------------------------------------------------------------------
 
 
@@ -2254,6 +2477,32 @@ def observe(inputs: Inputs, meta: Path, out: Path) -> int:
     return 0
 
 
+def env_origin(inputs: Inputs, a5: Path, hosts: Sequence[Path], out: Path) -> int:
+    """Write the env-origin record; each --compare record must hold the same facts."""
+    # [LAW:dataflow-not-control-flow] The host run compares against no record, the guest
+    # run against the host's; the same steps run either way.
+    try:
+        origin = measure_env_origin(a5)
+        facts: dict[str, Any] = json.loads(_canonical(asdict(origin)))
+        recorded = [(host, _object(_read(host), host.name)) for host in hosts]
+    except Q0Error as exc:
+        print(f"a5-kernel-ci env-origin: {exc}", file=sys.stderr)
+        return 1
+    problems = env_origin_problems(origin, a5, inputs.cpython) + [
+        f"{key} differs from {host}"
+        for host, record in recorded
+        for key, value in facts.items()
+        if record.get(key) != value
+    ]
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_bytes(
+        _canonical(facts | {"problems": problems, "verdict": "fail" if problems else "pass"})
+    )
+    for problem in problems:
+        print(f"a5-kernel-ci env-origin: {problem}", file=sys.stderr)
+    return 1 if problems else 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--expectations", type=Path, default=EXPECTATIONS)
@@ -2275,6 +2524,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     probe = commands.add_parser("observe", parents=[common])
     probe.add_argument("--meta", type=Path, required=True)
     probe.add_argument("--out", type=Path, required=True)
+    origin = commands.add_parser("env-origin", parents=[common])
+    origin.add_argument("--compare", type=Path, action="append", default=[])
+    origin.add_argument("--out", type=Path, required=True)
     args = parser.parse_args(argv)
 
     raw_bytes = args.expectations.read_bytes()
@@ -2287,10 +2539,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (ExpectationsError, ValueError) as exc:
         print(f"a5-kernel-ci: {exc}", file=sys.stderr)
         return 2
-    # [LAW:one-way-deps] observe is dispatched before `expectations` is parsed, so no
-    # Q1 section can shape a Q0 observation.
+    # [LAW:one-way-deps] observe and env-origin are dispatched before `expectations` is
+    # parsed, so no Q1 section can shape a Q0 observation.
     if args.command == "observe":
         return observe(inputs, args.meta, args.out)
+    if args.command == "env-origin":
+        return env_origin(inputs, A5, args.compare, args.out)
     try:
         expectations = parse_expectations(document)
     except (ExpectationsError, ValueError) as exc:

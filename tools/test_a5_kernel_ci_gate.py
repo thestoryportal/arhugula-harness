@@ -2207,6 +2207,123 @@ def test_stage_a5_detaches_the_tested_commit_and_builds_from_the_pins(
     assert list(other.iterdir()) == []
 
 
+_CPYTHON = parse_inputs(_RAW["inputs"]).cpython
+_SITE = str(gate.site_packages(gate.A5, _CPYTHON))
+_ORIGIN = gate.EnvOrigin(
+    executable="/a5/venv/bin/python",
+    prefix="/a5/venv",
+    executable_realpath=f"/a5/python/cpython-{_CPYTHON}/bin/python3",
+    base_prefix_realpath=f"/a5/python/cpython-{_CPYTHON}",
+    version=_CPYTHON,
+    sys_path=("/a5/src/tools", f"/a5/python/cpython-{_CPYTHON}/lib", _SITE, "/a5/src/core/src"),
+    user_site=False,
+    pyvenv_home=f"/a5/python/cpython-{_CPYTHON}/bin",
+    pth=(
+        gate.Pth(f"{_SITE}/_editable_impl_core.pth", "core", ("/a5/src/core/src",)),
+        gate.Pth(f"{_SITE}/a1_coverage.pth", "coverage", ()),
+    ),
+    links=(("/a5/venv/bin/python", f"/a5/python/cpython-{_CPYTHON}/bin/python3"),),
+    distributions=(gate.Distribution("core", "0.0.0", _SITE, "1" * 64),),
+    sources=(("core", "/a5/src/core/src/core/__init__.py"),),
+    test_tools=(("pytest", f"{_SITE}/pytest/__init__.py"),),
+    pytest_shebang="#!/a5/venv/bin/python",
+    git="/usr/bin/git",
+)
+_ELSEWHERE = "/home/runner/.venv"
+
+
+def test_env_origin_admits_only_the_staged_tree_at_the_pinned_cpython() -> None:
+    assert gate.env_origin_problems(_ORIGIN, gate.A5, _CPYTHON) == []
+    stray = gate.Pth(f"{_SITE}/stray.pth", None, ())
+    escapes = {
+        "executable": f"{_ELSEWHERE}/bin/python",
+        "prefix": _ELSEWHERE,
+        "executable_realpath": "/usr/bin/python3",
+        "base_prefix_realpath": "/usr",
+        "version": "3.12.0",
+        "sys_path": (*_ORIGIN.sys_path, "/usr/lib/python3/dist-packages"),
+        "user_site": True,
+        "pyvenv_home": "/usr/bin",
+        "pth": (*_ORIGIN.pth, stray),
+        "links": (*_ORIGIN.links, ("/a5/python/lib/libssl.so", "/usr/lib/libssl.so")),
+        "distributions": (
+            *_ORIGIN.distributions,
+            gate.Distribution("evil", "1", "/usr/lib/python3/dist-packages", "2" * 64),
+        ),
+        "sources": (("core", "/a5/src/tools/core.py"),),
+        "test_tools": (("pytest", "/usr/lib/python3/dist-packages/pytest/__init__.py"),),
+        "pytest_shebang": "#!/usr/bin/python3",
+        "git": "/usr/local/bin/git",
+    }
+    for field, value in escapes.items():
+        assert (
+            len(gate.env_origin_problems(replace(_ORIGIN, **{field: value}), gate.A5, _CPYTHON))
+            == 1
+        ), field
+    for field, value in {
+        "user_site": None,
+        "pth": (gate.Pth(f"{_SITE}/_editable_impl_core.pth", "core", ("/etc",)),),
+        "distributions": (gate.Distribution("core", "0.0.0", _SITE, None),),
+        "sources": (),
+        "git": None,
+    }.items():
+        assert (
+            len(gate.env_origin_problems(replace(_ORIGIN, **{field: value}), gate.A5, _CPYTHON))
+            == 1
+        ), field
+
+
+def test_env_origin_measures_imports_pth_owners_and_tools_from_the_running_venv(
+    tmp_path: Path,
+) -> None:
+    a5 = tmp_path / "a5"
+    (a5 / "src").mkdir(parents=True)
+    (a5 / "python").mkdir()
+    (a5 / "venv").symlink_to(sys.prefix)
+    (a5 / "src" / "pyproject.toml").write_text(
+        '[tool.coverage.run]\nsource = ["a5_kernel_ci_gate"]\n'
+    )
+    origin = gate.measure_env_origin(a5)
+    site_dir = os.path.realpath(next(Path(sys.prefix, "lib").glob("*/site-packages")))
+    assert origin.executable == sys.executable and origin.version == sys.version.split()[0]
+    # Every .pth of the locked venv is bytes some installed distribution's RECORD lists.
+    assert origin.pth and all(pth.owner for pth in origin.pth)
+    assert {pth.owner for pth in origin.pth if pth.path.endswith("a1_coverage.pth")} == {"coverage"}
+    assert {dist.location for dist in origin.distributions} == {site_dir}
+    assert all(dist.record_sha256 for dist in origin.distributions)
+    assert origin.sources == (("a5_kernel_ci_gate", os.path.realpath(gate.__file__)),)
+    assert dict(origin.test_tools)["pytest"] == os.path.realpath(pytest.__file__)
+    assert origin.pytest_shebang == f"#!{sys.prefix}/bin/python"
+    assert (str(a5 / "venv" / "bin" / "python"), os.path.realpath(sys.executable)) in origin.links
+    problems = gate.env_origin_problems(origin, a5, _CPYTHON)
+    assert f"coverage source a5_kernel_ci_gate imports from {origin.sources[0][1]}" in "\n".join(
+        problems
+    )
+    (a5 / "python").rmdir()
+    with pytest.raises(FileNotFoundError):
+        gate.measure_env_origin(a5)
+
+
+def test_env_origin_guest_record_must_equal_the_host_record_field_for_field(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(gate, "measure_env_origin", lambda a5: _ORIGIN)
+    without_expectations = {"inputs": _RAW["inputs"]}
+    (doc := tmp_path / "inputs.json").write_text(json.dumps(without_expectations))
+    host = tmp_path / "meta" / "host-env-origin.json"
+    assert main(["env-origin", "--expectations", str(doc), "--out", str(host)]) == 0
+    recorded = json.loads(host.read_text())
+    assert recorded["verdict"] == "pass" and recorded["git"] == "/usr/bin/git"
+    guest = tmp_path / "out" / "env-origin.json"
+    argv = ["env-origin", "--expectations", str(doc), "--compare", str(host), "--out", str(guest)]
+    assert main(argv) == 0
+    host.write_text(json.dumps(recorded | {"git": "/usr/local/bin/git"}))
+    assert main(argv) == 1
+    assert json.loads(guest.read_text())["problems"] == [f"git differs from {host}"]
+    host.unlink()
+    assert main(argv) == 1
+
+
 def test_pinned_keyring_holds_only_the_pinned_key_and_refuses_an_absent_one(
     tmp_path: Path,
 ) -> None:
