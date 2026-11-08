@@ -2623,3 +2623,156 @@ def test_host_command_stages_at_a5_from_inputs_alone_and_fails_loudly(
         paths["workspace"],
         paths["uv-cache"],
     )
+
+
+# --- Q0 post-launch: q0-collect over the records the host writer retained --------------
+
+_CLOSURE = tuple(
+    gate.PoolPackage(
+        gate.Package(name, version, "amd64"), f"pool/main/{deb.file}", deb.size, deb.sha256
+    )
+    for (name, version), deb in zip((("git", "1"), ("perl", "2")), _DEBS, strict=True)
+)
+_RUN_ENV = _JOB | {key: _IDENTITY[key] for key in gate.Q0_IDENTITY if key in _JOB}
+_Q0_INPUTS = replace(parse_inputs(_RAW["inputs"]), sha256=_IDENTITY["INPUTS_SHA256"])
+
+
+class PostLaunch(dict[str, Path]):
+    """The host's retained records as q0_host lays them out, and one fresh guest /out."""
+
+    def write(self, closure: Any) -> None:
+        gate.write_host_records(
+            _records(host={"closure": closure}),
+            gate.HostRecords(
+                self["evidence"] / "install-ns.json",
+                self["meta"] / "host.json",
+                self["meta"] / "binding.env",
+                self["evidence"] / "host-stage.json",
+            ),
+        )
+        binding_env = (self["meta"] / "binding.env").read_bytes()
+        observation = {
+            **_IDENTITY,
+            "binding_env_sha256": _sha(binding_env),
+            "INSTALL_NS_SHA256": gate.parse_binding_env(binding_env)["INSTALL_NS_SHA256"],
+        }
+        (self["out"] / "observation.json").write_text(json.dumps(observation))
+
+    def run(
+        self, environ: Mapping[str, str] = _RUN_ENV, inputs: gate.Inputs = _Q0_INPUTS
+    ) -> dict[str, Any]:
+        return gate.q0_post_launch(
+            inputs, environ, self["meta"], self["out"], self["launched"], self["evidence"]
+        )
+
+
+@pytest.fixture
+def post(tmp_path: Path) -> PostLaunch:
+    paths = PostLaunch({name: tmp_path / name for name in ("meta", "out", "evidence")})
+    for directory in paths.values():
+        directory.mkdir()
+    paths["launched"] = tmp_path / "launched"
+    paths["launched"].touch()
+    paths.write([asdict(package) for package in _CLOSURE])
+    return paths
+
+
+def test_q0_post_launch_completes_from_the_retained_records_alone(post: PostLaunch) -> None:
+    record = post.run()
+    assert record["completed_observation"] is True, record["problems"]
+    assert record["observation_sha256"] == _sha((post["out"] / "observation.json").read_bytes())
+    install = json.loads((post["evidence"] / "install-binding.json").read_text())
+    assert install["verdict"] == "pass"
+
+
+def test_closure_debs_are_the_closure_q0_host_installs() -> None:
+    records = _records(host={"closure": [asdict(package) for package in _CLOSURE]})
+    assert gate.closure_debs(records.host_json, records.binding_env) == _DEBS
+
+
+_ENTRY = asdict(_CLOSURE[0])
+
+
+@pytest.mark.parametrize(
+    "closure",
+    [
+        pytest.param([], id="empty"),
+        pytest.param({"0": _ENTRY}, id="not-a-list"),
+        pytest.param(None, id="absent"),
+        pytest.param([_ENTRY | {"size": True}], id="bool-size"),
+        pytest.param([_ENTRY | {"size": "10"}], id="text-size"),
+        pytest.param([_ENTRY | {"sha256": "D" * 64}], id="upper-hex"),
+        pytest.param([{k: v for k, v in _ENTRY.items() if k != "filename"}], id="no-filename"),
+        pytest.param([_ENTRY | {"package": {"name": "git"}}], id="partial-package"),
+    ],
+)
+def test_q0_post_launch_refuses_a_malformed_closure_before_collecting(
+    post: PostLaunch, closure: Any
+) -> None:
+    post.write(closure)
+    record = post.run()
+    _completed_nothing(record)
+    assert record["problems"][0].startswith("host: host.json closure")
+    assert list(post["evidence"].glob("observation.json")) == []
+
+
+def test_q0_post_launch_refuses_a_host_json_binding_env_does_not_name(post: PostLaunch) -> None:
+    host_json = post["meta"] / "host.json"
+    named = _sha(host_json.read_bytes())
+    host_json.write_bytes(host_json.read_bytes().replace(b'"perl"', b'"perk"'))
+    record = post.run()
+    assert record["problems"] == [f"host: host.json is not the record binding.env names ({named})"]
+    assert list(post["evidence"].glob("observation.json")) == []
+
+
+def test_q0_post_launch_judges_a_debs_list_the_install_record_does_not_hold(
+    post: PostLaunch,
+) -> None:
+    post.write([asdict(_CLOSURE[0])])
+    record = post.run()
+    _completed_nothing(record)
+    assert all(problem.startswith("install-binding:") for problem in record["problems"])
+
+
+@pytest.mark.parametrize("key", ["CI_TESTED", "GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT"])
+def test_q0_post_launch_takes_the_run_identity_from_the_job(post: PostLaunch, key: str) -> None:
+    _completed_nothing(post.run(_RUN_ENV | {key: "other"}))
+    unset = post.run({k: v for k, v in _RUN_ENV.items() if k != key})
+    assert unset["problems"] == [f"host: job environment lacks {[key]}"]
+
+
+def test_q0_post_launch_takes_inputs_sha256_from_the_parsed_inputs(post: PostLaunch) -> None:
+    record = post.run(inputs=replace(_Q0_INPUTS, sha256="2" * 64))
+    _completed_nothing(record)
+    assert record["problems"][0].startswith("collect: observation.json INPUTS_SHA256")
+
+
+def test_q0_collect_command_keeps_its_record_and_exits_on_completion(
+    post: PostLaunch, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(gate, "A5", post["meta"].parent)
+    for key, value in _RUN_ENV.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setattr(gate, "parse_inputs", lambda raw: _Q0_INPUTS)
+    (doc := post["meta"].parent / "inputs.json").write_text(json.dumps({"inputs": _RAW["inputs"]}))
+    argv = ["q0-collect", "--expectations", str(doc)]
+    argv += [f"--{name}={post[name]}" for name in ("out", "launched", "evidence")]
+    assert main(argv) == 0
+    kept = json.loads((post["evidence"] / "q0-collect.json").read_text())
+    assert kept["completed_observation"] is True and "verdict" not in kept
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "3")
+    assert main(argv) == 1
+    err = capsys.readouterr().err
+    assert "a5-kernel-ci q0-collect: collect: observation.json GITHUB_RUN_ATTEMPT" in err
+    assert json.loads((post["evidence"] / "q0-collect.json").read_text())["problems"]
+
+
+def test_ns_install_runs_from_the_q0_inputs_only_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen: list[tuple[Any, ...]] = []
+    monkeypatch.setattr(gate, "ns_install", lambda *args: seen.append(args) or 7)
+    (doc := tmp_path / "inputs.json").write_text(json.dumps({"inputs": _RAW["inputs"]}))
+    argv = ["guest-stage", "ns-install", "--expectations", str(doc), "--root", "/r"]
+    assert main([*argv, "--host-netns", "net:[1]", "--evidence", "/e", "a.deb"]) == 7
+    assert seen == [(Path("/r"), "net:[1]", Path("/e"), ["a.deb"])]

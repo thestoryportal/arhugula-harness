@@ -2648,6 +2648,77 @@ def host(inputs: Inputs, keys: tuple[Path, *tuple[Path, ...]], at: HostLayout) -
     return 0
 
 
+# --- Q0 post-launch (after vng exits): collect, then both binding checks ---------------
+
+
+def _pool_package(entry: object) -> PoolPackage:
+    match entry:
+        case {
+            "package": {"name": str(name), "version": str(version), "architecture": str(arch)},
+            "filename": str(filename),
+            "size": int(size),
+            "sha256": str(digest),
+        } if type(size) is int and _HEX64.fullmatch(digest):
+            return PoolPackage(Package(name, version, arch), filename, size, digest)
+        case _:
+            raise Q0Error(f"host.json closure entry {entry!r} is malformed")
+
+
+def closure_debs(host_json: bytes, binding_env: bytes) -> tuple[Deb, ...]:
+    """The .debs install-binding judges, re-parsed from the retained host.json closure.
+
+    [LAW:one-source-of-truth] They are read from the host.json bytes binding.env names, so
+    the judged list is the one the guest was bound to, not a second copy of it.
+    """
+    named = parse_binding_env(binding_env)["HOST_JSON_SHA256"]
+    if _sha256(host_json) != named:
+        raise Q0Error(f"host.json is not the record binding.env names ({named})")
+    entries = _object(host_json, "host.json").get("closure")
+    if type(entries) is not list or not entries:
+        raise Q0Error("host.json closure is not a non-empty list")
+    return tuple(_pool_package(entry).deb for entry in cast(list[object], entries))
+
+
+def q0_post_launch(
+    inputs: Inputs,
+    environ: Mapping[str, str],
+    meta: Path,
+    out: Path,
+    launched: Path,
+    evidence: Path,
+) -> dict[str, Any]:
+    """Whether this run's Q0 observation completed, judged from the retained host records."""
+    binding_env = meta / "binding.env"
+    try:
+        job = job_bindings(environ)
+        debs = closure_debs(_read(meta / "host.json"), _read(binding_env))
+    except Q0Error as exc:
+        return {"completed_observation": False, "problems": [f"host: {exc}"]}
+    # [LAW:one-source-of-truth] The run's identity is the job's own bindings and the
+    # inputs this gate parsed, the same values q0_host wrote into binding.env.
+    run = job | {"INPUTS_SHA256": inputs.sha256}
+    return q0_observe(
+        out,
+        launched,
+        {key: run[key] for key in Q0_IDENTITY},
+        evidence,
+        binding_env,
+        evidence / "host-stage.json",
+        evidence / "install-ns.json",
+        debs,
+    )
+
+
+def q0_collect_command(inputs: Inputs, out: Path, launched: Path, evidence: Path) -> int:
+    record = q0_post_launch(inputs, os.environ, A5 / "meta", out, launched, evidence)
+    # [LAW:effects-at-boundaries] The record is kept before the exit code reports it, so a
+    # refused observation still uploads why; it carries no verdict (Q0_observation).
+    (evidence / "q0-collect.json").write_bytes(_canonical(record))
+    for problem in record["problems"]:
+        print(f"a5-kernel-ci q0-collect: {problem}", file=sys.stderr)
+    return 0 if record["completed_observation"] else 1
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--expectations", type=Path, default=EXPECTATIONS)
@@ -2676,6 +2747,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     staging.add_argument("--key", type=Path, action="append", required=True)
     for name in ("work", "root", "evidence", "workspace", "uv-cache"):
         staging.add_argument(f"--{name}", type=Path, required=True)
+    collect = commands.add_parser("q0-collect", parents=[common])
+    for name in ("out", "launched", "evidence"):
+        collect.add_argument(f"--{name}", type=Path, required=True)
     args = parser.parse_args(argv)
 
     raw_bytes = args.expectations.read_bytes()
@@ -2688,8 +2762,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (ExpectationsError, ValueError) as exc:
         print(f"a5-kernel-ci: {exc}", file=sys.stderr)
         return 2
-    # [LAW:one-way-deps] observe, env-origin and host are dispatched before `expectations` is
-    # parsed, so no Q1 section can shape a Q0 observation.
+    # [LAW:one-way-deps] Every Q0 command is dispatched before `expectations` is parsed, so
+    # no Q1 section can shape a Q0 observation and the Q0 inputs-only file serves them all.
     if args.command == "observe":
         return observe(inputs, args.meta, args.out)
     if args.command == "env-origin":
@@ -2698,13 +2772,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         first, *rest = args.key
         layout = HostLayout(args.work, args.root, A5, args.evidence, args.workspace, args.uv_cache)
         return host(inputs, (first, *rest), layout)
+    if args.command == "q0-collect":
+        return q0_collect_command(inputs, args.out, args.launched, args.evidence)
+    if args.command == "guest-stage":
+        return ns_install(args.root, args.host_netns, args.evidence, args.debs)
     try:
         expectations = parse_expectations(document)
     except (ExpectationsError, ValueError) as exc:
         print(f"a5-kernel-ci: {exc}", file=sys.stderr)
         return 2
-    if args.command == "guest-stage":
-        return ns_install(args.root, args.host_netns, args.evidence, args.debs)
     if args.venue not in expectations.venues:
         print(f"a5-kernel-ci: unknown venue {args.venue!r}", file=sys.stderr)
         return 2
