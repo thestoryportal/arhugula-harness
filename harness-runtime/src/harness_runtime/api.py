@@ -335,6 +335,23 @@ class ResumePauseRecordSupersededError(Exception):
     """
 
 
+class ResumeEnginePauseRecordAbsentError(Exception):
+    """`RT-FAIL-RESUME-ENGINE-PAUSE-RECORD-ABSENT` (B-314 fork §4a) — the latest durable record
+    for the `resume_handle` is an engine-pause locator, but its engine store holds no pause
+    record for that run, so there is nothing to resume.
+
+    A pre-bootstrap, pre-claim refusal. The message names the engine class only: never a store
+    path, run-scoped digest or run.
+    """
+
+
+class ResumeEngineClassMismatchError(Exception):
+    """`RT-FAIL-RESUME-ENGINE-CLASS-MISMATCH` (B-314 fork §4a) — a valid engine-pause locator
+    names a different engine class than the supplied workflow's manifest, so the workflow
+    changed since the pause. A pre-bootstrap, pre-claim refusal naming both engine classes only.
+    """
+
+
 # ---------------------------------------------------------------------------
 # `WorkflowObject` runtime-local Protocol (Option C per spec §8 Risk surface).
 # ---------------------------------------------------------------------------

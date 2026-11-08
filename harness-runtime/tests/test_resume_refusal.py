@@ -17,6 +17,8 @@ from harness_runtime.api import (
     ResumeArgsError,
     ResumeClaimRefusedError,
     ResumeDirectChildHandleError,
+    ResumeEngineClassMismatchError,
+    ResumeEnginePauseRecordAbsentError,
     ResumeHandleUnknownError,
     ResumePauseRecordSupersededError,
     ResumePauseStateStaleError,
@@ -106,6 +108,17 @@ SPEC_CASES: list[tuple[ResumeRefusalError, dict[str, object]]] = [
             "fail_class": "RT-FAIL-RESUME-PAUSE-RECORD-SUPERSEDED",
         },
     ),
+    (
+        ResumeEnginePauseRecordAbsentError(f"WAL-segment record absent in {CANARY}"),
+        {
+            "kind": "engine-pause-record-absent",
+            "fail_class": "RT-FAIL-RESUME-ENGINE-PAUSE-RECORD-ABSENT",
+        },
+    ),
+    (
+        ResumeEngineClassMismatchError(f"WAL-segment != reconciler-loop in {CANARY}"),
+        {"kind": "engine-class-mismatch", "fail_class": "RT-FAIL-RESUME-ENGINE-CLASS-MISMATCH"},
+    ),
 ]
 
 
@@ -121,9 +134,9 @@ def test_each_typed_refusal_serializes_to_its_exact_spec_arm(
     assert _wire(error) == {"protocol": PROTOCOL, "refusal": expected}
 
 
-def test_the_nine_arms_are_distinct_and_each_round_trips_through_the_parser() -> None:
+def test_the_eleven_arms_are_distinct_and_each_round_trips_through_the_parser() -> None:
     values = [project(error) for error, _ in SPEC_CASES]
-    assert len({v.kind for v in values}) == 9
+    assert len({v.kind for v in values}) == 11
     assert [parse(to_json(v)) for v in values] == values
 
 
