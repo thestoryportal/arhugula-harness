@@ -35,6 +35,7 @@ import json
 import os
 import platform
 import re
+import secrets
 import shlex
 import shutil
 import site
@@ -1841,6 +1842,7 @@ class Bootstrap:
     closure: tuple[PoolPackage, ...]
     pool: Path  # downloaded, unverified: deliver_debs checks it against `closure` at entry
     self_test: dict[str, Any]
+    home: Path  # the gnupg home every pinned keyring, the kernel's included, is exported from
 
 
 def bootstrap(
@@ -1867,7 +1869,7 @@ def bootstrap(
     pool = work / "pool"
     pool.mkdir()
     run_steps(pool_fetch(pool, inputs.archive.snapshot_id, added), work, BOOTSTRAP_TIMEOUT)
-    return Bootstrap(tarball, packages, added, pool, test)
+    return Bootstrap(tarball, packages, added, pool, test, home)
 
 
 # --- guest kernel on the host (design.guest_kernel) -----------------------------------
@@ -1971,18 +1973,22 @@ def root_manifest(root: Path) -> dict[str, Mapping[str, Any]]:
 
 def installed_root(
     gate: Path, root: Path, host_netns: str, boot: Bootstrap, record: Path
-) -> dict[str, Mapping[str, Any]]:
+) -> tuple[dict[str, Any], dict[str, Mapping[str, Any]]]:
     """Step 3 into one extraction of the verified base; any run problem fails Q0 (3d)."""
     debs = [entry.deb for entry in boot.closure]
     run = guest_install(gate, root, host_netns, boot.pool, debs, record)
     if problems := run_problems(run, debs):
         raise Q0Error(f"install into {root}: " + "; ".join(problems))
-    return root_manifest(root)
+    return run, root_manifest(root)
 
 
-def stage_twice(
-    gate: Path, boot: Bootstrap, root: Path, evidence: Path, work: Path, host_netns: str
-) -> tuple[dict[str, Mapping[str, Any]], dict[str, Mapping[str, Any]]]:
+@dataclass(frozen=True)
+class Staged:
+    install: dict[str, Any]  # the kept root's step-3 run, which install-ns.json records
+    manifests: tuple[dict[str, Mapping[str, Any]], dict[str, Mapping[str, Any]]]
+
+
+def stage_twice(gate: Path, boot: Bootstrap, root: Path, work: Path, host_netns: str) -> Staged:
     """Q0_observation stages the root in two fresh directories; only `root` is kept to boot.
 
     Each is a further extraction of the verified tarball. The repeat exists only so its
@@ -1990,10 +1996,12 @@ def stage_twice(
     """
     root.mkdir()
     run_steps([extract_argv(boot.tarball, root)], root.parent, BOOTSTRAP_TIMEOUT)
-    staged = installed_root(gate, root, host_netns, boot, evidence / "install-ns.json")
+    # The raw namespace records stay in `work`: the kept run reaches the evidence only
+    # inside install-ns.json, which host_records composes with the self-test.
+    install, staged = installed_root(gate, root, host_netns, boot, work / "install-ns-root.json")
     with fresh_base(boot.tarball, work / "root-repeat") as repeat:
-        again = installed_root(gate, repeat, host_netns, boot, work / "install-ns-repeat.json")
-    return staged, again
+        _, again = installed_root(gate, repeat, host_netns, boot, work / "install-ns-repeat.json")
+    return Staged(install, (staged, again))
 
 
 # --- The /a5 environment stage (host_guest_boundary.guest_root ENV) -------------------
@@ -2364,6 +2372,9 @@ class HostFacts:
     # [LAW:types-are-the-program] Exactly the two stagings whose difference Q0 exposes.
     root_manifests: tuple[Mapping[str, Mapping[str, Any]], Mapping[str, Mapping[str, Any]]]
     vng_help: str
+    gcc_version: str  # the first line of `gcc --version` that built the guest kernel
+    # /a5/meta lies outside the stage manifest, so guest-run.sh is bound here instead.
+    guest_run_sha256: str
 
 
 # [LAW:one-source-of-truth] The keys observe requires are the fields the host writes.
@@ -2503,6 +2514,140 @@ def env_origin(inputs: Inputs, a5: Path, hosts: Sequence[Path], out: Path) -> in
     return 1 if problems else 0
 
 
+# --- Q0 host run (qualification_sequence.Q0_observation, everything before vng) ---------
+
+SENTINEL_MARKER = "A5ISOSENTINEL1"
+# The binding.env keys the job's own environment supplies; measured_bindings and
+# host_records supply the rest, and host_records refuses any other union.
+JOB_BINDINGS = (
+    "CI_HEAD",
+    "CI_BASE",
+    "CI_TESTED",
+    "CI_PARENTS",
+    "CI_EVENT",
+    "CI_REF",
+    "GITHUB_RUN_ID",
+    "GITHUB_RUN_ATTEMPT",
+    "GITHUB_WORKFLOW",
+    "ImageOS",
+    "ImageVersion",
+    "RUNNER_NAME",
+    "RUNNER_ENVIRONMENT",
+)
+
+
+def job_bindings(environ: Mapping[str, str]) -> dict[str, str]:
+    """The job's binding values; an unset one fails before anything is fetched or built."""
+    values = {key: environ.get(key, "") for key in JOB_BINDINGS}
+    if missing := [key for key, value in values.items() if not value]:
+        raise Q0Error(f"job environment lacks {missing}")
+    return values
+
+
+def measured_bindings(
+    inputs: Inputs, kernel: GuestKernel, stage_manifest: bytes, host_env: bytes
+) -> dict[str, str]:
+    return {
+        **kernel.bindings(),
+        # verified_base proved the tarball equal to its pin, so the pin is its sha256.
+        "BASE_ROOTFS_SHA256": inputs.base.tarball_sha256,
+        "INPUTS_SHA256": inputs.sha256,
+        "STAGE_MANIFEST_SHA256": _sha256(stage_manifest),
+        "HOST_ENV_SHA256": _sha256(host_env),
+    }
+
+
+def host_env_origin_argv(a5: Path) -> list[str]:
+    """The guest's env-origin step as the host runs it from /a5/src: one interpreter and
+    one environment, so the guest's --compare holds the same facts field for field."""
+    return [
+        *("/usr/bin/env", "-i", *(f"{name}={value}" for name, value in FIXED_GUEST_ENV.items())),
+        *(str(a5 / "venv" / "bin" / "python"), "tools/a5_kernel_ci_gate.py", "env-origin"),
+        *("--out", str(a5 / "meta" / "host-env-origin.json")),
+    ]
+
+
+def host_packages(packages: Sequence[str], cwd: Path) -> dict[str, str]:
+    """The installed host version of each launcher package; an absent one fails Q0."""
+    listing = _stdout(["dpkg-query", "-W", "-f", DPKG_QUERY_FORMAT, *packages], cwd)
+    return {package.name: package.version for package in base_packages(listing)}
+
+
+@dataclass(frozen=True)
+class HostLayout:
+    """Where one Q0 host run builds, stages and keeps what never crosses into the guest."""
+
+    work: Path  # existing and empty: downloads, keyrings, builds and raw run records
+    root: Path  # absent: the kept guest root, /a5-guest/root
+    a5: Path  # existing and empty: the /a5 environment stage
+    evidence: Path  # existing: install-ns.json and host-stage.json
+    workspace: Path  # the checkout /a5/src is cloned from
+    uv_cache: Path
+
+
+def q0_host(
+    gate: Path,
+    inputs: Inputs,
+    environ: Mapping[str, str],
+    keys: tuple[Path, *tuple[Path, ...]],
+    at: HostLayout,
+) -> None:
+    """Build and stage everything the Q0 guest boots on, then write the four host records."""
+    job = job_bindings(environ)
+    host_netns = os.readlink("/proc/self/ns/net")
+    sentinel = SENTINEL_MARKER + secrets.token_hex(32)
+    boot = bootstrap(gate, inputs, at.work, keys, host_netns, sentinel)
+    staged = stage_twice(gate, boot, at.root, at.work, host_netns)
+    (at.work / "kernel").mkdir()
+    kernel = guest_kernel(
+        at.work / "kernel", boot.home, inputs.kernel, len(os.sched_getaffinity(0))
+    )
+    stage_a5(at.a5, at.workspace, job["CI_TESTED"], at.uv_cache, inputs)
+    meta = at.a5 / "meta"
+    run_steps([host_env_origin_argv(at.a5)], at.a5 / "src", BOOTSTRAP_TIMEOUT)
+    # [LAW:no-ambient-temporal-coupling] The manifest is taken after the last write to
+    # the stage, so STAGE_MANIFEST_SHA256 names the stage as it boots.
+    if problems := guest_stage_verify(at.root, at.a5, ()):
+        raise Q0Error("stage: " + "; ".join(problems))
+    facts = HostFacts(
+        boot.base_packages,
+        boot.closure,
+        host_packages(inputs.launcher_packages, at.work),
+        staged.manifests,
+        _stdout(["vng", "--help"], at.work),
+        kernel.gcc_version,
+        _sha256(GUEST_RUN_SH.encode()),
+    )
+    values = job | measured_bindings(
+        inputs, kernel, _read(meta / "stage-manifest.json"), _read(meta / "host-env-origin.json")
+    )
+    records = host_records(
+        values,
+        asdict(facts),
+        staged.install,
+        boot.self_test,
+        {"A5_SENTINEL_ENV": _sha256(sentinel.encode())},
+    )
+    write_host_records(
+        records,
+        HostRecords(
+            at.evidence / "install-ns.json",
+            meta / "host.json",
+            meta / "binding.env",
+            at.evidence / "host-stage.json",
+        ),
+    )
+
+
+def host(inputs: Inputs, keys: tuple[Path, *tuple[Path, ...]], at: HostLayout) -> int:
+    try:
+        q0_host(Path(__file__).resolve(), inputs, os.environ, keys, at)
+    except Q0Error as exc:
+        print(f"a5-kernel-ci host: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--expectations", type=Path, default=EXPECTATIONS)
@@ -2527,6 +2672,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     origin = commands.add_parser("env-origin", parents=[common])
     origin.add_argument("--compare", type=Path, action="append", default=[])
     origin.add_argument("--out", type=Path, required=True)
+    staging = commands.add_parser("host", parents=[common])
+    staging.add_argument("--key", type=Path, action="append", required=True)
+    for name in ("work", "root", "evidence", "workspace", "uv-cache"):
+        staging.add_argument(f"--{name}", type=Path, required=True)
     args = parser.parse_args(argv)
 
     raw_bytes = args.expectations.read_bytes()
@@ -2539,12 +2688,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (ExpectationsError, ValueError) as exc:
         print(f"a5-kernel-ci: {exc}", file=sys.stderr)
         return 2
-    # [LAW:one-way-deps] observe and env-origin are dispatched before `expectations` is
+    # [LAW:one-way-deps] observe, env-origin and host are dispatched before `expectations` is
     # parsed, so no Q1 section can shape a Q0 observation.
     if args.command == "observe":
         return observe(inputs, args.meta, args.out)
     if args.command == "env-origin":
         return env_origin(inputs, A5, args.compare, args.out)
+    if args.command == "host":
+        first, *rest = args.key
+        layout = HostLayout(args.work, args.root, A5, args.evidence, args.workspace, args.uv_cache)
+        return host(inputs, (first, *rest), layout)
     try:
         expectations = parse_expectations(document)
     except (ExpectationsError, ValueError) as exc:

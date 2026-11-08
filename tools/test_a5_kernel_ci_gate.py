@@ -19,7 +19,7 @@ import shutil
 import socket
 import subprocess
 import sys
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path, PurePosixPath
@@ -1730,6 +1730,8 @@ _FACTS = gate.HostFacts(
     host_packages={"virtme-ng": "1.40-2"},
     root_manifests=({"/x": {"type": "dir"}}, {"/x": {"type": "file"}}),
     vng_help="usage: vng",
+    gcc_version="gcc (Ubuntu 15.2.0-1) 15.2.0",
+    guest_run_sha256="b" * 64,
 )
 _HOST_FACTS: dict[str, Any] = asdict(_FACTS)
 _GUEST = gate.GuestFacts(("a5", "bin", "out"), _MOUNTINFO, (), (_GIT,))
@@ -2432,9 +2434,8 @@ def _staging(
     git = gate.PoolPackage(
         gate.Package("git", "1", "amd64"), "pool/main/g/git/git_1_amd64.deb", 3, _sha(b"git")
     )
-    boot = gate.Bootstrap(tmp_path / "base.tar.gz", _BASE_SET, (git,), pool, {})
-    for name in ("evidence", "work"):
-        (tmp_path / name).mkdir()
+    boot = gate.Bootstrap(tmp_path / "base.tar.gz", _BASE_SET, (git,), pool, {}, tmp_path)
+    (tmp_path / "work").mkdir()
     return boot, ran
 
 
@@ -2443,15 +2444,15 @@ def test_stage_twice_keeps_the_root_and_exposes_the_path_two_builds_disagree_on(
 ) -> None:
     boot, ran = _staging(tmp_path, monkeypatch)
     root, work = tmp_path / "root", tmp_path / "work"
-    first, second = gate.stage_twice(
-        tmp_path / "gate.py", boot, root, tmp_path / "evidence", work, "net:[1]"
-    )
+    staged = gate.stage_twice(tmp_path / "gate.py", boot, root, work, "net:[1]")
+    first, second = staged.manifests
     assert ran == ["tar", "tar", "rm"]
     assert gate.manifest_diff(first, second) == ["/var/log/dpkg.log"]
     assert first == gate.root_manifest(root) and "/etc/os-release" in first
     assert not any(path.startswith(f"/{gate.DEB_CACHE}") for path in first | second)
     assert not (work / "root-repeat").exists()
-    assert (tmp_path / "evidence" / "install-ns.json").is_file()
+    assert staged.install["wrapper_exit"] == 0
+    assert staged.install["namespace"] == json.loads((work / "install-ns-root.json").read_text())
     assert (work / "install-ns-repeat.json").is_file()
 
 
@@ -2465,8 +2466,160 @@ def test_stage_twice_fails_closed_on_either_install_and_still_discards_the_repea
             tmp_path / "gate.py",
             boot,
             tmp_path / "root",
-            tmp_path / "evidence",
             tmp_path / "work",
             "net:[1]",
         )
     assert ran == steps and not (tmp_path / "work" / "root-repeat").exists()
+
+
+_JOB = {key: f"job-{key}" for key in gate.JOB_BINDINGS}
+
+
+class _Host:
+    """q0_host with every fetch, build and staging edge replaced by a recording fake."""
+
+    def __init__(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, problems: Sequence[str] = ()
+    ) -> None:
+        self.calls: list[tuple[str, Any]] = []
+        self.inputs = parse_inputs(_RAW["inputs"])
+        self.at = gate.HostLayout(
+            tmp_path / "work",
+            tmp_path / "root",
+            tmp_path / "a5",
+            tmp_path / "evidence",
+            tmp_path / "workspace",
+            tmp_path / "uv-cache",
+        )
+        for path in (self.at.work, self.at.a5, self.at.evidence):
+            path.mkdir()
+        doc = _install_ns_doc()
+        manifests = ({"/x": {"type": "dir"}}, {"/x": {"type": "file"}})
+        boot = gate.Bootstrap(
+            tmp_path / "base.tar.gz", _BASE_SET, (), tmp_path / "pool", doc["self_test"], tmp_path
+        )
+        kernel = gate.GuestKernel(tmp_path / "bzImage", "1" * 64, "2" * 64, "3" * 64, "gcc 15")
+        meta = self.at.a5 / "meta"
+
+        def record(name: str, value: Any, result: Any = None) -> Any:
+            self.calls.append((name, value))
+            return result
+
+        def stage_a5(a5: Path, workspace: Path, tested: str, cache: Path, inputs: Any) -> None:
+            record("stage_a5", (a5, workspace, tested, cache))
+            meta.mkdir()
+            (meta / gate.GUEST_RUN).write_text(gate.GUEST_RUN_SH)
+
+        def steps(argv: Any, cwd: Path, timeout: float) -> None:
+            record("run_steps", (argv, cwd))
+            (meta / "host-env-origin.json").write_text('{"verdict": "pass"}')
+
+        def verify(root: Path, a5: Path, mounts: Any) -> list[str]:
+            (meta / "stage-manifest.json").write_text('{"/a5/src": {}}')
+            return record("verify", (root, a5, tuple(mounts)), list(problems))
+
+        stdout = {"dpkg-query": "virtme-ng 1.40-2 amd64 ii\n", "vng": "usage: vng"}
+        staged = gate.Staged(doc["install"], manifests)
+        monkeypatch.setattr(gate, "bootstrap", lambda *a: record("bootstrap", a, boot))
+        monkeypatch.setattr(gate, "stage_twice", lambda *a: record("stage_twice", a, staged))
+        monkeypatch.setattr(gate, "guest_kernel", lambda *a: record("guest_kernel", a, kernel))
+        monkeypatch.setattr(gate, "stage_a5", stage_a5)
+        monkeypatch.setattr(gate, "run_steps", steps)
+        monkeypatch.setattr(gate, "guest_stage_verify", verify)
+        monkeypatch.setattr(
+            gate, "_stdout", lambda argv, cwd: record("stdout", argv, stdout[argv[0]])
+        )
+
+    def run(self, environ: Mapping[str, str]) -> None:
+        gate.q0_host(Path("gate.py"), self.inputs, environ, (Path("keys.asc"),), self.at)
+
+
+def test_q0_host_writes_records_binding_the_stage_it_built(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    host = _Host(tmp_path, monkeypatch)
+    host.run(_JOB | {"UNRELATED": "x"})
+    meta, evidence, at = host.at.a5 / "meta", host.at.evidence, host.at
+    assert [name for name, _ in host.calls][:6] == [
+        "bootstrap",
+        "stage_twice",
+        "guest_kernel",
+        "stage_a5",
+        "run_steps",
+        "verify",
+    ]
+    calls = dict(host.calls)
+    assert calls["guest_kernel"][:2] == (at.work / "kernel", tmp_path)
+    assert calls["stage_a5"][2] == "job-CI_TESTED"
+    assert calls["run_steps"] == ([gate.host_env_origin_argv(at.a5)], at.a5 / "src")
+    assert calls["verify"] == (at.root, at.a5, ())
+    env = gate.parse_binding_env((meta / "binding.env").read_bytes())
+    assert {key: env[key] for key in gate.JOB_BINDINGS} == _JOB
+    assert env["STAGE_MANIFEST_SHA256"] == _sha((meta / "stage-manifest.json").read_bytes())
+    assert env["HOST_ENV_SHA256"] == _sha((meta / "host-env-origin.json").read_bytes())
+    assert env["INSTALL_NS_SHA256"] == _sha((evidence / "install-ns.json").read_bytes())
+    assert env["HOST_JSON_SHA256"] == _sha((meta / "host.json").read_bytes())
+    assert env["GUEST_BZIMAGE_SHA256"] == "3" * 64
+    assert env["BASE_ROOTFS_SHA256"] == host.inputs.base.tarball_sha256
+    assert env["INPUTS_SHA256"] == host.inputs.sha256
+    facts = json.loads((meta / "host.json").read_bytes())
+    assert facts["host_packages"] == {"virtme-ng": "1.40-2"}
+    assert facts["gcc_version"] == "gcc 15" and facts["vng_help"] == "usage: vng"
+    assert facts["guest_run_sha256"] == _sha(gate.GUEST_RUN_SH.encode())
+    assert gate.evaluate_install_ns((evidence / "install-ns.json").read_bytes(), _DEBS) == []
+    stage = json.loads((evidence / "host-stage.json").read_bytes())
+    assert stage["binding_env_sha256"] == _sha((meta / "binding.env").read_bytes())
+    # Only the sentinel's digest is recorded, and on the host side only.
+    sentinel = calls["bootstrap"][5]
+    assert sentinel.startswith("A5ISOSENTINEL1") and len(sentinel) == 14 + 64
+    assert stage["sentinel_sha256"] == {"A5_SENTINEL_ENV": _sha(sentinel.encode())}
+    assert sentinel not in (meta / "binding.env").read_text() + (meta / "host.json").read_text()
+
+
+def test_q0_host_refuses_an_unset_job_binding_before_fetching_anything(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    host = _Host(tmp_path, monkeypatch)
+    with pytest.raises(gate.Q0Error, match=r"lacks \['CI_PARENTS'\]"):
+        host.run(_JOB | {"CI_PARENTS": ""})
+    assert host.calls == []
+
+
+def test_q0_host_writes_no_binding_for_a_stage_that_may_not_boot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    host = _Host(tmp_path, monkeypatch, problems=["/a5/x: socket"])
+    with pytest.raises(gate.Q0Error, match="stage: /a5/x: socket"):
+        host.run(_JOB)
+    assert not (host.at.a5 / "meta" / "binding.env").exists()
+    assert not (host.at.evidence / "host-stage.json").exists()
+
+
+def test_host_command_stages_at_a5_from_inputs_alone_and_fails_loudly(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    seen: list[tuple[Any, ...]] = []
+
+    def q0_host(*args: Any) -> None:
+        seen.append(args)
+        raise gate.Q0Error("pool git_1: missing")
+
+    monkeypatch.setattr(gate, "q0_host", q0_host)
+    (doc := tmp_path / "inputs.json").write_text(json.dumps({"inputs": _RAW["inputs"]}))
+    paths = {
+        name: tmp_path / name for name in ("work", "root", "evidence", "workspace", "uv-cache")
+    }
+    argv = ["host", "--expectations", str(doc), "--key", "a.asc", "--key", "b.asc"]
+    argv += [f"--{name}={path}" for name, path in paths.items()]
+    assert main(argv) == 1
+    assert "a5-kernel-ci host: pool git_1: missing" in capsys.readouterr().err
+    (_, inputs, _, keys, at) = seen[0]
+    assert inputs == parse_inputs(_RAW["inputs"]) and keys == (Path("a.asc"), Path("b.asc"))
+    assert at == gate.HostLayout(
+        paths["work"],
+        paths["root"],
+        gate.A5,
+        paths["evidence"],
+        paths["workspace"],
+        paths["uv-cache"],
+    )
