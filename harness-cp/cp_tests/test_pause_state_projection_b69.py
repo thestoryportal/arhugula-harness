@@ -188,6 +188,7 @@ def test_a3_legacy_variant_is_byte_compatible() -> None:
         "hitl_responses",
         "effect_fence_resolution",
         "effect_fence_resolutions",
+        "pending_hitl_decision",
     }
 
 

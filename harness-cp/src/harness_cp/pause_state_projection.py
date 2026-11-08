@@ -72,7 +72,7 @@ from pydantic import (
     model_serializer,
 )
 
-from harness_cp.hitl_placement import HITLPlacementKind, HITLResult
+from harness_cp.hitl_placement import HITLPlacementKind, HITLResult, PendingHITLDecision
 from harness_cp.pause_resume_protocol_types import (
     EffectFenceResolution,
     PauseSnapshot,
@@ -645,6 +645,12 @@ class AccessorDerivedResumeContext(ResumeContext):
             effect_fence_resolution=effect_fence_resolution,
             effect_fence_resolutions=effect_fence_resolutions,
         )
+
+
+# CP v1.132 §26.8.1: the inherited `pending_hitl_decision` annotation resolves here.
+AccessorDerivedResumeContext.model_rebuild(
+    _types_namespace={"PendingHITLDecision": PendingHITLDecision}
+)
 
 
 def pre_dispatch_gate_owning_branch_identity(snapshot_run_id: str, branch_index: int) -> str:

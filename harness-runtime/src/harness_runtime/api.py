@@ -771,7 +771,7 @@ async def run(
                     mcp_server.workflow_registry[workflow.workflow_id] = workflow
                     try:
                         cp_result = await _invoke_run_workflow_via_in_process_mcp(
-                            mcp_server.server, workflow.workflow_id, operator
+                            mcp_server.server, workflow.workflow_id, operator=operator
                         )
                     finally:
                         # Defensive cleanup — `_run_lock` serializes invocations but

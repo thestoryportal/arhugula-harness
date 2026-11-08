@@ -399,7 +399,7 @@ async def test_valid_run_executes_via_driver_and_returns_run_result(
         _ = workload_class
         return fake_ctx
 
-    async def _fake_invoke(fastmcp_server, workflow_id):  # type: ignore[no-untyped-def]
+    async def _fake_invoke(fastmcp_server, workflow_id, operator=None):  # type: ignore[no-untyped-def]
         _ = fastmcp_server, workflow_id
         from harness_cp.workflow_driver_types import (
             RunResult as _CpRR,
@@ -468,7 +468,7 @@ async def test_run_releases_lock_after_completion(monkeypatch: pytest.MonkeyPatc
         _ = workload_class
         return _make_fake_ctx()
 
-    async def _fake_invoke(fastmcp_server, workflow_id):  # type: ignore[no-untyped-def]
+    async def _fake_invoke(fastmcp_server, workflow_id, operator=None):  # type: ignore[no-untyped-def]
         _ = fastmcp_server, workflow_id
         from harness_cp.workflow_driver_types import (
             RunResult as _CpRR,
@@ -589,7 +589,7 @@ async def test_run_returns_report_with_saturated_executor_after_worker_timeout(
         _ = config, workload_class, requires_inference
         return ctx
 
-    async def _stuck_worker_invoke(fastmcp_server, workflow_id):  # type: ignore[no-untyped-def]
+    async def _stuck_worker_invoke(fastmcp_server, workflow_id, operator=None):  # type: ignore[no-untyped-def]
         _ = fastmcp_server
 
         # The shipped composition: CP worker via to_thread, bounded by wait_for.
