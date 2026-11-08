@@ -359,7 +359,13 @@ def test_parity_job_provides_just_and_zsh_then_runs_the_parity_script() -> None:
     steps = _jobs()["parity-tests"]["steps"]
     uses = [str(s.get("uses", "")) for s in steps]
     runs = _runs(_jobs()["parity-tests"])
-    assert any(u.startswith("extractions/setup-just@") for u in uses)
+    [install_step] = [s for s in steps if "rust-just" in str(s.get("run", ""))]
+    assert not install_step.get("continue-on-error", False)
+    install = str(install_step["run"])
+    assert re.search(r"^uv tool install rust-just==\d+\.\d+\.\d+$", install, re.M)
+    assert '"$(uv tool dir --bin)/just" --version' in install
+    assert 'uv tool dir --bin >> "$GITHUB_PATH"' in install
+    assert not any(u.startswith("extractions/setup-just@") for u in uses)
     assert any("apt-get install -y zsh" in r for r in runs)
     assert runs[-1] == "bash tools/codex-parity-check.sh"
     job = _jobs()["parity-tests"]
