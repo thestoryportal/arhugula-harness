@@ -553,6 +553,23 @@ def materialize_mcp_server_stage(
                 effect_fence_tree_wide_abort_present=(_effect_fence_tree_wide_abort_present),
             )
 
+        def _locate(result: _CpRunResult) -> EnginePauseLocator | None:
+            from harness_runtime.lifecycle.engine_recovery_loop import (
+                bind_engine_substrates,
+                engine_pause_locator,
+            )
+
+            # [LAW:one-source-of-truth] The stores the R-CXA-2 factory bound for this context.
+            return engine_pause_locator(
+                result,
+                workflow_id=workflow.workflow_id,
+                run_id=run_id,
+                engine_class=workflow.manifest_entry.engine_class,
+                substrates=bind_engine_substrates(
+                    harness_ctx.config, harness_ctx.verified_state_root
+                ),
+            )
+
         try:
             # The per-run inter-step channel + cost accumulator were isolated in
             # their ContextVars above; the `asyncio.to_thread` worker inherits them
@@ -564,7 +581,7 @@ def materialize_mcp_server_stage(
             # durable root's claim, `started` fsync and lease span exactly the body's life,
             # even when `wait_for` below has already answered `drained`.
             cp_result = await asyncio.wait_for(
-                asyncio.to_thread(_admission.run, harness_ctx, _execute),
+                asyncio.to_thread(_admission.run, harness_ctx, _execute, _locate),
                 timeout=drain_timeout_seconds,
             )
             return cp_result.model_dump(mode="json")

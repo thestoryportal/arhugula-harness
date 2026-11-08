@@ -38,7 +38,10 @@ from harness_runtime.config import state_placement
 from harness_runtime.config.state_placement import StateRootPlacementError, place_state_dir
 from harness_runtime.lifecycle.claimed_child_admission import ClaimedChildAdmission
 from harness_runtime.lifecycle.durable_pause_resume_protocol import DurablePauseResumeProtocol
-from harness_runtime.lifecycle.journal_workflow_pause_store import JournalWorkflowPauseStore
+from harness_runtime.lifecycle.journal_workflow_pause_store import (
+    EnginePauseLocator,
+    JournalWorkflowPauseStore,
+)
 from harness_runtime.lifecycle.pause_journal_root_resolver import (
     PauseJournalRootUnresolvedError,
     resolve_pause_journal_root,
@@ -71,6 +74,24 @@ __all__ = [
 ]
 
 type Body[R] = Callable[[ChildResumeAuthority | None], R]
+
+type Locate[R] = Callable[[R], EnginePauseLocator | None]
+"""The engine-pause locator a root body's result owes the journal (B-314 fork §2), if any."""
+
+
+def _owes_no_locator(_: object) -> None:
+    return None
+
+
+def _append_locator(journal: JournalWorkflowPauseStore, locator: EnginePauseLocator | None) -> None:
+    # [LAW:single-enforcer] The one append site both root units share, after their body returns.
+    match locator:
+        case EnginePauseLocator():
+            journal.capture_locator(locator)
+        case None:
+            pass
+
+
 """The workflow body: CP's `execute_workflow`, given the root's child authority (or none)."""
 
 
@@ -164,8 +185,9 @@ class DurableRootResume:
         self.ref: Final = ref
         self.refusal: ResumeClaimRefusedError | None = None
 
-    def run[R](self, ctx: HarnessContext, body: Body[R]) -> R:
-        """Claim, durably start, run `body` with the root's child authority, release once."""
+    def run[R](self, ctx: HarnessContext, body: Body[R], locate: Locate[R] = _owes_no_locator) -> R:
+        """Claim, durably start, run `body` with the root's child authority, release once,
+        then journal the locator a resumed run that paused again owes (a new claimable record)."""
         entered = False
         try:
             placement = place_state_dir(
@@ -187,7 +209,7 @@ class DurableRootResume:
                 # carried child claims through it and a grandchild through its child.
                 return body(ClaimedChildAdmission(store, started))
 
-            return run_started(store, self.ref, RootLatestAdmission(), started_body)
+            result = run_started(store, self.ref, RootLatestAdmission(), started_body)
         except (GatewayRefusal, StateRootPlacementError, JournalDirectoryMismatchError) as exc:
             reason = None if entered else _reason_of(exc)
             # A refusal raised inside the body is the body's, and an unmapped one is a fault.
@@ -195,6 +217,11 @@ class DurableRootResume:
                 raise
             self.refusal = ResumeClaimRefusedError(reason)
             raise self.refusal from exc
+        _append_locator(
+            JournalWorkflowPauseStore(journal_dir=placement.path, tenant_id=ctx.config.tenant_id),
+            locate(result),
+        )
+        return result
 
 
 class _Unclaimed:
@@ -202,8 +229,8 @@ class _Unclaimed:
 
     refusal: Final = None
 
-    def run[R](self, ctx: HarnessContext, body: Body[R]) -> R:
-        _ = ctx
+    def run[R](self, ctx: HarnessContext, body: Body[R], locate: Locate[R] = _owes_no_locator) -> R:
+        _ = ctx, locate
         return body(None)
 
 
@@ -241,8 +268,9 @@ class FreshRunAdmission:
         self.run_id: Final = run_id
         self.failure: FreshRunAdmissionError | None = None
 
-    def run[R](self, ctx: HarnessContext, body: Body[R]) -> R:
-        """Append the supersession record at the admission point, then run `body` unclaimed."""
+    def run[R](self, ctx: HarnessContext, body: Body[R], locate: Locate[R] = _owes_no_locator) -> R:
+        """Append the supersession record at the admission point, run `body` unclaimed, then
+        journal the locator an engine-native pause owes."""
         try:
             placement = place_state_dir(
                 _run_journal_root(ctx),
@@ -265,7 +293,9 @@ class FreshRunAdmission:
             # run before its first step (witness I.16 F1).
             self.failure = FreshRunAdmissionError()
             raise self.failure from exc
-        return body(None)
+        result = body(None)
+        _append_locator(store, locate(result))
+        return result
 
 
 type ResumeAdmission = DurableRootResume | _Unclaimed
