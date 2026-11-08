@@ -27,6 +27,7 @@ from harness_cp.hitl_timeout_degradation import WebhookConfig, WebhookPayload
 from harness_cp.sub_agent_gate_level_descent import GateLevel
 from harness_cp.validator_framework import ConcreteValidatorFramework
 from harness_cp.validator_framework_types import (
+    ValidatorBurdenLedger,
     ValidatorOutcome,
     ValidatorResult,
 )
@@ -131,7 +132,7 @@ async def test_one_validator_plus_one_webhook_produces_two_cost_records() -> Non
         validator_registry={step.step_id: validator},
         post_evaluate_hook=hook,
     )
-    await fw.evaluate(step, {}, step_context=ctx)
+    await fw.evaluate(step, {}, step_context=ctx, burden=ValidatorBurdenLedger())
 
     # --- Webhook surface ---
     # Mock httpx client that returns 200 OK — exercises success path of
@@ -240,7 +241,7 @@ async def test_validator_and_webhook_append_to_run_scoped_cost_sink() -> None:
         validator_registry={step.step_id: validator},
         post_evaluate_hook=hook,
     )
-    await fw.evaluate(step, {}, step_context=ctx)
+    await fw.evaluate(step, {}, step_context=ctx, burden=ValidatorBurdenLedger())
 
     assert len(sink) == 1, "validator dispatch must append exactly one cost record"
 
@@ -337,7 +338,7 @@ async def test_ledger_writer_wired_produces_real_entry_core_for_both_surfaces(
         validator_registry={step.step_id: validator},
         post_evaluate_hook=hook,
     )
-    await fw.evaluate(step, {}, step_context=ctx)
+    await fw.evaluate(step, {}, step_context=ctx, burden=ValidatorBurdenLedger())
 
     # --- Webhook surface ---
     class _MockResponse:
@@ -444,7 +445,7 @@ async def test_cost_attribution_signing_runs_off_event_loop() -> None:
 
     hb = asyncio.create_task(_heartbeat())
     try:
-        await fw.evaluate(step, {}, step_context=ctx)
+        await fw.evaluate(step, {}, step_context=ctx, burden=ValidatorBurdenLedger())
     finally:
         hb.cancel()
 
@@ -498,7 +499,7 @@ async def test_signing_failure_surfaced_loudly_never_silently_swallowed(
     )
 
     with caplog.at_level(logging_module.ERROR, logger="harness.runtime.audit_signing"):
-        evaluation = await fw.evaluate(step, {}, step_context=ctx)
+        evaluation = await fw.evaluate(step, {}, step_context=ctx, burden=ValidatorBurdenLedger())
 
     # Dispatch preserved; no signed record; failure surfaced LOUDLY.
     assert evaluation is not None

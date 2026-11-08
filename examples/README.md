@@ -32,11 +32,11 @@ ledger:    <64-character hash>
 
 The CLI does not print the model's reply in text mode. The state ledger is `.harness/onboarding/state-ledger/state.jsonl`; `STATE_LEDGER` binds its parent directory. The runtime also writes its index and worktree state under `.harness/`. The config names a loopback OTLP endpoint at port 4317; without a collector, trace export can report connection errors even when the workflow completes.
 
-`minimal.toml` remains an optional hosted Anthropic example. It selects `claude-haiku-4-5` and needs an Anthropic credential and a matching runtime provider and fallback chain. The generic `harness.toml.example` defaults to subscription CLI routing, so copying it unchanged does **not** configure the Anthropic-only route for `minimal.toml`. Keep credentials out of TOML; the local-development secret backend supports the OS keyring with environment fallback.
+`minimal.toml` remains an optional hosted Anthropic example. **It is not a supported surface of the first self-hosted Omarchy release**, which runs local Ollama with no paid hosted provider or API key. It selects `claude-haiku-4-5` and needs an Anthropic credential and a matching runtime provider and fallback chain. The generic `harness.toml.example` defaults to subscription CLI routing, so copying it unchanged does **not** configure the Anthropic-only route for `minimal.toml`. Keep credentials out of TOML; the local-development secret backend supports the OS keyring with environment fallback.
 
 ## Multi-step topology examples (local Ollama)
 
-Two further manifests run real multi-step topologies against the same local `llama3.2:3b` model, with no hosted provider and an empty fallback chain. Prompts and `num_predict` are small on purpose.
+Five further manifests run real multi-step topologies against the same local `llama3.2:3b` model, with no hosted provider and an empty fallback chain. Prompts and `num_predict` are small on purpose.
 
 - `ollama-decentralized-handoff.toml` — `pipeline-automation`, `decentralized-handoff`, three sequential stage-expert inference steps (`stage-draft`, `stage-review`, `stage-finalize`). Stages 2 and 3 act on the previous stage's output, which the runtime only delivers when `inter_step_data_flow` is on. The shared config leaves it off, so this example has its own config, `ollama.handoff.local.toml.example`: the shared config plus that one flag. Prepare and run it like this:
 
@@ -78,4 +78,54 @@ path = "/absolute/path/to/your/workspace/.harness/onboarding/state-ledger"
 uv run --no-sync harness run examples/ollama-parallelization.toml --config harness.toml
 ```
 
-These two manifests are checked provider-free (they load through the real manifest loader, their payloads validate, and a recording provider double shows the handoff stages receiving the prior stage's output under the handoff config), but they are **not yet witnessed** end to end: an installed-candidate run against a live local model, in a quiet Ollama window, is still open. Do not read a successful `completed` status here as that acceptance. The other topologies (evaluator-optimizer, orchestrator-workers, hierarchical delegation) have no local manifest yet, and the `examples/workflows/topology/*.yaml` files remain admissibility fixtures with a stand-in child, not runnable workflows.
+- `ollama-orchestrator-workers.toml` — `research`, `orchestrator-workers`. The lead step (`lead-plan`) runs first; two workers (`worker-benefits`, `worker-costs`) then run concurrently; a terminal `post-join-synthesis` step (`synthesize-brief`) receives the worker outputs after the barrier and writes the final brief. It uses the same `harness.toml` with research bindings as the parallelization example:
+
+```sh
+uv run --no-sync harness run examples/ollama-orchestrator-workers.toml --config harness.toml
+```
+
+- `ollama-hierarchical-delegation.toml` — `research`, `hierarchical-delegation`. The root lead has two children: a direct worker and a `sub-agent-dispatch` step whose child workflow is itself hierarchical (a lead and two workers). A post-join synthesis step composes the root children's outputs. A parent may have at most three direct children; the driver refuses a fourth instead of dropping it. If you edit the brief, recompute its `summary_hash`, as the comment in the manifest explains. Same config:
+
+```sh
+uv run --no-sync harness run examples/ollama-hierarchical-delegation.toml --config harness.toml
+```
+
+- `ollama-evaluator-optimizer.toml` — `content-creation`, `evaluator-optimizer`. A generator step writes a tagline; an evaluator step judges it and replies with one JSON object, `{"accepted": true|false, "feedback": "..."}`. The driver repeats generate and evaluate until the evaluator accepts or three iterations have run. Reaching that cap still ends the run `completed`, with `accepted` false in its final state, and text-mode output does not show the verdict, so `completed` does not mean the tagline was accepted. A reply that is not exactly that object (an extra key, a quoted boolean, a reply cut off by `num_predict`) fails the run. The evaluator asks Ollama for that shape through structured outputs (`format`), which needs an Ollama release with JSON-schema `format` support. The evaluator only sees the draft, and the regenerate step only sees the feedback, when `inter_step_data_flow` is on. Use `harness.handoff.toml` and add content-creation bindings to it, above its `[runtime.routing_manifest]` table:
+
+```toml
+[[runtime.path_bindings.raw_entries]]
+path_class = "SKILLS"
+workflow_class = "content-creation"
+deployment_surface = "local-development"
+path = "/absolute/path/to/your/workspace/.agents/skills"
+
+[[runtime.path_bindings.raw_entries]]
+path_class = "PROMPTS"
+workflow_class = "content-creation"
+deployment_surface = "local-development"
+path = "/absolute/path/to/your/workspace/.harness/onboarding/prompts"
+
+[[runtime.path_bindings.raw_entries]]
+path_class = "ROUTING_MANIFEST"
+workflow_class = "content-creation"
+deployment_surface = "local-development"
+path = "/absolute/path/to/your/workspace/.harness/onboarding/routing-manifest"
+
+[[runtime.path_bindings.raw_entries]]
+path_class = "STATE_LEDGER"
+workflow_class = "content-creation"
+deployment_surface = "local-development"
+path = "/absolute/path/to/your/workspace/.harness/onboarding/state-ledger"
+```
+
+```sh
+uv run --no-sync harness run examples/ollama-evaluator-optimizer.toml --config harness.handoff.toml
+```
+
+**What these topology examples do not show yet.** The orchestrator-workers and hierarchical manifests use the default declared-pool worker selection: their worker sets are the declared steps, and the lead runs and is recorded as its own step, but its output neither chooses nor reaches the workers, and the synthesis sees worker outputs only. A manifest can opt into the lead-directed plan (CP v1.130 §25.11.1) with `worker_selection = "lead-plan"` in its `[workflow]` table; the loader refuses it on any topology other than orchestrator-workers or hierarchical-delegation. Under that plan the lead's output carries a `worker_plan` list that selects, orders and briefs workers from the declared pool. These examples stay on declared-pool because their lead is an Ollama inference step, and the runtime does not yet turn a model reply into a `worker_plan`, so a lead-plan run of them would have no plan to follow. None of these examples declares an approval gate, so they do not exercise HITL placement inheritance into delegated children. Every step uses `tools = []` and the `ollama.local.toml.example` and `ollama.handoff.local.toml.example` configs they run with set `mcp_clients = []`, so no example here depends on a served MCP tool. That is a choice of these examples, not a limit of the Ollama arm: with an MCP client configured in `mcp_clients`, source offers its tools to the Ollama model and answers the model's tool calls through the runtime's HITL tool loop (Runtime v1.134 C-RT-38).
+
+The parallelization and handoff manifests are checked provider-free (they load through the real manifest loader, their payloads validate, and a recording provider double shows the handoff stages receiving the prior stage's output under the handoff config). The evaluator-optimizer, orchestrator-workers and hierarchical-delegation manifests are checked provider-free by `harness-runtime/tests/test_omarchy_offline_examples.py`: they load through the same loader, their topology is admissible for their workload, their configs with the README bindings resolve every path class, and the delegated brief's `summary_hash` matches its canonical hash. A recording stand-in for Ollama also runs the evaluator-optimizer loop (draft to evaluator, feedback to regenerate, the cap) and the orchestrator-workers synthesis (worker outputs only) through the real driver and dispatcher. All five are **not yet witnessed** end to end: an installed-candidate run against a live local model, in a quiet Ollama window, is still open for each. Do not read a successful `completed` status here as that acceptance. The `examples/workflows/topology/*.yaml` files remain admissibility fixtures with a stand-in child, not runnable workflows.
+
+## Offline embedding routing (Omarchy profile)
+
+`omarchy.offline-embedding.toml.example` is the Omarchy Ollama profile with Layer-2 embedding routing turned on, reading a pinned local `BAAI/bge-small-en-v1.5` model with no network access. It needs the optional embedding extra, the model files and a `SHA256SUMS` manifest in place first; follow [Offline embedding for Omarchy](../docs/operations/omarchy-offline-embedding.md).

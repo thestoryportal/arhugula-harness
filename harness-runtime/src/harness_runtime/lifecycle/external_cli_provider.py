@@ -23,9 +23,9 @@ import stat
 import sys
 import tempfile
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, fields
 from pathlib import Path
-from typing import Any, Protocol, cast
+from typing import Any, ClassVar, Protocol, cast
 
 from harness_runtime.lifecycle.cli_read_boundary import (
     REFUSAL_EXIT,
@@ -47,12 +47,15 @@ __all__ = [
     "AsyncioSubprocessRunner",
     "CLIProcessResult",
     "ClaudeCodeCLIAdapter",
+    "ClaudeCodeResultUsage",
     "CodexCLIAdapter",
+    "CodexTurnCompletedUsage",
     "ExternalCLICommandError",
     "ExternalCLINotAuthenticatedError",
     "ExternalCLIOutputError",
     "ExternalCLIProcessTimeout",
     "ExternalCLIProviderError",
+    "ExternalCLIReportedUsage",
     "ExternalCLISubprocessRunner",
     "ExternalCLITextResult",
     "GeminiCLIAdapter",
@@ -66,6 +69,7 @@ __all__ = [
     "construct_external_cli_adapter",
     "construct_gemini_cli_adapter",
     "construct_generic_command_cli_adapter",
+    "external_cli_usage_evidence",
 ]
 
 
@@ -77,10 +81,60 @@ class CLIProcessResult:
 
 
 @dataclass(frozen=True, slots=True)
+class CodexTurnCompletedUsage:
+    """The counters Codex's single terminal `turn.completed` event reported for its run.
+
+    Each counter is its own fact; `None` is unknown, never zero. `cached_input_tokens`
+    is the cached share of `input_tokens`, kept beside it, never added to it.
+    """
+
+    source: ClassVar[str] = "codex.turn.completed.usage"
+    shares: ClassVar[Mapping[str, str]] = {"cached_input_tokens": "input_tokens"}
+    input_tokens: int | None
+    cached_input_tokens: int | None
+    output_tokens: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class ClaudeCodeResultUsage:
+    """The top-level `usage` of Claude Code's successful terminal `result` object.
+
+    Each counter is its own fact; `None` is unknown, never zero. The cache counters are
+    reported beside `input_tokens`, not as shares of it. The per-model `modelUsage`
+    breakdown is a second view of the same run and is never read.
+    """
+
+    source: ClassVar[str] = "claude-code.result.usage"
+    shares: ClassVar[Mapping[str, str]] = {}
+    input_tokens: int | None
+    cache_creation_input_tokens: int | None
+    cache_read_input_tokens: int | None
+    output_tokens: int | None
+
+
+ExternalCLIReportedUsage = CodexTurnCompletedUsage | ClaudeCodeResultUsage
+"""What a subscription CLI said about its own run: evidence, never an API-priced quantity.
+Each schema owns its counter names, so no counter is renamed into another schema's.
+`shares` maps a counter to the counter it is a part of, so neither can exceed its whole."""
+
+
+def external_cli_usage_evidence(usage: ExternalCLIReportedUsage) -> Mapping[str, int | str]:
+    """The flat evidence record: the schema `source` beside the counters it knows.
+
+    An unknown counter is absent from the record, never written as zero.
+    """
+    counts = {name: count for name, count in asdict(usage).items() if count is not None}
+    return {"source": usage.source, **counts}
+
+
+@dataclass(frozen=True, slots=True)
 class ExternalCLITextResult:
     text: str
     exit_code: int
     raw_response: Mapping[str, Any]
+    reported_usage: ExternalCLIReportedUsage | None
+    """`None` is no observation: absent, ambiguous, or without one known counter. A known
+    observation can still hold unknown counters; none is ever read as zero."""
 
 
 class ExternalCLIProviderError(Exception):
@@ -793,7 +847,12 @@ class ClaudeCodeCLIAdapter:
         _raise_for_nonzero(self.command, result)
         payload = _parse_json_object(result.stdout, "Claude Code inference response")
         text = _extract_text_result(payload)
-        return ExternalCLITextResult(text=text, exit_code=result.exit_code, raw_response=payload)
+        return ExternalCLITextResult(
+            text=text,
+            exit_code=result.exit_code,
+            raw_response=payload,
+            reported_usage=_claude_result_usage(result.stdout),
+        )
 
 
 @dataclass(slots=True)
@@ -830,6 +889,7 @@ class CodexCLIAdapter:
             text=text,
             exit_code=result.exit_code,
             raw_response={"events": events},
+            reported_usage=_codex_turn_usage(events),
         )
 
 
@@ -866,7 +926,7 @@ class AntigravityCLIAdapter:
             on_wire=on_wire,
         )
         _raise_for_nonzero(self.command, result)
-        text, raw_response = _parse_response_by_format(
+        text, raw_response, reported_usage = _parse_response_by_format(
             result.stdout,
             ExternalCLIResponseFormat.TEXT,
             "Antigravity inference response",
@@ -875,6 +935,7 @@ class AntigravityCLIAdapter:
             text=text,
             exit_code=result.exit_code,
             raw_response=raw_response,
+            reported_usage=reported_usage,
         )
 
 
@@ -906,7 +967,7 @@ class GeminiCLIAdapter:
             on_wire=on_wire,
         )
         _raise_for_nonzero(self.command, result)
-        text, raw_response = _parse_response_by_format(
+        text, raw_response, reported_usage = _parse_response_by_format(
             result.stdout,
             ExternalCLIResponseFormat.TEXT,
             "Gemini inference response",
@@ -915,6 +976,7 @@ class GeminiCLIAdapter:
             text=text,
             exit_code=result.exit_code,
             raw_response=raw_response,
+            reported_usage=reported_usage,
         )
 
 
@@ -963,7 +1025,7 @@ class GenericCommandCLIAdapter:
             on_wire=on_wire,
         )
         _raise_for_nonzero(self.command, result)
-        text, raw_response = _parse_response_by_format(
+        text, raw_response, reported_usage = _parse_response_by_format(
             result.stdout,
             self.response_format,
             "generic external CLI inference response",
@@ -972,6 +1034,7 @@ class GenericCommandCLIAdapter:
             text=text,
             exit_code=result.exit_code,
             raw_response=raw_response,
+            reported_usage=reported_usage,
         )
 
 
@@ -1182,6 +1245,16 @@ def _codex_finite_float(literal: str) -> float:
     return value
 
 
+def _loads_strict_json(document: str) -> Any:
+    """`json.loads` refusing duplicate keys at any depth and non-finite numbers."""
+    return json.loads(
+        document,
+        object_pairs_hook=_codex_object_without_duplicate_keys,
+        parse_constant=_codex_reject_non_finite,
+        parse_float=_codex_finite_float,
+    )
+
+
 def _parse_codex_json_lines(raw: str, label: str) -> tuple[Mapping[str, Any], ...]:
     """Parse the WHOLE Codex JSONL stream before anything is classified or answered.
 
@@ -1198,12 +1271,7 @@ def _parse_codex_json_lines(raw: str, label: str) -> tuple[Mapping[str, Any], ..
         if not line.strip(" \t\r"):
             continue
         try:
-            parsed = json.loads(
-                line,
-                object_pairs_hook=_codex_object_without_duplicate_keys,
-                parse_constant=_codex_reject_non_finite,
-                parse_float=_codex_finite_float,
-            )
+            parsed = _loads_strict_json(line)
         except _CodexJSONBoundaryError as exc:
             raise ExternalCLIOutputError(f"{label} line {line_number} {exc.reason}") from None
         except (ValueError, RecursionError):
@@ -1311,6 +1379,75 @@ def _codex_answer_text(events: Sequence[Mapping[str, Any]], label: str) -> str:
     raise ExternalCLIOutputError(f"{label} did not contain an agent text result")
 
 
+def _reported_usage[UsageT: ExternalCLIReportedUsage](
+    schema: type[UsageT], usage: Any
+) -> UsageT | None:
+    """Every counter `schema` names, each read on its own: a missing or malformed counter
+    is unknown and leaves its independently valid neighbours known.
+
+    A part larger than its whole (`schema.shares`) proves one of the pair false without
+    saying which, so both become unknown. No known counter at all is no observation.
+    [LAW:parse-dont-validate]
+    """
+    if not isinstance(usage, Mapping):
+        return None
+    reported = cast(Mapping[str, Any], usage)
+    counts = {field.name: _reported_count(reported.get(field.name)) for field in fields(schema)}
+    for part, whole in schema.shares.items():
+        part_count, whole_count = counts[part], counts[whole]
+        if part_count is not None and whole_count is not None and part_count > whole_count:
+            counts[part] = counts[whole] = None
+    if all(count is None for count in counts.values()):
+        return None
+    return schema(**counts)
+
+
+def _reported_count(count: Any) -> int | None:
+    """A non-negative JSON integer, else unknown; `type(...) is int` refuses `bool` (an
+    `int` subclass) along with floats and strings."""
+    return count if type(count) is int and count >= 0 else None
+
+
+def _codex_turn_usage(events: Sequence[Mapping[str, Any]]) -> CodexTurnCompletedUsage | None:
+    """Usage from the stream's ONE `turn.completed`; two terminals are ambiguous, not summed.
+
+    Usage-shaped fields on any other event are intermediate and never read.
+    [LAW:one-source-of-truth]
+    """
+    terminals = [event for event in events if event.get("type") == "turn.completed"]
+    if len(terminals) != 1:
+        return None
+    return _reported_usage(CodexTurnCompletedUsage, terminals[0].get("usage"))
+
+
+def _codex_stream_usage(raw: str) -> CodexTurnCompletedUsage | None:
+    """`_codex_turn_usage` over a strict re-parse: the lenient generic JSONL reader keeps
+    the last of duplicate keys, which would let a conflicting `usage` key pass as one."""
+    try:
+        events = _parse_codex_json_lines(raw, "external CLI usage")
+    except ExternalCLIOutputError:
+        return None
+    return _codex_turn_usage(events)
+
+
+def _claude_result_usage(raw: str) -> ClaudeCodeResultUsage | None:
+    """Usage from a strictly parsed, successful terminal Claude Code `result` object."""
+    try:
+        parsed = _loads_strict_json(raw)
+    except (ValueError, RecursionError):
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    payload = cast(dict[str, Any], parsed)
+    if not (
+        payload.get("type") == "result"
+        and payload.get("subtype") == "success"
+        and payload.get("is_error") is False
+    ):
+        return None
+    return _reported_usage(ClaudeCodeResultUsage, payload.get("usage"))
+
+
 def _render_argv_templates(
     args: Sequence[str],
     *,
@@ -1330,18 +1467,27 @@ def _parse_response_by_format(
     raw: str,
     response_format: ExternalCLIResponseFormat,
     label: str,
-) -> tuple[str, Mapping[str, Any]]:
+) -> tuple[str, Mapping[str, Any], ExternalCLIReportedUsage | None]:
+    """The answer, its envelope and the usage that envelope's schema reports.
+
+    JSON and JSONL read the same terminal schemas as the dedicated Claude Code and Codex
+    adapters, so an equivalent generic route reports identical usage; text has none.
+    """
     if response_format is ExternalCLIResponseFormat.TEXT:
         text = raw.strip()
         if not text:
             raise ExternalCLIOutputError(f"{label} was empty")
-        return text, {"text": text}
+        return text, {"text": text}, None
     if response_format is ExternalCLIResponseFormat.JSON:
         payload = _parse_json_object(raw, label)
-        return _extract_text_result(payload), payload
+        return _extract_text_result(payload), payload, _claude_result_usage(raw)
     if response_format is ExternalCLIResponseFormat.JSONL:
         events = _parse_json_lines(raw, label)
-        return _extract_jsonl_text_result(events, label), {"events": events}
+        return (
+            _extract_jsonl_text_result(events, label),
+            {"events": events},
+            _codex_stream_usage(raw),
+        )
     raise ExternalCLIOutputError(f"unsupported external CLI response format {response_format!r}")
 
 

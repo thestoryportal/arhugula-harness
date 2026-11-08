@@ -78,7 +78,7 @@ def test_terminal_arc_id_reuse_refused_even_after_gc(qdir):
     reuse -- the gen-1 exclusive-create fallback no longer collides."""
     rs.reserve("pr-31", lane_id="A", branch="b", arc_type="inventing")
     rs.transition("pr-31", "open", lane_id="A")
-    rs.transition("pr-31", "merged", lane_id="A")
+    rs.transition("pr-31", "merged", lane_id="A", updates={"merge_sha": "c" * 40})
     with pytest.raises(rs.ReservationError, match="already terminal"):
         rs.reserve("pr-31", lane_id="B", branch="b2", arc_type="inventing")
     # simulate the post-GC state: below-head gens pruned, only the terminal head remains
@@ -223,10 +223,13 @@ def test_only_holder_terminalizes_open_reservation(qdir):
     rs.reserve("pr-9x", lane_id="A", branch="b", arc_type="inventing")
     rs.transition("pr-7b", "open", lane_id="A")
     with pytest.raises(rs.IllegalTransition, match="requires the holder"):
-        rs.transition("pr-7b", "merged", lane_id="B")
+        rs.transition("pr-7b", "merged", lane_id="B", updates={"merge_sha": "c" * 40})
     with pytest.raises(rs.IllegalTransition, match="requires the holder"):
         rs.transition("pr-7b", "abandoned", lane_id="B", superseded_by="pr-8")
-    assert rs.transition("pr-7b", "merged", lane_id="A")["state"] == "merged"
+    assert (
+        rs.transition("pr-7b", "merged", lane_id="A", updates={"merge_sha": "c" * 40})["state"]
+        == "merged"
+    )
     rs.reserve("pr-7c", lane_id="A", branch="b", arc_type="inventing")
     # pending->abandoned: legal for a lane that HOLDS the superseding reservation
     # (C-HE-03 §5; codex round-8 P1) -- OTHER owns pr-9y, so OTHER may abandon pr-7c to it
@@ -660,7 +663,7 @@ def test_superseded_by_only_on_abandoned(qdir):
     rs.transition("pr-16", "open", lane_id="A")
     with pytest.raises(rs.ReservationError, match="only legal on abandoned"):
         rs.transition("pr-16", "merged", lane_id="A", superseded_by="pr-17")
-    p = rs.transition("pr-16", "merged", lane_id="A")
+    p = rs.transition("pr-16", "merged", lane_id="A", updates={"merge_sha": "c" * 40})
     assert p["superseded_by"] is None
 
 
@@ -682,7 +685,7 @@ def test_accretion_refused_on_terminal_reservation(qdir):
     rs.reserve("pr-19", lane_id="A", branch="b", arc_type="inventing")
     rs.transition("pr-19", "open", lane_id="A")
     rs.record_phase("pr-19", "execute", "start")
-    rs.transition("pr-19", "merged", lane_id="A")
+    rs.transition("pr-19", "merged", lane_id="A", updates={"merge_sha": "c" * 40})
     with pytest.raises(rs.IllegalTransition, match="open window"):
         rs.record_phase("pr-19", "execute", "end")
     with pytest.raises(rs.IllegalTransition, match="open window"):
@@ -701,7 +704,9 @@ def test_gc_prunes_below_head_only_after_terminal_plus_30d_and_sweeps_tmp(qdir, 
     old = datetime.now(UTC) - timedelta(days=40)
     for p in d.glob("*.json"):  # gens 1-2 are 40 days old...
         os.utime(p, (old.timestamp(), old.timestamp()))
-    rs.transition("pr-11", "merged", lane_id="A")  # ...but terminalization is NOW
+    rs.transition(
+        "pr-11", "merged", lane_id="A", updates={"merge_sha": "c" * 40}
+    )  # ...but terminalization is NOW
     (d / ".2.12345.tmp").write_text("{}")
     os.utime(d / ".2.12345.tmp", (old.timestamp(), old.timestamp()))
     monkeypatch.setattr(rs, "_process_is_alive", lambda pid: False)
@@ -731,10 +736,20 @@ def test_reservation_ground_truth(qdir, monkeypatch):
     rs.open_with_sensor("pr-20", "A")
     rs.update_payload("pr-20", {"pr": 20})
     assert rs.reconcile("pr-20", gh_view=_gh_raises) == "open"  # fail safe: not reclaimable
-    assert rs.reconcile("pr-20", gh_view=lambda pr: {"state": "MERGED"}) == "merged"
+    assert (
+        rs.reconcile(
+            "pr-20", gh_view=lambda pr: {"state": "MERGED", "mergeCommit": {"oid": "c" * 40}}
+        )
+        == "merged"
+    )
     gen_after_merge = rs.current("pr-20")[0]
     # idempotent: a terminal head short-circuits -- no second transition, same gen
-    assert rs.reconcile("pr-20", gh_view=lambda pr: {"state": "MERGED"}) == "merged"
+    assert (
+        rs.reconcile(
+            "pr-20", gh_view=lambda pr: {"state": "MERGED", "mergeCommit": {"oid": "c" * 40}}
+        )
+        == "merged"
+    )
     assert rs.current("pr-20")[0] == gen_after_merge
     rs.reserve("pr-21", lane_id="A", branch="b", arc_type="inventing")
     later = datetime.now(UTC) + timedelta(hours=25)
@@ -754,6 +769,83 @@ def test_reservation_ground_truth(qdir, monkeypatch):
     rs.reserve("pr-23", lane_id="A", branch="b", arc_type="inventing")
     closed = rs.reconcile("pr-22", gh_view=lambda pr: {"state": "CLOSED"}, superseded_by="pr-23")
     assert closed == "abandoned"
+
+
+def test_reconcile_records_actual_merge_oid_atomically_and_refuses_missing(qdir):
+    rs.reserve("pr-25", lane_id="A", branch="b", arc_type="inventing")
+    rs.open_with_sensor("pr-25", "A")
+    rs.update_payload("pr-25", {"pr": 25})
+    marks = []
+    assert (
+        rs.reconcile(
+            "pr-25",
+            gh_view=lambda pr: {"state": "MERGED", "mergeCommit": None},
+            on_unconfirmed=marks.append,
+        )
+        == "open"
+    )
+    assert marks and rs.current("pr-25")[1]["state"] == "open"
+    assert (
+        rs.reconcile(
+            "pr-25",
+            gh_view=lambda pr: {
+                "state": "MERGED",
+                "mergedAt": "now",
+                "mergeCommit": {"oid": "c" * 40},
+            },
+        )
+        == "merged"
+    )
+    assert rs.current("pr-25")[1]["merge_sha"] == "c" * 40
+
+
+def test_merged_transition_requires_a_full_nonconflicting_receipt(qdir):
+    rs.reserve("pr-27", lane_id="A", branch="b", arc_type="inventing")
+    rs.open_with_sensor("pr-27", "A")
+    with pytest.raises(rs.ReservationError, match="requires a full merge SHA"):
+        rs.transition("pr-27", "merged", lane_id="A")
+    assert rs.current("pr-27")[1]["state"] == "open"
+    rs.update_payload("pr-27", {"merge_sha": "c" * 40})
+    with pytest.raises(rs.ReservationError, match="conflicts"):
+        rs.transition("pr-27", "merged", lane_id="A", updates={"merge_sha": "d" * 40})
+
+
+def test_reconcile_recovers_existing_null_terminal_from_same_pr(qdir):
+    rs.reserve("pr-26", lane_id="A", branch="b", arc_type="inventing")
+    rs.open_with_sensor("pr-26", "A")
+    rs.update_payload("pr-26", {"pr": 26, "head_sha": "a" * 40})
+    rs._cas_next("pr-26", lambda head: {**head, "state": "merged"})  # legacy receipt
+    old_gen = rs.current("pr-26")[0]
+    with pytest.raises(rs.ReservationError, match="unconfirmed"):
+        rs.reconcile("pr-26", gh_view=lambda pr: {"state": "MERGED", "mergeCommit": None})
+    assert rs.current("pr-26")[0] == old_gen
+    with pytest.raises(rs.ReservationError, match="head is unconfirmed"):
+        rs.reconcile(
+            "pr-26",
+            gh_view=lambda pr: {
+                "state": "MERGED",
+                "headRefOid": "b" * 40,
+                "mergeCommit": {"oid": "c" * 40},
+            },
+        )
+    assert rs.current("pr-26")[0] == old_gen
+    assert (
+        rs.reconcile(
+            "pr-26",
+            gh_view=lambda pr: {
+                "state": "MERGED",
+                "headRefOid": "a" * 40,
+                "mergeCommit": {"oid": "c" * 40},
+            },
+        )
+        == "merged"
+    )
+    gen, head = rs.current("pr-26")
+    assert gen == old_gen + 1 and head["merge_sha"] == "c" * 40
+    assert (
+        json.loads((qdir / "reservations/pr-26" / f"{old_gen}.json").read_text())["merge_sha"]
+        is None
+    )
 
 
 # mutation-probe: drop the sibling_open_count snapshot in open_with_sensor()
@@ -791,14 +883,18 @@ def test_reconcile_all_isolates_per_arc_faults(qdir, monkeypatch):
     rs.open_with_sensor("pr-41", "A")
     rs.update_payload("pr-41", {"pr": 41})
     later = datetime.now(UTC) + timedelta(hours=25)
-    out = rs.reconcile_all(gh_view=lambda pr: {"state": "MERGED"}, now=later)
+    out = rs.reconcile_all(
+        gh_view=lambda pr: {"state": "MERGED", "mergeCommit": {"oid": "c" * 40}}, now=later
+    )
     assert out["pr-40"].startswith("ERROR") and out["pr-41"] == "merged"
     assert rs.current("pr-40")[1]["state"] == "pending"  # fault surfaced, state untouched
 
 
 def test_cli_reconcile_all(qdir, monkeypatch, capsys):
     monkeypatch.setattr(rs, "emit_loop_row", lambda *a: None)
-    monkeypatch.setattr(rs, "_gh_view", lambda pr: {"state": "MERGED"})
+    monkeypatch.setattr(
+        rs, "_gh_view", lambda pr: {"state": "MERGED", "mergeCommit": {"oid": "c" * 40}}
+    )
     rs.reserve("pr-50", lane_id="A", branch="b", arc_type="inventing")
     rs.open_with_sensor("pr-50", "A")
     rs.update_payload("pr-50", {"pr": 50})
@@ -818,7 +914,7 @@ def test_reconcile_terminal_bound_to_checked_pr(qdir, monkeypatch):
 
     def gh_rebinds(pr):
         rs.update_payload("pr-60", {"pr": 61})  # concurrent ship-pr backfill wins the race
-        return {"state": "MERGED"}
+        return {"state": "MERGED", "mergeCommit": {"oid": "c" * 40}}
 
     marks = []
     assert rs.reconcile("pr-60", gh_view=gh_rebinds, on_unconfirmed=marks.append) == "open"
@@ -835,8 +931,10 @@ def test_reconcile_concurrent_pass_is_idempotent_not_error(qdir, monkeypatch):
     rs.update_payload("pr-70", {"pr": 70})
 
     def gh_and_sibling_wins(pr):
-        rs.transition("pr-70", "merged", lane_id="A")  # the sibling pass lands first
-        return {"state": "MERGED"}
+        rs.transition(
+            "pr-70", "merged", lane_id="A", updates={"merge_sha": "c" * 40}
+        )  # the sibling pass lands first
+        return {"state": "MERGED", "mergeCommit": {"oid": "c" * 40}}
 
     marks = []
     merged = rs.reconcile("pr-70", gh_view=gh_and_sibling_wins, on_unconfirmed=marks.append)
@@ -856,7 +954,7 @@ def test_reconcile_all_isolates_corrupt_head_read(qdir, monkeypatch):
     (qdir / "reservations" / "aa-bad").symlink_to(outside)  # sorts before pr-80
     # r3: a DANGLING symlink must be in-band ERROR too, never silently skipped
     (qdir / "reservations" / "ab-dangling").symlink_to(qdir / "no-such-target")
-    out = rs.reconcile_all(gh_view=lambda pr: {"state": "MERGED"})
+    out = rs.reconcile_all(gh_view=lambda pr: {"state": "MERGED", "mergeCommit": {"oid": "c" * 40}})
     assert out["aa-bad"].startswith("ERROR") and out["ab-dangling"].startswith("ERROR")
     assert out["pr-80"] == "merged"
 
@@ -891,13 +989,15 @@ def test_reconcile_all_isolates_schema_malformed_head(qdir, monkeypatch):
     rs.reserve("pr-95", lane_id="A", branch="b", arc_type="inventing")
     rs.open_with_sensor("pr-95", "A")
     rs.update_payload("pr-95", {"pr": 95})
-    out = rs.reconcile_all(gh_view=lambda pr: {"state": "MERGED"})
+    out = rs.reconcile_all(gh_view=lambda pr: {"state": "MERGED", "mergeCommit": {"oid": "c" * 40}})
     assert out["ab-empty"].startswith("ERROR") and out["pr-95"] == "merged"
 
 
 def test_cli_reconcile_all_log_to_store_writes_and_refuses_symlink(qdir, monkeypatch, capsys):
     monkeypatch.setattr(rs, "emit_loop_row", lambda *a: None)
-    monkeypatch.setattr(rs, "_gh_view", lambda pr: {"state": "MERGED"})
+    monkeypatch.setattr(
+        rs, "_gh_view", lambda pr: {"state": "MERGED", "mergeCommit": {"oid": "c" * 40}}
+    )
     rs.reserve("pr-97", lane_id="A", branch="b", arc_type="inventing")
     rs.open_with_sensor("pr-97", "A")
     rs.update_payload("pr-97", {"pr": 97})
@@ -927,7 +1027,7 @@ def test_reconcile_corrupt_state_isolates_in_band(qdir, monkeypatch):
     head = json.loads((qdir / "reservations" / "pr-99" / "1.json").read_text())
     head.update(state="bogus", generation=2, prev_generation=1)
     bad.write_text(json.dumps(head))
-    out = rs.reconcile_all(gh_view=lambda pr: {"state": "MERGED"})
+    out = rs.reconcile_all(gh_view=lambda pr: {"state": "MERGED", "mergeCommit": {"oid": "c" * 40}})
     assert out["pr-99"].startswith("ERROR") and "bogus" in out["pr-99"]
     # non-dict gh payload: fail safe to open -- no crash, no transition, and NO stale rows
     # whose detail would falsely assert the PR is still OPEN (r5 P2)

@@ -23,6 +23,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from typing import get_args
 
 import pytest
 from harness_cp.handoff_context import StateSummary
@@ -30,6 +31,7 @@ from harness_cp.pause_resume_protocol_types import PauseSnapshot, WorkflowPauseR
 from harness_is.state_ledger_entry_schema import Identifier
 from harness_runtime.lifecycle import journal_workflow_pause_store as store_module
 from harness_runtime.lifecycle.journal_workflow_pause_store import (
+    HandleUnknownCause,
     JournalWorkflowPauseStore,
     PauseJournalReadCause,
     encode_pause_journal_key,
@@ -82,6 +84,7 @@ def test_ac1a_two_os_processes_differently_tenanted_keep_their_own_streams(
     script = """
 import sys
 from pathlib import Path
+from typing import get_args
 from harness_cp.handoff_context import StateSummary
 from harness_cp.pause_resume_protocol_types import PauseSnapshot, WorkflowPauseReason
 from harness_is.state_ledger_entry_schema import Identifier
@@ -444,9 +447,14 @@ def test_ac4a_wrong_tenant_and_legacy_only_both_report_the_ordinary_absent(
     assert never == legacy_only._replace() == wrong_tenant._replace()
 
 
-def test_ac4b_the_cause_vocabulary_is_still_exactly_five() -> None:
-    """AC #4(b) — asserted PROGRAMMATICALLY over the shipped enum, not eyeballed."""
-    members = {member.value for member in PauseJournalReadCause}
+def test_ac4b_the_handle_cause_vocabulary_is_still_exactly_five() -> None:
+    """AC #4(b) — asserted PROGRAMMATICALLY over the shipped types, not eyeballed.
+
+    Runtime spec v1.137 Rule A3 adds ``superseded`` to the journal read vocabulary
+    only; the handle-unknown refusal's cause stays closed at five.
+    """
+    members = {member.value for member in get_args(HandleUnknownCause)}
+    assert {member.value for member in PauseJournalReadCause} == members | {"superseded"}
     assert members == {
         "absent",
         "empty-journal",
@@ -454,7 +462,7 @@ def test_ac4b_the_cause_vocabulary_is_still_exactly_five() -> None:
         "corrupt-latest",
         "workflow-mismatch",
     }
-    assert len(PauseJournalReadCause) == 5
+    assert len(PauseJournalReadCause) == 6
 
 
 def test_ac4c_absent_now_carries_the_indeterminate_disposition(tmp_path: Path) -> None:

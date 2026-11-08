@@ -50,6 +50,9 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 #: confused with an underived one. Span-attribute VALUES, not enum members.
 PROMPT_PACKET_FALLBACK_NOT_DERIVED: Final[str] = "not_derived"
 PROMPT_PACKET_FALLBACK_UNDETERMINED: Final[str] = "prompt_packet_denial_undetermined"
+#: Every mode-level gate admits the prompt packet, but a selected record's own
+#: C-MEM-05 `injection_policy` forbids prompt text.
+PROMPT_PACKET_FALLBACK_RECORD_POLICY_DENIED: Final[str] = "record_injection_policy_denied"
 
 
 class MemoryInjectionOperationStore(Protocol):
@@ -136,6 +139,8 @@ class RuntimeMemoryContext(BaseModel):
     #: `injection_access` and an absent `supports_prompt_extension_packet` —
     #: the selector does not distinguish those two once past its packet branch,
     #: and this field does not invent a distinction it cannot observe.
+    #: When every mode gate passes, `record_injection_policy_denied` still
+    #: withholds a packet holding a record that C-MEM-05 restricts from prompts.
     #:
     #: Defaults to `not_derived`: a context assembled anywhere but
     #: `compose_run_start` has not proven eligibility, and unproven must read as
@@ -282,7 +287,10 @@ class RuntimeMemoryContextComposer:
         )
         # B-83 [P1-e] — settled here, where the policy + budget inputs are in
         # scope, and carried on the context for the dispatch-side repair.
-        prompt_packet_denial = _prompt_packet_fallback_denial(request)
+        prompt_packet_denial = _prompt_packet_fallback_denial(
+            request,
+            prompt_injectable=retrieval_result.prompt_injectable,
+        )
         with memory_telemetry_span(
             self._tracer_provider,
             tracer_name="harness.runtime.memory_context",
@@ -494,10 +502,19 @@ def _access_mode_request(
     )
 
 
-def _prompt_packet_fallback_denial(request: MemoryContextCompositionRequest) -> str | None:
-    """Why would C-MEM-13 NOT select `PROMPT_EXTENSION_PACKET` for this request?
+def _prompt_packet_fallback_denial(
+    request: MemoryContextCompositionRequest,
+    *,
+    prompt_injectable: bool,
+) -> str | None:
+    """Why may this context's packet NOT be served as prompt text?
 
-    `None` means it WOULD have — the degraded-serve repair is authorized.
+    `None` means C-MEM-13 WOULD have selected `PROMPT_EXTENSION_PACKET` and
+    every record in the packet admits prompt text — the degraded-serve repair
+    is authorized. The mode gates come first, so a configuration denial is
+    named as itself; the record gate (`prompt_injectable`, settled by the
+    retriever against the same records it read) withholds a packet the mode
+    would admit but whose records were selected for tools only (C-MEM-05).
 
     B-83 [P1-e]. `select_memory_access_mode` returns at the FIRST mode whose
     gates pass, so a `STANDARD_MEMORY_TOOLS` selection proves nothing about the
@@ -544,7 +561,7 @@ def _prompt_packet_fallback_denial(request: MemoryContextCompositionRequest) -> 
     )
     probe_selection = select_memory_access_mode(probe)
     if probe_selection.access_mode is MemoryAccessMode.PROMPT_EXTENSION_PACKET:
-        return None
+        return None if prompt_injectable else PROMPT_PACKET_FALLBACK_RECORD_POLICY_DENIED
     if probe_selection.denial_reason is not None:
         return probe_selection.denial_reason.value
     # Unreachable by construction: with native + standard tools masked off the
@@ -620,6 +637,7 @@ def _hash_json(payload: dict[str, object]) -> str:
 
 __all__ = [
     "PROMPT_PACKET_FALLBACK_NOT_DERIVED",
+    "PROMPT_PACKET_FALLBACK_RECORD_POLICY_DENIED",
     "PROMPT_PACKET_FALLBACK_UNDETERMINED",
     "MemoryContextCompositionRequest",
     "MemoryInjectionOperationStore",

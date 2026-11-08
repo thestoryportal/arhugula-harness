@@ -57,6 +57,7 @@ def door(tmp_path, monkeypatch):
     # Hermeticity: the door's own WO-U03 observation reads the canonical activation
     # receipt; every arc is legacy here unless a test enrols it through `selected`.
     monkeypatch.setattr(md, "observe_landing_profile", lambda arc: LEGACY)
+    monkeypatch.setattr(md, "observed_refresh_rule", lambda: "legacy")
     rs.reserve("pr-1", lane_id="A", branch="b", arc_type="inventing")
     rs.open_with_sensor("pr-1", "A")
     # ship-pr back-fills the merge tuple BEFORE the door (C-HE-03 §3); acquire()
@@ -898,6 +899,9 @@ class FakeGround:
     sketch's single shared dict made gh_view(1) report the refresh PR's state after the
     continuation began, breaking every resume assertion)."""
 
+    def refresh_rule(self):
+        return "legacy"
+
     def __init__(self, *, head="a" * 40, base="b" * 40, tree="d" * 40, ci="success"):
         self.states = {
             1: {
@@ -988,6 +992,26 @@ def test_happy_path_lands_holds_through_ci_and_releases(door):
     assert md.read_lease() is None
 
 
+def test_milestone_policy_releases_after_own_main_without_refresh(door):
+    g = FakeGround()
+    g.refresh_rule = lambda: "trial"
+    original = g.gh_runs_for_sha
+    g.gh_runs_for_sha = lambda sha: [{**r, "databaseId": 10, "attempt": 1} for r in original(sha)]
+    assert _land(door, g) == "released"
+    assert md.read_lease() is None
+    assert len(g.states) == 1  # no refresh PR was ever created
+
+
+def test_milestone_policy_still_blocks_failed_own_main(door):
+    g = FakeGround(ci="failure")
+    g.refresh_rule = lambda: "trial"
+    with pytest.raises(md.DoorBlocked, match="post_merge_ci_not_green"):
+        _land(door, g)
+    assert md.read_lease()["state"] == "blocked"
+    assert g.merge_calls == [(1, "a" * 40)]
+    assert rs.current("pr-1")[1]["state"] == "merged"
+
+
 def test_local_base_cas_check_fails_door_on_tree_mismatch(door):
     g = FakeGround(tree="x" * 40)
     with pytest.raises(md.DoorFailed, match="attested"):
@@ -1034,6 +1058,100 @@ def test_timeout_reconcile_open_reissues_exactly_once(door):
         return subprocess.CompletedProcess([], 0, "", "")
 
     g.gh_merge = merge_first_hangs
+    assert _land(door, g) == "released"
+    assert len(g.merge_calls) == 2
+
+
+def test_rejected_merge_preserves_github_error_after_bounded_retry(door):
+    g = FakeGround()
+
+    def rejected(pr, head, timeout):
+        g.merge_calls.append((pr, head))
+        return subprocess.CompletedProcess([], 1, "", "Required status check is expected")
+
+    g.gh_merge = rejected
+    with pytest.raises(md.DoorBlocked, match="Required status check is expected"):
+        _land(door, g)
+    assert len(g.merge_calls) == 2
+    assert "Required status check is expected" in md.read_lease()["blocked_reason"]
+
+
+def test_confirmed_required_check_rejection_stops_after_one_attempt(door):
+    g = FakeGround()
+    error = (
+        'GraphQL: Required status check "pytest (all axis packages) — blocking" '
+        "is expected. (mergePullRequest)"
+    )
+
+    def rejected(pr, head, timeout):
+        g.merge_calls.append((pr, head))
+        return subprocess.CompletedProcess([], 1, "", error + "\n")
+
+    g.gh_merge = rejected
+    with pytest.raises(md.DoorBlocked, match="Required status check"):
+        _land(door, g)
+    assert len(g.merge_calls) == 1
+    assert error in md.read_lease()["blocked_reason"]
+
+
+def test_unknown_graphql_failure_remains_retryable(door):
+    g = FakeGround()
+
+    def transient(pr, head, timeout):
+        g.merge_calls.append((pr, head))
+        if len(g.merge_calls) == 1:
+            return subprocess.CompletedProcess([], 1, "", "GraphQL: service unavailable")
+        g.states[pr].update(state="MERGED", mergedAt="now", mergeCommit={"oid": "c" * 40})
+        return subprocess.CompletedProcess([], 0, "", "")
+
+    g.gh_merge = transient
+    assert _land(door, g) == "released"
+    assert len(g.merge_calls) == 2
+
+
+def test_rejected_merge_preserves_error_when_reconciliation_fails(door):
+    g = FakeGround()
+
+    def rejected(pr, head, timeout):
+        g.merge_calls.append((pr, head))
+        g.states[pr]["state"] = "CLOSED"
+        return subprocess.CompletedProcess([], 1, "", "GitHub rejected merge")
+
+    g.gh_merge = rejected
+    with pytest.raises(md.DoorBlocked, match="GitHub rejected merge; reconciliation failed"):
+        _land(door, g)
+    assert len(g.merge_calls) == 1
+    assert "not reconcilable" in md.read_lease()["blocked_reason"]
+
+
+@pytest.mark.parametrize(
+    "error",
+    ["connection lost", 'GraphQL: Required status check "ci" is expected. (mergePullRequest)'],
+)
+def test_rejected_merge_reconciles_a_server_side_merge(door, error):
+    g = FakeGround()
+
+    def rejected_after_merge(pr, head, timeout):
+        g.merge_calls.append((pr, head))
+        g.states[pr].update(state="MERGED", mergedAt="now", mergeCommit={"oid": "c" * 40})
+        return subprocess.CompletedProcess([], 1, "", error)
+
+    g.gh_merge = rejected_after_merge
+    assert _land(door, g) == "released"
+    assert len(g.merge_calls) == 1
+
+
+def test_nonzero_transport_failure_reconciles_and_retries(door):
+    g = FakeGround()
+
+    def transient(pr, head, timeout):
+        g.merge_calls.append((pr, head))
+        if len(g.merge_calls) == 1:
+            return subprocess.CompletedProcess([], 1, "", "connection reset")
+        g.states[pr].update(state="MERGED", mergedAt="now", mergeCommit={"oid": "c" * 40})
+        return subprocess.CompletedProcess([], 0, "", "")
+
+    g.gh_merge = transient
     assert _land(door, g) == "released"
     assert len(g.merge_calls) == 2
 
@@ -1980,7 +2098,7 @@ case "$1 $2" in
     ;;
   "worktree remove") ;;
   "worktree list") echo "worktree /x" ;;
-  "fetch origin") ;;
+  "fetch origin"|"fetch -q") ;;
   "add .harness/roadmap_status.md") ;;
   "diff --cached") echo ".harness/roadmap_status.md" ;;
   "commit -m") ;;
@@ -2189,7 +2307,7 @@ def test_resumed_refresh_already_merged_never_reissued(door):
         json.dumps({"pr": 2, "head_sha": "r" * 40}),
     )
     md.mark_attempted(lease, suffix="refresh")
-    _step_vi()
+    _step_vi(sha="c" * 40)
     resumed = md.read_lease()
     assert md.land(
         1, expected="legacy", lane_id="A", arc_id="pr-1", ground=g, refresh=None, lease=resumed
@@ -2374,6 +2492,32 @@ def test_fresh_land_of_an_already_merged_pr_never_reissues(door):
     g.states[1].update(state="MERGED", mergedAt="now", mergeCommit={"oid": "c" * 40})
     assert _land(door, g) == "released"
     assert g.merge_calls == []  # verified ground truth; nothing re-issued
+
+
+def test_land_recovers_legacy_null_receipt_from_confirmed_merge(door):
+    g = FakeGround()
+    rs.update_payload("pr-1", {"attested_merge_tree": "d" * 40})
+    lease = md.acquire(lane_id="A", arc_id="pr-1", pr=1, head_sha="a" * 40, base_sha="b" * 40)
+    md.mark_attempted(lease)
+    rs._cas_next("pr-1", lambda head: {**head, "state": "merged"})  # legacy receipt
+    g.states[1].update(state="MERGED", mergedAt="now", mergeCommit={"oid": "c" * 40})
+    assert (
+        md.land(
+            1, expected="legacy", lane_id="A", arc_id="pr-1", ground=g, refresh=None, lease=lease
+        )
+        == "released"
+    )
+    assert rs.current("pr-1")[1]["merge_sha"] == "c" * 40
+    assert g.merge_calls == []
+
+
+def test_land_refuses_merged_response_without_merge_oid(door):
+    g = FakeGround()
+    g.states[1].update(state="MERGED", mergedAt="now", mergeCommit=None)
+    with pytest.raises(md.DoorFailed, match="missing full merge commit oid"):
+        _land(door, g)
+    assert rs.current("pr-1")[1]["state"] == "open"
+    assert g.merge_calls == []
 
 
 # mutation-probe: drop unblock()'s open-holder refusal (a foreign lane takes the successor)
@@ -2581,7 +2725,7 @@ def test_release_verb_refuses_when_the_reservation_records_no_merge_sha(door, mo
     fresh = _unblocked_successor()
     _release_ground(monkeypatch)
     # the §4(vi) flip WITHOUT the merge_sha it normally records alongside
-    rs.transition("pr-1", "merged", lane_id="A")
+    rs._cas_next("pr-1", lambda head: {**head, "state": "merged"})  # legacy receipt
     assert rs.current("pr-1")[1].get("merge_sha") is None
     monkeypatch.setattr(md, "_process_is_alive", lambda pid: False)
     assert md.main(["release", "--lane-id", "A"]) == 4
@@ -3855,3 +3999,65 @@ def test_trial_resume_never_drops_an_outstanding_refresh(selected):
         )
     assert md.read_lease()["blocked_reason"] == "refresh_outstanding_under_trial"
     assert _receipts() == []
+
+
+def test_milestone_wrapper_preserves_started_legacy_refresh(door, monkeypatch, capsys):
+    monkeypatch.setattr(md, "observed_refresh_rule", lambda: "trial")
+    assert md.main(["profile", "--arc-id", "pr-1", "--with-refresh"]) == 0
+    assert capsys.readouterr().out == "legacy no-refresh\n"
+    lease = md.acquire(lane_id="A", arc_id="pr-1", pr=1, head_sha="a" * 40, base_sha="b" * 40)
+    from arc_metrics import publish_exclusive
+
+    publish_exclusive(md._sidecar(lease["lease_token"], "refresh.intent"), "{}")
+    assert md.main(["profile", "--arc-id", "pr-1", "--with-refresh"]) == 0
+    assert capsys.readouterr().out == "legacy refresh\n"
+
+
+@pytest.mark.parametrize(
+    ("posture", "profile_rc", "expected_rc", "refresh"),
+    [
+        ("legacy no-refresh", 0, 0, False),
+        ("legacy refresh", 0, 0, True),
+        ("trial no-refresh", 0, 0, False),
+        ("held", 6, 6, None),
+        ("legacy nonsense", 0, 70, None),
+    ],
+)
+def test_safe_wrapper_routes_posture_and_holds_query_failure(
+    tmp_path, posture, profile_rc, expected_rc, refresh
+):
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    log = tmp_path / "land.log"
+    uv = bindir / "uv"
+    uv.write_text(
+        """#!/usr/bin/env bash
+case "$*" in
+  *"merge_door.py profile"*) printf '%s\\n' "$TEST_POSTURE"; exit "$TEST_PROFILE_RC" ;;
+  *"roadmap_status_refresh.py --help"*) echo --emit-refresh-pr-json ;;
+  *"merge_door.py land"*) printf '%s\\n' "$*" > "$TEST_LAND_LOG" ;;
+  *) exit 99 ;;
+esac
+"""
+    )
+    uv.chmod(0o755)
+    env = {
+        **os.environ,
+        "PATH": f"{bindir}:{os.environ['PATH']}",
+        "HARNESS_ARC_ID": "test-wrapper",
+        "HARNESS_LANE_ID": "test",
+        "TEST_POSTURE": posture,
+        "TEST_PROFILE_RC": str(profile_rc),
+        "TEST_LAND_LOG": str(log),
+    }
+    result = subprocess.run(
+        ["bash", str(TOOLS / "hooks/safe-merge.sh"), "1"],
+        cwd=ROOT_REPO,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == expected_rc, result.stderr
+    assert log.exists() is (refresh is not None)
+    if log.exists():
+        assert ("--refresh-cmd" in log.read_text()) is refresh

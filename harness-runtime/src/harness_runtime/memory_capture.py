@@ -13,7 +13,7 @@ import unicodedata
 from collections.abc import Mapping, Sequence
 from datetime import datetime
 from enum import StrEnum
-from typing import ClassVar, Protocol, Self
+from typing import Annotated, ClassVar, Protocol, Self
 
 from harness_is.memory_observability import (
     MemoryTelemetryFailureClass,
@@ -46,7 +46,7 @@ from harness_is.memory_record_envelope import (
 )
 from harness_is.memory_store import MemoryStoreRecord, MemoryStoreWriteResult
 from harness_is.state_ledger_entry_schema import Actor, ActorClass, Identifier
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, model_validator
 from pydantic.json_schema import SkipJsonSchema
 
 from harness_runtime.memory_scope_family import (
@@ -231,6 +231,22 @@ class SummaryProvenance(BaseModel):
         if self.source is SummarySource.MODEL_GENERATED and not self.model:
             raise ValueError("model-generated summaries require a model")
         return self
+
+
+class TurnTokenUsage(BaseModel):
+    """The token counts one turn knows, and which report they came from.
+
+    `source` is `None` for the dispatcher's own provider counts; otherwise it names the
+    subscription CLI schema that reported these counters about its run. Each counter is
+    its own fact: an unknown one is absent, never zero, and none is summed into another.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    # [LAW:types-are-the-program] a usage with no known counter is no observation, so the
+    # turn carries `None` instead; strict ints keep a bool or a numeric string out.
+    counts: Annotated[dict[str, Annotated[StrictInt, Field(ge=0)]], Field(min_length=1)]
+    source: str | None
 
 
 class MemoryCaptureFailureKind(StrEnum):
@@ -614,7 +630,7 @@ class EpisodicMemoryCapture:
         tool_event_refs: Sequence[str],
         failure_observations: Sequence[str],
         promotion_candidates: Sequence[str],
-        token_usage: Mapping[str, int] | None,
+        token_usage: TurnTokenUsage | None,
         timestamp: datetime,
         provider: str | None,
         model: str | None,
@@ -641,7 +657,7 @@ class EpisodicMemoryCapture:
             "tool_event_refs": _string_list(tool_event_refs),
             "failure_observations": _string_list(failure_observations),
             "promotion_candidates": _string_list(promotion_candidates),
-            "token_usage": _token_usage(token_usage),
+            **_token_usage_fields(token_usage),
         }
         return self._capture(
             event_kind="turn_completion",
@@ -792,7 +808,7 @@ class EpisodicMemoryCapture:
             "tool_event_refs": [],
             "failure_observations": [captured_observation],
             "promotion_candidates": [],
-            "token_usage": None,
+            **_token_usage_fields(None),
         }
         return self._capture(
             event_kind="failure_observation",
@@ -1485,10 +1501,12 @@ def _string_list(values: Sequence[str]) -> list[str]:
     return [str(value) for value in values]
 
 
-def _token_usage(token_usage: Mapping[str, int] | None) -> dict[str, int] | None:
+def _token_usage_fields(token_usage: TurnTokenUsage | None) -> dict[str, object]:
+    # [LAW:one-source-of-truth] the source is its own field, so `token_usage` stays a
+    # pure counter map and every episodic turn carries the same two keys.
     if token_usage is None:
-        return None
-    return {str(key): int(value) for key, value in token_usage.items()}
+        return {"token_usage": None, "token_usage_source": None}
+    return {"token_usage": dict(token_usage.counts), "token_usage_source": token_usage.source}
 
 
 def _engine_class_value(engine_class: MemoryOperationEngineClass | None) -> str | None:

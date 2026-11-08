@@ -11,7 +11,11 @@ the completed-effect `PostEffectAuditSigningError`.
 
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
+import re
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -66,6 +70,8 @@ from .test_lifecycle_sub_agent_dispatch import (
     _step,  # pyright: ignore[reportPrivateUsage]
     _step_context,  # pyright: ignore[reportPrivateUsage]
 )
+
+_AUDIT_LOGGER = "harness.runtime.audit_signing"
 
 _FAMILIES = {
     "fan_out": (TopologyPattern.HIERARCHICAL_DELEGATION, "orchestrator-workers"),
@@ -318,6 +324,7 @@ def test_the_runner_raises_a_typed_workflow_mismatch_before_verification(
 
     with pytest.raises(ChildResumeRefusedError) as raised:
         runner(
+            validator_run=None,
             workflow_id="a-different-child-wf",
             manifest_entry=cast(Any, None),
             steps=(),
@@ -330,3 +337,133 @@ def test_the_runner_raises_a_typed_workflow_mismatch_before_verification(
 
     assert raised.value.reason is ChildResumeRefusal.WORKFLOW_MISMATCH
     assert json.dumps(str(raised.value)).count(str(site.tmp_path)) == 0
+
+
+# --- Runtime plan v2.70 criterion 2: the returned arm through the outermost boundary ------
+
+
+class _Siblings:
+    """The middle fan-out's workers: `w-done` completes its effect, then `w-refuse` refuses."""
+
+    def __init__(self, refusal: ChildResumeRefusedError) -> None:
+        self.refusal = refusal
+        self.effects: list[str] = []
+        self.done = threading.Event()
+
+    def dispatch(self, binding: Any, step: WorkflowStep, *, step_context: Any = None) -> Any:
+        if str(step.step_id) == "w-done":
+            self.effects.append("w-done")
+            self.done.set()
+            return {"done": "w-done"}
+        # [LAW:no-ambient-temporal-coupling] The completed effect is an owned event the refusal
+        # awaits, not an accident of sibling scheduling.
+        assert self.done.wait(10), "the completed sibling never ran"
+        raise self.refusal
+
+
+class _MidRunner:
+    """The root dispatcher's child runner: a real middle ORCHESTRATOR_WORKERS run."""
+
+    def __init__(self, protocol: Any, siblings: _Siblings) -> None:
+        self.protocol = protocol
+        self.siblings = siblings
+        self.result: RunResult | None = None
+
+    def __call__(self, **_: Any) -> RunResult:
+        workers = [
+            WorkflowStep(
+                step_id=StepID(name),
+                step_kind=StepKind.SUB_AGENT_DISPATCH,
+                step_payload=_payload().model_dump(),
+            )
+            for name in ("w-done", "w-refuse")
+        ]
+        self.result = _run(
+            "mid-wf",
+            TopologyPattern.HIERARCHICAL_DELEGATION,
+            [_step_of("mid-orch", StepKind.DECLARATIVE_STEP), *workers],
+            _Registry(_Echo(), self.siblings),
+            run_id="run-mid",
+            protocol=self.protocol,
+            depth=1,
+        )
+        return self.result
+
+
+class _AsyncSubAgent:
+    """The async seam the stage-5 facade wraps around the sub-agent dispatcher."""
+
+    def __init__(self, inner: Any) -> None:
+        self.inner = inner
+
+    async def dispatch(self, binding: Any, step: WorkflowStep, *, step_context: Any = None) -> Any:
+        return await asyncio.to_thread(
+            self.inner.dispatch, binding, step, step_context=step_context
+        )
+
+
+async def test_a_returned_refusal_under_fail_closed_signing_is_reported_once_and_recorded(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    from harness_cp.workflow_driver_types import ResumeRefusal
+    from harness_runtime.lifecycle.sync_dispatcher_facade import (
+        materialize_sync_dispatcher_facade,
+    )
+
+    from .test_lifecycle_sub_agent_dispatch import (
+        _TWO_REASONS,  # pyright: ignore[reportPrivateUsage]
+        _protected_store,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    protocol = _protocol(_store(tmp_path))
+    store = _protected_store(tmp_path)
+    siblings = _Siblings(ChildResumeRefusedError(_TWO_REASONS))
+    mid = _MidRunner(protocol, siblings)
+    dispatcher, _, _ = _dispatcher(
+        tmp_path,
+        audit_writer_override=cast(Any, _FamilyRaisingAuditWriter()),
+        protected_result_store=store,
+    )
+    dispatcher.audit_signing_fail_closed = True
+    dispatcher.child_workflow_runner = mid
+    facade = materialize_sync_dispatcher_facade(
+        cast(Any, _AsyncSubAgent(dispatcher)), result_timeout_seconds=30.0
+    )
+    root_worker = WorkflowStep(
+        step_id=StepID("c-0"),
+        step_kind=StepKind.SUB_AGENT_DISPATCH,
+        step_payload=_payload().model_dump(),
+    )
+
+    with caplog.at_level(logging.ERROR, logger=_AUDIT_LOGGER):
+        root = await asyncio.to_thread(
+            execute_workflow,
+            _manifest("wf-root", TopologyPattern.HIERARCHICAL_DELEGATION),
+            [_step_of("orch", StepKind.DECLARATIVE_STEP), root_worker],
+            run_id="run-root",
+            ctx=cast(DriverContext, _DriverCtx(protocol)),
+            default_model_binding=_BINDING,
+            step_dispatchers=cast(StepDispatcherRegistry, _Registry(_Echo(), facade)),
+        )
+
+    assert siblings.effects == ["w-done"]  # a completed effect exists before the refusal
+    assert mid.result is not None and mid.result.status is RunStatus.FAILED
+    assert mid.result.resume_refusal == _TWO_REASONS
+    # The dispatcher also logs its own omitted audit record; the boundary report is the one
+    # that carries the preserved result.
+    reports = [
+        r.getMessage()
+        for r in caplog.records
+        if r.name == _AUDIT_LOGGER and r.getMessage().startswith("post-effect audit signing")
+    ]
+    assert len(reports) == 1, reports
+    (result_ref,) = set(re.findall(r"result_ref=([^\s)\]]+)", reports[0]))
+    assert "sub-agent-result" in reports[0]
+    assert store.read(None, result_ref) == mid.result
+    signed = ResumeRefusal(reasons=_TWO_REASONS.reasons, audit_signing_failed=True)
+    assert root.status is RunStatus.FAILED and root.pause_snapshot is None
+    assert root.resume_refusal == signed
+    assert root.fail_class == (
+        "orchestrator-workers-child-resume-refused"
+        " (claim-busy; hitl-gate-config-changed; audit-signing-failed)"
+    )

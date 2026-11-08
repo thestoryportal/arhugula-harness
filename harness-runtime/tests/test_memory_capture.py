@@ -7,6 +7,7 @@ import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import pytest
 from harness_core import DeploymentSurface
 from harness_is.memory_operation_ledger import (
     MemoryOperationEngineClass,
@@ -23,6 +24,7 @@ from harness_runtime.memory_capture import (
     MemoryCaptureStatus,
     SummaryProvenance,
     SummarySource,
+    TurnTokenUsage,
 )
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
@@ -113,7 +115,9 @@ def test_supported_events_write_episodic_records_and_capture_operations(
             tool_event_refs=(),
             failure_observations=(),
             promotion_candidates=(),
-            token_usage={"input_tokens": 12, "output_tokens": 34},
+            token_usage=TurnTokenUsage(
+                counts={"input_tokens": 12, "output_tokens": 34}, source=None
+            ),
             **_common_kwargs(1),
         ),
         recorder.capture_tool_event(
@@ -251,6 +255,66 @@ def test_stored_summaries_carry_provenance_and_hash(tmp_path: Path) -> None:
         record.content["summary_hash"]
         == hashlib.sha256(b"summarized prompt\nsummarized response").hexdigest()
     )
+
+
+@pytest.mark.parametrize(
+    ("token_usage", "stored_counts", "stored_source"),
+    [
+        (None, None, None),
+        (
+            TurnTokenUsage(counts={"input_tokens": 12, "output_tokens": 34}, source=None),
+            {"input_tokens": 12, "output_tokens": 34},
+            None,
+        ),
+        (
+            TurnTokenUsage(
+                counts={"input_tokens": 31, "cached_input_tokens": 5, "output_tokens": 7},
+                source="codex.turn.completed.usage",
+            ),
+            {"input_tokens": 31, "cached_input_tokens": 5, "output_tokens": 7},
+            "codex.turn.completed.usage",
+        ),
+    ],
+    ids=["unknown", "sdk-counts", "reported-cli-counters"],
+)
+def test_turn_usage_stores_counters_and_their_source_as_separate_fields(
+    tmp_path: Path,
+    token_usage: TurnTokenUsage | None,
+    stored_counts: dict[str, int] | None,
+    stored_source: str | None,
+) -> None:
+    store, recorder = _recorder(tmp_path)
+
+    result = recorder.capture_turn_completion(
+        run_id=_RUN_ID,
+        turn_id="turn-usage",
+        step_id="step-usage",
+        prompt_summary="prompt",
+        response_summary="response",
+        summary=_model_summary(),
+        tool_event_refs=(),
+        failure_observations=(),
+        promotion_candidates=(),
+        token_usage=token_usage,
+        **_common_kwargs(),
+    )
+
+    assert result.memory_id is not None
+    record = store.read_record(result.memory_id, MemoryRecordKind.EPISODIC_TURN, run_id=_RUN_ID)
+    assert record.content["token_usage"] == stored_counts
+    assert record.content["token_usage_source"] == stored_source
+
+
+@pytest.mark.parametrize(
+    "counts",
+    [{}, {"input_tokens": -1}, {"input_tokens": True}, {"input_tokens": "31"}],
+    ids=["no-known-counter", "negative", "bool", "string"],
+)
+def test_turn_usage_admits_only_known_nonnegative_integer_counters(
+    counts: dict[str, object],
+) -> None:
+    with pytest.raises(ValueError):
+        TurnTokenUsage.model_validate({"counts": counts, "source": "claude-code.result.usage"})
 
 
 def test_redacted_capture_mode_persists_minimal_content(tmp_path: Path) -> None:

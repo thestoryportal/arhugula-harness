@@ -26,6 +26,39 @@ Useful flags:
 | `--socket-path <path>` | Select the daemon Unix socket for daemon-client mode. |
 | `--daemon-result-timeout-seconds <seconds>` | Set a finite positive wait for a daemon workflow result (default: 3600 seconds; requires `--daemon`). |
 
+## Resume A Paused Workflow
+
+`harness resume` continues the latest durable workflow-layer pause of a
+workflow. Pass the same manifest the paused run used; its `workflow_id` is the
+resume handle:
+
+```sh
+uv run harness resume examples/minimal.toml --config harness.toml
+```
+
+The command accepts only `--config`, `--tenant-id` and `--output`, which mean
+what they mean for `run`. It has no `--provider`, `--model` or `--daemon`, and
+it takes no snapshot or resume context. Resume runs in one-shot mode and keeps
+the paused run's `run_id`.
+
+Only the latest workflow-layer journal record for the `workflow_id` can be
+resumed. If the workflow paused only inside its engine, with no earlier
+workflow-layer record, the resume is refused as `handle` with cause `absent`.
+If any run of the same workflow started after the pause, the resume is refused
+as `pause-record-superseded`, so do not `harness run` a paused workflow you
+mean to resume.
+
+A resume that the runtime refuses before the workflow starts exits 6, or 7
+when the refusal is a claim refusal. With `--output json`, stdout carries one
+JSON refusal value under the protocol `harness.resume-refusal.v1`: its `kind`,
+its `RT-FAIL-RESUME-*` `fail_class` and the typed facts for that kind. Text
+mode prints the same fields to stderr after `resume refused:`. Neither form
+includes raw error text, paths, tenant identifiers or claim tokens. Read the
+`kind` to learn why a resume was refused; the exit code alone does not say.
+
+A config that loads but does not bind the pause protocol is refused with kind
+`protocol-not-bound` and exit 6. A config file that fails to load still exits 3.
+
 ## Run The Daemon
 
 Start the FastMCP-backed daemon over a Unix socket:
@@ -82,6 +115,9 @@ a running harness process to drain and exit through the admin shutdown path.
 | `2` | CLI option usage, workflow manifest load, or admissibility error. |
 | `3` | Runtime config load error. |
 | `4` | Bootstrap, daemon connection/startup, or daemon MCP result error. |
+| `5` | Workflow paused: the one-shot run result or daemon workflow status is `paused`. A workflow-layer pause can be continued with `harness resume`. Engine-native pauses have no safe resume through any command, and running the workflow again with `harness run` starts a new run instead of resuming. A pause captured before the runtime bound its pause-journal root cannot be resumed; its journal files stay on disk as operator-owned data. |
+| `6` | Resume refused before the workflow started (`RESUME_REFUSED`): the refusal `kind` is `arguments`, `handle`, `depth`, `protocol-not-bound`, `pause-state-stale`, `workflow-mismatch`, `step-index-out-of-range` or `pause-record-superseded`. |
+| `7` | Resume claim refused (`RESUME_CLAIM_REFUSED`): refusal kind `claim`, with its `reason`. |
 
 ## Config Practices
 
@@ -95,7 +131,8 @@ a running harness process to drain and exit through the admin shutdown path.
 ## Source Grounding
 
 This page is grounded in `harness-runtime/src/harness_runtime/cli/app.py`,
-`harness-runtime/pyproject.toml`, `harness-runtime/src/harness_runtime/admin/inspect.py`,
+`harness-runtime/src/harness_runtime/resume_refusal.py`, `harness-runtime/pyproject.toml`,
+`harness-runtime/src/harness_runtime/admin/inspect.py`,
 `harness-runtime/src/harness_runtime/admin/shutdown_cli.py`,
 `harness-runtime/src/harness_runtime/config_source.py`, `harness.toml.example`,
 and `justfile`.

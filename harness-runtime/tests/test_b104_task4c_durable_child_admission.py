@@ -42,6 +42,7 @@ from harness_runtime.lifecycle.durable_pause_resume_protocol import DurablePause
 from harness_runtime.lifecycle.journal_workflow_pause_store import JournalWorkflowPauseStore
 from pydantic import ValidationError
 
+from .pause_journal_roots import placed_config
 from .test_b104_task4a_capture_depth import (
     _DriverCtx,  # pyright: ignore[reportPrivateUsage]
     _protocol,  # pyright: ignore[reportPrivateUsage]
@@ -97,6 +98,7 @@ def _runner_over(
 
 def _resume(runner: Any, capture: PausedChildCapture, *, depth: int) -> Any:
     return runner(
+        validator_run=None,
         workflow_id=capture.child_workflow_id,
         manifest_entry=cast(Any, None),
         steps=(),
@@ -444,7 +446,7 @@ class _FailingSecondStage:
 
 @pytest.mark.asyncio
 async def test_the_real_stage_5_binding_refuses_a_durable_child_it_has_fully_verified(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, placed_root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The runner stage 5 actually composes, on a real durable bootstrap, has no gateway
     yet: it verifies the carried record and then refuses, so nothing of the child runs."""
@@ -461,7 +463,7 @@ async def test_the_real_stage_5_binding_refuses_a_durable_child_it_has_fully_ver
 
     _patch_providers(monkeypatch)
     _patch_collector(monkeypatch)
-    config = _config(tmp_path).model_copy(
+    config = placed_config(_config(placed_root), placed_root).model_copy(
         update={"pause_resume_protocol_config": PauseResumeProtocolConfig(durable=True)}
     )
     ctx = await run_bootstrap(config, workload_class=_WORKLOAD)

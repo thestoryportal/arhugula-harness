@@ -4,11 +4,16 @@ ACs per Phase 2 Session 3 plan v2.1 §2 L3:
 - All skills under PathClass.SKILLS loaded.
 - Duplicate IDs rejected.
 - Manifest schema enforced.
+
+Runtime v1.139 §14.17.8.5 W1 (content load + digest) and W2 (one typed load
+failure per closed reason).
 """
 
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -21,6 +26,8 @@ from harness_core import SkillID
 from harness_runtime.lifecycle.skills import (
     DuplicateSkillError,
     Skill,
+    SkillContentInvalidError,
+    SkillContentInvalidReason,
     SkillFrontmatterRejectedError,
     SkillManifest,
     load_skills_from_dir,
@@ -28,8 +35,17 @@ from harness_runtime.lifecycle.skills import (
 from pydantic import ValidationError
 
 
-def _write_manifest(skills_dir: Path, skill_id: str, **overrides: object) -> Path:
-    """Write a valid skill manifest to disk; return the file path."""
+def _write_manifest(
+    skills_dir: Path,
+    skill_id: str,
+    *,
+    content: str | None = "# Skill body\n\nDo the thing.\n",
+    **overrides: object,
+) -> Path:
+    """Write a valid skill manifest and its `<stem>.SKILL.md` content; return the manifest path.
+
+    `content=None` writes the manifest alone.
+    """
     skills_dir.mkdir(parents=True, exist_ok=True)
     manifest = {
         "skill_id": skill_id,
@@ -40,6 +56,8 @@ def _write_manifest(skills_dir: Path, skill_id: str, **overrides: object) -> Pat
     }
     path = skills_dir / f"{skill_id}.skill.json"
     path.write_text(json.dumps(manifest))
+    if content is not None:
+        (skills_dir / f"{skill_id}.SKILL.md").write_text(content, encoding="utf-8")
     return path
 
 
@@ -79,6 +97,8 @@ def test_duplicate_skill_id_rejected(tmp_path: Path) -> None:
     # Two files, both declaring skill_id='same' but with different filenames.
     skills_dir = tmp_path / "skills"
     skills_dir.mkdir()
+    (skills_dir / "first.SKILL.md").write_text("first body")
+    (skills_dir / "second.SKILL.md").write_text("second body")
     (skills_dir / "first.skill.json").write_text(
         json.dumps(
             {
@@ -205,12 +225,12 @@ def test_load_rejects_empty_version(tmp_path: Path) -> None:
     assert exc_info.value.reason is SkillFrontmatterRejectionReason.MISSING_VERSION
 
 
-def test_load_rejects_empty_version_sha(tmp_path: Path) -> None:
-    """`version_sha` empty → MISSING_VERSION_SHA (operator-supplied override to empty)."""
+def test_load_rejects_empty_version_sha_pin(tmp_path: Path) -> None:
+    """An operator-pinned empty `version_sha` disagrees with the content digest (v1.139)."""
     _write_manifest(tmp_path / "skills", "empty-sha", version_sha="")
-    with pytest.raises(SkillFrontmatterRejectedError) as exc_info:
+    with pytest.raises(SkillContentInvalidError) as exc_info:
         load_skills_from_dir(tmp_path / "skills")
-    assert exc_info.value.reason is SkillFrontmatterRejectionReason.MISSING_VERSION_SHA
+    assert exc_info.value.reason is SkillContentInvalidReason.VERSION_SHA_MISMATCH
 
 
 def test_load_accepts_valid_frontmatter(tmp_path: Path) -> None:
@@ -218,3 +238,99 @@ def test_load_accepts_valid_frontmatter(tmp_path: Path) -> None:
     _write_manifest(tmp_path / "skills", "within-bounds")
     skills = load_skills_from_dir(tmp_path / "skills")
     assert SkillID("within-bounds") in skills
+
+
+# --- Runtime v1.139 §14.17.8.5 W1: content load + digest -------------------
+
+
+def _git_hash_object(path: Path) -> str:
+    return subprocess.run(
+        ["git", "hash-object", str(path)], check=True, capture_output=True, text=True
+    ).stdout.strip()
+
+
+def test_w1_content_loads_with_digest_of_content_file(tmp_path: Path) -> None:
+    """`content` is the SKILL.md text; `version_sha` is `git hash-object` of it, not the manifest."""
+    content = "# Review\n\nCheck every seam. \u2014 ünïcode survives.\n"
+    manifest_path = _write_manifest(tmp_path / "skills", "w1", content=content)
+    content_path = tmp_path / "skills" / "w1.SKILL.md"
+
+    skill = load_skills_from_dir(tmp_path / "skills")[SkillID("w1")]
+
+    assert skill.content == content
+    assert skill.manifest.version_sha == _git_hash_object(content_path)
+    assert skill.manifest.version_sha != _git_hash_object(manifest_path)
+    assert skill.manifest.body_tokens == len(content) // 4
+
+
+def test_w1_matching_pin_loads_and_supplied_body_tokens_is_recomputed(tmp_path: Path) -> None:
+    """A pin equal to the digest loads; a supplied `body_tokens` never survives."""
+    content = "pinned body " * 10
+    skills_dir = tmp_path / "skills"
+    skills_dir.mkdir()
+    (skills_dir / "pinned.SKILL.md").write_text(content)
+    pin = _git_hash_object(skills_dir / "pinned.SKILL.md")
+    _write_manifest(skills_dir, "pinned", content=content, version_sha=pin, body_tokens=999_999)
+
+    skill = load_skills_from_dir(skills_dir)[SkillID("pinned")]
+
+    assert skill.manifest.version_sha == pin
+    assert skill.manifest.body_tokens == len(content) // 4
+
+
+def test_w1_content_binds_by_manifest_stem_not_skill_id(tmp_path: Path) -> None:
+    """The content file is `<stem>.SKILL.md` beside `<stem>.skill.json`, whatever the id."""
+    skills_dir = tmp_path / "skills"
+    skills_dir.mkdir()
+    (skills_dir / "file-stem.skill.json").write_text(
+        json.dumps({"skill_id": "other-id", "name": "n", "description": "d", "version": "1"})
+    )
+    (skills_dir / "file-stem.SKILL.md").write_text("stem-bound body")
+
+    assert load_skills_from_dir(skills_dir)[SkillID("other-id")].content == "stem-bound body"
+
+
+# --- Runtime v1.139 §14.17.8.5 W2: one typed failure per closed reason ------
+
+
+def _assert_content_invalid(skills_dir: Path, reason: SkillContentInvalidReason) -> None:
+    with pytest.raises(SkillContentInvalidError) as exc_info:
+        load_skills_from_dir(skills_dir)
+    err = exc_info.value
+    assert err.reason is reason
+    assert err.skill_id == SkillID("bad")
+    assert err.content_path == skills_dir / "bad.SKILL.md"
+    assert "'bad'" in str(err) and str(err.content_path) in str(err)
+    assert err.rt_fail_class == "RT-FAIL-SKILL-CONTENT-INVALID"
+
+
+def test_w2_missing_content(tmp_path: Path) -> None:
+    _write_manifest(tmp_path / "skills", "bad", content=None)
+    _assert_content_invalid(tmp_path / "skills", SkillContentInvalidReason.CONTENT_MISSING)
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root reads mode-000 files")
+def test_w2_unreadable_content(tmp_path: Path) -> None:
+    _write_manifest(tmp_path / "skills", "bad")
+    content_path = tmp_path / "skills" / "bad.SKILL.md"
+    content_path.chmod(0)
+    try:
+        _assert_content_invalid(tmp_path / "skills", SkillContentInvalidReason.CONTENT_UNREADABLE)
+    finally:
+        content_path.chmod(0o600)
+
+
+def test_w2_invalid_utf8_content(tmp_path: Path) -> None:
+    _write_manifest(tmp_path / "skills", "bad")
+    (tmp_path / "skills" / "bad.SKILL.md").write_bytes(b"ok \xff\xfe not utf-8")
+    _assert_content_invalid(tmp_path / "skills", SkillContentInvalidReason.CONTENT_NOT_UTF8)
+
+
+def test_w2_whitespace_only_content(tmp_path: Path) -> None:
+    _write_manifest(tmp_path / "skills", "bad", content=" \n\t\n ")
+    _assert_content_invalid(tmp_path / "skills", SkillContentInvalidReason.CONTENT_EMPTY)
+
+
+def test_w2_pinned_version_sha_mismatch(tmp_path: Path) -> None:
+    _write_manifest(tmp_path / "skills", "bad", version_sha="0" * 40)
+    _assert_content_invalid(tmp_path / "skills", SkillContentInvalidReason.VERSION_SHA_MISMATCH)

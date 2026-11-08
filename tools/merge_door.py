@@ -19,6 +19,7 @@ import argparse
 import errno
 import json
 import os
+import re
 import secrets
 import socket
 import stat as stat_module
@@ -1023,6 +1024,7 @@ class Ground:
     exact_ci: Callable[[int, str, str], cb.CiBindingDecision]
     clock: Callable[[], float] = field(default=time.monotonic)
     sleep: Callable[[float], None] = field(default=time.sleep)
+    refresh_rule: Callable[[], str] = field(default=lambda: "legacy")
 
 
 def _gh(*args: str, timeout: float) -> subprocess.CompletedProcess:
@@ -1188,7 +1190,14 @@ def default_ground() -> Ground:
         git_first_parent,
         codex_worktree_present,
         exact_ci,
+        refresh_rule=observed_refresh_rule,
     )
+
+
+def observed_refresh_rule() -> str:
+    """[LAW:single-enforcer] policy owns whether status needs a separate PR;
+    the door still owns the exact candidate, lease and successful own-main CI."""
+    return wp.refresh_rule(wp.load_policy(POLICY_PATH.read_bytes()), wp.read_activation())
 
 
 #: [LAW:one-source-of-truth] the contention row's cause — the ONE producer-side literal;
@@ -1536,18 +1545,40 @@ def _merge_once(
     True iff a reconcile pass was needed (the cycle is then not "clean" for §10)."""
     mark_attempted(lease, suffix=suffix)
     _kill_after("refresh-attempted" if suffix else "attempted")
+    failures = []
     for attempt in tuple(range(1, budget + 1)):
         try:
             proc = ground.gh_merge(pr, head_sha, MERGE_TIMEOUT_S)
             _kill_after("merge")
             if proc.returncode == 0:
                 return attempt > 1
+            failures.append(f"gh merge exited {proc.returncode}: {proc.stderr or proc.stdout}")
+            # [LAW:parse-dont-validate] This exact GitHub rejection is definitive;
+            # other GraphQL and transport failures remain ambiguous.
+            rejected = bool(
+                re.fullmatch(
+                    r'GraphQL: Required status check "[^"\n]+" is expected\. \(mergePullRequest\)',
+                    proc.stderr.strip(),
+                )
+            )
         except subprocess.TimeoutExpired:
-            pass
-        if reconcile_ground({**lease, "pr": pr}, ground) == "MERGED":
+            failures.append("gh merge timed out")
+            rejected = False
+        try:
+            state = reconcile_ground({**lease, "pr": pr}, ground)
+        except Exception as exc:
+            raise DoorFailed(f"{'; '.join(failures)}; reconciliation failed: {exc}") from exc
+        if state == "MERGED":
             return True  # invariant: NEVER re-invoke after MERGED
+        if rejected:
+            raise DoorFailed(failures[-1])
         if attempt == budget:
-            raise DoorFailed("merge_reissue_exhausted (cause_attribution: merge_reissue_exhausted)")
+            # [LAW:no-silent-failure] Preserve each diagnostic even when a nonzero
+            # exit is an ambiguous transport failure rather than a rejection.
+            raise DoorFailed(
+                "merge_reissue_exhausted (cause_attribution: merge_reissue_exhausted): "
+                + "; ".join(failures)
+            )
     return True
 
 
@@ -1687,10 +1718,25 @@ def land(
             raise DoorFailed("post-merge confirm: not MERGED")
         _kill_after("confirm")
         merge_sha = (v.get("mergeCommit") or {}).get("oid") or ""
-        if rs.current(arc_id)[1]["state"] != "merged":
-            if merge_sha:
-                rs.update_payload(arc_id, {"merge_sha": merge_sha})
-            rs.transition(arc_id, "merged", lane_id=lane_id)  # (vi)
+        if not re.fullmatch(r"[0-9a-f]{40}", merge_sha):
+            raise DoorFailed("post-merge confirm: missing full merge commit oid")
+        reservation = rs.current(arc_id)[1]
+        if reservation["state"] != "merged":
+            if reservation.get("pr") != pr or reservation.get("merge_sha") not in (None, merge_sha):
+                raise DoorFailed("reservation identity or merge receipt changed")
+            rs.transition(
+                arc_id,
+                "merged",
+                lane_id=lane_id,
+                updates={"merge_sha": merge_sha},
+                expect={"pr": pr, "merge_sha": reservation.get("merge_sha")},
+            )
+        elif not reservation.get("merge_sha"):
+            rs.reconcile(arc_id, gh_view=ground.gh_view)
+            if rs.current(arc_id)[1].get("merge_sha") != merge_sha:
+                raise DoorFailed("recovered merge receipt differs from confirmed merge")
+        elif reservation["merge_sha"] != merge_sha:
+            raise DoorFailed("reservation merge receipt differs from confirmed merge")
         _kill_after("reservation-merged")
         toctou_attested = lease.get("unblocked_from") == merge_sha
         if merge_sha and not toctou_attested and ground.git_first_parent(merge_sha) != base_sha:
@@ -1747,8 +1793,8 @@ def land(
         # §10: only a cycle whose terminal result is confirmed can count clean (r9 P2) —
         # the green refresh for legacy, the receipted own-main runs for trial
         cycle_confirmed = False
-        if profile.kind == "trial":
-            if recorded is not None or view.get("refresh_intent"):
+        if profile.kind == "trial" or ground.refresh_rule() == "trial":
+            if recorded is not None or view.get("refresh_intent") is not None:
                 # a lease that began a refresh arc under legacy still owes it: a later
                 # trial selection must not silently abandon that refresh
                 mark_blocked(lease, sha=merge_sha, reason="refresh_outstanding_under_trial")
@@ -2228,6 +2274,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("gc")
     prof = sub.add_parser("profile")
     prof.add_argument("--arc-id", required=True)
+    prof.add_argument("--with-refresh", action="store_true")
     args = p.parse_args(argv)
     try:
         if args.cmd == "land":
@@ -2247,21 +2294,34 @@ def main(argv: list[str] | None = None) -> int:
             require_landable(profile, args.arc_id)
             # a legacy landing needs exactly one refresh posture and a trial landing none, so
             # a wrapper that routed on a different selection is refused before any lease
-            if (profile.kind == "legacy") != bool(args.no_refresh or args.refresh_cmd):
+            explicit_refresh = bool(args.no_refresh or args.refresh_cmd)
+            requires_refresh = profile.kind == "legacy" and (
+                observed_refresh_rule() == "legacy" or explicit_refresh
+            )
+            if requires_refresh != bool(args.no_refresh or args.refresh_cmd):
                 posture = {"legacy": "--refresh-cmd or --no-refresh", "trial": "no refresh flag"}
                 landp.error(f"a {profile.kind} landing takes {posture[profile.kind]}")
             ground = default_ground()
+            if explicit_refresh:
+                # An explicit milestone/old in-flight continuation still completes;
+                # selecting the new default never abandons an existing refresh.
+                ground.refresh_rule = lambda: "legacy"
             refresh = None
             if args.refresh_cmd:
 
                 def refresh():
-                    out = subprocess.run(
-                        ["bash", "-c", args.refresh_cmd],
-                        capture_output=True,
-                        text=True,
-                        check=True,
-                        timeout=3600,
-                    ).stdout
+                    try:
+                        out = subprocess.run(
+                            ["bash", "-c", args.refresh_cmd],
+                            capture_output=True,
+                            text=True,
+                            check=True,
+                            timeout=3600,
+                        ).stdout
+                    except subprocess.CalledProcessError as exc:
+                        # [LAW:no-silent-failure] a failed continuation must name
+                        # its cause rather than hiding the producer's stderr.
+                        raise DoorFailed(f"refresh producer failed: {exc.stderr[-2000:]}") from exc
                     d = json.loads(out)
                     return int(d["pr"]), d["head_sha"]
 
@@ -2451,7 +2511,21 @@ def main(argv: list[str] | None = None) -> int:
             # the landing selection `land` would act on: `trial` or `legacy`, else exit 6
             profile = observe_landing_profile(args.arc_id)
             require_landable(profile, args.arc_id)
-            print(profile.kind)
+            if args.with_refresh:
+                live = read_lease()
+                retained = (
+                    live is not None
+                    and live.get("reservation_id") == args.arc_id
+                    and (live.get("refresh") is not None or live.get("refresh_intent"))
+                )
+                # [LAW:no-ambient-temporal-coupling] resume an already started
+                # legacy refresh through the same wrapper after policy adoption.
+                refresh = profile.kind == "legacy" and (
+                    observed_refresh_rule() == "legacy" or retained
+                )
+                print(profile.kind, "refresh" if refresh else "no-refresh")
+            else:
+                print(profile.kind)
             return 0
         else:
             print(json.dumps([str(x) for x in gc()]))

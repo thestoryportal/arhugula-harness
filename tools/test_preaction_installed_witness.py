@@ -21,18 +21,43 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from harness_is.pause_journal_root import UnresolvedCause
+from harness_runtime.config import state_placement
+from harness_runtime.lifecycle import journal_workflow_pause_store as journal_module
+from harness_runtime.lifecycle.pause_journal_root_resolver import (
+    INSTALLATION_STATE,
+    STORAGE_UNSELECTED,
+    InstallationState,
+    PauseJournalRootUnresolvedError,
+)
+from harness_runtime.lifecycle.resume_claim_store import ResumeClaimStore
+from harness_runtime.types import RuntimeConfig
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import installed_witness_provenance as prover
 import preaction_installed_witness as pw
-from test_b104_installed_public_witness import Alias, kernel_state, leader_reaped, settle_children
+from test_b104_installed_public_witness import (
+    UNRESOLVED_INSTALLATIONS,
+    Alias,
+    JournalUntouchable,
+    installation_declaring,
+    kernel_state,
+    leader_reaped,
+    seed_pause,
+    settle_children,
+    witness_config,
+)
 from test_b104_installed_public_witness import alias as alias  # the shared alias fixture
+from test_b104_installed_public_witness import (
+    declared_root as declared_root,
+)  # declared journal root
 from test_b104_installed_public_witness import orphans as orphans  # every test settles its orphans
 from test_installed_witness_provenance import Fixture
 
 TOOLS = Path(__file__).resolve().parent
 RECEIPT = "e" * 64
+JOURNAL_ROOT = "/scenario/state/installation-pause-journal"
 VENV = "/venv"
 SITE = f"{VENV}/lib/python3.12/site-packages"
 EXITED = {
@@ -170,6 +195,12 @@ def svc(webhooks: list[str], **tools: int) -> dict[str, Any]:
     return {"webhook_keys": list(webhooks), "tool_counts": dict(tools)}
 
 
+PING = ["GET", "/api/tags"]
+# Cumulative provider pings after each phase: one per bootstrap; provision never bootstraps and
+# the direct child handle is refused before bootstrap.
+PINGS = {"p": [0, 1, 2, 3], "n1": [0, 1, 2, 3], "n2": [0, 1, 1]}
+
+
 def scenario(name: str) -> dict[str, Any]:
     if name == "p":
         results = {
@@ -212,12 +243,22 @@ def scenario(name: str) -> dict[str, Any]:
             "run": svc([pw.KEY_A], **{"witness.b": 3}),
             "resume-child-handle": svc([pw.KEY_A], **{"witness.b": 3}),
         }
+    results = {"provision": {"installation_root": JOURNAL_ROOT}} | {
+        phase: {**observed, "journal_root": JOURNAL_ROOT} for phase, observed in results.items()
+    }
+    services = {"provision": svc([])} | services
+    services = {
+        phase: {**snapshot, "ollama_requests": [PING] * pings}
+        for (phase, snapshot), pings in zip(services.items(), PINGS[name], strict=True)
+    }
     return {
         "runs": {phase: {**EXITED, "pid": 5, "pgid": 5} for phase in results},
         "results": {phase: _ok(phase, observed) for phase, observed in results.items()},
         "services": services,
         "tool_server": {"kill": dict(GONE), "ready": True},
         "webhook_errors": [],
+        "ollama_requests": [PING] * PINGS[name][-1],
+        "ollama_errors": [],
     }
 
 
@@ -233,7 +274,7 @@ def test_honest_installed_evidence_passes() -> None:
     result = verdict(honest())
 
     assert result["status"] == "PASS" and result["failure_reasons"] == []
-    assert result["phase_states"]["p"] == ["Completed"] * 3
+    assert result["phase_states"]["p"] == ["Completed"] * 4
 
 
 def test_rehearsal_evidence_without_provenance_is_labelled_and_never_an_installed_pass() -> None:
@@ -602,7 +643,7 @@ def test_a_phase_without_proved_installed_provenance_is_broken(
 
     assert result["status"] == "FAIL", name
     assert any(reason in r for r in result["failure_reasons"]), (name, result["failure_reasons"])
-    assert result["phase_states"]["p"][0] == "Broken"
+    assert result["phase_states"]["p"][pw.PHASES_P.index("run")] == "Broken"
 
 
 def test_a_phase_that_fails_or_times_out_uses_the_reviewed_grammar() -> None:
@@ -784,10 +825,228 @@ def test_the_installed_child_command_line_keeps_isolation() -> None:
 
 
 def test_the_scenario_plan_matches_the_reviewed_design() -> None:
-    assert pw.PHASES_P == ("run", "resume-1", "resume-2")
+    assert pw.PHASES_P == ("provision", "run", "resume-1", "resume-2")
+    assert all(phases[0] == "provision" for phases in pw.SCENARIOS.values())
     assert set(pw.SCENARIOS) == {"p", "n1", "n2"}
     assert (pw.CHILD_CAP_SECONDS, pw.OVERALL_CAP_SECONDS) == (60, 600)
     assert pw.KEY_A.endswith(":step:1:pre-action") and pw.KEY_C.endswith(":step:2:pre-action")
+
+
+def test_every_phase_has_a_grounded_ping_count_and_the_plan_is_model_free() -> None:
+    assert set(pw.OLLAMA_LIST_CALLS) == {p for phases in pw.SCENARIOS.values() for p in phases}
+    assert "provider_free" not in pw.PLAN
+    assert "GET /api/tags" in pw.PLAN["model_free"] and "no model" in pw.PLAN["model_free"]
+
+
+# --- the owned Ollama-protocol stub: protocol, config selection, verdict --------------------------
+
+
+def _ask(port: int, method: str, path: str) -> tuple[int, bytes]:
+    import http.client
+
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=3)
+    try:
+        conn.request(method, path, body=b"{}" if method == "POST" else None)
+        response = conn.getresponse()
+        return response.status, response.read()
+    finally:
+        conn.close()
+
+
+def test_the_ollama_stub_answers_only_the_list_ping_and_records_every_request() -> None:
+    import socket
+
+    stub = pw.OllamaListStub()
+    stub.start()
+    try:
+        asked = [
+            ("GET", "/api/tags"),
+            ("POST", "/api/chat"),
+            ("POST", "/api/generate"),
+            ("GET", "/api/show"),
+            ("BREW", "/api/tags"),
+        ]
+        answers = [_ask(stub.port, method, path) for method, path in asked]
+        with socket.create_connection(("127.0.0.1", stub.port), timeout=3) as raw:
+            raw.sendall(b"not an http request\r\n\r\n")
+            raw.recv(1024)
+    finally:
+        stub.stop()
+        stub.server.server_close()
+
+    assert answers == [(200, b'{"models": []}')] + [(404, b"")] * 4
+    assert stub.requests == [list(pair) for pair in asked]
+    assert len(stub.errors) == 1 and "400" in stub.errors[0]
+    assert not stub.thread.is_alive()
+
+
+def test_the_ollama_sdk_list_ping_is_answered_by_the_stub_with_no_models() -> None:
+    """The product's ping is `ollama.AsyncClient.list()`; the stub must satisfy that exact call."""
+    import asyncio
+
+    import ollama
+
+    stub = pw.OllamaListStub()
+    stub.start()
+
+    async def ping() -> Any:
+        async with ollama.AsyncClient(host=f"http://127.0.0.1:{stub.port}") as client:
+            return await client.list()
+
+    try:
+        listed = asyncio.run(ping())
+    finally:
+        stub.stop()
+        stub.server.server_close()
+
+    assert listed.models == []
+    assert stub.requests == [["GET", "/api/tags"]] and stub.errors == []
+
+
+def test_the_operator_config_selects_only_ollama_at_the_owned_stub(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from harness_runtime.config_source import RuntimeConfigSource
+
+    for key in [k for k in os.environ if k.startswith("HARNESS_")]:
+        monkeypatch.delenv(key)
+    layout = pw.Layout(tmp_path / "p")
+    layout.root.mkdir()
+    layout.config.write_text(pw.config_text(layout, 7001, 7002, 7003))
+
+    config = RuntimeConfigSource.load(config_file=layout.config)
+
+    assert config.enabled_provider_names == ("ollama",)
+    assert config.external_cli_providers == ()
+    assert config.ollama_host == "http://127.0.0.1:7003"
+    assert config.ollama_optional is False
+    assert config.prompt_cache_boot_prewarm is False and config.prompt_cache_keepalive is False
+
+
+def test_the_provider_selection_refuses_a_b104_toml_it_cannot_place(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(pw.HELPERS, "config_text", lambda *_: "[runtime]\n")
+
+    with pytest.raises(ValueError, match="ollama_optional"):
+        pw.config_text(pw.Layout(tmp_path / "p"), 1, 2, 3)
+
+
+def _pings(evidence: dict[str, Any], name: str, phase: str | None, value: object) -> None:
+    """Replace one phase's ping snapshot (or the scenario's final record when `phase` is None)."""
+    target = evidence[name] if phase is None else evidence[name]["services"][phase]
+    target["ollama_requests"] = value
+
+
+CHAT = ["POST", "/api/chat"]
+PING_BREAKS: dict[str, tuple[Callable[[dict[str, Any]], None], list[str]]] = {
+    "model-request": (
+        lambda ev: (
+            _pings(ev, "n1", "resume-lowered", [PING, PING, CHAT]),
+            _pings(ev, "n1", None, [PING, PING, CHAT, PING]),
+        ),
+        [
+            "n1:ollama-stub:unexpected-request:POST /api/chat",
+            "n1:resume-lowered:ollama-stub:requests:3!=2",
+            "n1:resume-lowered-again:ollama-stub:snapshot-not-final-prefix",
+            "n1:ollama-stub:final-requests:4!=3",
+        ],
+    ),
+    "snapshot-model-request-final-clean": (
+        lambda ev: _pings(ev, "p", "run", [CHAT]),
+        ["p:run:ollama-stub:snapshot-not-final-prefix"],
+    ),
+    "snapshot-diverges-from-final": (
+        lambda ev: _pings(ev, "p", "resume-1", [PING, CHAT]),
+        ["p:resume-1:ollama-stub:snapshot-not-final-prefix"],
+    ),
+    "unknown-method": (
+        lambda ev: _pings(ev, "p", None, [PING, PING, PING, ["BREW", "/x"]]),
+        ["p:ollama-stub:unexpected-request:BREW /x", "p:ollama-stub:final-requests:4!=3"],
+    ),
+    "missing-ping": (
+        lambda ev: _pings(ev, "p", "run", []),
+        ["p:run:ollama-stub:requests:0!=1"],
+    ),
+    "ping-after-pre-bootstrap-refusal": (
+        lambda ev: (
+            _pings(ev, "n2", "resume-child-handle", [PING, PING]),
+            _pings(ev, "n2", None, [PING, PING]),
+        ),
+        [
+            "n2:resume-child-handle:ollama-stub:requests:2!=1",
+            "n2:ollama-stub:final-requests:2!=1",
+        ],
+    ),
+    "ping-at-provision": (
+        lambda ev: _pings(ev, "n1", "provision", [PING]),
+        ["n1:provision:ollama-stub:requests:1!=0"],
+    ),
+    "final-extra": (
+        lambda ev: _pings(ev, "p", None, [PING] * 4),
+        ["p:ollama-stub:final-requests:4!=3"],
+    ),
+    "missing-record": (
+        lambda ev: ev["p"].pop("ollama_requests"),
+        ["p:ollama-stub:malformed-evidence"],
+    ),
+    "malformed-record": (
+        lambda ev: _pings(ev, "n2", None, [["GET"]]),
+        ["n2:ollama-stub:malformed-evidence"],
+    ),
+    "missing-errors": (
+        lambda ev: ev["n1"].pop("ollama_errors"),
+        ["n1:ollama-stub:malformed-evidence"],
+    ),
+    "missing-snapshot": (
+        lambda ev: ev["n1"]["services"]["run"].pop("ollama_requests"),
+        ["n1:run:ollama-stub:requests:malformed!=1"],
+    ),
+    "listener-errors": (
+        lambda ev: ev["n2"].update(ollama_errors=["code 400, message Bad request version"]),
+        ["n2:ollama-stub:listener-errors"],
+    ),
+}
+
+
+@pytest.mark.parametrize("case", list(PING_BREAKS))
+def test_any_ping_evidence_but_the_grounded_list_calls_fails_the_verdict(case: str) -> None:
+    corrupt, reasons = PING_BREAKS[case]
+    evidence = honest()
+    corrupt(evidence)
+
+    result = verdict(evidence)
+
+    assert result["status"] == "FAIL"
+    assert result["failure_reasons"] == sorted(reasons)
+
+
+@pytest.mark.parametrize("name", list(pw.SCENARIOS))
+def test_a_journal_outside_the_provisioned_root_fails_the_scenario(name: str) -> None:
+    evidence = honest()
+    later = pw.SCENARIOS[name][-1]
+    evidence[name]["results"][later]["observed"]["journal_root"] = "/elsewhere/journal"
+
+    verdict = pw.evaluate(evidence, expected_receipt_sha256=RECEIPT)
+
+    assert verdict["status"] == "FAIL"
+    assert verdict["failure_reasons"] == [f"{name}:{later}:journal-not-at-provisioned-root"]
+
+
+def test_every_phase_body_runs_under_the_one_declaration_its_layout_wrote(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    layout = pw.Layout(tmp_path / "scenario")
+    pw.prepare_layout(layout)
+    seen: list[object] = []
+    monkeypatch.setitem(
+        pw.PHASE_BODIES, "run", lambda _: seen.append(INSTALLATION_STATE.get()) or {}
+    )
+
+    assert pw.run_phase(layout, "run", None) == 0
+
+    assert seen == [InstallationState(({"installation_root": str(layout.installation_root)},))]
+    assert INSTALLATION_STATE.get() == STORAGE_UNSELECTED  # unbound again after the body
 
 
 def _start(fleet: Any, tmp_path: Path, argv: list[str], phase: str) -> Any:
@@ -1129,8 +1388,8 @@ case, root, bystander_pgid = sys.argv[2], Path(sys.argv[3]), int(sys.argv[4])
 work = root / "work"
 work.mkdir(parents=True)
 facts = {
-    "owned_pgids": [], "webhook_ports": [], "boundary": {}, "unreserved": [], "foreign": [],
-    "kills": {},
+    "owned_pgids": [], "webhook_ports": [], "ollama_ports": [], "boundary": {}, "unreserved": [],
+    "foreign": [], "kills": {},
 }
 original_handler = signal.getsignal(signal.SIGTERM)
 
@@ -1238,13 +1497,14 @@ def alias_send(pidfd, sig, siginfo, flags):
     count_kill(target, sig)
 
 
-def config_text(layout, webhook_port, mcp_port):
+def config_text(layout, webhook_port, mcp_port, ollama_port):
     facts["webhook_ports"].append(webhook_port)
-    return real_config(layout, webhook_port, mcp_port)
+    facts["ollama_ports"].append(ollama_port)
+    return real_config(layout, webhook_port, mcp_port, ollama_port)
 
 
 def spawn(argv, env, cwd, logs, phase, own):
-    wanted = {"term-at-tool-server-spawn": "tool-server", "term-at-phase-spawn": "p-run"}
+    wanted = {"term-at-tool-server-spawn": "tool-server", "term-at-phase-spawn": "p-provision"}
 
     def owning(child):
         # The TERM lands between the group's creation and its registration.
@@ -1333,7 +1593,7 @@ def pidfd_open(pid, *rest):
         if phase != "tool-server":
             phase_pgids.add(pid)
     fail_at = {
-        "phase-acquisition-and-cleanup-kill-fail": "p-run",
+        "phase-acquisition-and-cleanup-kill-fail": "p-provision",
         "tool-server-acquisition-fails": "tool-server",
         "tool-server-acquisition-and-cleanup-kill-fail": "tool-server",
     }
@@ -1383,6 +1643,7 @@ def accepting(port):
 facts.update(
     chain=chain,
     open_webhook_ports=[p for p in facts["webhook_ports"] if accepting(p)],
+    open_ollama_ports=[p for p in facts["ollama_ports"] if accepting(p)],
     other_threads=[t.name for t in threading.enumerate() if t is not threading.main_thread()],
     handler_restored=signal.getsignal(signal.SIGTERM) == original_handler,
     term_still_blocked=signal.SIGTERM in signal.pthread_sigmask(signal.SIG_BLOCK, []),
@@ -1458,6 +1719,9 @@ def test_every_owned_resource_is_released_whatever_interrupts_its_lifecycle(
         assert all(n == 1 for n in facts["kills"].values()), f"settled twice: {facts['kills']}"
         assert facts["unreaped"] == [], f"owned leaders never released: {facts['unreaped']}"
         assert facts["open_webhook_ports"] == [], "the owned webhook listener still accepts"
+        assert facts["ollama_ports"] and facts["open_ollama_ports"] == [], (
+            "the owned Ollama-protocol stub was never acquired or still accepts"
+        )
         assert facts["other_threads"] == [], (
             f"threads outlived the helper: {facts['other_threads']}"
         )
@@ -1628,13 +1892,14 @@ def test_a_malformed_child_record_stops_the_loop_before_any_group_is_signalled(
     monkeypatch.setattr(os, "killpg", record_signal)
     monkeypatch.setattr(signal, "pidfd_send_signal", record_signal)
     monkeypatch.setattr(pw.HELPERS, "finish", finished_with_a_bool_group)
-    capture = pw.WebhookCapture()
+    capture, ollama = pw.WebhookCapture(), pw.OllamaListStub()
 
     try:
         with pytest.raises(ValueError, match="malformed phase run record"):
-            pw.run_scenario("p", pw.Layout(tmp_path), launch_exited, capture, 0.0)
+            pw.run_scenario("p", pw.Layout(tmp_path), launch_exited, capture, ollama, 0.0)
     finally:
         capture.server.server_close()
+        ollama.server.server_close()
 
     assert [s for s in signalled if s[1]] == []  # nothing but the acquisition's signal-0 probe
     monkeypatch.undo()
@@ -1663,3 +1928,56 @@ def test_verified_paths_come_only_from_a_record_the_prover_parses() -> None:
     for broken in broken_records:
         with pytest.raises(ValueError, match="not parseable provenance"):
             pw.verified_paths(broken)
+
+
+def test_latest_root_and_claim_view_read_one_declared_root(
+    declared_root: tuple[Path, RuntimeConfig],
+) -> None:
+    journal_root, config = declared_root
+    seed_pause(journal_root, pw.ROOT_ID)
+    record = pw._latest_root(config)  # pyright: ignore[reportPrivateUsage]
+    # The claim path as the installed claim store places it under the declared root itself.
+    claim = (
+        ResumeClaimStore(
+            placement=state_placement.place_state_dir(
+                journal_root, config, state_placement.probe_declared_state_root(config), what="test"
+            ),
+            tenant_id=config.tenant_id,
+        )
+        .paths_for(record.ref)
+        .claim
+    )
+
+    absent = pw._claim_view(config, record)  # pyright: ignore[reportPrivateUsage]
+    claim.parent.mkdir(parents=True, exist_ok=True)
+    claim.write_bytes(b"not a claim")
+
+    assert (record.journal_dir, record.ref.workflow_id) == (journal_root.resolve(), pw.ROOT_ID)
+    assert absent == {"phase": "absent", "claim_sha256": None}
+    invalid = pw._claim_view(config, record)  # pyright: ignore[reportPrivateUsage]
+    assert invalid == {
+        "phase": "invalid",
+        "claim_sha256": hashlib.sha256(b"not a claim").hexdigest(),
+    }
+
+
+@pytest.mark.parametrize(
+    ("cause", "roots"),
+    UNRESOLVED_INSTALLATIONS.items(),
+    ids=[c.value for c in UNRESOLVED_INSTALLATIONS],
+)
+def test_latest_root_refuses_an_unresolved_installation_before_any_journal_access(
+    cause: UnresolvedCause,
+    roots: Callable[[Path], tuple[Path, ...]],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(journal_module, "JournalWorkflowPauseStore", JournalUntouchable)
+
+    with (
+        installation_declaring(*roots(tmp_path)),
+        pytest.raises(PauseJournalRootUnresolvedError) as raised,
+    ):
+        pw._latest_root(witness_config(tmp_path))  # pyright: ignore[reportPrivateUsage]
+
+    assert raised.value.cause is cause

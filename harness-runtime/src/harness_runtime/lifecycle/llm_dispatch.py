@@ -117,7 +117,11 @@ from harness_runtime.lifecycle.audit_signing_errors import (
 from harness_runtime.lifecycle.cacheable_epoch import DEFAULT_CACHE_TTL, CacheTTL
 from harness_runtime.lifecycle.cost_record_sink import SupportsCostRecordAppend
 from harness_runtime.lifecycle.cross_family_cost_tag import provider_family_for_scope_check
-from harness_runtime.lifecycle.external_cli_provider import accepts_explicit_on_wire
+from harness_runtime.lifecycle.external_cli_provider import (
+    ExternalCLIReportedUsage,
+    accepts_explicit_on_wire,
+    external_cli_usage_evidence,
+)
 from harness_runtime.lifecycle.hitl_tool_loop import (
     HITLToolLoopCallResult,
     HITLToolLoopContext,
@@ -130,7 +134,13 @@ from harness_runtime.lifecycle.memory_tool_dispatch import (
     step_has_memory_tool,
 )
 from harness_runtime.lifecycle.post_tool_effect import ToolEffectFence
+from harness_runtime.lifecycle.skill_activation import (
+    SkillActivationMode,
+    compose_system_prompt_with_skills,
+    parse_skill_selection,
+)
 from harness_runtime.memory_context import (
+    PROMPT_PACKET_FALLBACK_RECORD_POLICY_DENIED,
     RenderedMemoryPromptPacket,
     RuntimeMemoryContext,
     append_rendered_memory_packet,
@@ -678,7 +688,8 @@ class RuntimeLLMDispatcher:
     # ergonomics; production stage-5 binding sets both when the operator opts
     # in via `RuntimeConfig.skill_activation_hook_config`. When either is None
     # OR the emitter's bound hook is None, the per-LLM-dispatch activation
-    # hook silent-skips per §14.17.5 invariant 3.
+    # hook is the operator opt-out (§14.17.5 invariant 3). A bound hook needs a
+    # `skills` mapping, enforced in `__post_init__` (v1.139 §14.17.8.2 item 1).
     skill_activation_emitter: Any = None
     skills: Any = None
     # R-300 — layered routing-selection substrate. Threaded at bootstrap stage 5
@@ -849,6 +860,20 @@ class RuntimeLLMDispatcher:
     # `UnresolvableResultRef` naming the missing store, never a second
     # unrelated error) — production wiring always injects a real instance.
     protected_result_store: Any = None
+
+    def __post_init__(self) -> None:
+        # [LAW:parse-dont-validate] v1.139 §14.17.8.2 item 1: a bound hook-2
+        # policy always meets a `skills` mapping (possibly empty), so dispatch
+        # never has an unbound-skills case to skip.
+        if (
+            self.skill_activation_emitter is not None
+            and self.skill_activation_emitter.hook is not None
+            and self.skills is None
+        ):
+            raise LLMDispatchBindError(
+                "skill activation hook bound without a skills mapping "
+                "(C-RT-27 v1.139 §14.17.8.2 item 1)"
+            )
 
     async def prewarm(self) -> PrewarmOutcome:
         """Boot-time prompt-cache pre-warm (B-18-KEEPALIVE; ADR-D3 §1.5:189).
@@ -1254,36 +1279,35 @@ class RuntimeLLMDispatcher:
             ``step-failure: {type}: {exc}``.
         """
         # --- C-RT-27 §14.17.2 hook-2 (per-LLM-dispatch activation hook) ---
-        # Pre-condition: emitter bound + hook bound + skills available. When
-        # any is missing/None, silent-skip per §14.17.5 invariant 3 (operator
-        # opt-out path preserves pre-v1.32 production behavior). Emit one
-        # `skill.activation` span per skill returned by the operator-supplied
-        # `SkillActivationHook.select_for_llm_dispatch(...)` policy, with
-        # `activation_mode = TOOL_SEARCH` per Q2=(d) hybrid hook-to-enum
-        # mapping. Fires BEFORE provider resolution + LLM call per §14.17.2
-        # hook-2 step 4 ordering.
+        # Pre-condition: emitter bound + hook bound (the operator opt-in; the
+        # opt-out selects nothing, §14.17.5 invariant 3). `__post_init__`
+        # guarantees a bound hook has a `skills` mapping. The selection is
+        # parsed before any effect (v1.139 §14.17.8.2 item 2): an unknown or
+        # duplicate id fails the step with no span and no provider call. Then
+        # one `skill.activation` span per selected skill, `activation_mode =
+        # TOOL_SEARCH` per Q2=(d), BEFORE provider resolution + LLM call per
+        # §14.17.2 hook-2 step 4. The selected content is composed into the
+        # effective system prompt below, after the base and before memory.
+        _selected_skills: Mapping[Any, Any] = {}
         if (
             self.skill_activation_emitter is not None
             and self.skill_activation_emitter.hook is not None
-            and self.skills is not None
         ):
-            from harness_runtime.lifecycle.skill_activation import SkillActivationMode
-
-            selected_ids = list(
+            _selected_skills = parse_skill_selection(
                 self.skill_activation_emitter.hook.select_for_llm_dispatch(
                     loaded_skills=self.skills.keys(),
                     workflow_id=step_context.workflow_id,
                     step_index=step_context.step_index,
-                )
+                ),
+                self.skills,
             )
-            for skill_id in selected_ids:
-                if skill_id in self.skills:
-                    self.skill_activation_emitter.emit(
-                        skill_id=skill_id,
-                        mode=SkillActivationMode.TOOL_SEARCH,
-                        workflow_id=step_context.workflow_id,
-                        skill=self.skills[skill_id],
-                    )
+            for skill_id, skill in _selected_skills.items():
+                self.skill_activation_emitter.emit(
+                    skill_id=skill_id,
+                    mode=SkillActivationMode.TOOL_SEARCH,
+                    workflow_id=step_context.workflow_id,
+                    skill=skill,
+                )
 
         payload = _coerce_payload(step.step_payload)
 
@@ -1377,6 +1401,11 @@ class RuntimeLLMDispatcher:
             _effective_system_prompt = self.per_role_system_prompts[_role]
         else:
             _effective_system_prompt = self.active_system_prompt
+        # v1.139 §14.17.8.2 item 5: base, then the hook-2 skills, then memory.
+        _effective_system_prompt = compose_system_prompt_with_skills(
+            _effective_system_prompt,
+            _selected_skills,
+        )
         _memory_context = self.memory_context
         _standard_memory_tool_executor = self.standard_memory_tool_executor
         if self.memory_runtime is not None:
@@ -2039,6 +2068,8 @@ class RuntimeLLMDispatcher:
             if external_cli_attrs is not None:
                 span.set_attribute("external_cli.exit_code", external_cli_attrs.exit_code)
                 span.set_attribute("external_cli.provider.kind", external_cli_attrs.kind)
+                for key, value in (external_cli_attrs.usage_evidence or {}).items():
+                    span.set_attribute(f"external_cli.usage.{key}", value)
 
             # anthropic.* per C-AS-14 §14.2 — emitted ONLY when
             # provider == "anthropic" per AS-AL-3 cross-axis scope.
@@ -2273,6 +2304,7 @@ class _AnthropicRequestAttrs:
 class _ExternalCLIAttrs:
     exit_code: int
     kind: str
+    usage_evidence: Mapping[str, int | str] | None
 
 
 #: B-83 degraded-serve reasons. Span-attribute VALUES, deliberately not enum
@@ -2304,16 +2336,19 @@ _DEGRADED_REASON_PROVIDER_FAMILY_SCOPE_MISMATCH: Final[str] = "provider_family_s
 #: reported a budget denial as an operator policy decision, which is a false
 #: accusation about a configuration the operator did not make.
 #:
-#: The VALUE DOMAIN of the real selector reasons, derived from the closed
-#: `MemoryAccessModeDenialReason` enum rather than spelled out here, so a new
-#: member is covered the day it is added. Membership is the discriminator for
-#: `_DegradedMemoryServe.policy_denial`: `prompt_packet_fallback_denial` carries
-#: EITHER a genuine selector reason (a resolver ran and decided) OR one of the
-#: two sentinels at `memory_context.py:48-52`, which are defined to be distinct
-#: from every enum value precisely so the two cases stay separable.
-_SELECTOR_DENIAL_REASON_VALUES: Final[frozenset[str]] = frozenset(
+#: The packet-denial reasons that are POLICY decisions: every real selector
+#: reason, derived from the closed `MemoryAccessModeDenialReason` enum rather
+#: than spelled out here so a new member is covered the day it is added, plus
+#: the C-MEM-05 record-policy sentinel (every mode gate admitted the packet, but
+#: a selected record's own `injection_policy` forbids prompt text). Membership
+#: is the discriminator for `_DegradedMemoryServe.policy_denial`: the only other
+#: values `prompt_packet_fallback_denial` carries are the two non-decision
+#: sentinels at `memory_context.py:48-52`, which are defined to be distinct from
+#: every enum value precisely so the two cases stay separable.
+# [LAW:one-source-of-truth] one set names which packet denials are policy denials.
+_POLICY_DENIAL_PACKET_REASON_VALUES: Final[frozenset[str]] = frozenset(
     reason.value for reason in MemoryAccessModeDenialReason
-)
+) | {PROMPT_PACKET_FALLBACK_RECORD_POLICY_DENIED}
 
 
 @dataclass(frozen=True, slots=True)
@@ -2340,9 +2375,11 @@ class _DegradedMemoryServe:
     #: outcomes where a policy determination was actually REACHED:
     #:
     #: * a `MemoryAccessModeDenialReason` the counterfactual selector actually
-    #:   returned (`_SELECTOR_DENIAL_REASON_VALUES`, the C-MEM-19
+    #:   returned (in `_POLICY_DENIAL_PACKET_REASON_VALUES`, the C-MEM-19
     #:   `POLICY_DENIAL` condition the primary DENIAL span already applies to
     #:   the SAME values, `memory_context.py:210-216`);
+    #: * the C-MEM-05 record-policy withhold, where a selected record's own
+    #:   `injection_policy` forbids prompt text;
     #: * a CONFIRMED cross-family withhold — both families RESOLVED and were
     #:   found unequal — whose withholding is MANDATED by C-MEM-13 (B-91 Q1,
     #:   decided 2026-07-29 — `Spec_Memory_Substrate_v1.md:511` records the
@@ -2784,11 +2821,10 @@ def _degraded_serve_disposition(
             selected_access_mode=memory_context.access_mode,
             reason=packet_denial,
             rendered=None,
-            # The ONLY report-only family a resolver actually decided: this
-            # value came back from a real `select_memory_access_mode` run
-            # (`memory_context.py:545-549`). Membership in the closed enum is
-            # what separates it from the two sentinels the same field can carry.
-            policy_denial=packet_denial in _SELECTOR_DENIAL_REASON_VALUES,
+            # A selector reason or the record-policy sentinel is a decision
+            # someone reached; membership separates both from the two
+            # non-decision sentinels the same field can carry.
+            policy_denial=packet_denial in _POLICY_DENIAL_PACKET_REASON_VALUES,
         )
     return _DegradedMemoryServe(
         selected_access_mode=memory_context.access_mode,
@@ -2912,6 +2948,10 @@ def _emit_degraded_memory_serve_span(
        `failure_class=POLICY_DENIAL` for exactly these values
        (`memory_context.py:210-216`). So does this span, per that precedent —
        the same decision reported by two emitters must not carry two classes.
+       The C-MEM-05 `record_injection_policy_denied` sentinel joins this
+       family: the composer's resolver admitted the packet mode, then a
+       selected record's own `injection_policy` forbade prompt text — a policy
+       decision about the packet's contents.
        Discriminated by `degraded.policy_denial`, carried as DATA from the site
        that knows the reason's provenance, never re-derived by string-matching
        a value domain that spans all three families.
@@ -5603,16 +5643,32 @@ async def _dispatch_external_cli(
     kind = getattr(adapter, "kind", "external-cli")
     if not isinstance(kind, str):
         kind = "external-cli"
+    usage_evidence = _external_cli_usage_evidence(result)
     response: Mapping[str, Any] = {
         "provider": provider,
         "model": model,
         "content": [{"type": "text", "text": text}],
+        "reported_usage": usage_evidence,
     }
     return (
         response,
+        # [LAW:one-source-of-truth] `_UsageAttrs` is the channel API cost attribution
+        # prices. A subscription CLI's counters are its own report, not an API-billed
+        # quantity, so they travel only as evidence and this channel stays unknown.
         _UsageAttrs(input_tokens=None, output_tokens=None, response_id=None),
-        _ExternalCLIAttrs(exit_code=exit_code, kind=kind),
+        _ExternalCLIAttrs(exit_code=exit_code, kind=kind, usage_evidence=usage_evidence),
     )
+
+
+def _external_cli_usage_evidence(result: Any) -> Mapping[str, int | str] | None:
+    """The adapter-parsed terminal usage as an evidence record, else unknown (`None`).
+
+    An adapter written before `reported_usage` existed reports none, which is unknown.
+    """
+    usage = getattr(result, "reported_usage", None)
+    if not isinstance(usage, ExternalCLIReportedUsage):
+        return None
+    return external_cli_usage_evidence(usage)
 
 
 def _response_to_mapping(response: Any) -> Mapping[str, Any]:

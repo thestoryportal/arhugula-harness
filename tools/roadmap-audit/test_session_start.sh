@@ -74,8 +74,8 @@ printf '%s' "$OUT" | grep -q "ROADMAP DRIFT" && ok "drift branch ($OUT)" || bad 
 #     refresh; an unreadable rule keeps the legacy halt and says so.
 TRIAL_HOOK=$(stub_hook 'print("trial")')
 OUT=$(CLAUDE_PROJECT_DIR="$REPO" bash "$TRIAL_HOOK" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null)
-printf '%s' "$OUT" | grep -q "hash=trial-unpinned" && ! printf '%s' "$OUT" | grep -q "ROADMAP DRIFT" \
-  && ok "trial rule owes no refresh ($OUT)" || bad "expected trial-unpinned, got: $OUT"
+printf '%s' "$OUT" | grep -q "hash=policy-unpinned" && ! printf '%s' "$OUT" | grep -q "ROADMAP DRIFT" \
+  && ok "trial rule owes no refresh ($OUT)" || bad "expected policy-unpinned, got: $OUT"
 FAIL_HOOK=$(stub_hook 'raise SystemExit("unreadable")')
 OUT=$(CLAUDE_PROJECT_DIR="$REPO" bash "$FAIL_HOOK" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null)
 printf '%s' "$OUT" | grep -q "ROADMAP DRIFT.*refresh rule unreadable; legacy kept" \

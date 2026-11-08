@@ -92,6 +92,15 @@ class Envelope:
     disposition_actor: str | None = None
     unique_catch: bool | None = None
     cycle_pass: str | None = None
+    reviewer_session: str | None = None
+    author_sessions: list[str] | None = None
+
+
+def independent_session(row: dict, authors: frozenset[str] = frozenset()) -> bool:
+    """An identity-bound reviewer is independent of every material author."""
+    return bool(row.get("reviewer_session")) and row["reviewer_session"] not in (
+        authors | frozenset(row.get("author_sessions") or ())
+    )
 
 
 def cycle_pass_from_env(env: dict[str, str] | None = None) -> str | None:
@@ -179,6 +188,10 @@ def validate(row: dict) -> None:
     except jsonschema.ValidationError as exc:
         raise RecordError(f"finding record schema: {exc.message}") from exc
     _check_finding_id_components(row)
+    # [LAW:single-enforcer] a native session never approves its own material work,
+    # including corrections. Legacy rows retain their original provenance.
+    if row.get("reviewer_session") is not None and not independent_session(row):
+        raise RecordError("reviewer session materially authored the candidate or a correction")
     try:
         # A shape-matching but impossible ts (e.g. `9999-99-99T99:99:99Z`) would pass the schema
         # regex and then, compared lexicographically, out-rank every real adjudication ts
@@ -245,6 +258,8 @@ _CORE_IMMUTABLE = (
     "round_n",
     "cause_attribution",
     "cycle_pass",
+    "reviewer_session",
+    "author_sessions",
 )
 
 
@@ -296,7 +311,11 @@ def _check_against_prior_rows(row: dict, rows: list[dict]) -> None:
     for k in _CORE_IMMUTABLE:
         # cycle_pass alone is optional: rows written before it existed carry no key, and
         # absent reads as its null default; every other core field must be present
-        was, now = (orig.get(k), row.get(k)) if k == "cycle_pass" else (orig[k], row[k])
+        was, now = (
+            (orig.get(k), row.get(k))
+            if k in ("cycle_pass", "reviewer_session", "author_sessions")
+            else (orig[k], row[k])
+        )
         if now != was:
             raise RecordError(f"adjudication may not change core field {k!r} ({was!r} -> {now!r})")
     if row["record_kind"] == "finding_adjudication":

@@ -3561,6 +3561,30 @@ def test_an_operator_suppressed_p1_lets_pass_3_complete():
     assert _next(rows) is None
 
 
+def test_single_independent_review_finishes_without_specialty_stack():
+    cycle = rlg.CycleRequest("initial", "codex", BASE, BASE, False, initial_policy=True)
+    assert isinstance(_decide(_state(preflights=(_pf(),)), [], cycle=cycle), rlg.Allowed)
+    rows = [_crow("initial", 1)]
+    assert rlg.completing_run(rows, ARC) is not None
+    assert _next(rows) is None
+    assert _next(rows, head=H2) == "correction"
+
+
+def test_single_review_correction_is_bound_to_delta_and_preserves_findings():
+    rows = [_crow("initial", 1, fid="single-f1", sev="P2")]
+    assert rlg.completing_run(rows, ARC) is None
+    rows.append(_adj("single-f1", "accepted"))
+    cycle = rlg.CycleRequest("correction", "codex", HEAD, BASE, False, initial_policy=True)
+    same = _decide(_state(preflights=(_pf(),)), rows, cycle=cycle)
+    assert isinstance(same, rlg.Refused) and same.code == "FIX_NOT_COMMITTED"
+    assert isinstance(_decide(_state(), rows, cycle=cycle, head_sha=H2), rlg.Allowed)
+    wrong = rlg.CycleRequest("correction", "codex", H3, BASE, False, initial_policy=True)
+    refused = _decide(_state(), rows, cycle=wrong, head_sha=H2)
+    assert isinstance(refused, rlg.Refused) and refused.code == "WRONG_BASE"
+    rows.append(_crow("correction", 2, head=H2))
+    assert _next(rows, head=H2) is None
+
+
 def test_deterministic_check_rows_are_not_cycle_findings():
     # a hard/warn/info row shares the record shape but is not a reviewer's finding
     rows = [*_pass("1", 1, fid="h1", sev="hard")]
@@ -4118,6 +4142,22 @@ def test_correction_carries_legacy_p1_streak():
     assert _trial([], policy=_policy(stopped=True)).state == "review_quarantined"
 
 
+def test_initial_p1_spends_a_round_but_does_not_count_as_a_correction_streak():
+    rows = _trial_rows("initial", producers=[LOOP_PRODUCER], finding=("first", "P1", "accepted"))
+    rows += _trial_rows(
+        "correction", producers=[LOOP_PRODUCER], head="d" * 40, finding=("fix1", "P1", "accepted")
+    )
+    first = _trial(rows)
+    assert len(first.completed_rounds) == 2
+    assert first.p1_streak == 1 and first.state != "review_quarantined"
+    rows += _trial_rows(
+        "correction", producers=[LOOP_PRODUCER], head="e" * 40, finding=("fix2", "P1", "accepted")
+    )
+    second = _trial(rows)
+    assert len(second.completed_rounds) == 3
+    assert second.p1_streak == 2 and second.state == "review_quarantined"
+
+
 def test_author_cannot_approve_own_material_fix():
     codex_fixed = _binding(authors=("claude", "codex"))
     d = _trial(_CLEAN_CYCLE, binding=codex_fixed)
@@ -4129,6 +4169,16 @@ def test_author_cannot_approve_own_material_fix():
         + _trial_rows("3")
     )
     assert _trial(gemini, binding=codex_fixed).state == "approved"
+
+
+def test_native_codex_reviewer_is_independent_of_codex_author():
+    author = "00000000-0000-4000-8000-000000000001"
+    reviewer = "00000000-0000-4000-8000-000000000002"
+    rows = _trial_rows("initial", producers=[LOOP_PRODUCER])
+    for row in rows:
+        row.update(reviewer_session=reviewer, author_sessions=[author])
+    assert _trial(rows, binding=_binding(authors=("codex", author))).state == "approved"
+    assert _trial(rows, binding=_binding(authors=(reviewer,))).state != "approved"
 
 
 def test_consolidated_review_requires_complete_concerns():
@@ -4468,3 +4518,110 @@ def test_one_lens_closing_pass_completes_a_concern_complete_cycle_under_trial():
     partial_first = _trial_rows("1", producers=[LOOP_PRODUCER, *_LENSES3[:2]])
     d = _trial(partial_first + _trial_rows("2") + one_lens)
     assert d.state != "approved" and rlg._WITNESS_LENS in d.missing_concerns
+
+
+def test_new_policy_preserves_partially_delivered_legacy_cycle():
+    rows = [_crow("1", 1)]
+    assert (
+        rlg.next_pass(
+            rows, ARC, doc_only=False, head_sha=HEAD, diff_digest=DIGEST, initial_policy=True
+        )
+        == "1"
+    )
+    cycle = rlg.CycleRequest("initial", "codex", BASE, BASE, False, initial_policy=True)
+    result = _decide(_state(), rows, cycle=cycle)
+    assert isinstance(result, rlg.Refused) and result.code == "PASS_OUT_OF_ORDER"
+
+
+def test_clean_initial_remains_complete_when_policy_is_reloaded():
+    rows = [_crow("initial", 1)]
+    assert rlg.completing_run(rows, ARC) is not None
+    assert (
+        rlg.next_pass(
+            rows, ARC, doc_only=False, head_sha=H2, diff_digest=DIGEST, initial_policy=True
+        )
+        == "correction"
+    )
+
+
+@pytest.mark.parametrize("after_correction", [False, True])
+@pytest.mark.parametrize("change", ["head", "digest"])
+def test_trial_reports_the_correction_pass_the_gate_admits(after_correction, change):
+    rows = [_crow("initial", 1)]
+    reviewed_head = HEAD
+    if after_correction:
+        rows.append(_crow("correction", 2, head=H2))
+        reviewed_head = H2
+    assert _trial(rows, binding=_binding(reviewed_head)).state == "approved"
+    head, digest = (H3, DIGEST) if change == "head" else (reviewed_head, "e" * 64)
+    decision = _trial(rows, binding=_binding(head, digest))
+    assert decision.state == "binding_stale" and decision.admit_launch
+    assert decision.next_pass == "correction"
+    cycle = rlg.CycleRequest(
+        decision.next_pass, "codex", reviewed_head, BASE, False, initial_policy=True
+    )
+    assert isinstance(
+        _decide(_state(), rows, head_sha=head, diff_digest=digest, cycle=cycle), rlg.Allowed
+    )
+
+
+def test_single_review_preserves_spent_round_budget():
+    rows = [_crow("initial", 1, fid="single-budget", sev="P2"), _adj("single-budget", "accepted")]
+    cycle = rlg.CycleRequest("correction", "codex", HEAD, BASE, False, initial_policy=True)
+    decision = rlg.decide(
+        _state(), rows, arc_id=ARC, head_sha=H2, diff_digest=DIGEST, budget=1, cycle=cycle
+    )
+    assert isinstance(decision, rlg.Refused) and decision.code == "BUDGET_EXHAUSTED"
+
+
+@pytest.mark.parametrize("producer", ["codex_review_wrapper", "gemini_review_wrapper"])
+def test_real_wrapper_emission_completes_single_review(repo, monkeypatch, producer):
+    policy = json.loads(
+        (Path(__file__).resolve().parents[1] / ".harness/workflow-policy.json").read_text()
+    )
+    policy["review_rules"] = {"delivery": "single-independent-milestone-status-v1"}
+    (repo / ".harness/workflow-policy.json").write_text(json.dumps(policy))
+    _commit_on_branch(repo, "candidate.py", "value = 1\n")
+    binding = rw.code_binding(repo, "main")
+    state = _state(preflights=(_pf(head=binding["head_sha"], digest=binding["diff_digest"]),))
+    monkeypatch.setattr(rlg, "_gate_state_in_force", lambda *_: state)
+    monkeypatch.setenv(fr.CYCLE_PASS_ENV, "initial")
+    assert isinstance(rlg.admit(repo, "main", ARC), rlg.Allowed)
+    outcome = rw.ReviewOutcome("APPROVE", "independent", None, "", [], binding, "stdout")
+    admission = rlg.delivery_admission(repo, outcome, producer=producer, arc_id=ARC, lane_id="test")
+    rows = rw.emit_outcome(
+        outcome, producer=producer, arc_id=ARC, lane_id="test", round_n=1, admit=admission
+    )
+    assert len(rows) == 1 and rows[0]["cycle_pass"] == "initial"
+    assert rlg.completing_run(fr.read_rows(), ARC) is not None
+    duplicate = rlg.admit(repo, "main", ARC)
+    assert isinstance(duplicate, rlg.Refused) and duplicate.code == "CYCLE_COMPLETE"
+    # Changing the worktree alone cannot alter the reviewed commit's policy.
+    (repo / ".harness/workflow-policy.json").write_text("{}")
+    assert rlg._streamlined_review(repo, binding["head_sha"]) is True
+
+
+def test_native_session_delivery_uses_real_gate_and_cannot_deliver_twice(repo, monkeypatch):
+    import native_review as native
+
+    policy = json.loads(
+        (Path(__file__).resolve().parents[1] / ".harness/workflow-policy.json").read_text()
+    )
+    policy["review_rules"] = {"delivery": "single-independent-milestone-status-v1"}
+    (repo / ".harness/workflow-policy.json").write_text(json.dumps(policy))
+    _commit_on_branch(repo, "candidate.py", "value = 1\n")
+    people = native.participants(
+        "00000000-0000-4000-8000-000000000002", ["00000000-0000-4000-8000-000000000001"]
+    )
+    binding = native.binding(repo, "main", people)
+    state = _state(preflights=(_pf(head=binding["head_sha"], digest=binding["diff_digest"]),))
+    monkeypatch.setattr(rlg, "_gate_state_in_force", lambda *_: state)
+    monkeypatch.setenv(fr.CYCLE_PASS_ENV, "initial")
+    monkeypatch.setenv("HARNESS_ARC_ID", ARC)
+    monkeypatch.setenv("HARNESS_LANE_ID", "test")
+    monkeypatch.setattr(rw, "record_round_outcome_if_reserved", lambda *a, **k: None)
+    text = "```json\n" + json.dumps({"verdict": "APPROVE", "findings": [], **binding}) + "\n```"
+    assert native.record(repo, text, binding, people) == 0
+    with pytest.raises(rlg.CycleRefusedError, match="CYCLE_COMPLETE"):
+        native.record(repo, text, binding, people)
+    assert len(fr.read_rows()) == 1

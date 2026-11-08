@@ -1757,6 +1757,16 @@ async def test_bootstrap_stage_5_prewarm_failure_does_not_abort_bootstrap(
 # ---------------------------------------------------------------------------
 
 
+class _PassValidator:
+    """Minimal operator validator so the validator opt-in can materialize."""
+
+    async def validate(self, step: Any, step_result: Any, *, step_context: Any) -> Any:
+        from harness_cp.validator_framework_types import ValidatorOutcome, ValidatorResult
+
+        _ = step, step_result, step_context
+        return ValidatorResult(outcome=ValidatorOutcome.PASS)
+
+
 @pytest.mark.asyncio
 async def test_u_rt_136_bootstrap_wires_resolved_flag_into_every_composer(
     tmp_path: Path,
@@ -1774,10 +1784,12 @@ async def test_u_rt_136_bootstrap_wires_resolved_flag_into_every_composer(
     composer to the False default → the matching ON assertion FAILS (the
     exact silently-fail-open-in-production wiring deletion the merge-gate
     test-witness lens flagged)."""
+    from harness_core.identity import StepID
     from harness_cp.workflow_driver_types import StepKind
     from harness_runtime.lifecycle.audit_signing_errors import (
         AUDIT_SIGNING_HARD_FAILURES,
     )
+    from harness_runtime.lifecycle.validator_framework_types import ValidatorBinding
     from harness_runtime.types import (
         ValidatorFrameworkConfig,
         WebhookDeliveryComposerConfig,
@@ -1812,7 +1824,14 @@ async def test_u_rt_136_bootstrap_wires_resolved_flag_into_every_composer(
     _patch_collector(monkeypatch)
 
     opt_ins = {
-        "validator_framework_config": ValidatorFrameworkConfig(),
+        "validator_framework_config": ValidatorFrameworkConfig(
+            bindings=(
+                ValidatorBinding(
+                    step_id=StepID("step-0"),
+                    class_qualified_name=f"{__name__}:{_PassValidator.__qualname__}",
+                ),
+            )
+        ),
         "webhook_delivery_composer_config": WebhookDeliveryComposerConfig(),
     }
     on_cfg = _config(tmp_path).model_copy(update={"audit_signing_fail_closed": True, **opt_ins})

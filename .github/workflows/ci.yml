@@ -778,6 +778,13 @@ jobs:
       - name: A5 kernel venue gate tests (trial-193 ci-venue-v2)
         run: uv run python -m pytest tools/test_a5_kernel_ci_gate.py -q
 
+      # [LAW:verifiable-goals] Native transcript provenance must run in required CI.
+      - name: Native independent review provenance tests
+        run: uv run python -m pytest tools/test_native_review.py -q
+
+      - name: Stacked PR publication safety tests
+        run: uv run python -m pytest tools/test_stacked_pr_publish.py -q
+
   q1-review-gate:
     needs: changes
     if: ${{ !cancelled() }}

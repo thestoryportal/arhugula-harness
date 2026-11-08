@@ -62,6 +62,23 @@ def _block(verdict="APPROVE", findings=None, **over):
     return "chatter\n```json\n" + json.dumps(body) + "\n```\ntrailer\n"
 
 
+@pytest.mark.parametrize("cycle_pass", ["initial", "correction"])
+def test_single_review_unavailable_never_invokes_gemini(monkeypatch, cycle_pass):
+    from argparse import Namespace
+
+    monkeypatch.setenv("HARNESS_CYCLE_PASS", cycle_pass)
+    monkeypatch.setattr(
+        cr,
+        "run_codex_review",
+        lambda *a, **k: rw.ReviewOutcome(
+            "REVIEWER_UNAVAILABLE", "codex", "permanent", "unavailable"
+        ),
+    )
+    monkeypatch.setattr(cr, "_emit_rows", lambda outcome: 1)
+    monkeypatch.setattr(cr, "_run_gemini_failover", lambda *a: pytest.fail("mandatory fallback"))
+    assert cr._reviewed_main(Namespace(base="main", failover=True), None) == 2
+
+
 # ── C-HE-15 §1/§2: only a positive schema parse counts ──────────────────────
 # mutation-probe(tools/review_wrapper_common.py): make parse_verdict() approve empty text
 def test_empty_stdout_exit0_is_unavailable():

@@ -119,6 +119,80 @@ LSOF_ELAPSED_MS=$(( (LSOF_FINISHED - LSOF_STARTED) / 1000000 ))
   && ok "lsof reference observation is bounded and fails closed" \
   || bad "lsof reference observation was not bounded: elapsed=${LSOF_ELAPSED_MS}ms rc=$LSOF_RC"
 
+eq "hook_bounded forwards the caller's stdin" "$(printf piped | hook_bounded 5 cat)" "piped"
+
+# A TERM-ignoring descendant that holds the caller's $(...) pipe must not outlive the
+# bound, whichever timeout runs it. Each fixture records that descendant's pid.
+DESC_PID="$REPO/descendant.pid"
+export DESC_PID
+TERM_CHILD="$REPO/term-child"
+cat > "$TERM_CHILD" <<'EOF'
+#!/usr/bin/env bash
+bash -c 'trap "" TERM; exec sleep 30' &
+echo $! > "$DESC_PID"
+wait
+EOF
+TERM_PARENT="$REPO/term-parent"
+cat > "$TERM_PARENT" <<'EOF'
+#!/usr/bin/env bash
+trap '' TERM
+sleep 30 &
+echo $! > "$DESC_PID"
+wait
+EOF
+# uutils timeout's observable contract: its own process group, TERM to the child and the
+# group, then a KILL that reaches only the child (its group KILL never happens).
+UUTILS="$REPO/uutils-timeout"
+mkdir "$UUTILS"
+cat > "$UUTILS/timeout" <<'EOF'
+#!/usr/bin/python3
+import os, signal, subprocess, sys
+kill_after, secs, cmd = float(sys.argv[2]), float(sys.argv[3]), sys.argv[4:]
+os.setpgid(0, 0)
+child = subprocess.Popen(cmd)
+try:
+    sys.exit(child.wait(secs))
+except subprocess.TimeoutExpired:
+    pass
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+child.send_signal(signal.SIGTERM)
+os.killpg(0, signal.SIGTERM)
+try:
+    child.wait(kill_after)
+    sys.exit(124)
+except subprocess.TimeoutExpired:
+    child.kill()
+    child.wait()
+    sys.exit(137)
+EOF
+chmod +x "$TERM_CHILD" "$TERM_PARENT" "$UUTILS/timeout"
+bounded_descendant() {
+  local label="$1" want_rc="$2" path="$3" fixture="$4" started finished rc elapsed survivor
+  rm -f "$DESC_PID" "$REPO/bounded.rc"
+  started=$(/usr/bin/python3 -c 'import time; print(time.monotonic_ns())')
+  # the rc travels by file: wait_bounded reports its own watchdog KILL as 124
+  ( out=$(PATH="$path" hook_bounded 1 "$fixture"); echo $? > "$REPO/bounded.rc" ) &
+  wait_bounded $! 8
+  rc=$(cat "$REPO/bounded.rc" 2>/dev/null || echo unfinished)
+  finished=$(/usr/bin/python3 -c 'import time; print(time.monotonic_ns())')
+  elapsed=$(( (finished - started) / 1000000 ))
+  survivor=$(cat "$DESC_PID" 2>/dev/null)
+  if [ -n "$survivor" ] && kill -0 "$survivor" 2>/dev/null; then
+    kill -KILL "$survivor"
+    bad "$label: descendant $survivor survived (rc=$rc elapsed=${elapsed}ms)"
+  elif [ -z "$survivor" ]; then
+    bad "$label: fixture never recorded its descendant"
+  else
+    { [ "$rc" = "$want_rc" ] && [ "$elapsed" -lt 6000 ]; } \
+      && ok "$label (rc=$rc, ${elapsed}ms)" \
+      || bad "$label: not bounded: rc=$rc elapsed=${elapsed}ms"
+  fi
+}
+bounded_descendant "hook_bounded kills a TERM-surviving descendant after a TERM timeout" \
+  124 "$PATH" "$TERM_CHILD"
+bounded_descendant "hook_bounded kills the group when uutils timeout's KILL reaches only the child" \
+  137 "$UUTILS:$PATH" "$TERM_PARENT"
+
 # hook_default_branch — falls back to main when no origin/HEAD symref.
 eq "hook_default_branch fallback main" "$(cd "$REPO" && hook_default_branch)" "main"
 

@@ -49,7 +49,6 @@ from harness_runtime.api import (
 from harness_runtime.lifecycle.journal_workflow_pause_store import (
     JournalWorkflowPauseStore,
     PauseJournalReadCause,
-    pause_journal_dir_for,
 )
 from harness_runtime.lifecycle.pause_resume_protocol_types import PauseResumeProtocolConfig
 from harness_runtime.types import (
@@ -59,6 +58,8 @@ from harness_runtime.types import (
     ProviderSecretsConfig,
     RuntimeConfig,
 )
+
+from .pause_journal_roots import declare_pause_journal_root
 
 _WORKLOAD = WorkloadClass.SOFTWARE_ENGINEERING
 _SURFACE = DeploymentSurface.LOCAL_DEVELOPMENT
@@ -136,7 +137,10 @@ class _Workflow:
 
 
 def _journal_dir(tmp_path: Path) -> Path:
-    return pause_journal_dir_for(tmp_path / PathClass.STATE_LEDGER.value.lower())
+    """The installation's declared pause-journal root (Runtime spec v1.137 Rule B3)."""
+    root = tmp_path / "pause-journal"
+    root.mkdir(exist_ok=True)
+    return declare_pause_journal_root(root)
 
 
 def _snapshot(run_id: str) -> PauseSnapshot:
@@ -232,9 +236,9 @@ async def test_both_surfaces_read_through_one_authority(
     calls: list[tuple[str | None, str]] = []
     real = api_module._read_durable_pause_snapshot
 
-    def _spy(cfg: RuntimeConfig, workflow: object, resume_handle: str) -> object:
+    def _spy(cfg: RuntimeConfig, resume_handle: str) -> object:
         calls.append((cfg.tenant_id, resume_handle))
-        return real(cfg, workflow, resume_handle)  # type: ignore[arg-type]
+        return real(cfg, resume_handle)
 
     monkeypatch.setattr(api_module, "_read_durable_pause_snapshot", _spy)
 
@@ -337,6 +341,7 @@ async def test_the_factory_keys_the_capture_side_store_by_the_configured_tenant(
     )
     from harness_runtime.lifecycle.journal_workflow_pause_store import pause_journal_filename
 
+    journal_dir = _journal_dir(tmp_path)
     config = _config(tmp_path, tenant_id=_TENANT_A)
     protocol = await materialize_pause_resume_protocol_stage(
         config,
@@ -359,7 +364,6 @@ async def test_the_factory_keys_the_capture_side_store_by_the_configured_tenant(
 
     # The capture landed at the TENANT-COMPOSITE key, and NOT at the untenanted
     # one a `tenant_id=None` factory would have produced.
-    journal_dir = _journal_dir(tmp_path)
     assert (journal_dir / pause_journal_filename(_TENANT_A, _WORKFLOW_ID)).is_file()
     assert not (journal_dir / pause_journal_filename(None, _WORKFLOW_ID)).exists()
 

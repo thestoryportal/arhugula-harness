@@ -62,7 +62,13 @@ from harness_cp.workflow_driver import (
     _hash_hitl_gate_config,
     execute_workflow,
 )
-from harness_cp.workflow_driver_types import RunStatus, StepKind, WorkflowStep
+from harness_cp.workflow_driver_types import (
+    ChildResumeRefusal,
+    ResumeRefusal,
+    RunStatus,
+    StepKind,
+    WorkflowStep,
+)
 from harness_cp.workflow_manifest_entry import StepOverride, WorkflowManifestEntry
 from harness_is.state_ledger_entry_schema import Actor, ActorClass, Identifier
 
@@ -84,6 +90,11 @@ _BASE_PLACEMENT = HITLPlacement(
     tool_filter=("read_file", "write_file"),
     cascade_policy=CascadePolicy.PAUSE,
     timeout=5000,
+)
+
+#: CP v1.131 §0.4 items 1-2: the typed refusal every gate-config guard/origin returns.
+_GATE_CONFIG_REFUSAL = ResumeRefusal(
+    reasons=frozenset({ChildResumeRefusal.HITL_GATE_CONFIG_CHANGED})
 )
 
 
@@ -497,6 +508,7 @@ def test_peer_resume_rejects_hitl_gate_config_timeout_altered() -> None:
     )
     assert resumed.status is RunStatus.FAILED
     assert "pre-dispatch-gate-owning-hitl-gate-config-changed" in (resumed.fail_class or "")
+    assert resumed.resume_refusal == _GATE_CONFIG_REFUSAL
 
 
 def test_peer_resume_rejects_hitl_gate_config_placement_removed() -> None:
@@ -515,6 +527,7 @@ def test_peer_resume_rejects_hitl_gate_config_placement_removed() -> None:
     )
     assert resumed.status is RunStatus.FAILED
     assert "pre-dispatch-gate-owning-hitl-gate-config-changed" in (resumed.fail_class or "")
+    assert resumed.resume_refusal == _GATE_CONFIG_REFUSAL
 
 
 def test_peer_resume_rejects_hitl_gate_config_removed_placements_added() -> None:
@@ -543,6 +556,7 @@ def test_peer_resume_rejects_hitl_gate_config_removed_placements_added() -> None
     )
     assert resumed.status is RunStatus.FAILED
     assert "pre-dispatch-gate-owning-hitl-gate-config-changed" in (resumed.fail_class or "")
+    assert resumed.resume_refusal == _GATE_CONFIG_REFUSAL
 
 
 def test_peer_resume_rejects_hitl_gate_config_per_step_add_fold_removed() -> None:
@@ -578,6 +592,7 @@ def test_peer_resume_rejects_hitl_gate_config_per_step_add_fold_removed() -> Non
     )
     assert resumed.status is RunStatus.FAILED
     assert "pre-dispatch-gate-owning-hitl-gate-config-changed" in (resumed.fail_class or "")
+    assert resumed.resume_refusal == _GATE_CONFIG_REFUSAL
 
 
 # --- 3. `_execute_orchestrator_workers` twin-guard witness --------------------------
@@ -644,6 +659,7 @@ def test_ow_resume_rejects_hitl_gate_config_changed() -> None:
     )
     assert resumed.status is RunStatus.FAILED
     assert "pre-dispatch-gate-owning-hitl-gate-config-changed" in (resumed.fail_class or "")
+    assert resumed.resume_refusal == _GATE_CONFIG_REFUSAL
 
 
 def test_ow_resume_rejects_hitl_gate_config_placement_removed() -> None:
@@ -678,6 +694,7 @@ def test_ow_resume_rejects_hitl_gate_config_placement_removed() -> None:
     )
     assert resumed.status is RunStatus.FAILED
     assert "pre-dispatch-gate-owning-hitl-gate-config-changed" in (resumed.fail_class or "")
+    assert resumed.resume_refusal == _GATE_CONFIG_REFUSAL
 
 
 def test_ow_resume_accepts_unchanged_hitl_gate_config() -> None:

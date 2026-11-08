@@ -1,5 +1,17 @@
 # CLAUDE.md — Multi-LLM Agent Harness Workspace
 
+**Delivery policy (user-approved 2026-11-04).** When the tracked
+`.harness/workflow-policy.json` selects `single-independent-milestone-status-v1`,
+`docs/delivery-policy.md` governs delivery: one independent reviewer session of any model family,
+no author/correction-author self-approval or mandatory Gemini/fallback/shadow,
+correction delta, focused local checks with qualifying reuse, generated Git/LIT
+status or milestone refresh, and independent isolated work during CI. It replaces
+contrary default review-stack, duplicate full-local-suite, per-merge status-PR,
+cleanup and local-main-sync requirements below. Required exact-candidate CI,
+installed acceptance, recovery proof, findings, budgets and actual denials remain.
+Delivered legacy reviews and recorded refresh intents keep their original gates.
+
+
 *Workspace-level guidance for Claude Code Loaded at every session startup.*
 
 **Start here:** `CONTEXT.md` (workspace root) is the compact task router — it routes an incoming session to the operative posture (§11) and the entry points that posture needs. This file is the full governance behind it; read it for anything the router does not answer.
@@ -51,11 +63,11 @@ Canonical spec heads — **one family per row, so each version stays bound to it
 
 | Axis | Head spec artifact | Head version |
 |---|---|---|
-| IS | `Spec_Information_Substrate_v1.md` | **v1.16** (cleared 2026-09-25) |
+| IS | `Spec_Information_Substrate_v1.md` | **v1.17** (cleared 2026-11-04) |
 | AS | `Spec_Action_Surface_v1.md` | **v1.14** (cleared 2026-07-15) |
-| CP | `Spec_Control_Plane_v1_124.md` | **v1.124** (cleared 2026-09-25) |
-| OD | `Spec_Operational_Discipline_v1_42.md` | **v1.42** (cleared 2026-08-16) |
-| Runtime | `Spec_Harness_Runtime_v1_134.md` | **v1.134** (cleared 2026-10-04) |
+| CP | `Spec_Control_Plane_v1_131.md` | **v1.131** (cleared 2026-11-07) |
+| OD | `Spec_Operational_Discipline_v1_43.md` | **v1.43** (cleared 2026-11-04) |
+| Runtime | `Spec_Harness_Runtime_v1_142.md` | **v1.142** (cleared 2026-11-07) |
 | Memory | `Spec_Memory_Substrate_v1.md` | **v1.3** (cleared 2026-08-06) |
 
 Full per-version change-note lineage lives at `.harness/artifact-pointers/spec-heads.md` and, per family, at `.harness/artifact-pointers/{is,as,cp,od,runtime,memory}.md` — **query, do not read wholesale** (`rg <term> .harness/artifact-pointers/*.md`).
@@ -67,11 +79,11 @@ Canonical plan heads — one family per row (same adjacency rule as §2.3):
 | Axis | Head plan artifact |
 |---|---|
 | core | `Implementation_Plan_Harness_Core_v1_3.md` |
-| IS | `Implementation_Plan_Information_Substrate_v2_10.md` |
+| IS | `Implementation_Plan_Information_Substrate_v2_11.md` |
 | AS | `Implementation_Plan_Action_Surface_v1_6.md` (v1.6, cleared 2026-07-15) |
-| CP | `Implementation_Plan_Control_Plane_v2_55.md` |
-| OD | `Implementation_Plan_Operational_Discipline_v2_36.md` |
-| Runtime | `Implementation_Plan_Harness_Runtime_v2_65.md` |
+| CP | `Implementation_Plan_Control_Plane_v2_56.md` |
+| OD | `Implementation_Plan_Operational_Discipline_v2_37.md` |
+| Runtime | `Implementation_Plan_Harness_Runtime_v2_70.md` |
 | CXA | `Cross_Axis_Composition_Document_v2_23.md` |
 | Memory | `Implementation_Plan_Memory_Substrate_v1.md` v1.3 (cleared 2026-08-06) |
 
@@ -434,6 +446,12 @@ Verify any memory or checkpoint claim empirically against HEAD before authoring 
 *Codifies how Claude allocates effort and reaches for multi-agent / multi-voice tooling, across BOTH postures (design-phase + Phase 7) and every effort level. Distilled from the 2026-06-01 ultracode retrospective. Load-bearing principle: **the verification disciplines (§13.1, cheap) catch the bugs — not raw reasoning depth or multi-agent fan-out.** Reach for heavier machinery deliberately, at named high-leverage moments; not by default.*
 
 ### 13.1 Always-on disciplines (every session, every posture, independent of the effort knob)
+
+For the selected delivery policy, use ONE independent native reviewer session of
+any model family under `docs/delivery-policy.md`. The author and every
+material correction author are excluded. The two review rows below describe the
+retained legacy procedure; they do not add a second review, Gemini fallback or
+shadow obligation to current delivery. Additional review requires a named risk.
 
 | Discipline | When |
 |---|---|

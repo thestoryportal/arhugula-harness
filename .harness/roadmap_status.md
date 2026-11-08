@@ -8,11 +8,11 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `a297597f74c2` |
-| `last_refreshed` | 2026-10-30T00:00:00Z |
-| `git_head` | `55535e56` —  |
+| `workspace_state_hash` | `514db0a0051a` |
+| `last_refreshed` | 2026-11-04T00:00:00Z |
+| `git_head` | `e8c798fb` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
-| `open_fork_doc_count` | 125 |
+| `open_fork_doc_count` | 126 |
 
 **Hash recipe.** `sha256(git_head[:8] + "|" + sorted_open_pr_csv + "|" + open_fork_doc_count + "|" + latest_retirement_batch_path)[:12]`. See `Project_Roadmap_v1.md` §7.1.
 
@@ -22,7 +22,7 @@
 
 **Purpose.** Live pointer to the next Claude/Codex-executable frontier. Full round-by-round history (every prior round, verbatim, most-recent-first) lives in the archive below — grep it by PR/`B-`/`R-`-id/round, never read wholesale.
 
-**Current next action (post-#1683).** Finish only WO-U07 (LIT arhugula-harness-trial-193.7x7.2je) at its compatible inactive scope: verify this terminating refresh own-main CI, exact review/source/main proofs and current writer/process release, then close U07. Source PR1683 completes the original companion correction lineage and its accepted witness gap. Activation remains with U23/U24; current-final installed product acceptance is not claimed. Hold U08/U14/U19/U23/U24/U25 with repair_paused=true; no next ticket or destructive cleanup. After verified U07 closure the paired lanes preserve evidence and perform their own Memento once, then hold.
+**Current next action (post-#1697).** Continue the accepted Trial 193 campaign under /home/robbo/Work/arhugula-omarchy/docs/orchestration/release-campaign.md and live LIT arhugula-harness-trial-193. PR #1697 lands the cleared Runtime v1.137/plan v2.68, IS v1.17/plan v2.11 and OD v1.43/plan v2.37 contracts for B-310/B-313/B-314; it delivers no supersession implementation, resume exposure or installed acceptance. Buford owns the next prerequisite: select and prove the retained installation journal root and its binding across supported processes; it remains UNSELECTED/UNBOUND until witnessed, and consumes journal implementation/resume exposure. Profile-coder is the next implementation owner once that prerequisite and explicit source-path ownership are recorded, with an independently admitted reviewer; continue other eligible isolated slices under live LIT meanwhile. Preserve journal-position ordering, the original engine-native recovery obligation, three PR #1697 pass-3 P3 notes and four PR #1691 pass-3 P3 notes owed to their next PR under B-298, plus B-319. Installed A7 examples/topologies/routes/assets, Proposed A5/A4 compatibility and returned-arm result_ref/real-leaf witnesses, venue/restore, all 38 original rows and 122 criteria, and the independent six-category decision remain open. Preserve actual denials, A5 native-delivery hold, repair_paused, protected work and spent passes; source clearance is not release acceptance.
 
 **Archive.** `.harness/roadmap-next-action-archive.md` (PRIOR rounds only, verbatim as each stood when superseded — the current round lives only in this head; the newest superseded round may lag there until the next content PR archives it, and is always losslessly recoverable from this file's own git history meanwhile).
 
@@ -43,6 +43,7 @@
 | PR | Branch | R-NNN | Posture |
 |---|---|---|---|
 | #1292 | `fix/codex-hook-contract-recovery` | — | — |
+| #1688 | `recon/a5-reconcile-20261103` | — | — |
 
 ---
 
@@ -50,11 +51,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
-| PR #1683 | 2026-10-30 | WO-U07 G1 inactive companion lineage and accepted witness correction landed; source own-main verified by merge door before this continuation. |
-| PR #1681 | 2026-10-29 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
-| PR #1677 | 2026-10-29 | U10 deadline and pipefail corrections landed; exact own-main CI 40916333255 passed all 23 jobs. Installed acceptance and full U10 closure remain pending. |
-| PR #1675 | 2026-10-29 | Empty diffs require the full CI path; U10 live acceptance remains pending. |
-| PR #1673 | 2026-10-29 | Terminating roadmap refresh after PR #1672. |
+| PR #1697 | 2026-11-04 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
+| PR #1695 | 2026-11-04 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
+| PR #1692 | 2026-11-04 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
+| PR #1691 | 2026-11-04 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
+| PR #1689 | 2026-11-04 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 
 ---
 

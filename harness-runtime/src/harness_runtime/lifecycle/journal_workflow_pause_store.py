@@ -79,7 +79,7 @@ from collections.abc import Generator
 from contextlib import contextmanager
 from enum import StrEnum
 from pathlib import Path
-from typing import NamedTuple, cast
+from typing import Literal, NamedTuple, cast
 
 from harness_core.cross_process_lock_deadline import (
     CrossProcessLockDeadline,
@@ -103,7 +103,6 @@ __all__ = [
     "encode_pause_journal_key",
     "journal_exclusion_is_degraded",
     "legacy_pause_journal_filename",
-    "pause_journal_dir_for",
     "pause_journal_filename",
 ]
 
@@ -187,6 +186,23 @@ class PauseJournalReadCause(StrEnum):
 
     WORKFLOW_MISMATCH = "workflow-mismatch"
     """The latest record's ``workflow_id`` does not match — permanent."""
+
+    SUPERSEDED = "superseded"
+    """The latest record is a well-formed supersession record for this workflow: a later
+    fresh run was admitted after the pause was captured (Runtime spec v1.137 Rule A3).
+    Not a failure of the read and never a handle-unknown cause — permanent, decisive."""
+
+
+#: The five causes a ``ResumeHandleUnknownError`` may carry (Runtime spec v1.137 Rule A3).
+#: [LAW:types-are-the-program] ``superseded`` is excluded here, so a handle refusal
+#: carrying it does not type-check.
+HandleUnknownCause = Literal[
+    PauseJournalReadCause.ABSENT,
+    PauseJournalReadCause.EMPTY_JOURNAL,
+    PauseJournalReadCause.READ_ERROR,
+    PauseJournalReadCause.CORRUPT_LATEST,
+    PauseJournalReadCause.WORKFLOW_MISMATCH,
+]
 
 
 #: errnos whose failure is PERMANENT despite arriving as an ``OSError``. Routing
@@ -333,20 +349,6 @@ that replaces that inode. It is a LOCK file, never a canonical one — it carrie
 no bytes and nothing reads it. Reads open one sha256-named path directly and
 nothing globs this directory, so the extra sibling is inert.
 """
-
-
-def pause_journal_dir_for(state_ledger_dir: Path) -> Path:
-    """Return the pause-journal directory co-located under the STATE_LEDGER dir.
-
-    The single source of truth for the journal directory location, consumed by
-    BOTH the stage-5 factory (which derives ``state_ledger_dir`` from
-    ``ctx.ledger_writer.handle.canonical_path.parent``) and ``api.resume`` (which
-    resolves it from ``config`` via ``PathResolver``) — both compute the same
-    ``<state_ledger_dir>/pause-journal`` path for the same
-    ``(workflow_class, deployment_surface)``, so a capture-side write and a
-    resume-side read over a fresh bootstrap find the same file (restart-survival).
-    """
-    return state_ledger_dir / PAUSE_JOURNAL_SUBDIR
 
 
 # ---------------------------------------------------------------------------
@@ -595,9 +597,48 @@ class JournalWorkflowPauseStore:
         # re-derivation — hence the import rather than a local copy.
         self._tenant_scope = normalize_tenant_scope(tenant_id)
 
+    @property
+    def journal_dir(self) -> Path:
+        """The one directory this store captures to and reads from."""
+        return self._journal_dir
+
     def capture(self, snapshot: PauseSnapshot, *, depth: int | None) -> JournalRecordRef:
         """Append a snapshot and return its exact identity under the journal lock."""
-        return self._append(snapshot, depth=depth)
+        if not _depth_is_wellformed(depth):
+            raise ValueError("journal depth must be a nonnegative integer or None")
+        record_count, digest = self._append(
+            snapshot.workflow_id,
+            {
+                "workflow_id": snapshot.workflow_id,
+                "pause_snapshot": snapshot.model_dump(mode="json"),
+                "depth": depth,
+            },
+        )
+        return JournalRecordRef(
+            tenant=self._tenant_scope,
+            workflow_id=snapshot.workflow_id,
+            run_id=snapshot.run_id,
+            record_count=record_count,
+            latest_digest=digest,
+            snapshot_hash=snapshot.snapshot_hash,
+        )
+
+    def supersede(self, workflow_id: str, run_id: str) -> None:
+        """Supersede the workflow's journal for the fresh run ``run_id``: its admission point.
+
+        Runtime spec v1.137 Rule B2: under the journal lock, a journal that exists and is
+        non-empty gets one supersession record naming ``run_id``; otherwise there is nothing to
+        supersede and no line is written (the lock file is created as for any journal
+        operation). [LAW:single-enforcer] Rule A2: the record goes through the same locked,
+        fsynced append as a snapshot.
+        """
+        with self._locked_journal(workflow_id) as path:
+            # [LAW:no-ambient-temporal-coupling] Checked only while the lock is held, so a
+            # capture that creates the file is ordered wholly before or after this step.
+            if path.exists() and path.stat().st_size > 0:
+                self._append_locked(
+                    path, {"kind": "supersession", "workflow_id": workflow_id, "run_id": run_id}
+                )
 
     def read_latest(self, workflow_id: str) -> PauseSnapshot | None:
         """Return the workflow's latest journaled ``PauseSnapshot``, or ``None``.
@@ -760,8 +801,10 @@ class JournalWorkflowPauseStore:
         with cross_process_journal_lock(journal_path):
             yield
 
-    def _append(self, snapshot: PauseSnapshot, *, depth: int | None) -> JournalRecordRef:
-        """Append one JSONL record to the workflow's file, durably.
+    def _append(self, workflow_id: str, record: dict[str, object]) -> tuple[int, str]:
+        """Append one JSONL record (either kind) and return its ``(record_count, digest)``.
+
+        Append one JSONL record to the workflow's file, durably.
 
         The record is ``fsync``-ed to stable storage before returning so a host
         crash / power loss immediately after ``capture`` cannot lose an
@@ -844,47 +887,42 @@ class JournalWorkflowPauseStore:
         **The read path deliberately does NOT take this lock** — see
         :meth:`read_latest_attributed`.
         """
-        if not _depth_is_wellformed(depth):
-            raise ValueError("journal depth must be a nonnegative integer or None")
-        record = {
-            "workflow_id": snapshot.workflow_id,
-            "pause_snapshot": snapshot.model_dump(mode="json"),
-            "depth": depth,
-        }
-        line = json.dumps(record, sort_keys=True)
-        path = self._journal_file(snapshot.workflow_id)
-        journal_dir = path.parent
-        journal_dir.mkdir(parents=True, exist_ok=True)
+        with self._locked_journal(workflow_id) as path:
+            return self._append_locked(path, record)
+
+    @contextmanager
+    def _locked_journal(self, workflow_id: str) -> Generator[Path, None, None]:
+        """Hold the workflow's journal lock and yield its journal path (see :meth:`_append`)."""
+        path = self._journal_file(workflow_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
         # UNCONDITIONAL, and BEFORE the lock — so it precedes any statement that
         # could create a journal file. See the docstring's durability section:
         # both directory fsyncs are unconditional precisely because every
         # flag-gated form leaves a crash window that a later writer then skips
         # FOREVER.
-        self._fsync_dir(journal_dir.parent)
+        self._fsync_dir(path.parent.parent)
         with self._cross_process_append_lock(path):
-            is_new_file = not path.exists()
-            needs_leading_newline = (not is_new_file) and self._last_byte_is_not_newline(path)
-            with path.open("a", encoding="utf-8") as handle:
-                if needs_leading_newline:
-                    handle.write("\n")
-                handle.write(line + "\n")
-                handle.flush()
-                os.fsync(handle.fileno())
-            # UNCONDITIONAL, and AFTER the file exists — durably links this
-            # workflow's journal dirent into `pause-journal`.
-            self._fsync_dir(journal_dir)
-            # [LAW:no-ambient-temporal-coupling] Freeze identity before another writer can append.
-            lines, digest = _raw_journal_identity(path.read_bytes())
-            if not lines or lines[-1] != line.encode("utf-8") or digest is None:
-                raise OSError("journal append identity does not match the written record")
-            return JournalRecordRef(
-                tenant=self._tenant_scope,
-                workflow_id=snapshot.workflow_id,
-                run_id=snapshot.run_id,
-                record_count=len(lines),
-                latest_digest=digest,
-                snapshot_hash=snapshot.snapshot_hash,
-            )
+            yield path
+
+    def _append_locked(self, path: Path, record: dict[str, object]) -> tuple[int, str]:
+        """Append one record to ``path``, whose journal lock the caller holds."""
+        line = json.dumps(record, sort_keys=True)
+        is_new_file = not path.exists()
+        needs_leading_newline = (not is_new_file) and self._last_byte_is_not_newline(path)
+        with path.open("a", encoding="utf-8") as handle:
+            if needs_leading_newline:
+                handle.write("\n")
+            handle.write(line + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        # UNCONDITIONAL, and AFTER the file exists — durably links this
+        # workflow's journal dirent into `pause-journal`.
+        self._fsync_dir(path.parent)
+        # [LAW:no-ambient-temporal-coupling] Freeze identity before another writer can append.
+        lines, digest = _raw_journal_identity(path.read_bytes())
+        if not lines or lines[-1] != line.encode("utf-8") or digest is None:
+            raise OSError("journal append identity does not match the written record")
+        return len(lines), digest
 
     @staticmethod
     def _last_byte_is_not_newline(path: Path) -> bool:
@@ -943,6 +981,8 @@ class JournalWorkflowPauseStore:
             if not isinstance(loaded, dict):
                 return None, PauseJournalReadCause.CORRUPT_LATEST
             record = cast("dict[str, object]", loaded)
+            if "kind" in record:
+                return None, _supersession_cause(record, expected_workflow_id)
             if record.get("workflow_id") != expected_workflow_id:
                 return None, PauseJournalReadCause.WORKFLOW_MISMATCH
             snapshot = PauseSnapshot.model_validate(record["pause_snapshot"])
@@ -960,3 +1000,23 @@ class JournalWorkflowPauseStore:
             # ValueError covers json.JSONDecodeError; any value-level failure
             # means a corrupt record → fail closed.
             return None, PauseJournalReadCause.CORRUPT_LATEST
+
+
+def _supersession_cause(
+    record: dict[str, object], expected_workflow_id: str
+) -> PauseJournalReadCause:
+    """Classify a line carrying ``kind`` (Runtime spec v1.137 Rule A1).
+
+    Only the exact ``{kind: "supersession", workflow_id, run_id}`` shape is a
+    supersession record; any other ``kind`` or field set is an undecodable line.
+    """
+    if (
+        record.keys() != {"kind", "workflow_id", "run_id"}
+        or record["kind"] != "supersession"
+        or not isinstance(record["workflow_id"], str)
+        or not isinstance(record["run_id"], str)
+    ):
+        return PauseJournalReadCause.CORRUPT_LATEST
+    if record["workflow_id"] != expected_workflow_id:
+        return PauseJournalReadCause.WORKFLOW_MISMATCH
+    return PauseJournalReadCause.SUPERSEDED

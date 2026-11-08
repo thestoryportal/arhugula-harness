@@ -13,6 +13,7 @@ import json
 from pathlib import Path
 
 import pytest
+from harness_cp.topology_pattern import WorkerSelection
 from harness_runtime.lifecycle.engine_output_store import (
     EngineOutputStore,
     engine_output_dir_for,
@@ -354,12 +355,156 @@ def test_orchestrator_capture_and_read(tmp_path: Path) -> None:
     store = EngineOutputStore(journal_dir=tmp_path / "eo")
     assert store.read_orchestrator_output(_RUN_KEY) is None
     assert store.orchestrator_present(_RUN_KEY) is False
-    store.record_orchestrator(_RUN_KEY, "orch-step", {"plan": "delegate"})
-    assert store.read_orchestrator_output(_RUN_KEY) == ("orch-step", {"plan": "delegate"})
+    store.record_orchestrator(
+        _RUN_KEY, "orch-step", {"plan": "delegate"}, WorkerSelection.DECLARED_POOL
+    )
+    assert store.read_orchestrator_output(_RUN_KEY) == (
+        "orch-step",
+        {"plan": "delegate"},
+        WorkerSelection.DECLARED_POOL,
+    )
     assert store.orchestrator_present(_RUN_KEY) is True
     # The orchestrator record does NOT pollute the worker branch set.
     assert store.read_branch_records(_RUN_KEY) == {}
     assert store.present_branch_indexes(_RUN_KEY) == set()
+
+
+def test_orchestrator_record_carries_worker_selection(tmp_path: Path) -> None:
+    """CP v1.130 §25.11.1.5(6): the selection is recorded with the output and survives a
+    restart, so crash resume re-derives the plan from the same two inputs."""
+    store = EngineOutputStore(journal_dir=tmp_path / "eo")
+    store.record_orchestrator(
+        _RUN_KEY, "orch", {"worker_plan": [{"worker": "c"}]}, WorkerSelection.LEAD_PLAN
+    )
+    fresh = EngineOutputStore(journal_dir=tmp_path / "eo")
+    assert fresh.read_orchestrator_output(_RUN_KEY) == (
+        "orch",
+        {"worker_plan": [{"worker": "c"}]},
+        WorkerSelection.LEAD_PLAN,
+    )
+
+
+def test_orchestrator_record_without_selection_reads_as_declared_pool(tmp_path: Path) -> None:
+    """W6c store leg: a pre-v1.130 record (no `worker_selection`) reads as DECLARED_POOL,
+    never as LEAD_PLAN."""
+    store = EngineOutputStore(journal_dir=tmp_path / "eo")
+    store.record_orchestrator(_RUN_KEY, "orch", {"x": 1}, WorkerSelection.LEAD_PLAN)
+    path = next((tmp_path / "eo").rglob("orchestrator.jsonl"))
+    path.write_text(json.dumps({"step_id": "orch", "output": {"x": 1}}) + "\n")
+    assert store.read_orchestrator_output(_RUN_KEY) == (
+        "orch",
+        {"x": 1},
+        WorkerSelection.DECLARED_POOL,
+    )
+
+
+def test_orchestrator_record_with_unknown_selection_is_unreadable(tmp_path: Path) -> None:
+    """An unknown selection value is corruption: unreadable (None) while present, so the
+    driver's presence-vs-readability gate fails closed instead of guessing a selection."""
+    store = EngineOutputStore(journal_dir=tmp_path / "eo")
+    store.record_orchestrator(_RUN_KEY, "orch", {"x": 1}, WorkerSelection.LEAD_PLAN)
+    path = next((tmp_path / "eo").rglob("orchestrator.jsonl"))
+    path.write_text(
+        json.dumps({"step_id": "orch", "output": {"x": 1}, "worker_selection": "x"}) + "\n"
+    )
+    assert store.read_orchestrator_output(_RUN_KEY) is None
+    assert store.orchestrator_present(_RUN_KEY) is True
+
+
+def test_orchestrator_unknown_selection_appended_after_valid_is_unreadable(
+    tmp_path: Path,
+) -> None:
+    """A complete later record with an unknown selection must not be skipped in favour of
+    an older valid record (that would re-derive a stale plan on crash resume); a torn
+    trailing line still is (review F1, cmt-a21a9ed0)."""
+    store = EngineOutputStore(journal_dir=tmp_path / "eo")
+    store.record_orchestrator(_RUN_KEY, "orch", {"plan": ["a"]}, WorkerSelection.LEAD_PLAN)
+    path = next((tmp_path / "eo").rglob("orchestrator.jsonl"))
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write('{"step_id": "orch", "out')
+    assert store.read_orchestrator_output(_RUN_KEY) == (
+        "orch",
+        {"plan": ["a"]},
+        WorkerSelection.LEAD_PLAN,
+    )
+    path.write_text(
+        json.dumps({"step_id": "orch", "output": {"plan": ["a"]}, "worker_selection": "lead-plan"})
+        + "\n"
+        + json.dumps(
+            {
+                "step_id": "orch",
+                "output": {"plan": ["b"]},
+                "worker_selection": "future-selection",
+            }
+        )
+        + "\n"
+    )
+    assert store.read_orchestrator_output(_RUN_KEY) is None
+    assert store.orchestrator_present(_RUN_KEY) is True
+
+
+@pytest.mark.parametrize(
+    "later",
+    [
+        {"step_id": "orch", "output": ["not-a-mapping"], "worker_selection": "lead-plan"},
+        {"step_id": 7, "output": {"plan": ["b"]}, "worker_selection": "lead-plan"},
+        {"output": {"plan": ["b"]}, "worker_selection": "lead-plan"},
+        ["not", "an", "object"],
+    ],
+)
+def test_orchestrator_malformed_record_appended_after_valid_is_unreadable(
+    tmp_path: Path, later: object
+) -> None:
+    """A complete later record with a malformed shape must not be skipped in favour of an
+    older valid record (review F2, cmt-e1835f07)."""
+    store = EngineOutputStore(journal_dir=tmp_path / "eo")
+    store.record_orchestrator(_RUN_KEY, "orch", {"plan": ["a"]}, WorkerSelection.LEAD_PLAN)
+    path = next((tmp_path / "eo").rglob("orchestrator.jsonl"))
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(later) + "\n")
+    assert store.read_orchestrator_output(_RUN_KEY) is None
+    assert store.orchestrator_present(_RUN_KEY) is True
+
+
+def test_orchestrator_newline_terminated_invalid_json_after_valid_is_unreadable(
+    tmp_path: Path,
+) -> None:
+    """A newline-terminated undecodable latest line is not a torn append: it must not
+    resurrect the older plan (review F2, cmt-0ee57f83)."""
+    store = EngineOutputStore(journal_dir=tmp_path / "eo")
+    store.record_orchestrator(
+        _RUN_KEY, "orch", {"worker_plan": [{"worker": "a"}]}, WorkerSelection.LEAD_PLAN
+    )
+    path = next((tmp_path / "eo").rglob("orchestrator.jsonl"))
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write('{"output": {"worker_plan": [}, "step_id": "orch"}\n')
+    assert store.read_orchestrator_output(_RUN_KEY) is None
+    assert store.orchestrator_present(_RUN_KEY) is True
+    # A torn tail after the unsuperseded garbage line does not make it readable either.
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write('{"step_id": "or')
+    assert store.read_orchestrator_output(_RUN_KEY) is None
+
+
+def test_orchestrator_torn_append_self_heals_on_next_record(tmp_path: Path) -> None:
+    """A torn trailing append is skipped, and once the next append's leading newline
+    terminates it, the later valid record supersedes it (existing self-heal)."""
+    store = EngineOutputStore(journal_dir=tmp_path / "eo")
+    store.record_orchestrator(_RUN_KEY, "orch", {"plan": ["a"]}, WorkerSelection.LEAD_PLAN)
+    path = next((tmp_path / "eo").rglob("orchestrator.jsonl"))
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write('{"step_id": "orch", "out')
+    assert store.read_orchestrator_output(_RUN_KEY) == (
+        "orch",
+        {"plan": ["a"]},
+        WorkerSelection.LEAD_PLAN,
+    )
+    store.record_orchestrator(_RUN_KEY, "orch", {"plan": ["c"]}, WorkerSelection.LEAD_PLAN)
+    assert store.read_orchestrator_output(_RUN_KEY) == (
+        "orch",
+        {"plan": ["c"]},
+        WorkerSelection.LEAD_PLAN,
+    )
 
 
 def test_branch_absent_run_returns_empty(tmp_path: Path) -> None:
@@ -543,7 +688,9 @@ def test_orchestrator_dispatched_marker_distinct_from_capture(tmp_path: Path) ->
     store.record_orchestrator_dispatched(_RUN_KEY, "orch-step", "inference-step")
     assert store.orchestrator_dispatched(_RUN_KEY) is True
     assert store.orchestrator_present(_RUN_KEY) is False  # no terminal capture → maybe-ran
-    store.record_orchestrator(_RUN_KEY, "orch-step", {"plan": "delegate"})  # now captured
+    store.record_orchestrator(
+        _RUN_KEY, "orch-step", {"plan": "delegate"}, WorkerSelection.DECLARED_POOL
+    )  # now captured
     assert store.orchestrator_present(_RUN_KEY) is True
     assert store.orchestrator_dispatched(_RUN_KEY) is True  # both coexist
 

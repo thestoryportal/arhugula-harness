@@ -83,13 +83,22 @@ hook_bounded() {
   # escalate to KILL, so this is a genuine hard bound everywhere. Invoke the binary
   # EXPLICITLY (not via an unquoted "$prefix $@" that relies on word-splitting — zsh
   # does not split unquoted vars, which would turn the prefix into one bogus argv0).
-  if command -v timeout >/dev/null 2>&1; then
-    timeout -k 2 "$secs" "$@"
-    return $?
-  fi
-  if command -v gtimeout >/dev/null 2>&1; then
-    gtimeout -k 2 "$secs" "$@"
-    return $?
+  local runner rc
+  if runner=$(command -v timeout || command -v gtimeout); then
+    # The runner leads its own process group, so after a reported timeout (124 TERM,
+    # 137 KILL) its survivors are killed here, whichever timeout is installed. A
+    # TERM-ignoring descendant outlives GNU's TERM once the child itself exits, and
+    # uutils (Ubuntu 26.04's timeout) never delivers its group KILL: its
+    # signal(SIGKILL, SIG_IGN) fails before kill(0). Either survivor holds a caller's
+    # $(...) pipe open past the bound. `<&0` keeps the caller's stdin, which a
+    # non-interactive shell would otherwise replace with /dev/null for a background job.
+    "$runner" -k 2 "$secs" "$@" <&0 & local t=$!
+    wait "$t"; rc=$?
+    case "$rc" in
+      # [LAW:no-silent-failure] exception: ESRCH only means no member survived.
+      124|137) kill -s KILL -- "-$t" 2>/dev/null ;;
+    esac
+    return "$rc"
   fi
   "$@" & local p=$!
   (

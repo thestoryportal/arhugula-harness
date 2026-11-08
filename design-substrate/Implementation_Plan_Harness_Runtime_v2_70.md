@@ -1,9 +1,17 @@
-# Implementation Plan: Harness Runtime — v2.67 (PROPOSED delta over cleared v2.64)
+# Implementation Plan: Harness Runtime — v2.70 (delta over cleared v2.69)
 
-**Status: PROPOSED — not cleared.** Grounded on cleared v2.64; implements proposed Runtime spec
-v1.136. Plans v2.65 (A3, U-RT-157; on main through PR #1633) and v2.66 (A5, U-RT-158; on main through PR #1635) are separately PROPOSED and not cleared; v2.64 remains the cleared head. Fold order is
-A3 → A5 → A4, so this unit is U-RT-159; it was drafted as U-RT-158, which A5 keeps (root decision,
-LIT `cmt-fcde66ad-1705-4ba8-bc49-7a4e03d4b0e0`). This is a proposed label reconciliation, not clearance.
+**Status: CLEARED 2026-11-07 — ratified by the integration lead at LIT `cmt-756042fc-eb54-4a73-b152-61488707f1a2`
+on the frozen reviewed body `745f234f0000e9abcd0f87624e64883bd57e1494` (independent contract GREEN
+`cmt-553de0a0-3dcd-4af9-b87e-dd9987bad06e`); clearance `.harness/clearance/implementation-plan-harness-runtime-v2-70-cleared-2026-11-07.md`.
+Contract clearance only; source conformance, CI, landing and installed acceptance remain owed.**
+Folded onto cleared head v2.69 (U-RT-161;
+`.harness/clearance/implementation-plan-harness-runtime-v2-69-cleared-2026-11-05.md`) by the
+integration lead's scope and numbering decision (LIT `cmt-7836db07-b27b-4248-849b-50101a522c0e`); implements
+Runtime spec v1.142. This is the former Proposed v2.67, drafted over cleared v2.65 (A3, U-RT-157), with
+its unit and criteria unchanged. Cleared U-RT-160 and U-RT-161 keep their labels and terms. Plan v2.66
+(A5, U-RT-158) stays separately PROPOSED and not cleared; the actual A5 interfaces are bound before an
+affected U-RT-159 candidate is frozen or integrated. This unit is U-RT-159; it was drafted as U-RT-158,
+which A5 keeps (root decision, LIT `cmt-fcde66ad-1705-4ba8-bc49-7a4e03d4b0e0`).
 
 ## U-RT-159 — typed child refusal at the sub-agent dispatch FAILED row (A4)
 

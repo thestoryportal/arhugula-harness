@@ -389,6 +389,7 @@ def _ephemeral_runner(admission: Any, monkeypatch: pytest.MonkeyPatch) -> tuple[
 
 def _dispatch(runner: Any) -> Any:
     return runner(
+        validator_run=None,
         workflow_id="wf-c",
         manifest_entry=cast(Any, None),
         steps=(),

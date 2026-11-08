@@ -2,7 +2,7 @@
 
 ACs from CP plan v2.16 §1 U-CP-61:
   AC #1 Hook fires on every step (per Decision 2.D3 — opt-out via no-op validator;
-        driver-level opt-out via validator_framework=None)
+        driver-level opt-out via validator_run=None)
   AC #2 `validator.evaluate` outer span emits with 3 canonical attributes per OD spec
         v1.8 §C-OD-29.1 row 1-3
   AC #3 `validator.fail` event attributes emit when outcome != PASS (4-attr set)
@@ -30,13 +30,14 @@ from harness_cp.per_step_override_evaluator import StepEffectiveBinding
 from harness_cp.topology_pattern import TopologyPattern
 from harness_cp.validator_framework import (
     ConcreteValidatorFramework,
-    SyncValidatorFrameworkFacade,
-    materialize_sync_validator_framework_facade,
+    open_validator_run,
 )
 from harness_cp.validator_framework_types import (
+    Validator,
     ValidatorFailClass,
     ValidatorOutcome,
     ValidatorResult,
+    ValidatorRunBinding,
 )
 from harness_cp.workflow_driver import (
     StepDispatcher,
@@ -116,14 +117,12 @@ class _FakeCtx:
         self,
         *,
         tracer_provider: object,
-        validator_framework: object | None = None,
     ) -> None:
         self.ledger_writer = _FakeLedger()
         self.ledger_reader = _FakeLedgerReader()
         self.lifecycle_emitter = _FakeEmitter()
         self.drained_flag = asyncio.Event()
         self.tracer_provider = tracer_provider
-        self.validator_framework = validator_framework
         # U-RT-87 (v2.20) — pause_resume_protocol + pause_requested_flag per
         # runtime spec v1.21 §4 + §14.14.3 DriverContext Protocol extension.
         self.pause_resume_protocol: object | None = None
@@ -156,7 +155,7 @@ def _registry(dispatcher: StepDispatcher) -> StepDispatcherRegistry:
 
 
 # ----------------------------------------------------------------------------
-# Validator test doubles + facade factory
+# Validator test doubles + run-binding factory
 # ----------------------------------------------------------------------------
 
 
@@ -174,14 +173,21 @@ class _FixedValidator:
         return self._result
 
 
-def _make_facade(
+def _open_binding(
     result: ValidatorResult,
     step_ids: list[StepID],
-) -> SyncValidatorFrameworkFacade:
-    """Construct a SyncValidatorFrameworkFacade backed by a background loop.
+) -> ValidatorRunBinding:
+    return _open_registry_binding({sid: _FixedValidator(result) for sid in step_ids}, 10.0)
 
-    The facade requires construction on a running event loop. We spin up a
-    daemon-thread loop, materialize the facade on it, and return the facade.
+
+def _open_registry_binding(
+    validator_registry: Mapping[StepID, Validator],
+    result_timeout_seconds: float,
+) -> ValidatorRunBinding:
+    """Open a root `ValidatorRunBinding` backed by a background loop.
+
+    The binding requires opening on a running event loop. We spin up a
+    daemon-thread loop, open the binding on it, and return the binding.
     The background loop persists for the lifetime of the test process (daemon
     thread; reaped at exit).
     """
@@ -193,14 +199,10 @@ def _make_facade(
         asyncio.set_event_loop(loop)
 
         async def _on_loop() -> None:
-            inner = ConcreteValidatorFramework(
-                validator_registry={sid: _FixedValidator(result) for sid in step_ids},
+            inner = ConcreteValidatorFramework(validator_registry=validator_registry)
+            container["binding"] = open_validator_run(
+                inner, result_timeout_seconds=result_timeout_seconds
             )
-            facade = materialize_sync_validator_framework_facade(
-                inner=inner,
-                result_timeout_seconds=10.0,
-            )
-            container["facade"] = facade
             loop_ready.set()
             # Block the loop alive for the test process lifetime.
             await asyncio.Event().wait()
@@ -210,22 +212,21 @@ def _make_facade(
     thread = threading.Thread(target=_run_loop, daemon=True)
     thread.start()
     loop_ready.wait(timeout=5.0)
-    return cast(SyncValidatorFrameworkFacade, container["facade"])
+    return cast(ValidatorRunBinding, container["binding"])
 
 
 # ----------------------------------------------------------------------------
-# AC #1 — Hook fires only when validator_framework is bound
+# AC #1 — Hook fires only when a validator_run binding is passed
 # ----------------------------------------------------------------------------
 
 
-def test_hook_skipped_when_validator_framework_is_none() -> None:
-    """AC #1 — validator_framework=None: hook is no-op; PASS-path workflow."""
+def test_hook_skipped_when_validator_run_is_none() -> None:
+    """AC #1 — validator_run=None (opt-out): hook is no-op; PASS-path workflow."""
     exporter = InMemorySpanExporter()
     provider = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(exporter))
 
     ctx = _FakeCtx(tracer_provider=provider)
-    assert ctx.validator_framework is None
 
     step = WorkflowStep(
         step_id=StepID("step-no-validator"),
@@ -246,7 +247,7 @@ def test_hook_skipped_when_validator_framework_is_none() -> None:
     assert "validator.evaluate" not in span_names
 
 
-def test_hook_fires_when_validator_framework_bound() -> None:
+def test_hook_fires_when_validator_run_bound() -> None:
     """AC #1 + AC #2 — validator.evaluate span emitted with envelope attrs."""
     exporter = InMemorySpanExporter()
     provider = TracerProvider()
@@ -257,17 +258,18 @@ def test_hook_fires_when_validator_framework_bound() -> None:
         step_kind=StepKind.INFERENCE_STEP,
         step_payload={"echo": "ok"},
     )
-    facade = _make_facade(
+    binding = _open_binding(
         ValidatorResult(outcome=ValidatorOutcome.PASS),
         [step.step_id],
     )
 
-    ctx = _FakeCtx(tracer_provider=provider, validator_framework=facade)
+    ctx = _FakeCtx(tracer_provider=provider)
     result = execute_workflow(
         manifest_entry=_manifest(),
         steps=[step],
         run_id="run-pass",
         ctx=cast(Any, ctx),
+        validator_run=binding,
         default_model_binding=_DEFAULT_BINDING,
         step_dispatchers=_registry(cast(StepDispatcher, _EchoDispatcher())),
     )
@@ -300,7 +302,7 @@ def test_hook_emits_fail_attributes_on_non_pass() -> None:
         step_kind=StepKind.INFERENCE_STEP,
         step_payload={"echo": "ok"},
     )
-    facade = _make_facade(
+    binding = _open_binding(
         ValidatorResult(
             outcome=ValidatorOutcome.ESCALATE,
             fail_class=ValidatorFailClass.SAFETY_POLICY,
@@ -309,12 +311,13 @@ def test_hook_emits_fail_attributes_on_non_pass() -> None:
         [step.step_id],
     )
 
-    ctx = _FakeCtx(tracer_provider=provider, validator_framework=facade)
+    ctx = _FakeCtx(tracer_provider=provider)
     execute_workflow(
         manifest_entry=_manifest(),
         steps=[step],
         run_id="run-escalate",
         ctx=cast(Any, ctx),
+        validator_run=binding,
         default_model_binding=_DEFAULT_BINDING,
         step_dispatchers=_registry(cast(StepDispatcher, _EchoDispatcher())),
     )
@@ -344,7 +347,7 @@ def test_hook_populates_parent_hitl_span_id_on_escalate() -> None:
         step_kind=StepKind.INFERENCE_STEP,
         step_payload={"echo": "ok"},
     )
-    facade = _make_facade(
+    binding = _open_binding(
         ValidatorResult(
             outcome=ValidatorOutcome.ESCALATE,
             fail_class=ValidatorFailClass.EXTERNAL_REJECTION,
@@ -353,12 +356,13 @@ def test_hook_populates_parent_hitl_span_id_on_escalate() -> None:
         [step.step_id],
     )
 
-    ctx = _FakeCtx(tracer_provider=provider, validator_framework=facade)
+    ctx = _FakeCtx(tracer_provider=provider)
     execute_workflow(
         manifest_entry=_manifest(),
         steps=[step],
         run_id="run-escalate-link",
         ctx=cast(Any, ctx),
+        validator_run=binding,
         default_model_binding=_DEFAULT_BINDING,
         step_dispatchers=_registry(cast(StepDispatcher, _EchoDispatcher())),
     )
@@ -388,17 +392,18 @@ def test_pass_outcome_proceeds_to_ledger_append() -> None:
         step_kind=StepKind.INFERENCE_STEP,
         step_payload={"echo": "ok"},
     )
-    facade = _make_facade(
+    binding = _open_binding(
         ValidatorResult(outcome=ValidatorOutcome.PASS),
         [step.step_id],
     )
 
-    ctx = _FakeCtx(tracer_provider=provider, validator_framework=facade)
+    ctx = _FakeCtx(tracer_provider=provider)
     result = execute_workflow(
         manifest_entry=_manifest(),
         steps=[step],
         run_id="run-pass-proceeds",
         ctx=cast(Any, ctx),
+        validator_run=binding,
         default_model_binding=_DEFAULT_BINDING,
         step_dispatchers=_registry(cast(StepDispatcher, _EchoDispatcher())),
     )
@@ -418,7 +423,7 @@ def test_permanent_fail_returns_failed_with_typed_fail_class() -> None:
         step_kind=StepKind.INFERENCE_STEP,
         step_payload={"echo": "ok"},
     )
-    facade = _make_facade(
+    binding = _open_binding(
         ValidatorResult(
             outcome=ValidatorOutcome.PERMANENT_FAIL,
             fail_class=ValidatorFailClass.SAFETY_POLICY,
@@ -427,12 +432,13 @@ def test_permanent_fail_returns_failed_with_typed_fail_class() -> None:
         [step.step_id],
     )
 
-    ctx = _FakeCtx(tracer_provider=provider, validator_framework=facade)
+    ctx = _FakeCtx(tracer_provider=provider)
     result = execute_workflow(
         manifest_entry=_manifest(),
         steps=[step],
         run_id="run-permanent-fail",
         ctx=cast(Any, ctx),
+        validator_run=binding,
         default_model_binding=_DEFAULT_BINDING,
         step_dispatchers=_registry(cast(StepDispatcher, _EchoDispatcher())),
     )
@@ -440,3 +446,101 @@ def test_permanent_fail_returns_failed_with_typed_fail_class() -> None:
     assert result.status.value == "failed"
     assert result.fail_class is not None
     assert "CP-FAIL-VALIDATOR-PERMANENT" in result.fail_class
+
+
+# ----------------------------------------------------------------------------
+# CP v1.129 §28.11.4 — typed binding failures keep their CP fail class
+# ----------------------------------------------------------------------------
+
+
+class _StalledValidator:
+    """Never returns; records whether the abandoned evaluation was cancelled."""
+
+    def __init__(self) -> None:
+        self.cancelled = threading.Event()
+
+    async def validate(
+        self,
+        step: WorkflowStep,
+        step_result: Mapping[str, Any],
+        *,
+        step_context: Any,
+    ) -> ValidatorResult:
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            self.cancelled.set()
+            raise
+        raise AssertionError("unreachable")
+
+
+class _RaisingTimeoutValidator:
+    async def validate(
+        self,
+        step: WorkflowStep,
+        step_result: Mapping[str, Any],
+        *,
+        step_context: Any,
+    ) -> ValidatorResult:
+        raise TimeoutError("validator's own upstream call timed out")
+
+
+def _run_single_step(binding: ValidatorRunBinding, step: WorkflowStep) -> Any:
+    ctx = _FakeCtx(tracer_provider=TracerProvider())
+    result = execute_workflow(
+        manifest_entry=_manifest(),
+        steps=[step],
+        run_id=f"run-{step.step_id}",
+        ctx=cast(Any, ctx),
+        validator_run=binding,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=_registry(cast(StepDispatcher, _EchoDispatcher())),
+    )
+    assert ctx.ledger_writer.appends == []  # type: ignore[attr-defined]
+    return result
+
+
+def _echo_step(step_id: str) -> WorkflowStep:
+    return WorkflowStep(
+        step_id=StepID(step_id),
+        step_kind=StepKind.INFERENCE_STEP,
+        step_payload={"echo": "ok"},
+    )
+
+
+def test_registry_miss_returns_catalog_missing_fail_class() -> None:
+    step = _echo_step("step-unregistered")
+    binding = _open_registry_binding({StepID("step-other"): _StalledValidator()}, 10.0)
+
+    result = _run_single_step(binding, step)
+
+    assert result.status.value == "failed"
+    assert result.fail_class == (
+        "CP-FAIL-VALIDATOR-CATALOG-MISSING: no validator registered for step_id=step-unregistered"
+    )
+
+
+def test_result_timeout_returns_execution_fail_class_and_cancels_evaluation() -> None:
+    step = _echo_step("step-stalled")
+    stalled = _StalledValidator()
+    binding = _open_registry_binding({step.step_id: stalled}, 0.2)
+
+    result = _run_single_step(binding, step)
+
+    assert result.status.value == "failed"
+    assert result.fail_class == (
+        "CP-FAIL-VALIDATOR-EXECUTION: validator result not ready within 0.2s at step_id=step-stalled"
+    )
+    assert stalled.cancelled.wait(timeout=5.0), "the abandoned evaluation kept running"
+
+
+def test_validator_raised_timeout_is_not_the_binding_timeout() -> None:
+    step = _echo_step("step-raises-timeout")
+    binding = _open_registry_binding({step.step_id: _RaisingTimeoutValidator()}, 10.0)
+
+    result = _run_single_step(binding, step)
+
+    assert result.status.value == "failed"
+    assert result.fail_class == (
+        "validator-framework-failure: TimeoutError: validator's own upstream call timed out"
+    )

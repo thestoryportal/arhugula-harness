@@ -42,6 +42,7 @@ import logging
 from collections.abc import Awaitable, Callable, Collection, Coroutine, Iterable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import ContextVar
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import Enum
 from types import MappingProxyType
@@ -56,8 +57,7 @@ from opentelemetry.trace import Status, StatusCode, TracerProvider
 if TYPE_CHECKING:
     from harness_is.state_ledger_entry_schema import Identifier
 
-    from harness_cp.validator_framework import SyncValidatorFrameworkFacade
-    from harness_cp.validator_framework_types import ValidatorEvaluation
+    from harness_cp.validator_framework_types import ValidatorEvaluation, ValidatorRunBinding
 
 from harness_core import (
     JournalRecordRef,
@@ -153,6 +153,14 @@ from harness_cp.sub_agent_dispatch_capacity_authority import (
     DefaultCapacityAuthority as _DefaultCapacityAuthority,
 )
 from harness_cp.topology_pattern import CascadePolicy, TopologyPattern
+from harness_cp.validator_framework_types import ValidatorFrameworkFailureError
+from harness_cp.worker_plan import (
+    WorkerAssignment,
+    WorkerPlan,
+    WorkerPlanInvalid,
+    WorkerSelection,
+    derive_worker_plan,
+)
 from harness_cp.workflow_driver_errors import (
     BranchBarrierDeadlineExceededError,
     EngineClassNotYetMaterializedError,
@@ -160,7 +168,9 @@ from harness_cp.workflow_driver_errors import (
 )
 from harness_cp.workflow_driver_types import (
     ChildResumeAuthority,
+    ChildResumeRefusal,
     ChildResumeRefusedError,
+    ResumeRefusal,
     RunResult,
     RunStatus,
     StepExecutionContext,
@@ -559,18 +569,6 @@ class DriverContext(Protocol):
     # (HarnessContext exposes the materialized provider with the same
     # `object`-typed field per harness-runtime/types.py).
     tracer_provider: object
-
-    # OPTIONAL ValidatorFramework — operator-opt-in per C-CP-25 §25.3 +
-    # Decision 2.D3 (Phase A.2 RATIFIED). When None, the U-CP-61 post-dispatch
-    # validation hook is skipped (driver-level opt-out). When bound, the
-    # operator-populated validator_registry must cover every step.step_id
-    # (Decision 2.D3 in-band opt-out is via no-op validator at registry, not
-    # at framework binding). Typed as `object | None` so the CP Protocol does
-    # not import the sync facade type — concrete binding at runtime stage 5
-    # uses `harness_cp.validator_framework.SyncValidatorFrameworkFacade`
-    # (structural match via the `.evaluate(...)` sync method per
-    # `SyncValidatorFrameworkLike` Protocol).
-    validator_framework: object | None
 
     # OPTIONAL PauseResumeProtocol — U-RT-87 (v2.20) operator-opt-in per
     # runtime spec v1.21 §14.14.3 workflow_driver per-step pre-entry
@@ -1704,6 +1702,17 @@ def _step_fail_class(prefix: str, exc: BaseException) -> str:
     `ManagedAgentsSessionError` name-match)."""
     code = getattr(exc, "rt_fail_class", None) or type(exc).__name__
     return f"{prefix}: {code}: {exc}"
+
+
+def _validator_fail_class(exc: Exception) -> str:
+    """Compose the `fail_class` of a validator-evaluation failure (CP v1.129 §28.11.4).
+
+    [LAW:single-enforcer] the one place a typed validator failure keeps its CP
+    fail class; every other exception stays `validator-framework-failure`.
+    """
+    if isinstance(exc, ValidatorFrameworkFailureError):
+        return f"{exc.fail_class}: {exc}"
+    return f"validator-framework-failure: {type(exc).__name__}: {exc}"
 
 
 _HITL_GATE_TERMINAL_FAIL_CLASS_PREFIX = "RT-FAIL-HITL-GATE-"
@@ -3211,17 +3220,58 @@ def _emit_resume_attempted(
     emit_resume_attempted_span(snapshot, result, tracer=tracer, diff_policy=diff_policy)
 
 
-def _refused_fail_class(prefix: str, refusals: Mapping[int, ChildResumeRefusedError]) -> str:
-    """The terminal fail_class for a run ended by a refused durable paused child.
+#: CP v1.131 §0.4 items 1-2: a resume whose applicable HITL gate configuration differs from
+#: its capture is refused before any of its steps run.
+_HITL_GATE_CONFIG_REFUSAL = ResumeRefusal(
+    reasons=frozenset({ChildResumeRefusal.HITL_GATE_CONFIG_CHANGED})
+)
 
-    Keeps the stable `<family>-child-resume-refused` prefix and appends the distinct
-    refusal reasons, plus `audit-signing-failed` when composing a refusal's audit also
-    failed signing under fail-closed, so the run records what truly happened.
+
+@dataclass(frozen=True)
+class _GateConfigChanged:
+    """A fan-out resume-body mismatch that is a gate-owning branch's changed HITL gate
+    configuration: the refusal is typed where it is detected (CP v1.131 §0.4 item 2).
+
+    Every other body mismatch stays a plain `str`. [LAW:parse-dont-validate] The run's
+    `resume_refusal` comes from this variant, never from the rendered fail-class text.
     """
-    parts = sorted({r.reason.value for r in refusals.values()})
-    if any(r.audit_signing_failed for r in refusals.values()):
+
+    detail: str
+
+    def __str__(self) -> str:
+        return self.detail
+
+
+def _body_mismatch_refusal(mismatch: str | _GateConfigChanged) -> ResumeRefusal | None:
+    return _HITL_GATE_CONFIG_REFUSAL if isinstance(mismatch, _GateConfigChanged) else None
+
+
+def _merged_refusal(refusals: Mapping[int, ChildResumeRefusedError]) -> ResumeRefusal:
+    """Every refusal recorded before the barrier ended, as one value (§0.4 item 3)."""
+    return ResumeRefusal.union(refusal.refusal for refusal in refusals.values())
+
+
+def _refused_fail_class(prefix: str, refusal: ResumeRefusal) -> str:
+    """The terminal fail_class for a run ended by refused durable paused children.
+
+    Keeps the stable `<family>-child-resume-refused` prefix and appends the sorted refusal
+    reasons, plus `audit-signing-failed` when composing a refusal's audit also failed
+    signing under fail-closed (the v1.124 §0.3 format).
+    """
+    parts = sorted(reason.value for reason in refusal.reasons)
+    if refusal.audit_signing_failed:
         parts.append("audit-signing-failed")
     return f"{prefix} ({'; '.join(parts)})"
+
+
+def _with_refusal(finished: tuple[RunResult, int], refusal: ResumeRefusal) -> tuple[RunResult, int]:
+    """Stamp a refused run's terminal result with the refusal its fail class renders.
+
+    [LAW:one-source-of-truth] The carrier and the fail-class text derive from the same
+    merged value, so the parent's dispatch reads data and never parses `fail_class`.
+    """
+    result, steps_executed = finished
+    return RunResult.model_validate({**dict(result), "resume_refusal": refusal}), steps_executed
 
 
 def execute_workflow(
@@ -3236,6 +3286,7 @@ def execute_workflow(
     reconstruct_final_state: bool = True,
     resume_context: ResumeContext | None = None,
     child_resume_authority: ChildResumeAuthority | None = None,
+    validator_run: ValidatorRunBinding | None = None,
     hitl_uniform_fallback_eligible_run_id: str | None = None,
     effect_fence_uniform_fallback_eligible_key: str | None = None,
     effect_fence_tree_wide_abort_present: bool = False,
@@ -3259,6 +3310,7 @@ def execute_workflow(
         descent_depth=0,
         resume_context=resume_context,
         child_resume_authority=child_resume_authority,
+        validator_run=validator_run,
         hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
         effect_fence_uniform_fallback_eligible_key=effect_fence_uniform_fallback_eligible_key,
         effect_fence_tree_wide_abort_present=effect_fence_tree_wide_abort_present,
@@ -3279,6 +3331,11 @@ def execute_workflow_at_depth(
     parent_gate_floor: GateLevel = GateLevel.AUTO,
     resume_context: ResumeContext | None = None,
     child_resume_authority: ChildResumeAuthority | None = None,
+    # CP v1.129 §28.11.3: this execution's validator binding (root: opened at ingress;
+    # child: `open_child()` by sub-agent dispatch), composed onto every step context.
+    # [LAW:types-are-the-program] exception: `None` default mirrors `child_resume_authority`
+    # for out-of-slice direct callers; Runtime ingress and the child runner pass it explicitly.
+    validator_run: ValidatorRunBinding | None = None,
     hitl_uniform_fallback_eligible_run_id: str | None = None,
     effect_fence_uniform_fallback_eligible_key: str | None = None,
     effect_fence_tree_wide_abort_present: bool = False,
@@ -3616,6 +3673,7 @@ def execute_workflow_at_depth(
             # execute_workflow call's own top-level parameter; unmodified pass-through).
             resume_context=resume_context,
             child_resume_authority=child_resume_authority,
+            validator_run=validator_run,
             hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
             effect_fence_uniform_fallback_eligible_key=effect_fence_uniform_fallback_eligible_key,
             effect_fence_tree_wide_abort_present=effect_fence_tree_wide_abort_present,
@@ -3660,6 +3718,7 @@ def _execute_workflow_body(
     descent_depth: int,
     resume_context: ResumeContext | None = None,
     child_resume_authority: ChildResumeAuthority | None = None,
+    validator_run: ValidatorRunBinding | None = None,
     hitl_uniform_fallback_eligible_run_id: str | None = None,
     effect_fence_uniform_fallback_eligible_key: str | None = None,
     effect_fence_tree_wide_abort_present: bool = False,
@@ -3872,6 +3931,20 @@ def _execute_workflow_body(
                     _crash_branch_steps,
                     manifest_entry.topology_pattern,
                     manifest_entry.fanout_timeout_disposition,
+                    manifest_entry.worker_selection,
+                )
+            except _WorkerPlanRefusedError as exc:
+                return (
+                    RunResult(
+                        workflow_id=manifest_entry.workflow_id,
+                        run_id=run_id,
+                        status=RunStatus.FAILED,
+                        terminal_step_index=None,
+                        partial_state=None,
+                        final_state=None,
+                        fail_class=exc.fail_class,
+                    ),
+                    0,
                 )
             except _FanOutStoreCorruptError as exc:
                 return (
@@ -3912,6 +3985,22 @@ def _execute_workflow_body(
                     ),
                     0,
                 )
+            # CP v1.130 §25.11.1.5(3) — every worker-ordinal decision below resolves an ordinal
+            # through the recorded plan (the same derivation `_determine_fanout_resume` just
+            # bound, so it cannot refuse here); `_crash_branch_steps` stays the declared body.
+            _crash_plan_steps = _crash_ordinal_steps(
+                _crash_branch_steps,
+                manifest_entry.worker_selection,
+                (
+                    (
+                        _crash_fan_out_resume.orchestrator_step_id,
+                        _crash_fan_out_resume.orchestrator_output,
+                        _crash_fan_out_resume.worker_selection,
+                    )
+                    if isinstance(_crash_fan_out_resume, FanOutResumeState)
+                    else None
+                ),
+            )
             # RECONCILER fan-out replay returns before the linear engine branch below, so a present
             # engine pause record must fire the engine-layer pause/CAS gate before branch-store
             # replay/finalization. Branch records (and synthesis records) are reserve-before-commit:
@@ -4003,9 +4092,9 @@ def _execute_workflow_body(
                     # ORCHESTRATOR_WORKERS / HIERARCHICAL_DELEGATION INCLUDES the orchestrator
                     # `steps[0]`, so `_cardinality` would over-count by one and let a stale
                     # `branch-{worker_count}.dispatched` marker slip through as in-range; out-of-
-                    # family Codex [P2]). Computed from `_crash_branch_steps` (synthesis already
+                    # family Codex [P2]). Computed from `_crash_plan_steps` (synthesis already
                     # split off) the same way as the incomplete-recovery `_expected_branches`.
-                    _card_branch_count = len(_crash_branch_steps) - (
+                    _card_branch_count = len(_crash_plan_steps) - (
                         1
                         if manifest_entry.topology_pattern
                         in {
@@ -4027,7 +4116,7 @@ def _execute_workflow_body(
                     # unrecoverable remainder (SUB_AGENT / MANAGED / out-of-range / un-kinded /
                     # changed-to-non-TOOL) forces the fail-closed.
                     _dispatched_resumed_kinds = _resumed_branch_kinds_by_ordinal(
-                        _crash_branch_steps,
+                        _crash_plan_steps,
                         branch_count=_card_branch_count,
                         orchestrated=manifest_entry.topology_pattern
                         in {
@@ -4036,7 +4125,7 @@ def _execute_workflow_body(
                         },
                     )
                     _dispatched_resumed_step_ids = _resumed_branch_step_ids_by_ordinal(
-                        _crash_branch_steps,
+                        _crash_plan_steps,
                         branch_count=_card_branch_count,
                         orchestrated=manifest_entry.topology_pattern
                         in {
@@ -4060,7 +4149,7 @@ def _execute_workflow_body(
                         ),
                         resumed_subagent_recoverable_indexes=(
                             _resumed_subagent_recoverable_by_ordinal(
-                                _crash_branch_steps,
+                                _crash_plan_steps,
                                 branch_count=_card_branch_count,
                                 orchestrated=manifest_entry.topology_pattern
                                 in {
@@ -4073,7 +4162,7 @@ def _execute_workflow_body(
                             _crash_replay_store, run_idempotency_key
                         ),
                         resumed_child_engines=_resumed_subagent_child_engine_by_ordinal(
-                            _crash_branch_steps,
+                            _crash_plan_steps,
                             branch_count=_card_branch_count,
                             orchestrated=manifest_entry.topology_pattern
                             in {
@@ -4312,12 +4401,12 @@ def _execute_workflow_body(
                             run_idempotency_key
                         )
                         _pr_resumed_kinds = _resumed_branch_kinds_by_ordinal(
-                            _crash_branch_steps,
+                            _crash_plan_steps,
                             branch_count=_crash_expected,
                             orchestrated=_pr_orchestrated,
                         )
                         _pr_resumed_step_ids = _resumed_branch_step_ids_by_ordinal(
-                            _crash_branch_steps,
+                            _crash_plan_steps,
                             branch_count=_crash_expected,
                             orchestrated=_pr_orchestrated,
                         )
@@ -4335,7 +4424,7 @@ def _execute_workflow_body(
                             ),
                             resumed_subagent_recoverable_indexes=(
                                 _resumed_subagent_recoverable_by_ordinal(
-                                    _crash_branch_steps,
+                                    _crash_plan_steps,
                                     branch_count=_crash_expected,
                                     orchestrated=_pr_orchestrated,
                                 )
@@ -4344,7 +4433,7 @@ def _execute_workflow_body(
                                 _crash_replay_store, run_idempotency_key
                             ),
                             resumed_child_engines=_resumed_subagent_child_engine_by_ordinal(
-                                _crash_branch_steps,
+                                _crash_plan_steps,
                                 branch_count=_crash_expected,
                                 orchestrated=_pr_orchestrated,
                             ),
@@ -4460,7 +4549,7 @@ def _execute_workflow_body(
                         # remainder (SUB_AGENT_DISPATCH recursive child / MANAGED_AGENTS unfenced /
                         # out-of-range / un-kinded / changed-to-non-TOOL) forces the fail-closed.
                         _maybe_ran_resumed_kinds = _resumed_branch_kinds_by_ordinal(
-                            _crash_branch_steps,
+                            _crash_plan_steps,
                             branch_count=_crash_expected,
                             orchestrated=manifest_entry.topology_pattern
                             in {
@@ -4469,7 +4558,7 @@ def _execute_workflow_body(
                             },
                         )
                         _maybe_ran_resumed_step_ids = _resumed_branch_step_ids_by_ordinal(
-                            _crash_branch_steps,
+                            _crash_plan_steps,
                             branch_count=_crash_expected,
                             orchestrated=manifest_entry.topology_pattern
                             in {
@@ -4493,7 +4582,7 @@ def _execute_workflow_body(
                             ),
                             resumed_subagent_recoverable_indexes=(
                                 _resumed_subagent_recoverable_by_ordinal(
-                                    _crash_branch_steps,
+                                    _crash_plan_steps,
                                     branch_count=_crash_expected,
                                     orchestrated=manifest_entry.topology_pattern
                                     in {
@@ -4506,7 +4595,7 @@ def _execute_workflow_body(
                                 _crash_replay_store, run_idempotency_key
                             ),
                             resumed_child_engines=_resumed_subagent_child_engine_by_ordinal(
-                                _crash_branch_steps,
+                                _crash_plan_steps,
                                 branch_count=_crash_expected,
                                 orchestrated=manifest_entry.topology_pattern
                                 in {
@@ -4619,7 +4708,7 @@ def _execute_workflow_body(
                     TopologyPattern.ORCHESTRATOR_WORKERS,
                     TopologyPattern.HIERARCHICAL_DELEGATION,
                 }
-                _expected_branches = len(_crash_branch_steps) - (1 if _is_orchestrated else 0)
+                _expected_branches = len(_crash_plan_steps) - (1 if _is_orchestrated else 0)
                 _complete_output_bearing = (
                     _crash_fan_out_resume is not None
                     and len(_crash_fan_out_resume.branches) == _expected_branches
@@ -4712,6 +4801,7 @@ def _execute_workflow_body(
             descent_depth=descent_depth,
             resume_context=resume_context,
             child_resume_authority=child_resume_authority,
+            validator_run=validator_run,
             hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
             effect_fence_uniform_fallback_eligible_key=effect_fence_uniform_fallback_eligible_key,
             effect_fence_tree_wide_abort_present=effect_fence_tree_wide_abort_present,
@@ -4734,6 +4824,7 @@ def _execute_workflow_body(
             descent_depth=descent_depth,
             resume_context=resume_context,
             child_resume_authority=child_resume_authority,
+            validator_run=validator_run,
             hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
             effect_fence_uniform_fallback_eligible_key=effect_fence_uniform_fallback_eligible_key,
             effect_fence_tree_wide_abort_present=effect_fence_tree_wide_abort_present,
@@ -4777,6 +4868,7 @@ def _execute_workflow_body(
             descent_depth=descent_depth,
             resume_context=resume_context,
             child_resume_authority=child_resume_authority,
+            validator_run=validator_run,
             hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
             effect_fence_uniform_fallback_eligible_key=effect_fence_uniform_fallback_eligible_key,
             effect_fence_tree_wide_abort_present=effect_fence_tree_wide_abort_present,
@@ -4818,6 +4910,7 @@ def _execute_workflow_body(
             descent_depth=descent_depth,
             resume_context=resume_context,
             child_resume_authority=child_resume_authority,
+            validator_run=validator_run,
             hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
             effect_fence_uniform_fallback_eligible_key=effect_fence_uniform_fallback_eligible_key,
             effect_fence_tree_wide_abort_present=effect_fence_tree_wide_abort_present,
@@ -4841,6 +4934,7 @@ def _execute_workflow_body(
             descent_depth=descent_depth,
             resume_context=resume_context,
             child_resume_authority=child_resume_authority,
+            validator_run=validator_run,
             hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
             effect_fence_uniform_fallback_eligible_key=effect_fence_uniform_fallback_eligible_key,
             effect_fence_tree_wide_abort_present=effect_fence_tree_wide_abort_present,
@@ -5375,6 +5469,7 @@ def _execute_workflow_body(
                                 f"{resume_snapshot.hitl_gate_config_hash!r}, resume "
                                 f"recomputes {_resumed_linear_gate_config_hash!r}"
                             ),
+                            resume_refusal=_HITL_GATE_CONFIG_REFUSAL,
                         ),
                         0,
                     )
@@ -5660,6 +5755,7 @@ def _execute_workflow_body(
             # step's context to forward into the recursive `execute_workflow` call).
             resume_context=resume_context,
             child_resume_authority=child_resume_authority,
+            validator_run=validator_run,
             hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
             effect_fence_uniform_fallback_eligible_key=effect_fence_uniform_fallback_eligible_key,
             effect_fence_tree_wide_abort_present=effect_fence_tree_wide_abort_present,
@@ -5883,7 +5979,7 @@ def _execute_workflow_body(
 
         # § 25.3.5 (NEW at v1.10) — U-CP-61 post-dispatch validation hook.
         # Per C-CP-25 §25.3 "post-dispatch, pre-ledger-append validation
-        # hook". Operator-opt-in: skip when ctx.validator_framework is None
+        # hook". Operator-opt-in: skip when validator_run is None
         # (driver-level opt-out). When bound, the framework returns a
         # ValidatorEvaluation; the next_action drives the branch:
         #   PROCEED   → fall through to ledger append (normal flow)
@@ -5898,15 +5994,15 @@ def _execute_workflow_body(
         #               span linking-to subsequent hitl.gate.evaluated per
         #               §C-OD-29.1 row 10 + F2-02 absorption.
         #   ABORT     → return RunResult(FAILED) with CP-FAIL-VALIDATOR-PERMANENT
-        if ctx.validator_framework is not None:
+        if validator_run is not None:
             tracer = cast(TracerProvider, ctx.tracer_provider).get_tracer(
                 "harness.cp.workflow_driver"
             )
             with tracer.start_as_current_span("validator.evaluate") as evaluate_span:
                 try:
-                    evaluation: ValidatorEvaluation = cast(
-                        "SyncValidatorFrameworkFacade", ctx.validator_framework
-                    ).evaluate(
+                    # CP v1.129 §28.11.2: this execution's binding runs the shared
+                    # async framework on the ingress loop with this execution's ledger.
+                    evaluation: ValidatorEvaluation = validator_run.evaluate(
                         step,
                         step_output,
                         step_context=step_context,
@@ -5920,7 +6016,7 @@ def _execute_workflow_body(
                         terminal_step_index=step_index,
                         partial_state=dict(accumulated),
                         final_state=None,
-                        fail_class=(f"validator-framework-failure: {type(exc).__name__}: {exc}"),
+                        fail_class=_validator_fail_class(exc),
                     ), steps_executed
 
                 # §C-OD-29.1 outer envelope (3 attrs).
@@ -5965,7 +6061,7 @@ def _execute_workflow_body(
                 # gate. Escalation cannot be silently dropped." Fires the
                 # ValidatorEscalationGateComposer mid-step pre-ledger-append
                 # per C-CP-28 §25.3 + §25.4 invariant 2. Operator-opt-in:
-                # only when both validator_framework AND ask_user_question_
+                # only when both validator_run AND ask_user_question_
                 # surface are bound at ctx (production paths supply both;
                 # test paths may set ask_user_question_surface = None and
                 # the escalation outcome will fail-closed).
@@ -7751,12 +7847,66 @@ class _FanOutStoreOrchestratorMaybeRanError(Exception):
     """
 
 
+class _WorkerPlanRefusedError(Exception):
+    """A fan-out's worker plan cannot bind (CP v1.130 §25.11.1.4(3), §25.11.1.5(5)/(6)).
+
+    `fail_class` is the run's FAILED class: a selection that differs from the recorded one, or a
+    plan that fails derivation. Raised before any worker dispatch or worker marker.
+    """
+
+    def __init__(self, fail_class: str) -> None:
+        super().__init__(fail_class)
+        self.fail_class = fail_class
+
+
+def _bound_worker_plan(
+    selection: WorkerSelection,
+    recorded_selection: WorkerSelection,
+    orchestrator_output: Mapping[str, Any],
+    pool: Sequence[WorkflowStep],
+) -> WorkerPlan:
+    """The fan-out's worker plan, bound to the selection recorded with the orchestrator output.
+
+    The plan is a pure function of selection, recorded output and declared pool; the selection is
+    the input resume cannot otherwise check, so a recorded selection that differs from the running
+    manifest's refuses the plan (§25.11.1.5(6)). A fresh dispatch records the manifest's own
+    selection, so it passes it as both. Every orchestrator-topology unit that maps a worker ordinal
+    gets its plan here [LAW:single-enforcer].
+    """
+    if recorded_selection is not selection:
+        raise _WorkerPlanRefusedError("orchestrator-workers-selection-mismatch")
+    try:
+        return derive_worker_plan(selection, orchestrator_output, pool)
+    except WorkerPlanInvalid as exc:
+        raise _WorkerPlanRefusedError(f"orchestrator-workers-plan-invalid: {exc.reason}") from exc
+
+
+def _crash_ordinal_steps(
+    steps: Sequence[WorkflowStep],
+    selection: WorkerSelection,
+    orchestrator: tuple[str, Mapping[str, Any], WorkerSelection] | None,
+) -> Sequence[WorkflowStep]:
+    """`steps` with its declared worker pool replaced by the recorded orchestrator output's plan.
+
+    A worker's branch ordinal is its plan position (§25.11.1.5(1)), so the pre-strategy crash units
+    resolve ordinal `i` to `result[i + 1]`, the `orchestrated=True` convention of the
+    `_resumed_*_by_ordinal` helpers. With no orchestrator record there is no plan: such a store
+    holds no legitimate worker artifact (§25.11.1.5(4)), and the declared body is the domain.
+    """
+    if orchestrator is None:
+        return steps
+    _step_id, output, recorded_selection = orchestrator
+    plan = _bound_worker_plan(selection, recorded_selection, output, steps[1:])
+    return [steps[0], *(assignment.step for assignment in plan.assignments)]
+
+
 def _determine_fanout_resume(
     store: Any,
     run_key: str,
     steps: Sequence[WorkflowStep],
     topology: TopologyPattern,
     timeout_disposition: FanoutTimeoutDisposition = FanoutTimeoutDisposition.FAIL_CLOSED,
+    worker_selection: WorkerSelection = WorkerSelection.DECLARED_POOL,
 ) -> FanOutResumeState | PeerFanOutResumeState | None:
     """Reconstruct a fan-out crash-resume state from the durable branch STORE.
 
@@ -7807,6 +7957,26 @@ def _determine_fanout_resume(
             f"fan-out crash-resume cardinality mismatch: store captured a {_recorded_cardinality}-"
             f"branch fan-out, resume supplied {len(steps)} (changed body) — fail closed"
         )
+    _orchestrated = topology in {
+        TopologyPattern.ORCHESTRATOR_WORKERS,
+        TopologyPattern.HIERARCHICAL_DELEGATION,
+    }
+    orchestrator = store.read_orchestrator_output(run_key) if _orchestrated else None
+    # Cardinality-ordering fail-closed (out-of-family Codex [P2]): the orchestrator record is
+    # fsynced BEFORE the fan-out cardinality marker, so a crash between them leaves a valid
+    # orchestrator record with NO recorded cardinality — and a manifest with a CHANGED worker
+    # count would then reuse the old orchestrator output against the new worker set undetected.
+    # An orchestrator record without a cardinality marker therefore fails closed — before the
+    # record's plan is derived, so the plan is only ever read against a validated body.
+    if orchestrator is not None and _recorded_cardinality is None:
+        raise _FanOutStoreCorruptError(
+            "fan-out orchestrator record present but the fan-out cardinality marker is absent "
+            "(crash between orchestrator capture and cardinality write) — fail closed (the "
+            "worker count cannot be validated against a changed manifest)"
+        )
+    # CP v1.130 §25.11.1.5(3) — the worker ordinal domain is the recorded output's plan (the
+    # recorded cardinality above stays a check on the declared body).
+    _ordinal_steps = _crash_ordinal_steps(steps, worker_selection, orchestrator)
     # Disposition recovery (the at-most-once class closer — an output-only store made every
     # non-clean-success disposition invisible). A COMPLETED branch with NO output (ran-and-
     # errored; its effect LANDED) is recovered as TERMINAL — not re-dispatched (the seed loop
@@ -7836,15 +8006,7 @@ def _determine_fanout_resume(
             # maybe-ran machinery) re-runs them. `_branch_count` is the worker/branch count
             # (orchestrator `steps[0]` excluded for the orchestrator topologies — the marker is
             # keyed by branch ordinal, matching the cardinality-only `_card_branch_count`).
-            _branch_count = len(steps) - (
-                1
-                if topology
-                in {
-                    TopologyPattern.ORCHESTRATOR_WORKERS,
-                    TopologyPattern.HIERARCHICAL_DELEGATION,
-                }
-                else 0
-            )
+            _branch_count = len(_ordinal_steps) - (1 if _orchestrated else 0)
             _timeout_unsafe = _refire_unsafe_branch_indices(
                 set(timed_out), store.dispatched_branch_kinds(run_key), _branch_count
             )
@@ -7903,7 +8065,6 @@ def _determine_fanout_resume(
     # orchestrator — else re-dispatching `steps[0]` double-fires its effect, which the
     # sidecar already captured (out-of-family Codex [P1]). The orchestrator record is
     # therefore the recovery authority for these topologies, independent of the branch set.
-    orchestrator = store.read_orchestrator_output(run_key)
     if orchestrator is None:
         if store.orchestrator_present(run_key):
             # Orchestrator file present-but-unreadable → fail closed (corruption / tamper),
@@ -8083,30 +8244,30 @@ def _determine_fanout_resume(
                     "a stamped-only recovery class without the dispatch-instrumented stamp; "
                     "re-dispatch would risk a double-fire)"
                 )
+            # CP v1.130 §25.11.1.5(4) — every worker dispatch marker and the cardinality marker
+            # are written after `record_orchestrator`, so with neither an orchestrator record nor
+            # an orchestrator marker, either one is orphaned (corruption), not a fresh run. Checked
+            # by presence, under every cascade_policy and both selections; no plan is derived.
+            if store.dispatched_branch_kinds(run_key) or store.fanout_cardinality_present(run_key):
+                raise _FanOutStoreCorruptError(
+                    "fan-out worker dispatch marker / cardinality marker present but neither the "
+                    "orchestrator record nor its dispatch marker is (orphaned marker, corrupt "
+                    "store) — fail closed, never a fresh re-dispatch"
+                )
             return None  # no marker → provably-not-run OR pre-arc journal → fresh run
         # Workers completed but the orchestrator output is ABSENT — an inconsistent store
         # (the orchestrator completes BEFORE any worker dispatches). Fail closed.
         raise _FanOutStoreCorruptError(
             "fan-out orchestrator output absent but workers completed (inconsistent store)"
         )
-    # Cardinality-ordering fail-closed (out-of-family Codex [P2]): the orchestrator record is
-    # fsynced BEFORE the fan-out cardinality marker, so a crash between them leaves a valid
-    # orchestrator record with NO recorded cardinality — and a manifest with a CHANGED worker
-    # count would then reuse the old orchestrator output against the new worker set undetected.
-    # An orchestrator record without a cardinality marker therefore fails closed.
-    if _recorded_cardinality is None:
-        raise _FanOutStoreCorruptError(
-            "fan-out orchestrator record present but the fan-out cardinality marker is absent "
-            "(crash between orchestrator capture and cardinality write) — fail closed (the "
-            "worker count cannot be validated against a changed manifest)"
-        )
-    orchestrator_step_id, orchestrator_output = orchestrator
+    orchestrator_step_id, orchestrator_output, recorded_selection = orchestrator
     return FanOutResumeState(
         orchestrator_output=orchestrator_output,
         orchestrator_step_id=orchestrator_step_id,
         branches=branches,  # possibly empty — orchestrator captured, zero workers completed
-        worker_count=len(steps) - 1,
+        worker_count=len(_ordinal_steps) - 1,
         paused_child_branches=(),
+        worker_selection=recorded_selection,
     )
 
 
@@ -8131,6 +8292,7 @@ def _execute_parallelization(
     descent_depth: int,
     resume_context: ResumeContext | None = None,
     child_resume_authority: ChildResumeAuthority | None = None,
+    validator_run: ValidatorRunBinding | None = None,
     hitl_uniform_fallback_eligible_run_id: str | None = None,
     effect_fence_uniform_fallback_eligible_key: str | None = None,
     effect_fence_tree_wide_abort_present: bool = False,
@@ -8321,7 +8483,7 @@ def _execute_parallelization(
     # output. NO orchestrator-identity check (PARALLELIZATION has no `steps[0]`).
     if _peer_resume is not None:
 
-        def _resume_body_mismatch() -> str | None:
+        def _resume_body_mismatch() -> str | _GateConfigChanged | None:
             if len(steps) != _peer_resume.branch_count:
                 return (
                     f"branch-count-mismatch: snapshot captured "
@@ -8517,7 +8679,7 @@ def _execute_parallelization(
                         inherited_hitl_placements=inherited_hitl_placements,
                     )
                     if _resumed_pg_gate_config_hash != pg.hitl_gate_config_hash:
-                        return (
+                        return _GateConfigChanged(
                             f"pre-dispatch-gate-owning-hitl-gate-config-changed at "
                             f"{pg.branch_index}: snapshot hitl_gate_config_hash="
                             f"{pg.hitl_gate_config_hash!r}, resume recomputes "
@@ -8535,6 +8697,7 @@ def _execute_parallelization(
                 partial_state=None,
                 final_state=None,
                 fail_class=f"parallelization-resume-body-mismatch: {_mismatch}",
+                resume_refusal=_body_mismatch_refusal(_mismatch),
             ), 0
 
     # Resolve cascade policy before the RECONCILER CAS gate so invalid effect-fence pause resumes
@@ -8582,6 +8745,7 @@ def _execute_parallelization(
         # compose_branch_child_context's model_copy (deliberately not reset).
         resume_context=resume_context,
         child_resume_authority=child_resume_authority,
+        validator_run=validator_run,
         hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
         effect_fence_uniform_fallback_eligible_key=effect_fence_uniform_fallback_eligible_key,
         effect_fence_tree_wide_abort_present=effect_fence_tree_wide_abort_present,
@@ -9908,12 +10072,14 @@ def _execute_parallelization(
             if not child_resume_refused_dispositions:
                 return None
             _synthesize_undispatched_terminals()
-            return _finish(
-                RunStatus.FAILED,
-                fail_class=_refused_fail_class(
-                    "parallelization-child-resume-refused", child_resume_refused_dispositions
+            refusal = _merged_refusal(child_resume_refused_dispositions)
+            return _with_refusal(
+                _finish(
+                    RunStatus.FAILED,
+                    fail_class=_refused_fail_class("parallelization-child-resume-refused", refusal),
+                    salvage=False,
                 ),
-                salvage=False,
+                refusal,
             )
 
         try:
@@ -10611,12 +10777,14 @@ def _execute_parallelization(
     # FAILED before any policy branching so nothing re-pauses, re-dispatches or captures.
     if child_resume_refused_dispositions:
         _synthesize_undispatched_terminals()
-        return _finish(
-            RunStatus.FAILED,
-            fail_class=_refused_fail_class(
-                "parallelization-child-resume-refused", child_resume_refused_dispositions
+        refusal = _merged_refusal(child_resume_refused_dispositions)
+        return _with_refusal(
+            _finish(
+                RunStatus.FAILED,
+                fail_class=_refused_fail_class("parallelization-child-resume-refused", refusal),
+                salvage=False,
             ),
-            salvage=False,
+            refusal,
         )
 
     if effect_fence_aborted_dispositions:
@@ -11171,6 +11339,7 @@ def _execute_evaluator_optimizer(
     descent_depth: int,
     resume_context: ResumeContext | None = None,
     child_resume_authority: ChildResumeAuthority | None = None,
+    validator_run: ValidatorRunBinding | None = None,
     hitl_uniform_fallback_eligible_run_id: str | None = None,
     effect_fence_uniform_fallback_eligible_key: str | None = None,
     effect_fence_tree_wide_abort_present: bool = False,
@@ -11487,6 +11656,7 @@ def _execute_evaluator_optimizer(
             # B-39 Slice B — plain pass-through (no fan-out at this strategy).
             resume_context=resume_context,
             child_resume_authority=child_resume_authority,
+            validator_run=validator_run,
             hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
             effect_fence_uniform_fallback_eligible_key=effect_fence_uniform_fallback_eligible_key,
             effect_fence_tree_wide_abort_present=effect_fence_tree_wide_abort_present,
@@ -11681,6 +11851,7 @@ def _execute_evaluator_optimizer(
                             f"{resume_snapshot.hitl_gate_config_hash!r}, resume recomputes "
                             f"{_resumed_eo_gate_config_hash!r}"
                         ),
+                        resume_refusal=_HITL_GATE_CONFIG_REFUSAL,
                     ), 0
             hitl_delivery_cell = HITLDeliveryCell(_eo_resolved_hitl)
 
@@ -12198,6 +12369,7 @@ def _execute_orchestrator_workers(
     descent_depth: int,
     resume_context: ResumeContext | None = None,
     child_resume_authority: ChildResumeAuthority | None = None,
+    validator_run: ValidatorRunBinding | None = None,
     hitl_uniform_fallback_eligible_run_id: str | None = None,
     effect_fence_uniform_fallback_eligible_key: str | None = None,
     effect_fence_tree_wide_abort_present: bool = False,
@@ -12415,15 +12587,41 @@ def _execute_orchestrator_workers(
         return result, 0
 
     orchestrator_step = steps[0]
-    worker_steps = list(steps[1:])
+    # CP v1.130 §25.11.1.2 — the declared worker pool; the plan selects, orders and briefs its
+    # members. `worker_steps` is the planned list every later operation reads (§25.11.1.4(1)),
+    # bound below once the orchestrator output is known: here on resume (recovered output), after
+    # the orchestrator dispatch on a fresh run. A worker's `branch_index` is its plan position.
+    worker_pool = steps[1:]
+    worker_assignments: tuple[WorkerAssignment, ...] = ()
+    worker_steps: list[WorkflowStep] = []
 
     # B-FANOUT-PAUSE — material-diff guard on resume: the re-supplied workflow's
     # worker count MUST match the count captured at pause, else the recovered
     # branch ordinals no longer map to these steps (a changed body) → fail closed
     # rather than re-dispatch a mismatched set.
     if _fan_out_resume is not None:
+        # §25.11.1.5(2)/(5)/(6) — re-derive the plan from the recovered output under the resumed
+        # manifest, refusing a changed selection, before any worker-ordinal check.
+        try:
+            worker_assignments = _bound_worker_plan(
+                manifest_entry.worker_selection,
+                _fan_out_resume.worker_selection,
+                _fan_out_resume.orchestrator_output,
+                worker_pool,
+            ).assignments
+        except _WorkerPlanRefusedError as exc:
+            return RunResult(
+                workflow_id=workflow_id,
+                run_id=run_id,
+                status=RunStatus.FAILED,
+                terminal_step_index=None,
+                partial_state=None,
+                final_state=None,
+                fail_class=exc.fail_class,
+            ), 0
+        worker_steps = [assignment.step for assignment in worker_assignments]
 
-        def _resume_body_mismatch() -> str | None:
+        def _resume_body_mismatch() -> str | _GateConfigChanged | None:
             # orchestrator identity (its output is recovered + dispatch skipped —
             # Codex [P2]: a renamed/reordered steps[0] would apply stale output) ...
             if str(orchestrator_step.step_id) != _fan_out_resume.orchestrator_step_id:
@@ -12624,7 +12822,7 @@ def _execute_orchestrator_workers(
                         inherited_hitl_placements=inherited_hitl_placements,
                     )
                     if _resumed_pg_gate_config_hash != pg.hitl_gate_config_hash:
-                        return (
+                        return _GateConfigChanged(
                             f"pre-dispatch-gate-owning-hitl-gate-config-changed at "
                             f"{pg.branch_index}: snapshot hitl_gate_config_hash="
                             f"{pg.hitl_gate_config_hash!r}, resume recomputes "
@@ -12642,6 +12840,7 @@ def _execute_orchestrator_workers(
                 partial_state=None,
                 final_state=None,
                 fail_class=f"orchestrator-workers-resume-{_mismatch}",
+                resume_refusal=_body_mismatch_refusal(_mismatch),
             ), 0
 
     # Resolve cascade policy before the RECONCILER CAS gate so invalid effect-fence pause resumes
@@ -12850,6 +13049,7 @@ def _execute_orchestrator_workers(
         # compose_branch_child_context's model_copy (deliberately not reset).
         resume_context=resume_context,
         child_resume_authority=child_resume_authority,
+        validator_run=validator_run,
         hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
         effect_fence_uniform_fallback_eligible_key=effect_fence_uniform_fallback_eligible_key,
         effect_fence_tree_wide_abort_present=effect_fence_tree_wide_abort_present,
@@ -12946,6 +13146,33 @@ def _execute_orchestrator_workers(
         # double-fire window.
         # `_fanout_replay_store` handle reused.
         _orch_replay_store = _fanout_replay_store(ctx, manifest_entry)
+        # CP v1.130 §25.11.1.5(6) — the selection is recorded with the orchestrator output, so a
+        # `LEAD_PLAN` record is never written without it: a bound store whose `record_orchestrator`
+        # cannot take it refuses the run before the orchestrator dispatches. `DECLARED_POOL` keeps
+        # the historical three-argument call for such a store, whose record reads back as it.
+        _orch_record_kwargs: dict[str, object] = (
+            {"worker_selection": manifest_entry.worker_selection}
+            if _orch_replay_store is not None
+            and _callable_accepts_keyword(
+                _orch_replay_store.record_orchestrator, "worker_selection"
+            )
+            else {}
+        )
+        if (
+            _orch_replay_store is not None
+            and not _orch_record_kwargs
+            and manifest_entry.worker_selection is WorkerSelection.LEAD_PLAN
+        ):
+            _finalize_reconciler_cas_if_attempted()
+            return RunResult(
+                workflow_id=workflow_id,
+                run_id=run_id,
+                status=RunStatus.FAILED,
+                terminal_step_index=None,
+                partial_state=None,
+                final_state=None,
+                fail_class="orchestrator-workers-plan-store-unsupported",
+            ), 0
         try:
             _orch_dispatcher = step_dispatchers.lookup(orchestrator_step.step_kind)
             if _orch_replay_store is not None:
@@ -13100,7 +13327,10 @@ def _execute_orchestrator_workers(
         # computed above for the reserve-before-DISPATCH marker — reuse it).
         if _orch_replay_store is not None:
             _orch_replay_store.record_orchestrator(
-                run_idempotency_key, str(orchestrator_step.step_id), orchestrator_output
+                run_idempotency_key,
+                str(orchestrator_step.step_id),
+                orchestrator_output,
+                **_orch_record_kwargs,
             )
         _append_buffered_sequential_entry(
             writer=orchestrator_writer,
@@ -13110,6 +13340,31 @@ def _execute_orchestrator_workers(
             timestamp=fanout_timestamp,
             procedural_tier_snapshot_ref=snapshot_ref,
         )
+        # CP v1.130 §25.11.1.4(1)/(3) — one plan per fan-out, derived from the output just
+        # recorded and before any worker marker. A plan that fails derivation fails the run with
+        # the orchestrator's ledger entry and replay record kept; no worker failed, so
+        # `cascade_policy` does not apply.
+        try:
+            worker_assignments = _bound_worker_plan(
+                manifest_entry.worker_selection,
+                manifest_entry.worker_selection,
+                orchestrator_output,
+                worker_pool,
+            ).assignments
+        except _WorkerPlanRefusedError as exc:
+            drain_branch_buffers(ctx.ledger_writer, [orchestrator_writer])
+            ctx.lifecycle_emitter.emit(WorkflowEventClass.STEP_BOUNDARY)
+            _finalize_reconciler_cas_if_attempted()
+            return RunResult(
+                workflow_id=workflow_id,
+                run_id=run_id,
+                status=RunStatus.FAILED,
+                terminal_step_index=None,
+                partial_state=None,
+                final_state=None,
+                fail_class=exc.fail_class,
+            ), 1
+        worker_steps = [assignment.step for assignment in worker_assignments]
 
     # B-60 (codex round-1 on PR #1075, reproduced): the orchestrator's
     # SEQUENTIAL dispatch above is this strategy's Phase 1 — a token
@@ -13139,7 +13394,8 @@ def _execute_orchestrator_workers(
     # run-level `ABORT` (which fails the whole run). The ORCHESTRATOR analogue of the
     # parallelization peer scoped-abort.
     _scoped_abort_ordinals: set[int] = set()
-    for branch_index, step in enumerate(worker_steps):
+    for branch_index, assignment in enumerate(worker_assignments):
+        step = assignment.step
         # B-FANOUT-PAUSE — on resume, a branch that reached a terminal disposition
         # before the prior `pause` halt is SKIPPED (§25.15.2 obligation 7: a
         # `completed`/`timed_out`/`cancelled` branch MUST NOT be re-dispatched —
@@ -13182,7 +13438,8 @@ def _execute_orchestrator_workers(
         # default` fold site below. (Out-of-family review [P3].)
         role = binding.agent_role or derive_agent_role(step.step_id)
         # The worker's DECLARED step ordinal is its position in the original
-        # `steps` (orchestrator=0, workers=1,2,…), i.e. `branch_index + 1`.
+        # `steps` (orchestrator=0, workers=1,2,…), i.e. `assignment.declared_index`
+        # — fixed by the declaration, never by its plan position (CP v1.130 §25.11.1.4(2)).
         # `compose_branch_child_context` inherits `step_index` from the fan-out
         # parent (the orchestrator, step 0), so set it to the declared ordinal
         # here — downstream consumers key per-step policy / audit / the runtime
@@ -13289,7 +13546,10 @@ def _execute_orchestrator_workers(
             # tuple (keyed from manifest_entry, NOT the inherited fanout_parent — so
             # the orchestrator's own placement override never leaks to a worker).
             update={
-                "step_index": branch_index + 1,
+                "step_index": assignment.declared_index,
+                # CP v1.130 §25.11.1.4(4) — the lead-authored brief (`None` unless `LEAD_PLAN` and
+                # a sub-agent worker); Runtime's sub-agent composer is its only reader.
+                "lead_brief": assignment.brief,
                 "child_resume": _child_resume,
                 "effect_fence_resolution": _branch_effect_fence_directive,
                 "hitl_delivery_holder": _branch_hitl_delivery_cell,
@@ -13465,7 +13725,7 @@ def _execute_orchestrator_workers(
     # WORKER branches' LOST ledger entries (out-of-family Codex [P1]): a crash before the
     # barrier drained nothing, so the resumed ledger would omit them + undercount
     # `workflow.step_count`. Dedup-safe; extends the barrier-drain set. (The worker context
-    # mirrors the dispatch-plan build: `derive_agent_role` + `step_index = branch_index + 1`;
+    # mirrors the dispatch-plan build: `derive_agent_role` + the declared `step_index`;
     # `child_resume_snapshot` is None — a crash has no paused children.)
     if _fan_out_crash_resume is not None:
         for _bi in sorted(_recovered_terminal):
@@ -13482,7 +13742,7 @@ def _execute_orchestrator_workers(
                 agent_role=_r_binding.agent_role or derive_agent_role(_r_step.step_id),
             ).model_copy(
                 update={
-                    "step_index": _bi + 1,
+                    "step_index": worker_assignments[_bi].declared_index,
                     "hitl_placements": fold_step_hitl_placements(
                         manifest_entry.hitl_placements,
                         _r_binding.hitl_placement,
@@ -13512,7 +13772,7 @@ def _execute_orchestrator_workers(
     # re-dispatch — `[[durable-recovery-presence-validity-scope]]`). Its writer joins the barrier
     # drain; its ordinal (`_scoped_abort_ordinals`) feeds the post-barrier fold (PARTIAL with
     # survivors; FAILED if NONE) + the run fail_class. NEVER re-dispatched. (Worker context
-    # mirrors the dispatch-plan / re-materialize build: derive role + `step_index = _bi + 1`.)
+    # mirrors the dispatch-plan / re-materialize build: derive role + the declared `step_index`.)
     # SKIPPED under PROCEED: an effect-fence resume under PROCEED is rejected fail-closed (the
     # strict-tier guard below, + the `not branch_plan` early gate), so recording a durable terminal
     # here would corrupt state for a rejected resume (fail-closed precedes durable writes —
@@ -13543,7 +13803,7 @@ def _execute_orchestrator_workers(
             agent_role=_sa_binding.agent_role or derive_agent_role(_sa_step.step_id),
         ).model_copy(
             update={
-                "step_index": _sa_bi + 1,
+                "step_index": worker_assignments[_sa_bi].declared_index,
                 "hitl_placements": fold_step_hitl_placements(
                     manifest_entry.hitl_placements,
                     _sa_binding.hitl_placement,
@@ -13761,7 +14021,7 @@ def _execute_orchestrator_workers(
                 agent_role=_r_binding.agent_role or derive_agent_role(_r_step.step_id),
             ).model_copy(
                 update={
-                    "step_index": _bi + 1,
+                    "step_index": worker_assignments[_bi].declared_index,
                     "hitl_placements": fold_step_hitl_placements(
                         manifest_entry.hitl_placements,
                         _r_binding.hitl_placement,
@@ -13903,6 +14163,7 @@ def _execute_orchestrator_workers(
                     for _bi, _status in sorted(terminal_dispositions.items())
                 ),
                 worker_count=len(worker_steps),
+                worker_selection=manifest_entry.worker_selection,
                 # B-FANOUT-CRASH-RESUME-PAUSE-RECONSTRUCT-MAYBE-RAN-FENCE-STEP-ID — the
                 # ORCHESTRATOR_WORKERS / HIERARCHICAL reconstruct-no-dispatch path ALWAYS
                 # short-circuits HERE (every worker is skipped → empty branch_plan → this
@@ -14566,12 +14827,16 @@ def _execute_orchestrator_workers(
             if not child_resume_refused_dispositions:
                 return None
             _synthesize_undispatched_terminals()
-            return _finish(
-                RunStatus.FAILED,
-                fail_class=_refused_fail_class(
-                    "orchestrator-workers-child-resume-refused", child_resume_refused_dispositions
+            refusal = _merged_refusal(child_resume_refused_dispositions)
+            return _with_refusal(
+                _finish(
+                    RunStatus.FAILED,
+                    fail_class=_refused_fail_class(
+                        "orchestrator-workers-child-resume-refused", refusal
+                    ),
+                    salvage=False,
                 ),
-                salvage=False,
+                refusal,
             )
 
         try:
@@ -15220,12 +15485,16 @@ def _execute_orchestrator_workers(
     # FAILED before any policy branching so nothing re-pauses, re-dispatches or captures.
     if child_resume_refused_dispositions:
         _synthesize_undispatched_terminals()
-        return _finish(
-            RunStatus.FAILED,
-            fail_class=_refused_fail_class(
-                "orchestrator-workers-child-resume-refused", child_resume_refused_dispositions
+        refusal = _merged_refusal(child_resume_refused_dispositions)
+        return _with_refusal(
+            _finish(
+                RunStatus.FAILED,
+                fail_class=_refused_fail_class(
+                    "orchestrator-workers-child-resume-refused", refusal
+                ),
+                salvage=False,
             ),
-            salvage=False,
+            refusal,
         )
 
     if effect_fence_aborted_dispositions:
@@ -15375,6 +15644,7 @@ def _execute_orchestrator_workers(
                 for _bi, _status in sorted(terminal_dispositions.items())
             ),
             worker_count=len(worker_steps),
+            worker_selection=manifest_entry.worker_selection,
             # B-HIERARCHICAL-PAUSE — workers whose recursive child PAUSED this round.
             # DISJOINT from `branches` (a paused-child ordinal never entered
             # `terminal_dispositions`). Each carries the child's nested PauseSnapshot so
@@ -15571,6 +15841,7 @@ def _execute_hierarchical_delegation(
     descent_depth: int,
     resume_context: ResumeContext | None = None,
     child_resume_authority: ChildResumeAuthority | None = None,
+    validator_run: ValidatorRunBinding | None = None,
     hitl_uniform_fallback_eligible_run_id: str | None = None,
     effect_fence_uniform_fallback_eligible_key: str | None = None,
     effect_fence_tree_wide_abort_present: bool = False,
@@ -15687,6 +15958,7 @@ def _execute_hierarchical_delegation(
         descent_depth=descent_depth,
         resume_context=resume_context,
         child_resume_authority=child_resume_authority,
+        validator_run=validator_run,
         hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
         effect_fence_uniform_fallback_eligible_key=effect_fence_uniform_fallback_eligible_key,
         effect_fence_tree_wide_abort_present=effect_fence_tree_wide_abort_present,
@@ -15773,6 +16045,7 @@ def _execute_decentralized_handoff(
     descent_depth: int,
     resume_context: ResumeContext | None = None,
     child_resume_authority: ChildResumeAuthority | None = None,
+    validator_run: ValidatorRunBinding | None = None,
     hitl_uniform_fallback_eligible_run_id: str | None = None,
     effect_fence_uniform_fallback_eligible_key: str | None = None,
     effect_fence_tree_wide_abort_present: bool = False,
@@ -15991,6 +16264,7 @@ def _execute_decentralized_handoff(
                             f"{resume_snapshot.hitl_gate_config_hash!r}, resume recomputes "
                             f"{_resumed_handoff_gate_config_hash!r}"
                         ),
+                        resume_refusal=_HITL_GATE_CONFIG_REFUSAL,
                     ), 0
             hitl_delivery_cell = HITLDeliveryCell(_handoff_resolved_hitl)
 
@@ -16155,6 +16429,7 @@ def _execute_decentralized_handoff(
             # compose_branch_child_context's model_copy (deliberately not reset).
             resume_context=resume_context,
             child_resume_authority=child_resume_authority,
+            validator_run=validator_run,
             hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
             effect_fence_uniform_fallback_eligible_key=effect_fence_uniform_fallback_eligible_key,
             effect_fence_tree_wide_abort_present=effect_fence_tree_wide_abort_present,

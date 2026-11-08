@@ -1,4 +1,4 @@
-"""U-RT-83 — RuntimeConfig.validator_framework_config + ValidatorFrameworkConfig empty-marker tests.
+"""U-RT-83 — RuntimeConfig.validator_framework_config + ValidatorFrameworkConfig carrier tests.
 
 Authority: C-RT-23.
 
@@ -8,12 +8,13 @@ ACs per runtime plan v2.17 §1 U-RT-83:
    established field-ordering position (after `memory_tool_backend_config`);
    type `ValidatorFrameworkConfig | None`; default `None`; frozen-model
    invariant preserved.
-2. `ValidatorFrameworkConfig` empty-marker authored as `@dataclass(frozen=True)`
-   with NO fields; `.default()` classmethod returns `cls()` empty instance.
+2. `ValidatorFrameworkConfig` is a `@dataclass(frozen=True)` catalog of
+   `ValidatorBinding`s (Trial193.4h4 replaced the v1.18 empty marker; an
+   empty catalog is refused, so opt-out is `None`).
 3. Module organization under `lifecycle/` (true parallel to §14.12 precedent
    `memory_tool_types.py`).
 4. `RuntimeConfig(validator_framework_config=None)` constructs successfully +
-   `RuntimeConfig(validator_framework_config=ValidatorFrameworkConfig.default())`
+   `RuntimeConfig(validator_framework_config=<one-binding catalog>)`
    constructs successfully. RuntimeConfig Pydantic v2 frozen-model validation
    passes in both shapes.
 5. Spec v1.18 §3 C-RT-02 RuntimeConfig table NEW row verbatim.
@@ -28,8 +29,10 @@ from typing import Any
 
 import pytest
 from harness_core.deployment_surface import DeploymentSurface
+from harness_core.identity import StepID
 from harness_cp.topology_pattern import TopologyPattern
 from harness_runtime.lifecycle.validator_framework_types import (
+    ValidatorBinding,
     ValidatorFrameworkConfig,
 )
 from harness_runtime.types import (
@@ -77,24 +80,21 @@ def test_runtime_config_field_declared_in_schema() -> None:
     assert "validator_framework_config" in RuntimeConfig.model_fields
 
 
-# AC #2 — empty-marker dataclass shape.
+# AC #2 — catalog dataclass shape.
+
+_CATALOG = ValidatorFrameworkConfig(
+    bindings=(ValidatorBinding(step_id=StepID("step"), class_qualified_name="pkg.mod:Check"),)
+)
 
 
 def test_validator_framework_config_is_frozen_dataclass() -> None:
     assert dataclasses.is_dataclass(ValidatorFrameworkConfig)
-    fields = dataclasses.fields(ValidatorFrameworkConfig)
-    assert fields == (), "empty-marker must declare zero fields at v1.18"
-    # frozen=True: assignment raises.
-    instance = ValidatorFrameworkConfig()
     with pytest.raises(dataclasses.FrozenInstanceError):
-        instance.unknown = "x"  # type: ignore[attr-defined]
+        _CATALOG.bindings = ()  # type: ignore[misc]
 
 
-def test_validator_framework_config_default_factory() -> None:
-    default = ValidatorFrameworkConfig.default()
-    assert isinstance(default, ValidatorFrameworkConfig)
-    # Empty-marker: all instances structurally equal.
-    assert default == ValidatorFrameworkConfig()
+def test_binding_params_default_to_empty() -> None:
+    assert _CATALOG.bindings[0].params == {}
 
 
 # AC #3 — module organization under lifecycle/ (parallel to §14.12 precedent).
@@ -110,12 +110,12 @@ def test_module_lives_under_lifecycle_subdirectory() -> None:
 # AC #4 — both shapes pass RuntimeConfig Pydantic validation.
 
 
-def test_runtime_config_accepts_default_factory_instance(tmp_path: Path) -> None:
+def test_runtime_config_accepts_catalog(tmp_path: Path) -> None:
     config = RuntimeConfig(
         **_minimal_runtime_config_kwargs(tmp_path),
-        validator_framework_config=ValidatorFrameworkConfig.default(),
+        validator_framework_config=_CATALOG,
     )
-    assert isinstance(config.validator_framework_config, ValidatorFrameworkConfig)
+    assert config.validator_framework_config == _CATALOG
 
 
 def test_runtime_config_rejects_wrong_type(tmp_path: Path) -> None:
@@ -130,13 +130,12 @@ def test_runtime_config_frozen_invariant_preserved(tmp_path: Path) -> None:
     """AC #1 — RuntimeConfig frozen-model invariant preserved post-addition."""
     config = RuntimeConfig(**_minimal_runtime_config_kwargs(tmp_path))
     with pytest.raises(ValidationError):
-        config.validator_framework_config = ValidatorFrameworkConfig()  # type: ignore[misc]
+        config.validator_framework_config = _CATALOG  # type: ignore[misc]
 
 
 # AC #6 — importable from the package surface.
 
 
 def test_carriers_importable() -> None:
-    # Imports at module top; assert schema-level field presence + default factory.
     assert "validator_framework_config" in RuntimeConfig.model_fields
-    assert ValidatorFrameworkConfig.default() == ValidatorFrameworkConfig()
+    assert ValidatorBinding is not None

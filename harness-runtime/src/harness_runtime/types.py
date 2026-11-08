@@ -832,6 +832,20 @@ class CollectorConfig(BaseModel):
         return value
 
 
+class FullVMCarrier(StrEnum):
+    """Selected `TIER_4_FULL_VM` carrier (859, ADR-D2 Tier-4 cells).
+
+    Explicit operator selection — never a fallback chain: an unavailable selected
+    carrier refuses, it does not substitute the other carrier or a lower tier.
+    """
+
+    E2B = "e2b"
+    """E2B managed full-VM sandbox (the original R-412 carrier; the default)."""
+
+    KATA = "kata"
+    """Local Kata Containers hardware-virtualized microVM under Docker."""
+
+
 class SandboxDriverConfig(BaseModel):
     """Per-server tool-execution-driver config — runtime spec v1.43 §14.9.9 (FR-1).
 
@@ -857,7 +871,7 @@ class SandboxDriverConfig(BaseModel):
     image: str | None = None
     """Container image for `TIER_2_CONTAINER` / `TIER_3_MICROVM` drivers. Required
     for those tiers (absence → `RT-FAIL-SANDBOX-DRIVER-UNAVAILABLE`); ignored for
-    `TIER_4_FULL_VM` (E2B uses an env-configured template)."""
+    `TIER_4_FULL_VM` with the E2B carrier (E2B uses an env-configured template)."""
 
     network: str = "none"
     """Container network mode (`TIER_2`/`TIER_3`). Defaults to `"none"` (egress-off)."""
@@ -873,6 +887,14 @@ class SandboxDriverConfig(BaseModel):
 
     allow_internet_access: bool = False
     """`TIER_4_FULL_VM` (E2B) network-egress toggle. Defaults to egress-off."""
+
+    full_vm_carrier: FullVMCarrier = FullVMCarrier.E2B
+    """`TIER_4_FULL_VM` carrier. `kata` selects the local Kata microVM driver, which
+    requires `image` and `network="none"` (any other mode refuses; egress-restricted)."""
+
+    full_vm_runtime: str = "kata"
+    """Docker runtime name registered for Kata (`full_vm_carrier=kata` only); its
+    `docker info` registration must carry a Kata identity or the call refuses."""
 
 
 class MCPClientConfig(BaseModel):
@@ -2600,25 +2622,20 @@ class RuntimeConfig(BaseModel):
     """
 
     validator_framework_config: ValidatorFrameworkConfig | None = None
-    """Operator-supplied validator framework opt-in marker.
+    """Operator-supplied validator catalog (opt-in).
 
     Added at U-RT-83 per `Spec_Harness_Runtime_v1.md` v1.18 §3 C-RT-02
-    field-table extension (Class 1 fork validator-composer arc stage-4
-    absence Reading A absorption at `.harness/class_1_fork_validator_
-    composer_arc_stage_4_absence.md`; operator-ratified 2026-05-24).
+    field-table extension; the §14.13.7 operator-supply shape (one
+    `ValidatorBinding` per guarded step) landed at Trial193.4h4.
 
-    Empty-marker shape at v1.18 Reading A scope per spec §14.13.1. `None`
-    (the default) → operator opt-out → stage-4 factory returns `None` →
-    `ctx.validator_framework is None` → the `workflow_driver.py:668`
-    post-dispatch hook branch evaluates False (production-default state
-    preserved). Non-`None` → operator opt-in → stage-4 factory constructs
-    a `ConcreteValidatorFramework` instance bound to `ctx.validator_
-    framework`; the driver hook True-arm fires per C-CP-25 §25.3.3.4.
-
-    Internal operator-supply shape (validator catalog, per-validator config,
-    discovery mechanism) deferred to implementation discretion per
-    §14.13.7. Ingested at stage 4 OD bucket by
-    `materialize_validator_framework_stage` factory (U-RT-84) per §14.13.3.
+    `None` (the default) → operator opt-out → stage-4 factory returns `None`
+    → `ctx.validator_framework is None` → the driver's post-dispatch
+    validator hook is skipped (production-default state preserved).
+    Non-`None` → operator opt-in → the stage-4 factory resolves and
+    constructs every bound validator and binds the driver-facing facade over
+    a populated `ConcreteValidatorFramework` at `ctx.validator_framework`.
+    TOML: `[[runtime.validator_framework_config.bindings]]` tables with
+    `step_id`, `class_qualified_name` and optional scalar `params`.
     """
 
     pause_resume_protocol_config: PauseResumeProtocolConfig | None = None
@@ -2919,13 +2936,11 @@ class HarnessContext(BaseModel):
     collector_daemon: CollectorDaemonHandle
     cost_chain: CostAttributionChain
     audit_writer: AuditLedgerWriter
-    # U-RT-84 — ValidatorFramework Protocol-typed binding per runtime spec
-    # v1.18 §4 + §14.13. Narrowed from the v1.17-era `object | None` carrier
-    # to the CP-canonical Protocol surface from CP spec v1.11 §25.1
-    # (Mapping[str, Validator] + async evaluate(...)). Stage 4 OD-bucket
-    # factory `materialize_validator_framework_stage` produces this; `None`
-    # is the production-default (operator opt-out → driver hook False arm).
-    # See §14.13.1 + plan v2.17 U-RT-84 AC #5.
+    # U-RT-84 / Trial193.4h4 — the one stage-4 CP async `ValidatorFramework`
+    # per bootstrap (runtime spec v1.138 §14.13.2/.5). It holds no per-run
+    # state: each `run_workflow` invocation opens its own synchronous
+    # `ValidatorRunBinding` over it (§14.13.8). `None` is the production
+    # default (operator opt-out → no binding → driver hook False arm).
     validator_framework: ValidatorFramework | None = None
 
     # U-RT-87 — PauseResumeProtocol carrier per runtime spec v1.21 §4 +

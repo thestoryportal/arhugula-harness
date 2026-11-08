@@ -19,7 +19,7 @@ from harness_is.memory_operation_ledger import (
     MemoryOperationProjection,
 )
 from harness_is.memory_policy import AccessDecision, MemoryPolicyResolver
-from harness_is.memory_record_envelope import MemoryID, MemoryRecordKind, MemoryScope
+from harness_is.memory_record_envelope import MemoryID, MemoryRecordKind, MemoryScope, MemoryTier
 from harness_is.memory_retrieval_index import (
     DerivedRetrievalIndex,
     DerivedRetrievalIndexEntry,
@@ -67,6 +67,9 @@ class RetrievalExclusionReason(StrEnum):
     RECORD_UNAVAILABLE = "record_unavailable"
     TOKEN_BUDGET_EXCEEDED = "token_budget_exceeded"
 
+
+#: The single C-MEM-05 `injection_policy` value that admits prompt-packet text.
+_PROMPT_INJECTION_POLICY = "prompt_packet_allowed"
 
 _INACTIVE_STATUS_REASONS: Mapping[str, RetrievalExclusionReason] = {
     "denied": RetrievalExclusionReason.DENIED,
@@ -158,6 +161,10 @@ class MemoryRetrievalResult(BaseModel):
     packet_hash: str
     ranking_trace: tuple[RankingTraceEntry, ...]
     packet: MemoryPacket
+    #: Whether every selected record's own `injection_policy` admits prompt
+    #: text. Prompt-packet retrieval already excludes the rest, so this is
+    #: always true there; a tool packet may carry records restricted to tools.
+    prompt_injectable: bool
 
     @model_validator(mode="after")
     def _hashes_match_packet(self) -> Self:
@@ -224,7 +231,12 @@ class MemoryRetriever:
             policy_ref=self._policy_ref,
         )
         resolution = resolve_request_scope(request.scope, self._family_canonicalizer)
-        eligible, excluded = self._eligible_records(request, index, resolution)
+        eligible, excluded = self._eligible_records(
+            request,
+            index,
+            resolution,
+            access_mode=access_mode,
+        )
         ordered_for_packet = tuple(sorted(eligible, key=_packet_candidate_sort_key))
         sections, selected, budget_excluded = _assemble_sections(
             ordered_for_packet,
@@ -251,6 +263,9 @@ class MemoryRetriever:
             packet_hash=packet.packet_hash,
             ranking_trace=ranking_trace,
             packet=packet,
+            prompt_injectable=all(
+                _record_permits_prompt_injection(item.record) for item in selected
+            ),
         )
         self._write_retrieval_event(
             result,
@@ -265,6 +280,8 @@ class MemoryRetriever:
         request: MemoryRetrievalRequest,
         index: DerivedRetrievalIndex,
         resolution: RequestScopeResolution,
+        *,
+        access_mode: MemoryPacketAccessMode,
     ) -> tuple[tuple[_EligibleRecord, ...], tuple[ExcludedMemoryRef, ...]]:
         query_terms = set(_tokenize(request.query_summary))
         eligible: list[_EligibleRecord] = []
@@ -286,6 +303,12 @@ class MemoryRetriever:
                 record = self._store.read_record(entry.memory_id, entry.record_kind)
             except MemoryStoreRecordUnavailableError:
                 excluded.append(_excluded(entry, RetrievalExclusionReason.RECORD_UNAVAILABLE))
+                continue
+            if (
+                access_mode is MemoryPacketAccessMode.PROMPT_EXTENSION_PACKET
+                and not _record_permits_prompt_injection(record)
+            ):
+                excluded.append(_excluded(entry, RetrievalExclusionReason.POLICY_DENIED))
                 continue
             content_terms = _record_query_terms(record)
             if query_terms and not query_terms.intersection(content_terms):
@@ -345,6 +368,21 @@ class MemoryRetriever:
                 procedural_snapshot_ref=_procedural_snapshot_ref(result.packet.sections),
             )
         )
+
+
+def _record_permits_prompt_injection(record: MemoryStoreRecord) -> bool:
+    """Whether a record's own C-MEM-05 `injection_policy` admits prompt text.
+
+    Only the explicit `prompt_packet_allowed` value admits a record; `never`,
+    `retrieval_only`, the tool/native-only values and any malformed value do
+    not. Semantic records must carry the field, so its absence fails closed.
+    Procedural snapshots predate the field, so a snapshot without it keeps the
+    prompt eligibility it always had. Ordinary tool retrieval is not gated here.
+    """
+
+    if "injection_policy" not in record.content:
+        return record.envelope.tier is not MemoryTier.SEMANTIC
+    return record.content["injection_policy"] == _PROMPT_INJECTION_POLICY
 
 
 def _validate_sha256_hex(value: str, *, field_name: str) -> None:

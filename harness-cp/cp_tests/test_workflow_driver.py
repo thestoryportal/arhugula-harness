@@ -295,7 +295,8 @@ def _ctx(*, prior_entries: int = 0) -> tuple[_FakeCtx, _FakeLedger, _FakeEmitter
 
 def test_run_result_eight_fields() -> None:
     """8-field RunResult per C-CP-25 §25.2 + v1.21 §14.14.5 invariant 4
-    additive `pause_snapshot` field (U-RT-89)."""
+    additive `pause_snapshot` field (U-RT-89) + CP v1.131 §0.3 amended
+    C-CP-25 §25.2 additive `resume_refusal` field (N1)."""
     result = RunResult(
         workflow_id="wf",
         run_id="run-1",
@@ -312,6 +313,7 @@ def test_run_result_eight_fields() -> None:
         "fail_class",
         "pause_snapshot",
         "pause_record_ref",
+        "resume_refusal",
     }
 
 

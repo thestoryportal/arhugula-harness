@@ -66,7 +66,13 @@ from harness_cp.workflow_driver import (
     StepKindDispatcherNotBoundError,
     execute_workflow,
 )
-from harness_cp.workflow_driver_types import RunStatus, StepKind, WorkflowStep
+from harness_cp.workflow_driver_types import (
+    ChildResumeRefusal,
+    ResumeRefusal,
+    RunStatus,
+    StepKind,
+    WorkflowStep,
+)
 from harness_cp.workflow_manifest_entry import WorkflowManifestEntry
 from harness_is.state_ledger_entry_schema import Actor, ActorClass, Identifier
 
@@ -94,6 +100,11 @@ _PLACEMENT_B = HITLPlacement(
     tool_filter=("read_file",),
     cascade_policy=CascadePolicy.PAUSE,
     timeout=9999,  # ONLY the timeout differs from _PLACEMENT_A
+)
+
+#: CP v1.131 §0.4 items 1-2: the typed refusal every gate-config guard/origin returns.
+_GATE_CONFIG_REFUSAL = ResumeRefusal(
+    reasons=frozenset({ChildResumeRefusal.HITL_GATE_CONFIG_CHANGED})
 )
 
 
@@ -325,6 +336,7 @@ def test_linear_resume_rejects_hitl_gate_config_changed() -> None:
     assert resumed.status is RunStatus.FAILED
     assert resumed.fail_class is not None
     assert "linear-resume-hitl-gate-config-changed" in resumed.fail_class
+    assert resumed.resume_refusal == _GATE_CONFIG_REFUSAL
 
 
 def test_linear_resume_rejects_hitl_gate_config_placement_removed() -> None:
@@ -336,6 +348,7 @@ def test_linear_resume_rejects_hitl_gate_config_placement_removed() -> None:
     assert resumed.status is RunStatus.FAILED
     assert resumed.fail_class is not None
     assert "linear-resume-hitl-gate-config-changed" in resumed.fail_class
+    assert resumed.resume_refusal == _GATE_CONFIG_REFUSAL
 
 
 def test_linear_resume_skips_check_for_legacy_snapshot_with_absent_hash() -> None:
@@ -498,6 +511,7 @@ def test_eo_resume_rejects_hitl_gate_config_changed() -> None:
     assert resumed.status is RunStatus.FAILED
     assert resumed.fail_class is not None
     assert "evaluator-optimizer-resume-hitl-gate-config-changed" in resumed.fail_class
+    assert resumed.resume_refusal == _GATE_CONFIG_REFUSAL
 
 
 def test_eo_resume_rejects_hitl_gate_config_placement_removed() -> None:
@@ -508,6 +522,7 @@ def test_eo_resume_rejects_hitl_gate_config_placement_removed() -> None:
     assert resumed.status is RunStatus.FAILED
     assert resumed.fail_class is not None
     assert "evaluator-optimizer-resume-hitl-gate-config-changed" in resumed.fail_class
+    assert resumed.resume_refusal == _GATE_CONFIG_REFUSAL
 
 
 def test_eo_resume_skips_check_for_legacy_snapshot_with_absent_hash() -> None:
@@ -631,6 +646,7 @@ def test_dh_resume_rejects_hitl_gate_config_changed() -> None:
     assert resumed.status is RunStatus.FAILED
     assert resumed.fail_class is not None
     assert "decentralized-handoff-resume-hitl-gate-config-changed" in resumed.fail_class
+    assert resumed.resume_refusal == _GATE_CONFIG_REFUSAL
 
 
 def test_dh_resume_rejects_hitl_gate_config_placement_removed() -> None:
@@ -641,6 +657,7 @@ def test_dh_resume_rejects_hitl_gate_config_placement_removed() -> None:
     assert resumed.status is RunStatus.FAILED
     assert resumed.fail_class is not None
     assert "decentralized-handoff-resume-hitl-gate-config-changed" in resumed.fail_class
+    assert resumed.resume_refusal == _GATE_CONFIG_REFUSAL
 
 
 def test_dh_resume_skips_check_for_legacy_snapshot_with_absent_hash() -> None:

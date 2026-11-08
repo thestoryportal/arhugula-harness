@@ -47,11 +47,11 @@ def _entry(**over: object) -> WorkflowManifestEntry:
     return WorkflowManifestEntry(**base)  # type: ignore[arg-type]
 
 
-def test_workflow_manifest_entry_fourteen_fields() -> None:
-    """B-18-3C-PREWARM — `concurrent_cache_warmup` field added (ADR-D4 §1.8);
-    was 13 at v1.63 with `fanout_timeout_disposition`, 12 at v1.20 with
+def test_workflow_manifest_entry_fifteen_fields() -> None:
+    """CP v1.130 §25.11.1.1 — `worker_selection` field added; was 14 with
+    `concurrent_cache_warmup` (B-18-3C-PREWARM, ADR-D4 §1.8), 13 at v1.63 with `fanout_timeout_disposition`, 12 at v1.20 with
     `default_gate_level`, 11 at v2.12 with `entry_version`."""
-    assert len(WorkflowManifestEntry.model_fields) == 14
+    assert len(WorkflowManifestEntry.model_fields) == 15
     assert set(WorkflowManifestEntry.model_fields) == {
         "workflow_id",
         "workload_class",
@@ -67,6 +67,7 @@ def test_workflow_manifest_entry_fourteen_fields() -> None:
         "default_gate_level",
         "fanout_timeout_disposition",
         "concurrent_cache_warmup",
+        "worker_selection",
     }
 
 

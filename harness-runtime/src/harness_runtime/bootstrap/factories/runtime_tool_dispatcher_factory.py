@@ -66,6 +66,7 @@ from harness_runtime.lifecycle.audit_signing_fail_closed_validation import (
 from harness_runtime.lifecycle.docker_tool_execution_driver import (
     DockerToolRunnerExecutionDriver,
     GVisorRunscToolRunnerExecutionDriver,
+    KataMicroVMToolRunnerExecutionDriver,
 )
 from harness_runtime.lifecycle.e2b_tool_execution_driver import (
     E2BManagedFullVMToolRunnerExecutionDriver,
@@ -83,6 +84,7 @@ from harness_runtime.lifecycle.runtime_tool_dispatcher import (
     ToolExecutionDriver,
 )
 from harness_runtime.types import (
+    FullVMCarrier,
     MCPClientConfig,
     RuntimeConfig,
     SandboxDriverConfig,
@@ -186,6 +188,8 @@ def _select_tool_execution_driver(
     fail-loud `RT-FAIL-SANDBOX-DRIVER-UNAVAILABLE` (FR-2(i)). The factory NEVER
     falls through to in-process for a `> TIER_1_PROCESS` claim (the silent-in-process
     defect this closes); invariant: delivered-tier ≥ resolved-tier, no silent downgrade.
+    `TIER_4_FULL_VM` delivers through the explicitly selected `full_vm_carrier` (E2B
+    managed or local Kata microVM); the selection is never a fallback between them.
     """
     if tier is SandboxTier.TIER_1_PROCESS:
         return MCPHostToolExecutionDriver()
@@ -221,6 +225,26 @@ def _select_tool_execution_driver(
             docker_binary=driver_config.docker_binary,
             timeout_seconds=driver_config.timeout_seconds,
             network=driver_config.network,
+        )
+
+    if tier is SandboxTier.TIER_4_FULL_VM and driver_config.full_vm_carrier is FullVMCarrier.KATA:
+        if driver_config.image is None:
+            raise SandboxDriverUnavailableError(
+                f"resolved tier {tier.value!r} (local Kata microVM) requires sandbox_driver.image"
+            )
+        if driver_config.network != "none":
+            # The local Tier-4 carrier is egress-restricted (ADR-D2 Tier-4 cells):
+            # refuse any other network mode rather than run with egress.
+            raise SandboxDriverUnavailableError(
+                f"resolved tier {tier.value!r} (local Kata microVM) requires "
+                f"sandbox_driver.network='none', got {driver_config.network!r}"
+            )
+        return KataMicroVMToolRunnerExecutionDriver(
+            image=driver_config.image,
+            command=driver_config.command,
+            docker_binary=driver_config.docker_binary,
+            timeout_seconds=driver_config.timeout_seconds,
+            runtime=driver_config.full_vm_runtime,
         )
 
     if tier is SandboxTier.TIER_4_FULL_VM:

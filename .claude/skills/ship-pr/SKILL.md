@@ -1,7 +1,27 @@
 ---
 name: ship-pr
-description: Open a PR for the current arc, run its one bounded review cycle (codex + the decorrelated `merge-gate` lenses, launched on push and concurrent with CI), merge on CI green AND a clean pass 3, and run the post-merge fixed-point refresh checklist correctly. Use when the operator says "/ship-pr", "ship it", "open the PR", "land this", or when an arc is built+green and ready to merge. Codifies the §12.2 post-merge audit + the §12.2.1 terminating-refresh fixed-point so the roadmap_status.md refresh is done right (and does not recurse). Do NOT use to author code (that is the arc itself) — use it for the PR + gate + refresh ritual.
+description: Ship a reviewed arc through required candidate CI and the safe merge door using the tracked delivery policy; retain in-flight legacy obligations.
 ---
+
+## Delivery policy selection — read before the legacy procedure
+
+Read `.harness/workflow-policy.json`. When `review_rules.delivery` is
+`single-independent-milestone-status-v1`, follow
+`docs/delivery-policy.md` for new arcs and **stop here**. That procedure
+uses one independent review, delta correction review, focused local checks and
+milestone status. No default three-lens stack or separate roadmap-refresh PR is
+owed. Existing delivered legacy pass tags and refresh intents retain their
+obligations; use the legacy sections below only for that retained scope.
+
+The direct instruction "Eliminate the gemini requirement" selects a separate
+independent reviewer session of any model family. Follow delivery-policy.md's
+native-session evidence route; author/correction-author self-approval remains
+forbidden. No mandatory Gemini, fallback or shadow step is owed, including when
+retaining legacy findings and spent passes. Preserve actual disclosure denials.
+
+The remainder of this file is the legacy procedure. Do not combine its review
+stack or refresh cycle with the selected delivery procedure.
+
 
 # ship-pr — PR + fixed-point refresh (U-HK-23)
 
@@ -44,6 +64,12 @@ canonical §12 protocol** rather than re-stating it — the recipe lives in CLAU
   as `just leg-selfcheck` below, and for the same reason. `just codex-context-check` stays the
   checkpoint-bound local gate; what the two shapes may differ on is named in
   `tools/test_codex_context_guard.py::test_local_ci_parity`.
+- **Stacked work:** while a parent has not landed, qualified authors may publish the
+  reviewed source branch and continue independent work without opening its PR yet.
+  Reconcile against actual main, import applicable review and run affected checks at
+  the front of the train, then open the PR for normal final-candidate CI. For an
+  existing stacked PR, use the retarget-before-push procedure in `docs/delivery-policy.md`.
+  Verify the resulting PR run and required checks; a metadata event is not candidate CI.
 - **Grounding pass (U-WT-01).** Before codex round 1: (a) re-read every `file:line` cite in
   the diff and PR body at HEAD — never from recall; (b) recompute every count/arithmetic
   claim from the actual source rather than restating it; (c) confirm every `#NNN` reference

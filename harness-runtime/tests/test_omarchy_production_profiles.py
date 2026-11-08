@@ -45,6 +45,7 @@ PROFILES = (
     Profile("examples/omarchy.ollama.toml.example", ("ollama",), ()),
     Profile("examples/omarchy.claude-code.toml.example", ("claude_code",), ("claude-code",)),
     Profile("examples/omarchy.codex.toml.example", ("codex",), ("codex",)),
+    Profile("examples/omarchy.offline-embedding.toml.example", ("ollama",), ()),
 )
 PROFILE_IDS = [Path(p.file).name for p in PROFILES]
 LEGACY_EXAMPLES = (
@@ -290,6 +291,9 @@ def test_deploy_docs_give_the_operator_setup_and_state_the_limits() -> None:
         "omarchy.ollama.toml.example",
         "omarchy.claude-code.toml.example",
         "omarchy.codex.toml.example",
+        "Four additive, complete profiles",
+        "| `examples/omarchy.offline-embedding.toml.example` | local Ollama with offline embedding"
+        " routing ([guide](operations/omarchy-offline-embedding.md)) | source-checked only |",
         "HELD",
         "durable",
     ):

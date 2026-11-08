@@ -77,8 +77,8 @@ poison the lock.
 from __future__ import annotations
 
 import asyncio
-import os
 from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, NamedTuple, Protocol, cast, runtime_checkable
 
@@ -109,9 +109,11 @@ from harness_od.idempotency_join_dedup import SpanCostRecord
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from harness_runtime.lifecycle.journal_workflow_pause_store import (
+    HandleUnknownCause,
     PauseJournalReadCause,
     PauseJournalReadResult,
 )
+from harness_runtime.lifecycle.mcp_server import ResumedEntry
 from harness_runtime.lifecycle.protected_result_store import normalize_tenant_scope
 from harness_runtime.lifecycle.root_resume_admission import (
     UNCLAIMED,
@@ -231,12 +233,12 @@ class ResumeHandleUnknownError(Exception):
         self,
         message: str,
         *,
-        cause: PauseJournalReadCause,
+        cause: HandleUnknownCause,
         retryable: bool = False,
         indeterminate: bool = False,
     ) -> None:
         super().__init__(message)
-        self.cause: PauseJournalReadCause = cause
+        self.cause: HandleUnknownCause = cause
         self.retryable: bool = retryable
         self.indeterminate: bool = indeterminate
 
@@ -319,6 +321,17 @@ class ResumePauseStateStaleError(Exception):
     def __init__(self, message: str, *, claimed_token: str) -> None:
         super().__init__(message)
         self.claimed_token: str = claimed_token
+
+
+class ResumePauseRecordSupersededError(Exception):
+    """`RT-FAIL-RESUME-PAUSE-RECORD-SUPERSEDED` (Runtime spec v1.137 §D.5) — the latest durable
+    record for the supplied `resume_handle` is a supersession record: a later fresh run of the
+    workflow was admitted after this pause was captured, so the pause is no longer resumable.
+
+    A pre-bootstrap refusal of its own, never a `ResumeHandleUnknownError` cause, a claim refusal
+    or an argument error. It carries no fields; the message names no path, tenant or run.
+    Raised by the durable handle read once that read reports supersession (U-RT-160 portion 160a).
+    """
 
 
 # ---------------------------------------------------------------------------
@@ -818,18 +831,14 @@ class _LocatedPauseRead(NamedTuple):
     result: PauseJournalReadResult
 
 
-def _read_durable_pause_snapshot(
-    config: RuntimeConfig,
-    workflow: WorkflowObject,
-    resume_handle: str,
-) -> _LocatedPauseRead:
+def _read_durable_pause_snapshot(config: RuntimeConfig, resume_handle: str) -> _LocatedPauseRead:
     """Read the latest durably-journaled `PauseSnapshot` for the handle (C-RT-35).
 
-    Resolves the pause-journal directory the SAME way the stage-5 factory does at
-    capture — `<STATE_LEDGER resolved dir>/pause-journal` for this workflow's
-    `(workload_class, deployment_surface)` — and reads the latest record. Pure
-    (no bootstrap side effects); `PathResolver.resolve_path` does not create the
-    directory.
+    Reads the latest record from the installation's pause-journal root, the one
+    directory the stage-5 factory captures to (Runtime spec v1.137 Rule B3). Pure
+    (no bootstrap side effects); resolution creates no directory. An unresolved
+    root refuses `ResumeProtocolNotBoundError` (Rule B7), so every surface reading
+    through here refuses before any claim and never reports a handle or absence.
 
     Returns the CAUSE-ATTRIBUTED result (spec v1.107 §30): fail-closed exactly as
     before, but with the five causes distinguished instead of collapsed into one
@@ -837,24 +846,23 @@ def _read_durable_pause_snapshot(
     carried so the token needs no second read. B-104: the result travels with the
     real directory it was read from, so a claim never re-derives a record's address.
     """
-    from harness_is.path_class_registry import PathClass
-    from harness_is.path_resolver import PathResolver
-
-    from harness_runtime.config.path_bindings import build_path_binding
-    from harness_runtime.lifecycle.journal_workflow_pause_store import (
-        JournalWorkflowPauseStore,
-        pause_journal_dir_for,
+    from harness_runtime.lifecycle.journal_workflow_pause_store import JournalWorkflowPauseStore
+    from harness_runtime.lifecycle.pause_journal_root_resolver import (
+        PauseJournalRootUnresolvedError,
+        resolve_pause_journal_root,
     )
 
-    resolver = PathResolver(build_path_binding(config.path_bindings))
-    state_ledger_dir = resolver.resolve_path(
-        PathClass.STATE_LEDGER,
-        workflow.workload_class,
-        config.deployment_surface,
-    )
-    # [LAW:one-source-of-truth] Resolved ONCE, then read through: the directory this read
-    # opened is the value handed on, so a symlink retargeted later cannot re-address it.
-    journal_dir = Path(os.path.realpath(pause_journal_dir_for(state_ledger_dir)))
+    try:
+        # [LAW:one-source-of-truth] Resolved ONCE, to the real directory, then read through: the
+        # directory this read opened is the value handed on, so a symlink retargeted later cannot
+        # re-address it.
+        journal_dir = resolve_pause_journal_root(config)
+    except PauseJournalRootUnresolvedError as exc:
+        # [LAW:single-enforcer] The one read authority refuses for every surface reading here.
+        raise ResumeProtocolNotBoundError(
+            "RT-FAIL-RESUME-PROTOCOL-NOT-BOUND: the installation's pause-journal root is "
+            "unresolved, so no durable pause record can be read (Runtime spec v1.137 Rule B7)."
+        ) from exc
     # The tenant scope enters the KEY from `config` — Runtime spec v1.108
     # §14.14.9.1: keying is the §14.14.8 TENANT-COMPOSITE key, *"matching
     # `resume()` exactly"*, by that paragraph's OWN both-surfaces-or-neither
@@ -908,9 +916,7 @@ async def _enforce_pause_state_staleness_precondition(
     # the journal cannot be written concurrently while the comparison runs.
     # *(Out-of-family review [P2], round 2.)*
     current_read = (
-        await asyncio.to_thread(
-            _read_durable_pause_snapshot, config, workflow, workflow.workflow_id
-        )
+        await asyncio.to_thread(_read_durable_pause_snapshot, config, workflow.workflow_id)
     ).result
     current = mint_staleness_token(current_read)
     # THREE conditions, all required. The token match alone is NOT sufficient on
@@ -1102,9 +1108,7 @@ async def read_paused_workflow_state(
     # *(out-of-family review [P2] at the impl leg)*. `resume()`'s own long-standing
     # synchronous read is UNCHANGED — narrowing that is out of this arc's scope.
     read = (
-        await asyncio.to_thread(
-            _read_durable_pause_snapshot, resolved_config, workflow, resume_handle
-        )
+        await asyncio.to_thread(_read_durable_pause_snapshot, resolved_config, resume_handle)
     ).result
     snapshot = read.snapshot
     # The WORKFLOW-MATCH guard runs HERE, before any projection is returned
@@ -1236,6 +1240,175 @@ def _emit_pause_state_read(
             **counts,
         )
     )
+
+
+@dataclass(frozen=True)
+class DurableHandle:
+    """A durable-store resume source: the workflow whose latest journaled pause is resumed."""
+
+    workflow_id: str
+
+
+# [LAW:types-are-the-program] Runtime spec v1.141 §2.1: exactly one source, never both or neither.
+type RootResumeSource = DurableHandle | PauseSnapshot
+
+
+def _root_resume_source(
+    pause_snapshot: PauseSnapshot | None, resume_handle: str | None
+) -> RootResumeSource:
+    """`api.resume`'s two optional keyword inputs, parsed into the one typed resume source."""
+    match pause_snapshot, resume_handle:
+        case None, str() as handle:
+            return DurableHandle(handle)
+        case PauseSnapshot() as snapshot, None:
+            return snapshot
+        case _:
+            _supplied = "both" if pause_snapshot is not None else "neither"
+            raise ResumeArgsError(
+                "resume() requires exactly one of `pause_snapshot` (caller-supplied) "
+                f"or `resume_handle` (harness durable-store read); got {_supplied} "
+                "(C-RT-35)."
+            )
+
+
+def parse_resume_context(raw: dict[str, Any] | None) -> ResumeContext | None:
+    """A wire `resume_context` parsed once into its closed two-variant type (spec v1.141 §1.1).
+
+    Both variants forbid extra keys, so `pause_state` alone selects the one that can accept
+    the object; parsing as the base variant alone would make the §30 staleness fence
+    unreachable. An object neither accepts is the caller's argument error (§4.2), raised
+    before any journal read.
+    """
+    match raw:
+        case None:
+            return None
+        case {"pause_state": _}:
+            variant: type[ResumeContext] = AccessorDerivedResumeContext
+        case _:
+            variant = ResumeContext
+    try:
+        return variant.model_validate(raw)
+    except ValidationError as exc:
+        raise ResumeArgsError(
+            "resume_context is accepted by neither ResumeContext variant "
+            "(Runtime spec v1.141 §4.2)."
+        ) from exc
+
+
+async def admit_root_resume(
+    workflow: WorkflowObject,
+    source: RootResumeSource,
+    resume_context: ResumeContext | None,
+    config: RuntimeConfig,
+) -> ResumedEntry:
+    """The one pre-body root resume admission (Runtime spec v1.141 §2.2-§2.3).
+
+    `api.resume` (inside `_run_lock`) and the daemon's `resume_workflow` (no process lock)
+    both call this unit and re-implement none of its checks. Each check raises its existing
+    typed refusal, in the existing order. The claim is not made here: `DurableRootResume`
+    claims the record at body admission, and refuses one that changed after these reads.
+    """
+
+    # Detect-then-refuse: resume REQUIRES the pause/resume opt-in (the same
+    # config that produced the pause). Without it the driver's entry-point
+    # resume detection is inert and the workflow would SILENTLY re-run from
+    # step 0 — re-executing completed prefix steps + side effects. Fail fast
+    # (pre-bootstrap) rather than silently re-run. C-RT-35.
+    if config.pause_resume_protocol_config is None:
+        raise ResumeProtocolNotBoundError(
+            "resume() requires config.pause_resume_protocol_config (the "
+            "pause/resume opt-in that produced the pause); without it the "
+            "driver's resume detection is inert and the workflow would "
+            "silently re-run from step 0 (C-RT-35 detect-then-refuse)."
+        )
+
+    # Resolve the snapshot to resume from: the caller-supplied one, or the
+    # latest record the harness durably journaled for the handle. C-RT-35.
+    if isinstance(source, DurableHandle):
+        if not config.pause_resume_protocol_config.durable:
+            raise ResumeArgsError(
+                "resume_handle requires the durable opt-in "
+                "(pause_resume_protocol_config.durable=True); without it the "
+                "harness owns no snapshot store to read (C-RT-35)."
+            )
+        _located = _read_durable_pause_snapshot(config, source.workflow_id)
+        _read = _located.result
+        if _read.snapshot is None:
+            # spec v1.107 §30: the cause attribution is carried as a STABLE
+            # IDENTIFIER on the EXISTING fail class, and the retry disposition is a
+            # FUNCTION OF THE CAUSE rather than a flat "permanent" — a flat label
+            # would suppress exactly the `read-error` retry the refinement exists
+            # to enable. Cause class only: no exception text, no resolved path.
+            assert _read.cause is not None
+            # [LAW:types-are-the-program] Runtime spec v1.137 Rule A3: supersession is its own
+            # pre-bootstrap refusal, so the handle cause below narrows to the closed five.
+            if _read.cause is PauseJournalReadCause.SUPERSEDED:
+                raise ResumePauseRecordSupersededError(
+                    "RT-FAIL-RESUME-PAUSE-RECORD-SUPERSEDED: a later fresh run of this workflow "
+                    "superseded the durable pause record for this resume_handle; it is no "
+                    "longer resumable (Runtime spec v1.137 §D.5)."
+                )
+            raise ResumeHandleUnknownError(
+                f"no resumable durable PauseSnapshot for resume_handle="
+                f"{source.workflow_id!r} under the resolved STATE_LEDGER pause-journal; "
+                f"cause={_read.cause.value} (C-RT-35).",
+                cause=_read.cause,
+                retryable=_read.retryable,
+                indeterminate=_read.indeterminate,
+            )
+        # B-104 Task 4d — the depth rides the SAME read as the snapshot; anything but an
+        # exact depth of 0 (child, grandchild, legacy/unknown, malformed) is refused here,
+        # pre-bootstrap. A depth-0 record continues to its claim below.
+        if _read.depth != 0:
+            raise ResumeDirectChildHandleError(depth=_read.depth)
+        snapshot = _read.snapshot
+        # A populated snapshot was parsed from a latest line, so that line has a digest.
+        assert _read.latest_record_digest is not None
+        # B-104 — the root record's exact address: the directory this SAME read opened and
+        # the ref from it (never a second derivation). The resume worker refuses unless its
+        # bootstrapped capture directory is that directory, then claims and fsyncs `started`.
+        admission: ResumeAdmission = DurableRootResume(
+            journal_dir=_located.journal_dir,
+            ref=JournalRecordRef(
+                tenant=normalize_tenant_scope(config.tenant_id),
+                workflow_id=snapshot.workflow_id,
+                run_id=snapshot.run_id,
+                record_count=_read.record_count,
+                latest_digest=_read.latest_record_digest,
+                snapshot_hash=snapshot.snapshot_hash,
+            ),
+        )
+    else:
+        snapshot = source
+        # A caller-supplied snapshot is outside the durable claim contract: no claim, no
+        # authority, so its durable children still meet stage 5's refusing admission.
+        admission = UNCLAIMED
+
+    # Detect-then-refuse: a snapshot's hash validates against its own embedded
+    # fields, so a snapshot from another workflow would otherwise be applied
+    # (its run_id + step_index) against THIS workflow's steps. C-RT-35.
+    if snapshot.workflow_id != workflow.workflow_id:
+        raise ResumeWorkflowMismatchError(
+            f"snapshot.workflow_id={snapshot.workflow_id!r} != "
+            f"workflow.workflow_id={workflow.workflow_id!r}; a snapshot may only "
+            f"resume its own workflow (C-RT-35)."
+        )
+    # Detect-then-refuse: a step_index outside the supplied workflow's steps
+    # (the workflow changed since the pause) would slice `steps[resume_at:]`
+    # to empty → a silent SUCCESS that executed nothing. C-RT-35.
+    _step_count = len(workflow.steps)
+    if not (0 <= snapshot.step_index < _step_count):
+        raise ResumeStepIndexOutOfRangeError(
+            f"snapshot.step_index={snapshot.step_index} is not a "
+            f"valid step of the resumed workflow (0 <= i < {_step_count}); the "
+            f"workflow may have changed since the pause (C-RT-35)."
+        )
+    # Detect-then-refuse: a resume_context composed against a §14.14.9 accessor
+    # read is refused when the durably-journaled pause state changed since that
+    # read (spec v1.107 §30, refusal-only, no value proceeds). Last, because it
+    # performs its own journal read off the event loop (spec v1.141 §2.2).
+    await _enforce_pause_state_staleness_precondition(config, workflow, resume_context, snapshot)
+    return ResumedEntry(pause_snapshot=snapshot, admission=admission, resume_context=resume_context)
 
 
 async def resume(
@@ -1370,139 +1543,27 @@ async def resume(
             f"`resume()` requires a `WorkflowObject`; got {type(workflow).__name__!r}"
         )
 
-    # Detect-then-refuse: EXACTLY ONE snapshot source. Both → ambiguous; neither
-    # → nothing to resume. C-RT-35 cascade step 2.
-    if (pause_snapshot is None) == (resume_handle is None):
-        _supplied = "both" if pause_snapshot is not None else "neither"
-        raise ResumeArgsError(
-            "resume() requires exactly one of `pause_snapshot` (caller-supplied) "
-            f"or `resume_handle` (harness durable-store read); got {_supplied} "
-            "(C-RT-35)."
-        )
-
-    # Detect-then-refuse: resume REQUIRES the pause/resume opt-in (the same
-    # config that produced the pause). Without it the driver's entry-point
-    # resume detection is inert and the workflow would SILENTLY re-run from
-    # step 0 — re-executing completed prefix steps + side effects. Fail fast
-    # (pre-bootstrap) rather than silently re-run. C-RT-35.
+    source = _root_resume_source(pause_snapshot, resume_handle)
     resolved_config = config if config is not None else _default_config()
-    if resolved_config.pause_resume_protocol_config is None:
-        raise ResumeProtocolNotBoundError(
-            "resume() requires config.pause_resume_protocol_config (the "
-            "pause/resume opt-in that produced the pause); without it the "
-            "driver's resume detection is inert and the workflow would "
-            "silently re-run from step 0 (C-RT-35 detect-then-refuse)."
-        )
 
-    # Concurrency guard BEFORE the durable-store read (Codex-caught, this arc):
-    # the `resume_handle` path reads the shared pause journal, which an in-flight
-    # `run()`/`resume()` mutates (under this same lock). Checking `_run_lock`
-    # first means a concurrent call surfaces the documented
-    # `ConcurrentRunNotSupported` rather than a spurious
-    # `RT-FAIL-RESUME-HANDLE-UNKNOWN` from observing a partially-written / not-yet-
-    # written snapshot. Correct because: (a) the store is only written while the
-    # lock is held (capture fires inside `execute_workflow` under `_run_lock`),
-    # and (b) the guard → store read → `async with _run_lock` segment below is
-    # `await`-free, so under asyncio's cooperative scheduling no other coroutine
-    # can acquire the lock (and thus write the store) between this check and our
-    # own acquisition. C-RT-35.
+    # Concurrency guard BEFORE every journal read (Codex-caught, C-RT-35): the
+    # `resume_handle` path reads the shared pause journal, which an in-flight
+    # `run()`/`resume()` mutates under this same lock. The guard → `async with
+    # _run_lock` segment below is `await`-free, so no other coroutine can acquire
+    # the lock between this check and our own acquisition, and the admission's
+    # reads all run inside it (Runtime spec v1.141 §2.4).
     if _run_lock.locked():
         raise ConcurrentRunNotSupported(
             "a `run()`/`resume()` invocation is already in flight in this "
             "process; Track A is bootstrap-per-call. Serialize calls."
         )
 
-    # Resolve the snapshot to resume from: the caller-supplied one, or the
-    # latest record the harness durably journaled for the handle. C-RT-35.
-    if resume_handle is not None:
-        if not resolved_config.pause_resume_protocol_config.durable:
-            raise ResumeArgsError(
-                "resume_handle requires the durable opt-in "
-                "(pause_resume_protocol_config.durable=True); without it the "
-                "harness owns no snapshot store to read (C-RT-35)."
-            )
-        _located = _read_durable_pause_snapshot(resolved_config, workflow, resume_handle)
-        _read = _located.result
-        if _read.snapshot is None:
-            # spec v1.107 §30: the cause attribution is carried as a STABLE
-            # IDENTIFIER on the EXISTING fail class, and the retry disposition is a
-            # FUNCTION OF THE CAUSE rather than a flat "permanent" — a flat label
-            # would suppress exactly the `read-error` retry the refinement exists
-            # to enable. Cause class only: no exception text, no resolved path.
-            assert _read.cause is not None
-            raise ResumeHandleUnknownError(
-                f"no resumable durable PauseSnapshot for resume_handle="
-                f"{resume_handle!r} under the resolved STATE_LEDGER pause-journal; "
-                f"cause={_read.cause.value} (C-RT-35).",
-                cause=_read.cause,
-                retryable=_read.retryable,
-                indeterminate=_read.indeterminate,
-            )
-        # B-104 Task 4d — the depth rides the SAME read as the snapshot; anything but an
-        # exact depth of 0 (child, grandchild, legacy/unknown, malformed) is refused here,
-        # pre-bootstrap. A depth-0 record continues to its claim below.
-        if _read.depth != 0:
-            raise ResumeDirectChildHandleError(depth=_read.depth)
-        snapshot = _read.snapshot
-        # A populated snapshot was parsed from a latest line, so that line has a digest.
-        assert _read.latest_record_digest is not None
-        # B-104 — the root record's exact address: the directory this SAME read opened and
-        # the ref from it (never a second derivation). The resume worker refuses unless its
-        # bootstrapped capture directory is that directory, then claims and fsyncs `started`.
-        admission: ResumeAdmission = DurableRootResume(
-            journal_dir=_located.journal_dir,
-            ref=JournalRecordRef(
-                tenant=normalize_tenant_scope(resolved_config.tenant_id),
-                workflow_id=snapshot.workflow_id,
-                run_id=snapshot.run_id,
-                record_count=_read.record_count,
-                latest_digest=_read.latest_record_digest,
-                snapshot_hash=snapshot.snapshot_hash,
-            ),
-        )
-    else:
-        assert pause_snapshot is not None  # exactly-one-of guard guarantees this
-        snapshot = pause_snapshot
-        # A caller-supplied snapshot is outside the durable claim contract: no claim, no
-        # authority, so its durable children still meet stage 5's refusing admission.
-        admission = UNCLAIMED
-
-    # Detect-then-refuse: a snapshot's hash validates against its own embedded
-    # fields, so a snapshot from another workflow would otherwise be applied
-    # (its run_id + step_index) against THIS workflow's steps. C-RT-35.
-    if snapshot.workflow_id != workflow.workflow_id:
-        raise ResumeWorkflowMismatchError(
-            f"snapshot.workflow_id={snapshot.workflow_id!r} != "
-            f"workflow.workflow_id={workflow.workflow_id!r}; a snapshot may only "
-            f"resume its own workflow (C-RT-35)."
-        )
-    # Detect-then-refuse: a step_index outside the supplied workflow's steps
-    # (the workflow changed since the pause) would slice `steps[resume_at:]`
-    # to empty → a silent SUCCESS that executed nothing. C-RT-35.
-    _step_count = len(workflow.steps)
-    if not (0 <= snapshot.step_index < _step_count):
-        raise ResumeStepIndexOutOfRangeError(
-            f"snapshot.step_index={snapshot.step_index} is not a "
-            f"valid step of the resumed workflow (0 <= i < {_step_count}); the "
-            f"workflow may have changed since the pause (C-RT-35)."
-        )
     from harness_runtime.bootstrap import run_bootstrap
     from harness_runtime.shutdown import shutdown as _shutdown
 
     async with _run_lock:
-        # Detect-then-refuse: a resume_context composed against a §14.14.9 accessor
-        # read is refused when the durably-journaled pause state changed since that
-        # read (spec v1.107 §30, NEW — refusal-only, no value proceeds). Still
-        # PRE-BOOTSTRAP, alongside the rest of the `RT-FAIL-RESUME-*` battery, and
-        # inert for the legacy no-read variant. Placed INSIDE the lock rather than
-        # beside the other guards for two reasons, both load-bearing: it performs
-        # filesystem I/O, which must not run in the await-free window the
-        # `_run_lock.locked()` guard depends on; and holding the lock means the
-        # journal cannot be written between the read it compares against and the
-        # decision it makes.
-        await _enforce_pause_state_staleness_precondition(
-            resolved_config, workflow, resume_context, snapshot
-        )
+        # [LAW:single-enforcer] The one admission unit the daemon also calls (spec v1.141 §2.3).
+        entry = await admit_root_resume(workflow, source, resume_context, resolved_config)
         # B-INTERSTEP-PERRUN-ISOLATION — isolate this resume's cost accumulator in
         # `COST_ACCUM_VAR` for the whole run (mirrors `run()`); the post-run cost
         # read resolves the SAME accumulator the wrappers appended to, and the
@@ -1521,14 +1582,11 @@ async def resume(
                 )
                 mcp_server = cast("_ConcreteHarnessMCPServer", ctx.mcp_server)
                 mcp_server._state["_harness_ctx"] = ctx  # pyright: ignore[reportPrivateUsage]
-                # In-process resume handoff (NOT over the MCP wire) — the
-                # `run_workflow` tool reads these from `_state`, mirroring how
-                # `_harness_ctx` is passed. Presence of `_resume_pause_snapshot`
-                # switches the tool to the resume path (snapshot.run_id continuity
-                # + `pause_snapshot_input=` to the driver). C-RT-35.
-                mcp_server._state["_resume_pause_snapshot"] = snapshot  # pyright: ignore[reportPrivateUsage]
-                mcp_server._state["_resume_context"] = resume_context  # pyright: ignore[reportPrivateUsage]
-                mcp_server._state["_resume_admission"] = admission  # pyright: ignore[reportPrivateUsage]
+                # Track A resume handoff (NOT over the MCP wire), mirroring `_harness_ctx`:
+                # this per-call server is shared with no concurrent request while
+                # `_run_lock` is held, so one resumed entry replaces the fresh one the
+                # `run_workflow` tool would build (Runtime spec v1.141 §3.3).
+                mcp_server._state["_root_entry"] = entry  # pyright: ignore[reportPrivateUsage]
                 mcp_server.workflow_registry[workflow.workflow_id] = workflow
                 try:
                     cp_result = await _invoke_run_workflow_via_in_process_mcp(
@@ -1537,7 +1595,7 @@ async def resume(
                 except RuntimeError:
                     # A typed claim refusal does not survive the MCP text boundary; the worker
                     # recorded it on the admission before any body ran. Never parse the text.
-                    refusal = admission.refusal
+                    refusal = entry.admission.refusal
                     if refusal is None:
                         raise
                     # The tool's text error is this same refusal rendered; keep the typed cause.
@@ -1545,9 +1603,7 @@ async def resume(
                 finally:
                     mcp_server.workflow_registry.pop(workflow.workflow_id, None)
                     mcp_server._state.pop("_harness_ctx", None)  # pyright: ignore[reportPrivateUsage]
-                    mcp_server._state.pop("_resume_pause_snapshot", None)  # pyright: ignore[reportPrivateUsage]
-                    mcp_server._state.pop("_resume_context", None)  # pyright: ignore[reportPrivateUsage]
-                    mcp_server._state.pop("_resume_admission", None)  # pyright: ignore[reportPrivateUsage]
+                    mcp_server._state.pop("_root_entry", None)  # pyright: ignore[reportPrivateUsage]
                 timed_out = (
                     cp_result.status == _CpRunStatus.DRAINED
                     and cp_result.fail_class == "RT-FAIL-DRAIN-TIMEOUT"

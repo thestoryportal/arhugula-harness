@@ -60,17 +60,20 @@ shortcuts) and verifies the full binding chain at the produced
 
 from __future__ import annotations
 
+import os
+import subprocess
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
 import pytest
 from harness_core import SkillID
-from harness_runtime.bootstrap import run_bootstrap
+from harness_runtime.bootstrap import BootstrapFailure, run_bootstrap
 from harness_runtime.lifecycle.skill_activation import (
     SkillActivationHookConfig,
     SkillActivationSpanEmitter,
 )
+from harness_runtime.lifecycle.skills import SkillContentInvalidError, SkillContentInvalidReason
 from harness_runtime.types import HarnessContext, RuntimeConfig
 
 from .conftest import WORKLOAD, build_config
@@ -130,9 +133,20 @@ def _config_with_skill_activation_opt_in_and_hook(tmp_path: Path) -> RuntimeConf
 # --- Skills fixture helper ---------------------------------------------------
 
 
+_FIXTURE_CONTENT = "# Fixture Skill\n\nFollow the AS-8d fixture procedure.\n"
+
+
+def _git_hash_object(path: Path) -> str:
+    """`git hash-object` of a file: the independent oracle for `version_sha`."""
+    return subprocess.run(
+        ["git", "hash-object", str(path)], check=True, capture_output=True, text=True
+    ).stdout.strip()
+
+
 def _seed_skills_dir(skills_dir: Path) -> SkillID:
-    """Write a single fixture skill manifest. Returns its skill_id."""
+    """Write a single fixture skill manifest + its SKILL.md content. Returns its skill_id."""
     skills_dir.mkdir(parents=True, exist_ok=True)
+    (skills_dir / "fixture-skill.SKILL.md").write_text(_FIXTURE_CONTENT)
     manifest = skills_dir / "fixture-skill.skill.json"
     raw = (
         '{"skill_id": "fixture-skill", '
@@ -207,12 +221,8 @@ async def test_skill_activation_e2e_opt_in_with_hook_branch(
     ``skill.activation`` span carrying all 6 AS spec v1.7 §14.4 attributes
     with ``activation_mode = filesystem_read``.
 
-    Note (MVP-proxy disposition per advisor pre-substantive consultation):
-    ``skill.body_tokens`` at the fixture is computed from
-    ``description`` length (MVP heuristic per spec §14.17.7 + skills.py
-    extension). Real-workflow body-token computation (full SKILL.md body
-    read) is owed at a follow-on arc per spec §14.17.7 deferred-discretion
-    + plan v2.28 U-RT-99 AC #6 MVP-shape acknowledgement.
+    At v1.139 (§14.17.8.1) ``version_sha`` / ``body_tokens`` derive from the
+    fixture's ``fixture-skill.SKILL.md`` content bytes.
     """
     _ = patched_runtime
     skills_dir = tmp_path / "skills"
@@ -235,8 +245,10 @@ async def test_skill_activation_e2e_opt_in_with_hook_branch(
 
     # Verify the skill loaded with computed version_sha + body_tokens.
     skill = ctx.skills[skill_id]
-    assert len(skill.manifest.version_sha) == 40  # SHA-1 hex
-    assert skill.manifest.body_tokens >= 0  # MVP heuristic: non-negative int
+    content_sha = _git_hash_object(skills_dir / "fixture-skill.SKILL.md")
+    assert skill.content == _FIXTURE_CONTENT
+    assert skill.manifest.version_sha == content_sha
+    assert skill.manifest.body_tokens == len(_FIXTURE_CONTENT) // 4
     assert skill.manifest.name == "Fixture Skill"
     assert skill.manifest.version == "1.0"
 
@@ -263,10 +275,9 @@ async def test_skill_activation_e2e_opt_in_with_hook_branch(
     span = skill_spans[0]
     assert span.attrs["skill.id"] == str(skill_id)
     assert span.attrs["skill.name"] == "Fixture Skill"
-    assert len(span.attrs["skill.version_sha"]) == 40
+    assert span.attrs["skill.version_sha"] == content_sha
     assert span.attrs["skill.frontmatter.version"] == "1.0"
-    assert isinstance(span.attrs["skill.body_tokens"], int)
-    assert span.attrs["skill.body_tokens"] >= 0
+    assert span.attrs["skill.body_tokens"] == len(_FIXTURE_CONTENT) // 4
     assert span.attrs["skill.activation_mode"] == "filesystem_read"
     assert span.attrs["workflow.id"] == "e2e-wf-1"
 
@@ -317,3 +328,58 @@ async def test_skill_activation_e2e_joint_with_other_opt_in_bindings(
     assert ctx.skill_activation_emitter is not None
     assert ctx.pause_resume_protocol is not None
     assert ctx.webhook_delivery_composer is not None
+
+
+# --- Runtime v1.139 §14.17.8.5 W2 — invalid content aborts bootstrap stage 2 --
+
+
+def _break_content(content_path: Path, reason: SkillContentInvalidReason) -> None:
+    match reason:
+        case SkillContentInvalidReason.CONTENT_MISSING:
+            content_path.unlink()
+        case SkillContentInvalidReason.CONTENT_UNREADABLE:
+            content_path.chmod(0)
+        case SkillContentInvalidReason.CONTENT_NOT_UTF8:
+            content_path.write_bytes(b"\xff\xfe")
+        case SkillContentInvalidReason.CONTENT_EMPTY:
+            content_path.write_text("  \n")
+        case SkillContentInvalidReason.VERSION_SHA_MISMATCH:
+            manifest = content_path.with_name("fixture-skill.skill.json")
+            manifest.write_text(
+                manifest.read_text().replace("}", ', "version_sha": "' + "0" * 40 + '"}')
+            )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reason", list(SkillContentInvalidReason))
+async def test_w2_invalid_skill_content_aborts_bootstrap_stage_2(
+    tmp_path: Path,
+    patched_runtime: dict[str, Any],
+    reason: SkillContentInvalidReason,
+) -> None:
+    """Each closed content-failure reason aborts bootstrap at stage 2 (AS), fail-closed."""
+    _ = patched_runtime
+    if reason is SkillContentInvalidReason.CONTENT_UNREADABLE and os.geteuid() == 0:
+        pytest.skip("root reads mode-000 files")
+    skills_dir = tmp_path / "skills"
+    _seed_skills_dir(skills_dir)
+    content_path = skills_dir / "fixture-skill.SKILL.md"
+    _break_content(content_path, reason)
+
+    try:
+        with pytest.raises(BootstrapFailure) as exc_info:
+            await run_bootstrap(
+                _config_with_skill_activation_opt_out(tmp_path), workload_class=WORKLOAD
+            )
+    finally:
+        if content_path.exists():
+            content_path.chmod(0o600)
+
+    cause = exc_info.value.cause
+    assert "stage AS (2)" in str(exc_info.value)
+    assert isinstance(cause, SkillContentInvalidError)
+    assert (cause.skill_id, cause.content_path, cause.reason) == (
+        SkillID("fixture-skill"),
+        content_path,
+        reason,
+    )

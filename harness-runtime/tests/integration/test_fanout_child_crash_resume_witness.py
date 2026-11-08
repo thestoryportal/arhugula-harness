@@ -185,6 +185,7 @@ def _drive(
         cast(Any, ctx), durable_admission=RefuseDurableChildAdmission()
     )
     return runner(
+        validator_run=None,
         workflow_id=_CHILD_WF,
         manifest_entry=_manifest(engine_class),
         steps=[_branch_step(0, kind), _branch_step(1, kind), _branch_step(2, kind)],

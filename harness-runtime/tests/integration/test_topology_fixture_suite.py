@@ -124,6 +124,7 @@ class _MockChildWorkflowRunner:
         child_resume: Any = None,
         child_run_id_seed: str | None = None,
         child_resume_authority: Any = None,
+        validator_run: Any,
         resume_context: Any = None,
         hitl_uniform_fallback_eligible_run_id: str | None = None,
         effect_fence_uniform_fallback_eligible_key: str | None = None,
@@ -142,6 +143,7 @@ class _MockChildWorkflowRunner:
             inherited_hitl_placements,
             child_resume,
             child_run_id_seed,
+            validator_run,
             resume_context,
             hitl_uniform_fallback_eligible_run_id,
         )

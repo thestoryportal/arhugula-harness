@@ -52,6 +52,7 @@ from __future__ import annotations
 
 import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -1573,6 +1574,13 @@ async def test_ac4_multi_step_real_llm_execution(
     assert result.workflow_id == "wf-ac4-multi-step"
 
 
+def _git_hash_object(path: Path) -> str:
+    """`git hash-object` of a file: the independent oracle for `version_sha`."""
+    return subprocess.run(
+        ["git", "hash-object", str(path)], check=True, capture_output=True, text=True
+    ).stdout.strip()
+
+
 @pytest.mark.e2e
 @pytest.mark.asyncio
 @pytest.mark.skipif(
@@ -1689,6 +1697,12 @@ async def test_ac7_skill_activation_emits_skill_namespace_span(
         '"description": "' + test_skill_description + '", '
         '"version": "' + test_skill_version + '"}'
     )
+    # Runtime v1.139 §14.17.8.1: every manifest loads with its `<stem>.SKILL.md` content.
+    skill_content_path = skills_dir / f"{test_skill_id}.SKILL.md"
+    skill_content_path.write_text(
+        "# AC7 Test Skill\n\nAnswer the operator in one short sentence.\n", encoding="utf-8"
+    )
+    skill_content_sha = _git_hash_object(skill_content_path)
 
     # ---------------- operator-supplied SkillActivationHook ----------------
     hook_invocations: list[tuple[str, int]] = []
@@ -1855,8 +1869,10 @@ async def test_ac7_skill_activation_emits_skill_namespace_span(
     assert span.attrs["skill.name"] == test_skill_name
     assert span.attrs["skill.activation_mode"] == "tool_search"
     assert span.attrs["skill.frontmatter.version"] == test_skill_version
-    assert "skill.version_sha" in span.attrs
-    assert "skill.body_tokens" in span.attrs
+    assert span.attrs["skill.version_sha"] == skill_content_sha
+    assert (
+        span.attrs["skill.body_tokens"] == len(skill_content_path.read_text(encoding="utf-8")) // 4
+    )
     assert span.attrs["workflow.id"] == "wf-ac7-skill-activation"
 
 
@@ -2458,6 +2474,8 @@ async def test_ac5_sigint_mid_multi_step_produces_drained_resumable_state(
 
 def test_ac6_daemon_concurrent_two_clients_complete_independently(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    placed_root: Path,
 ) -> None:
     """AC #6 — concurrent run_workflow invocations from distinct MCP client
     sessions complete independently per spec v1.36 §14.18 chapeau (line 65)
@@ -2516,6 +2534,7 @@ def test_ac6_daemon_concurrent_two_clients_complete_independently(
         pause_snapshot_input: Any = None,
         resume_context: Any = None,
         child_resume_authority: Any = None,
+        validator_run: Any = None,
         hitl_uniform_fallback_eligible_run_id: Any = None,
         effect_fence_uniform_fallback_eligible_key: Any = None,
         effect_fence_tree_wide_abort_present: Any = False,
@@ -2524,6 +2543,7 @@ def test_ac6_daemon_concurrent_two_clients_complete_independently(
         _ = pause_snapshot_input  # C-RT-35 resume threading — None on the run path.
         _ = resume_context  # B-39 Slice B — None on the (non-resume) run path.
         assert child_resume_authority is None  # B-104 — a daemon run is unclaimed.
+        _ = validator_run  # Runtime v1.138 §14.13.8(2) — the run's own binding.
         _ = hitl_uniform_fallback_eligible_run_id  # B-39 Slice B, codex round-2 [P1] fix.
         _ = effect_fence_uniform_fallback_eligible_key  # B-70 impl leg.
         _ = effect_fence_tree_wide_abort_present  # B-80 impl leg.
@@ -2547,7 +2567,18 @@ def test_ac6_daemon_concurrent_two_clients_complete_independently(
     monkeypatch.setattr("harness_cp.workflow_driver.execute_workflow", _fake_execute_workflow)
 
     server = materialize_mcp_server_stage(drain_timeout_seconds=30.0)
-    server._state["_harness_ctx"] = SimpleNamespace(step_dispatchers=None)
+    # Each fresh run's admission (Runtime spec v1.137 Rules B1/B3) places the declared journal
+    # root (no durable capture directory here) under the verified state root and reads the tenant.
+    server._state["_harness_ctx"] = SimpleNamespace(
+        step_dispatchers=None,
+        validator_framework=None,
+        ledger_writer=SimpleNamespace(handle=SimpleNamespace(canonical_path=tmp_path / "s.jsonl")),
+        config=SimpleNamespace(
+            tenant_id=None, path_bindings=PathBindingConfig(), state_placement=object()
+        ),
+        verified_state_root=SimpleNamespace(realpath=placed_root.resolve()),
+        pause_resume_protocol=None,
+    )
 
     def _fake_workflow(wf_id: str) -> SimpleNamespace:
         return SimpleNamespace(
