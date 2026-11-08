@@ -409,7 +409,8 @@ jobs:
       - name: Launcher packages
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends virtme-ng qemu-system-x86 virtiofsd
+          sudo apt-get install -y --no-install-recommends virtme-ng qemu-system-x86 virtiofsd libelf-dev
+          test -r /usr/include/gelf.h
 
       # `launch` runs the guest in a transient systemd user scope (owned_handles).
       - name: User manager for the guest scope
