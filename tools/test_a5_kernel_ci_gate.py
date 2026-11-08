@@ -1314,7 +1314,7 @@ def _stage(tmp_path: Path) -> tuple[Path, Path]:
     (a5 / "venv" / "lib" / "a5.pth").write_text("# comment\n../../src\n")
     (a5 / "venv" / "python").symlink_to("/a5/src/pkg")
     (a5 / "meta").mkdir()
-    for name in ("binding.env", "host.json", "host-env-origin.json"):
+    for name in ("binding.env", "host.json", "host-env-origin.json", *gate.GUEST_SCRIPTS):
         (a5 / "meta" / name).write_text(name)
     return root, a5
 
@@ -1731,7 +1731,7 @@ _FACTS = gate.HostFacts(
     root_manifests=({"/x": {"type": "dir"}}, {"/x": {"type": "file"}}),
     vng_help="usage: vng",
     gcc_version="gcc (Ubuntu 15.2.0-1) 15.2.0",
-    guest_run_sha256="b" * 64,
+    guest_scripts={gate.GUEST_RUN: "b" * 64, gate.Q0_PROBE: "c" * 64},
 )
 _HOST_FACTS: dict[str, Any] = asdict(_FACTS)
 _GUEST = gate.GuestFacts(("a5", "bin", "out"), _MOUNTINFO, (), (_GIT,))
@@ -2090,25 +2090,49 @@ def _recorder(path: Path, log: Path, step: str | None) -> None:
     path.chmod(0o755)
 
 
+class _GuestScript:
+    """One generated guest script, run as the guest would against recording executables."""
+
+    def __init__(self, tmp_path: Path, name: str) -> None:
+        self.a5, self.out, self.log = tmp_path / "a5", tmp_path / "out", tmp_path / "log"
+        for path in (self.a5 / "meta", self.a5 / "src", self.a5 / "venv" / "bin", self.log):
+            path.mkdir(parents=True)
+        self.script = self.a5 / "meta" / name
+        self.script.write_text(self.relocate(gate.GUEST_SCRIPTS[name]))
+        self.values = {key: "7" * 64 for key in gate.BINDING_ENV_KEYS} | {"CI_PARENTS": "p1 p2"}
+        # No newline after the last line: it is still read.
+        (self.a5 / "meta" / "binding.env").write_text(
+            "\n".join(f"{k}={v}" for k, v in self.values.items())
+        )
+        _recorder(self.a5 / "venv" / "bin" / "python", self.log, None)
+        _recorder(self.a5 / "venv" / "bin" / "pytest", self.log, "pytest")
+
+    def relocate(self, text: str) -> str:
+        return text.replace("/a5/", f"{self.a5}/").replace("/out", str(self.out))
+
+    def run(self, steps: Sequence[str], exits: dict[str, int]) -> int:
+        shutil.rmtree(self.out, ignore_errors=True)
+        for step in steps:
+            (self.log / f"{step}.exit").write_text(str(exits.get(step, 0)))
+        host = {"PATH": os.environ["PATH"], "GITHUB_TOKEN": "host-only"}
+        return subprocess.run(["/bin/sh", str(self.script)], env=host, check=False).returncode
+
+    def bound_argv(self, step: str) -> list[str]:
+        """The step's argv, once its cwd and exact environment are the bound ones."""
+        cwd, argv, env = json.loads((self.log / f"{step}.seen").read_text())
+        assert cwd == str(self.a5 / "src") and gate.guest_env_problems(env) == []
+        fixed = {key: self.relocate(value) for key, value in gate.FIXED_GUEST_ENV.items()}
+        assert env == self.values | fixed
+        return argv
+
+
 def test_guest_run_gives_each_step_exactly_the_bound_environment(tmp_path: Path) -> None:
-    a5, out, log = tmp_path / "a5", tmp_path / "out", tmp_path / "log"
-    for path in (a5 / "meta", a5 / "src", a5 / "venv" / "bin", log):
-        path.mkdir(parents=True)
-    script = a5 / "meta" / gate.GUEST_RUN
-    script.write_text(gate.GUEST_RUN_SH.replace("/a5/", f"{a5}/").replace("/out/", f"{out}/"))
-    values = {key: "7" * 64 for key in gate.BINDING_ENV_KEYS} | {"CI_PARENTS": "p1 p2"}
-    # No newline after the last line: it is still read.
-    (a5 / "meta" / "binding.env").write_text("\n".join(f"{k}={v}" for k, v in values.items()))
-    _recorder(a5 / "venv" / "bin" / "python", log, None)
-    _recorder(a5 / "venv" / "bin" / "pytest", log, "pytest")
+    guest = _GuestScript(tmp_path, gate.GUEST_RUN)
+    out = guest.out
     steps = [name for name, _, _ in gate.GUEST_STEPS]
 
     def run(exits: dict[str, int]) -> int:
-        shutil.rmtree(out, ignore_errors=True)
-        for step in steps:
-            (log / f"{step}.exit").write_text(str(exits.get(step, 0)))
-        host = {"PATH": os.environ["PATH"], "GITHUB_TOKEN": "host-only"}
-        return subprocess.run(["/bin/sh", str(script)], env=host, check=False).returncode
+        return guest.run(steps, exits)
 
     # A failed suite is recorded and does not stop the outcome check after it.
     assert run({"pytest": 1}) == 0
@@ -2120,19 +2144,41 @@ def test_guest_run_gives_each_step_exactly_the_bound_environment(tmp_path: Path)
         "check": "0\n",
     }
     assert (out / "pytest.log").is_file() and (out / "home").is_dir() and (out / "tmp").is_dir()
-    for step in steps:
-        cwd, argv, env = json.loads((log / f"{step}.seen").read_text())
-        assert cwd == str(a5 / "src") and gate.guest_env_problems(env) == []
-        assert env == values | {
-            key: value.replace("/a5/", f"{a5}/").replace("/out/", f"{out}/")
-            for key, value in gate.FIXED_GUEST_ENV.items()
-        }
-    assert argv[:2] == ["tools/a5_kernel_ci_gate.py", "check"]
+    argvs = [guest.bound_argv(step) for step in steps]
+    assert argvs[-1][:2] == ["tools/a5_kernel_ci_gate.py", "check"]
     # A failed isolation or env-origin check stops the run before anything measured runs.
     for gating in ("isolation", "env-origin"):
         assert run({gating: 3}) == 1
         assert (out / f"{gating}.rc").read_text() == "3\n"
         assert not (out / "preflight.rc").exists()
+
+
+def test_q0_probe_runs_only_observe_and_only_behind_the_isolation_check(
+    tmp_path: Path,
+) -> None:
+    guest = _GuestScript(tmp_path, gate.Q0_PROBE)
+    steps = [name for name, _, _ in gate.Q0_STEPS]
+    assert guest.run(steps, {}) == 0
+    assert {step: (guest.out / f"{step}.rc").read_text() for step in steps} == {
+        "isolation": "0\n",
+        "observe": "0\n",
+    }
+    assert [guest.bound_argv(step)[:2] for step in steps] == [
+        ["tools/a5_kernel_ci_gate.py", "isolation"],
+        ["tools/a5_kernel_ci_gate.py", "observe"],
+    ]
+    assert guest.bound_argv("observe")[2:] == [
+        "--meta",
+        f"{guest.a5}/meta",
+        "--out",
+        str(guest.out),
+    ]
+    # Q0 measures no suite.
+    assert not (guest.log / "pytest.seen").exists()
+    assert guest.run(steps, {"isolation": 3}) == 1
+    assert (guest.out / "isolation.rc").read_text() == "3\n"
+    assert not (guest.out / "observe.rc").exists()
+    assert guest.run(steps, {"observe": 2}) == 1
 
 
 def test_src_config_holds_only_core_and_branch_settings_and_the_file_origin() -> None:
@@ -2183,7 +2229,8 @@ def test_stage_a5_detaches_the_tested_commit_and_builds_from_the_pins(
     head = ["git", "-C", str(a5 / "src"), "rev-parse", "HEAD"]
     assert subprocess.run(head, check=True, capture_output=True, text=True).stdout.strip() == tested
     assert (a5 / "src" / "f").read_text() == "tested"
-    assert (a5 / "meta" / gate.GUEST_RUN).read_text() == gate.GUEST_RUN_SH
+    for name, text in gate.GUEST_SCRIPTS.items():
+        assert (a5 / "meta" / name).read_text() == text
     install = {
         "PATH": "/usr/bin:/bin",
         "UV_PYTHON_INSTALL_DIR": str(a5 / "python"),
@@ -2508,7 +2555,8 @@ class _Host:
         def stage_a5(a5: Path, workspace: Path, tested: str, cache: Path, inputs: Any) -> None:
             record("stage_a5", (a5, workspace, tested, cache))
             meta.mkdir()
-            (meta / gate.GUEST_RUN).write_text(gate.GUEST_RUN_SH)
+            for name, text in gate.GUEST_SCRIPTS.items():
+                (meta / name).write_text(text)
 
         def steps(argv: Any, cwd: Path, timeout: float) -> None:
             record("run_steps", (argv, cwd))
@@ -2565,7 +2613,10 @@ def test_q0_host_writes_records_binding_the_stage_it_built(
     facts = json.loads((meta / "host.json").read_bytes())
     assert facts["host_packages"] == {"virtme-ng": "1.40-2"}
     assert facts["gcc_version"] == "gcc 15" and facts["vng_help"] == "usage: vng"
-    assert facts["guest_run_sha256"] == _sha(gate.GUEST_RUN_SH.encode())
+    assert facts["guest_scripts"] == {
+        gate.GUEST_RUN: _sha(gate.GUEST_RUN_SH.encode()),
+        gate.Q0_PROBE: _sha(gate.Q0_PROBE_SH.encode()),
+    }
     assert gate.evaluate_install_ns((evidence / "install-ns.json").read_bytes(), _DEBS) == []
     stage = json.loads((evidence / "host-stage.json").read_bytes())
     assert stage["binding_env_sha256"] == _sha((meta / "binding.env").read_bytes())
