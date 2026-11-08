@@ -1145,13 +1145,26 @@ def ns_install(root: Path, host_netns: str, evidence: Path, files: Sequence[str]
     except Q0Error as exc:
         crossed = [str(exc)]
     if not crossed:
+        dev = root / "dev"
+        if not stat.S_ISDIR(dev.lstat().st_mode):
+            raise Q0Error(f"{dev} is not a directory in the staged root")
+        null = dev / "null"
+        if os.path.lexists(null):
+            raise Q0Error(f"{null} already exists in the staged root")
+        # [LAW:effects-at-boundaries] Give maintainer scripts their own null device;
+        # never expose the host's /dev or leave the node in the measured stage.
+        os.mknod(null, stat.S_IFCHR | 0o666, os.makedev(1, 3))
         dpkg = ["chroot", str(root), "/usr/bin/dpkg", "-i"]
-        record["dpkg_exit"] = subprocess.run(
-            [*dpkg, *(f"/{DEB_CACHE}/{name}" for name in files)],
-            env=INSTALL_ENV,
-            close_fds=True,
-            check=False,
-        ).returncode
+        try:
+            null.chmod(0o666)
+            record["dpkg_exit"] = subprocess.run(
+                [*dpkg, *(f"/{DEB_CACHE}/{name}" for name in files)],
+                env=INSTALL_ENV,
+                close_fds=True,
+                check=False,
+            ).returncode
+        finally:
+            null.unlink()
     evidence.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
     return 0 if record["dpkg_exit"] == 0 else 1
 

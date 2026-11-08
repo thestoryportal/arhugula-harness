@@ -18,6 +18,7 @@ import os
 import re
 import shutil
 import socket
+import stat
 import subprocess
 import sys
 from collections.abc import Callable, Mapping, Sequence
@@ -1313,6 +1314,7 @@ def test_install_run_refuses_a_namespace_record_from_before_the_run(tmp_path: Pa
 def _root(tmp_path: Path) -> Path:
     cache = tmp_path / "root" / gate.DEB_CACHE
     cache.mkdir(parents=True)
+    (tmp_path / "root" / "dev").mkdir()
     for deb in _DEBS:
         (cache / deb.file).write_bytes(deb.file.encode())
     return tmp_path / "root"
@@ -1325,20 +1327,33 @@ def test_ns_install_outside_the_boundary_never_spawns_dpkg(
         raise AssertionError("dpkg spawned outside the boundary")
 
     monkeypatch.setattr(gate.subprocess, "run", no_dpkg)
+    monkeypatch.setattr(gate.os, "readlink", lambda path: "net:[1]")
+    monkeypatch.setattr(gate.socket, "if_nameindex", lambda: [(1, "lo")])
     evidence = tmp_path / "ns.json"
     files = [deb.file for deb in _DEBS]
     assert gate.ns_install(_root(tmp_path), "net:[1]", evidence, files) == 1
     assert json.loads(evidence.read_text())["dpkg_exit"] is None
 
 
-def test_ns_install_inside_the_boundary_runs_dpkg_once_in_list_order(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("dpkg_exit", [0, 1])
+def test_ns_install_inside_the_boundary_runs_dpkg_once_in_list_order_and_cleans_null(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, dpkg_exit: int
 ) -> None:
     calls: list[tuple[list[str], dict[str, Any]]] = []
+    root, evidence = _root(tmp_path), tmp_path / "ns.json"
+    null = root / "dev" / "null"
+
+    def mknod(path: Path, mode: int, device: int) -> None:
+        assert path == null
+        assert mode == stat.S_IFCHR | 0o666
+        assert device == os.makedev(1, 3)
+        path.touch()
 
     def dpkg(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
+        assert null.is_file() and null.read_bytes() == b""
+        assert stat.S_IMODE(null.stat().st_mode) == 0o666
         calls.append((argv, kwargs))
-        return subprocess.CompletedProcess(argv, 0)
+        return subprocess.CompletedProcess(argv, dpkg_exit)
 
     for name in list(os.environ):
         monkeypatch.delenv(name)
@@ -1347,9 +1362,12 @@ def test_ns_install_inside_the_boundary_runs_dpkg_once_in_list_order(
     monkeypatch.setattr(gate.os, "readlink", lambda path: "net:[2]")
     monkeypatch.setattr(gate.socket, "if_nameindex", lambda: [(1, "lo")])
     monkeypatch.setattr(gate, "_proc_caps", lambda: _hexes(_CLEAN))
+    monkeypatch.setattr(gate.os, "mknod", mknod)
     monkeypatch.setattr(gate.subprocess, "run", dpkg)
-    root, evidence = _root(tmp_path), tmp_path / "ns.json"
-    assert gate.ns_install(root, "net:[1]", evidence, [deb.file for deb in _DEBS]) == 0
+    assert gate.ns_install(root, "net:[1]", evidence, [deb.file for deb in _DEBS]) == int(
+        dpkg_exit != 0
+    )
+    assert not os.path.lexists(null)
     assert calls == [
         (
             ["chroot", str(root), "/usr/bin/dpkg", "-i"]
@@ -1358,8 +1376,26 @@ def test_ns_install_inside_the_boundary_runs_dpkg_once_in_list_order(
         )
     ]
     actual = [gate.Deb(d.file, len(d.file), _sha(d.file.encode())) for d in _DEBS]
-    run = {"wrapper_exit": 0, "namespace": json.loads(evidence.read_text())}
-    assert gate.run_problems(run, actual) == []
+    run = {"wrapper_exit": dpkg_exit, "namespace": json.loads(evidence.read_text())}
+    assert gate.run_problems(run, actual) == (
+        [] if dpkg_exit == 0 else ["wrapper exit 1 is not 0", "dpkg exit 1 is not 0"]
+    )
+
+
+def test_ns_install_refuses_a_dev_link_outside_the_staged_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _root(tmp_path)
+    (root / "dev").rmdir()
+    (root / "dev").symlink_to(tmp_path)
+    monkeypatch.setattr(gate.os, "readlink", lambda path: "net:[2]")
+    monkeypatch.setattr(gate.socket, "if_nameindex", lambda: [(1, "lo")])
+    monkeypatch.setattr(gate, "namespace_problems", lambda record: [])
+    monkeypatch.setattr(
+        gate.os, "mknod", lambda *args: pytest.fail("device escaped the staged root")
+    )
+    with pytest.raises(gate.Q0Error, match="not a directory in the staged root"):
+        gate.ns_install(root, "net:[1]", tmp_path / "ns.json", [deb.file for deb in _DEBS])
 
 
 def test_ns_install_exposes_no_option_that_skips_the_boundary(
