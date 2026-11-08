@@ -139,17 +139,32 @@ to `approve`, `edit`, `reject`, `respond`), never a `HITLResult`:
   workflow_id is the handle. Python: `api.resume(resume_handle=..., operator_decision=...)`.
   Daemon: `resume_workflow(workflow_id, operator_decision={...})`. Supplying both
   `operator_decision` and `resume_context` is the caller's argument error (§4.2).
-- **Pending decision, no audit identity at admission.** `ResumeContext` (CP §26.8.1,
-  `harness-cp/src/harness_cp/pause_resume_protocol_types.py:1364`) gains
-  `operator_decision: OperatorDecision | None`, mutually exclusive with `hitl_response` (a model
-  validator refuses both). It carries only `response` (approve/edit/reject/respond),
-  `edited_proposal` payload, `response_text` and `rejection_reason`; it has no timestamp, hash or
-  audit ID. One runtime function, `operator_resume_context(snapshot, decision)`, called once inside
-  `api.admit_root_resume` after the durable snapshot is read and before the claim is taken, returns
-  `ResumeContext(operator_decision=decision)`. The CP driver delivers it through the existing
-  per-branch `HITLDeliveryCell` on the resumed step only, exactly as it delivers `hitl_response`.
+- **CP-owned pending value.** CP cannot import runtime
+  (`harness-cp/src/harness_cp/pause_resume_protocol_types.py:1640-1659`), so CP owns the carrier:
+  `PendingHITLDecision` in `harness_cp.hitl_placement`, beside `HITLResult` (frozen, extra
+  forbidden): `kind: Literal["pending"]`, `response: HITLResponse` (approve/edit/reject/respond),
+  `edited_proposal_payload: dict[str, Any] | None` (required for edit only), `response_text`
+  (required for respond only), `rejection_reason`. It has no timestamp, hash or audit ID. The
+  runtime maps its C1 `OperatorDecision` onto it at admission; runtime-to-CP is the existing
+  import direction.
+- **One response authority.** `ResumeContext` (CP §26.8.1, `:1364`) gains
+  `pending_hitl_decision: PendingHITLDecision | None`. A model validator refuses it together with
+  `hitl_response` or `hitl_responses` (`:1456`), so exactly one of the three can carry a response.
+  Pending is parent-gate scope only; the keyed map stays the only child addressing.
+  `hitl_response_for` (`:1581-1620`) is unchanged and never returns the pending value, so child
+  runners and existing callers see no change. A new
+  `hitl_delivery_for(run_id) -> HITLResult | PendingHITLDecision | None` returns
+  `hitl_response_for(run_id)` when that is not None, else `pending_hitl_decision`. The CP driver
+  uses it only for the depth-0 root's resumed step (`step_index == resume_at`).
+- **Discriminated one-shot cell.** `HITLDeliveryCell` (`:1640-1685`) widens `_value` and the
+  return of `consume_and_clear` to `HITLResult | PendingHITLDecision | None`. One cell per
+  resumed step, read-and-clear unchanged, so a pending value is consumed at most once. Callers
+  discriminate with `isinstance`; a stored `HITLResult` behaves exactly as today.
+- **Admission.** `operator_resume_context(snapshot, decision)`, called once inside
+  `api.admit_root_resume` after the durable snapshot is read and before the claim is taken,
+  returns `ResumeContext(pending_hitl_decision=...)`.
 - **The resumed gate owns the identity.** Composer step 0 (`P/lifecycle/hitl_gate_composer.py:1906`)
-  is the single owner. On a delivered `operator_decision` it builds the `HITLResult` itself:
+  is the single owner. On a consumed `PendingHITLDecision` it builds the `HITLResult` itself:
   `audit_ledger_entry_id` is the `EntryID` under which it persists its own step-4h audit for this
   response (the `hitl_action_id`-keyed entry it already writes), `timestamp` is its clock read at
   consumption, and `response_summary_hash` comes from `_compute_response_summary_hash` (`:867`),
@@ -217,13 +232,16 @@ the gated step. "Audit" is the step-4h `CPAuditLedgerEntry`; "ingress" is the sp
    exit 5 (PAUSED) with a resume handle, zero effects; then one public
    `harness resume <manifest> --hitl-response approve` (and, for the daemon row,
    `resume_workflow(..., operator_decision={"action": "approve"})`). A spy on the root admission
-   asserts the admitted context has `operator_decision.response` approve, `hitl_response` None,
-   and no timestamp, hash or audit ID. After the run, the step-4h HITL audit entry read back from
+   asserts the admitted context has `pending_hitl_decision.response` approve, `hitl_response`
+   and `hitl_responses` None, and no timestamp, hash or audit ID. The resumed root gate's cell
+   yields that pending value once and a second `consume_and_clear` yields None; a child run and
+   a non-resumed step receive None, and `hitl_response_for` returns None. After the run, the step-4h HITL audit entry read back from
    the ledger has ID X; the `HITLResult` step 0 routed has `audit_ledger_entry_id == X`,
    `response_summary_hash` equal to the shared helper's value and an ISO-8601 `timestamp` within
    the test window; X differs from the snapshot's `state_ledger_anchor`, which is unchanged. The
-   marker is written once. A context carrying both `operator_decision` and `hitl_response` is
-   refused by the model validator.
+   marker is written once. A context carrying `pending_hitl_decision` with `hitl_response` or
+   with `hitl_responses` is refused by the model validator, and existing `HITLResult` deliveries
+   (CP and runtime resume regressions) are unchanged.
    The same resume with `--hitl-response` against a non-HITL pause is an argument refusal, zero
    effects, and the handle stays resumable.
 10. `hold` without the durable pause binding: audited REJECT with reason
@@ -262,10 +280,13 @@ the gated step. "Audit" is the step-4h `CPAuditLedgerEntry`; "ingress" is the sp
 - **Pass 3 (`cmt-6af8be74-16c0-4152-b133-bc17b54f2b1c`):** E1 the response-audit identity is
   assigned by the resumed gate (step 0) from its own step-4h entry; admission carries a pending
   decision only; `state_ledger_anchor` is never an audit identity.
+- **Pass 4 (`cmt-bcf3867c-9b7f-41b1-a04c-d5d9414c37ba`):** G1 CP-owned `PendingHITLDecision`,
+  one response authority by validator, unchanged `hitl_response_for`, root-only
+  `hitl_delivery_for`, discriminated one-shot cell.
 - **Open for Buford ratification:** the 900 s constant.
 
 ## Disposition (on ratification)
 
-The C1–C5 contract, with the CP §26.8.1 `ResumeContext.operator_decision` amendment, becomes the next free Runtime spec version's §14.8 amendment to C-RT-18, with
+The C1–C5 contract, with the CP §26.8.1 `PendingHITLDecision`, `ResumeContext.pending_hitl_decision`, `hitl_delivery_for` and `HITLDeliveryCell` amendment, becomes the next free Runtime spec version's §14.8 amendment to C-RT-18, with
 one plan unit for T03 carrying assertions 1–16, materialized in P2 before T03 claims conformance.
 No source or test change is made by this stage.
