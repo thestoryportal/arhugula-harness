@@ -2075,6 +2075,138 @@ def test_guest_kernel_builds_only_the_verified_source(
     assert built == [source]
 
 
+def _recorder(path: Path, log: Path, step: str | None) -> None:
+    """An executable that records its cwd, argv and environment, then exits as told."""
+    name = repr(step) if step else "sys.argv[2]"
+    path.write_text(
+        f"#!{sys.executable}\nimport json, os, pathlib, sys\n"
+        f"step, log = {name}, pathlib.Path({str(log)!r})\n"
+        "seen = [os.getcwd(), sys.argv[1:], dict(os.environ)]\n"
+        "(log / f'{step}.seen').write_text(json.dumps(seen))\n"
+        "sys.exit(int((log / f'{step}.exit').read_text()))\n"
+    )
+    path.chmod(0o755)
+
+
+def test_guest_run_gives_each_step_exactly_the_bound_environment(tmp_path: Path) -> None:
+    a5, out, log = tmp_path / "a5", tmp_path / "out", tmp_path / "log"
+    for path in (a5 / "meta", a5 / "src", a5 / "venv" / "bin", log):
+        path.mkdir(parents=True)
+    script = a5 / "meta" / gate.GUEST_RUN
+    script.write_text(gate.GUEST_RUN_SH.replace("/a5/", f"{a5}/").replace("/out/", f"{out}/"))
+    values = {key: "7" * 64 for key in gate.BINDING_ENV_KEYS} | {"CI_PARENTS": "p1 p2"}
+    # No newline after the last line: it is still read.
+    (a5 / "meta" / "binding.env").write_text("\n".join(f"{k}={v}" for k, v in values.items()))
+    _recorder(a5 / "venv" / "bin" / "python", log, None)
+    _recorder(a5 / "venv" / "bin" / "pytest", log, "pytest")
+    steps = [name for name, _, _ in gate.GUEST_STEPS]
+
+    def run(exits: dict[str, int]) -> int:
+        shutil.rmtree(out, ignore_errors=True)
+        for step in steps:
+            (log / f"{step}.exit").write_text(str(exits.get(step, 0)))
+        host = {"PATH": os.environ["PATH"], "GITHUB_TOKEN": "host-only"}
+        return subprocess.run(["/bin/sh", str(script)], env=host, check=False).returncode
+
+    # A failed suite is recorded and does not stop the outcome check after it.
+    assert run({"pytest": 1}) == 0
+    assert {step: (out / f"{step}.rc").read_text() for step in steps} == {
+        "isolation": "0\n",
+        "env-origin": "0\n",
+        "preflight": "0\n",
+        "pytest": "1\n",
+        "check": "0\n",
+    }
+    assert (out / "pytest.log").is_file() and (out / "home").is_dir() and (out / "tmp").is_dir()
+    for step in steps:
+        cwd, argv, env = json.loads((log / f"{step}.seen").read_text())
+        assert cwd == str(a5 / "src") and gate.guest_env_problems(env) == []
+        assert env == values | {
+            key: value.replace("/a5/", f"{a5}/").replace("/out/", f"{out}/")
+            for key, value in gate.FIXED_GUEST_ENV.items()
+        }
+    assert argv[:2] == ["tools/a5_kernel_ci_gate.py", "check"]
+    # A failed isolation or env-origin check stops the run before anything measured runs.
+    for gating in ("isolation", "env-origin"):
+        assert run({gating: 3}) == 1
+        assert (out / f"{gating}.rc").read_text() == "3\n"
+        assert not (out / "preflight.rc").exists()
+
+
+def test_src_config_holds_only_core_and_branch_settings_and_the_file_origin() -> None:
+    workspace = Path("/w")
+    clean = (
+        "core.bare=false\nbranch.main.remote=origin\nremote.origin.url=file:///w\n"
+        "remote.origin.fetch=+refs/heads/*:refs/remotes/origin/*\n"
+    )
+    assert gate.src_config_problems(clean, workspace) == []
+    leaked = clean + "http.https://github.com/.extraheader=AUTHORIZATION: basic x\n"
+    assert gate.src_config_problems(leaked, workspace) == [
+        "/a5/src/.git/config holds http.https://github.com/.extraheader"
+    ]
+    assert gate.src_config_problems(clean.replace("file:///w", "https://x/r"), workspace) == [
+        "/a5/src/.git/config lacks remote.origin.url=file:///w",
+        "/a5/src/.git/config holds remote.origin.url",
+    ]
+
+
+def test_stage_a5_detaches_the_tested_commit_and_builds_from_the_pins(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace, bin_dir, log = tmp_path / "ws", tmp_path / "bin", tmp_path / "uv.log"
+    bin_dir.mkdir()
+    git = ["git", "-C", str(workspace), "-c", "user.name=t", "-c", "user.email=t@t"]
+    subprocess.run(["git", "init", "-q", str(workspace)], check=True)
+    (workspace / "f").write_text("tested")
+    subprocess.run([*git, "add", "f"], check=True)
+    subprocess.run([*git, "commit", "-qm", "tested"], check=True)
+    tested = subprocess.run(
+        [*git, "rev-parse", "HEAD"], check=True, capture_output=True, text=True
+    ).stdout.strip()
+    (workspace / "f").write_text("later")
+    subprocess.run([*git, "commit", "-qam", "later"], check=True)
+    inputs = parse_inputs(_RAW["inputs"])
+    (bin_dir / "uv").write_text(
+        f"#!{sys.executable}\nimport json, os, sys\n"
+        f"if sys.argv[1:] == ['--version']:\n    sys.exit(print('uv {inputs.uv_version} (x)'))\n"
+        # Python's own PEP 538 locale coercion sets LC_CTYPE; the real uv is not Python.
+        "env = {k: v for k, v in os.environ.items() if k != 'LC_CTYPE'}\n"
+        f"open({str(log)!r}, 'a').write(json.dumps([sys.argv[1:], env]) + '\\n')\n"
+    )
+    (bin_dir / "uv").chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}:{os.environ['PATH']}")
+    a5, cache = tmp_path / "a5", tmp_path / "cache"
+    a5.mkdir()
+    gate.stage_a5(a5, workspace, tested, cache, inputs)
+    head = ["git", "-C", str(a5 / "src"), "rev-parse", "HEAD"]
+    assert subprocess.run(head, check=True, capture_output=True, text=True).stdout.strip() == tested
+    assert (a5 / "src" / "f").read_text() == "tested"
+    assert (a5 / "meta" / gate.GUEST_RUN).read_text() == gate.GUEST_RUN_SH
+    install = {
+        "PATH": "/usr/bin:/bin",
+        "UV_PYTHON_INSTALL_DIR": str(a5 / "python"),
+        "UV_CACHE_DIR": str(cache),
+    }
+    assert [json.loads(line) for line in log.read_text().splitlines()] == [
+        [["python", "install", inputs.cpython], install],
+        [
+            ["sync", "--locked", "--all-packages", "--directory", str(a5 / "src")],
+            install
+            | {
+                "UV_PROJECT_ENVIRONMENT": str(a5 / "venv"),
+                "UV_PYTHON_PREFERENCE": "only-managed",
+                "UV_PYTHON_DOWNLOADS": "never",
+                "UV_LINK_MODE": "copy",
+            },
+        ],
+    ]
+    other = tmp_path / "other"
+    other.mkdir()
+    with pytest.raises(gate.Q0Error, match=r"uv \['.+'\] is not the pinned 0\.0\.1"):
+        gate.stage_a5(other, workspace, tested, cache, replace(inputs, uv_version="0.0.1"))
+    assert list(other.iterdir()) == []
+
+
 def test_pinned_keyring_holds_only_the_pinned_key_and_refuses_an_absent_one(
     tmp_path: Path,
 ) -> None:
