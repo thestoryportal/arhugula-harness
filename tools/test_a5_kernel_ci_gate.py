@@ -14,10 +14,11 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 import socket
 import subprocess
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import asdict, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path, PurePosixPath
@@ -1976,3 +1977,79 @@ def test_resolve_closure_reads_every_verified_component_index_after_update(
     assert calls == ["update", "git"]
     assert added == gate.closure(_URIS, gate.packages_index(_INDEX), archive.snapshot_id, _BASE_SET)
     assert "Dir::State::status" in (tmp_path / "apt" / "apt.conf").read_text()
+
+
+def _staging(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, dpkg_exits: tuple[int, int] = (0, 0)
+) -> tuple[gate.Bootstrap, list[str]]:
+    """Extraction writes one base file; the fake entry writes its record and a dpkg log
+    naming its own root, so the two stagings differ in exactly that path."""
+    ran: list[str] = []
+
+    def steps(argv: Sequence[Sequence[str]], *_: object) -> None:
+        for step in map(list, argv):
+            ran.append(step[0] if step[0] == "tar" else step[3])
+            root = Path(step[-1])
+            if step[0] == "tar":
+                (root / "etc").mkdir()
+                (root / "etc" / "os-release").write_text("ubuntu\n")
+            else:
+                shutil.rmtree(root)
+
+    def entry(_: Path, root: Path, __: str, record: Path, debs: Sequence[gate.Deb]) -> list[str]:
+        ns = _install_run_record(tuple(debs))["namespace"]
+        exit_code = dpkg_exits[len([r for r in ran if r == "tar"]) - 1]
+        write = (
+            "import json,pathlib,sys; pathlib.Path(sys.argv[1]).write_text(sys.argv[3]);"
+            "log=pathlib.Path(sys.argv[2],'var','log'); log.mkdir(parents=True);"
+            "(log/'dpkg.log').write_text(sys.argv[2])"
+        )
+        doc = json.dumps(ns | {"dpkg_exit": exit_code})
+        return [sys.executable, "-c", write, str(record), str(root), doc]
+
+    monkeypatch.setattr(gate, "run_steps", steps)
+    monkeypatch.setattr(gate, "install_argv", entry)
+    pool = tmp_path / "pool"
+    pool.mkdir()
+    (pool / "git_1_amd64.deb").write_bytes(b"git")
+    git = gate.PoolPackage(
+        gate.Package("git", "1", "amd64"), "pool/main/g/git/git_1_amd64.deb", 3, _sha(b"git")
+    )
+    boot = gate.Bootstrap(tmp_path / "base.tar.gz", _BASE_SET, (git,), pool, {})
+    for name in ("evidence", "work"):
+        (tmp_path / name).mkdir()
+    return boot, ran
+
+
+def test_stage_twice_keeps_the_root_and_exposes_the_path_two_builds_disagree_on(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    boot, ran = _staging(tmp_path, monkeypatch)
+    root, work = tmp_path / "root", tmp_path / "work"
+    first, second = gate.stage_twice(
+        tmp_path / "gate.py", boot, root, tmp_path / "evidence", work, "net:[1]"
+    )
+    assert ran == ["tar", "tar", "rm"]
+    assert gate.manifest_diff(first, second) == ["/var/log/dpkg.log"]
+    assert first == gate.root_manifest(root) and "/etc/os-release" in first
+    assert not any(path.startswith(f"/{gate.DEB_CACHE}") for path in first | second)
+    assert not (work / "root-repeat").exists()
+    assert (tmp_path / "evidence" / "install-ns.json").is_file()
+    assert (work / "install-ns-repeat.json").is_file()
+
+
+@pytest.mark.parametrize(("exits", "steps"), [((1, 0), ["tar"]), ((0, 1), ["tar", "tar", "rm"])])
+def test_stage_twice_fails_closed_on_either_install_and_still_discards_the_repeat(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, exits: tuple[int, int], steps: list[str]
+) -> None:
+    boot, ran = _staging(tmp_path, monkeypatch, exits)
+    with pytest.raises(gate.Q0Error, match="dpkg exit 1 is not 0"):
+        gate.stage_twice(
+            tmp_path / "gate.py",
+            boot,
+            tmp_path / "root",
+            tmp_path / "evidence",
+            tmp_path / "work",
+            "net:[1]",
+        )
+    assert ran == steps and not (tmp_path / "work" / "root-repeat").exists()

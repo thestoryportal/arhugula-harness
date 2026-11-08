@@ -1807,6 +1807,38 @@ def bootstrap(
     return Bootstrap(tarball, packages, added, pool, test)
 
 
+def root_manifest(root: Path) -> dict[str, Mapping[str, Any]]:
+    """One staged root as the guest will see it at /, by guest path."""
+    return {guest: _node(host) for guest, host in _walk(root, "/", ())}
+
+
+def installed_root(
+    gate: Path, root: Path, host_netns: str, boot: Bootstrap, record: Path
+) -> dict[str, Mapping[str, Any]]:
+    """Step 3 into one extraction of the verified base; any run problem fails Q0 (3d)."""
+    debs = [entry.deb for entry in boot.closure]
+    run = guest_install(gate, root, host_netns, boot.pool, debs, record)
+    if problems := run_problems(run, debs):
+        raise Q0Error(f"install into {root}: " + "; ".join(problems))
+    return root_manifest(root)
+
+
+def stage_twice(
+    gate: Path, boot: Bootstrap, root: Path, evidence: Path, work: Path, host_netns: str
+) -> tuple[dict[str, Mapping[str, Any]], dict[str, Mapping[str, Any]]]:
+    """Q0_observation stages the root in two fresh directories; only `root` is kept to boot.
+
+    Each is a further extraction of the verified tarball. The repeat exists only so its
+    manifest can expose a path that differs between two builds, then root discards it.
+    """
+    root.mkdir()
+    run_steps([extract_argv(boot.tarball, root)], root.parent, BOOTSTRAP_TIMEOUT)
+    staged = installed_root(gate, root, host_netns, boot, evidence / "install-ns.json")
+    with fresh_base(boot.tarball, work / "root-repeat") as repeat:
+        again = installed_root(gate, repeat, host_netns, boot, work / "install-ns-repeat.json")
+    return staged, again
+
+
 # --- CLI ----------------------------------------------------------------------------
 
 
