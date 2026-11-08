@@ -57,6 +57,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
+from harness_cp.workflow_driver_types import EngineResumePrefix
 from mcp.server.fastmcp import Context, FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import CallToolResult, TextContent
@@ -140,6 +141,7 @@ class FreshEntry:
     run_id: str = field(default_factory=lambda: uuid.uuid4().hex)
     pause_snapshot: None = field(default=None, init=False)
     resume_context: None = field(default=None, init=False)
+    engine_resume: None = field(default=None, init=False)
     admission: FreshRunAdmission = field(init=False)
 
     def __post_init__(self) -> None:
@@ -158,6 +160,7 @@ class ResumedEntry:
     pause_snapshot: PauseSnapshot
     admission: ResumeAdmission
     resume_context: ResumeContext | None
+    engine_resume: None = field(default=None, init=False)
 
     @property
     def run_id(self) -> str:
@@ -178,6 +181,11 @@ class EngineResumedEntry:
     @property
     def run_id(self) -> str:
         return self.locator.run_id
+
+    @property
+    def engine_resume(self) -> EngineResumePrefix:
+        """The completed-effect prefix the driver's F2 `resume_at` must match (fork §3.4)."""
+        return EngineResumePrefix(step_index=self.locator.step_index)
 
 
 # [LAW:types-are-the-program] Runtime spec v1.141 §3.1: the body receives exactly one of these,
@@ -543,6 +551,7 @@ def materialize_mcp_server_stage(
                 default_model_binding=workflow.default_model_binding,
                 step_dispatchers=cast(Any, effective_step_dispatchers),
                 pause_snapshot_input=_resume_snapshot,
+                engine_resume=entry.engine_resume,
                 resume_context=_resume_context,
                 child_resume_authority=child_resume_authority,
                 validator_run=validator_run,

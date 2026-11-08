@@ -67,6 +67,7 @@ from harness_cp.workflow_driver_errors import (
     WorkflowDriverError,
 )
 from harness_cp.workflow_driver_types import (
+    EngineResumePrefix,
     RunResult,
     RunStatus,
     StepExecutionContext,
@@ -2076,6 +2077,96 @@ def test_reconciler_loop_observable_lifecycle_events_emit() -> None:
     )
     assert WorkflowEventClass.WORKFLOW_START in emitter.emits
     assert emitter.emits.count(WorkflowEventClass.STEP_BOUNDARY) == 2
+
+
+class _RecordingRecoveryLoop:
+    """Duck-typed engine recovery loop with a present pause record that counts its
+    `attempt_resume` fires and answers `RESUME_CLEAN`."""
+
+    def __init__(self) -> None:
+        self.fires: list[dict[str, Any]] = []
+
+    def has_pause_record(self, *, engine_class: Any, workflow_id: Any, run_id: Any) -> bool:
+        _ = (engine_class, workflow_id, run_id)
+        return True
+
+    async def attempt_resume(self, **kwargs: Any) -> Any:
+        from types import SimpleNamespace
+
+        from harness_cp.pause_resume_protocol import ResumeOutcomeKind
+
+        self.fires.append(kwargs)
+        return SimpleNamespace(
+            resume_outcome=SimpleNamespace(outcome_kind=ResumeOutcomeKind.RESUME_CLEAN)
+        )
+
+
+def _engine_resume_run(
+    engine_class: EngineClass, *, f2_prefix: int, locator_step: int
+) -> tuple[RunResult, _EchoDispatcher, _RecordingRecoveryLoop, _FakeEmitter]:
+    """One root engine resume of `run-1` over a 3-step workflow whose F2 ledger holds
+    `f2_prefix` committed steps and whose admitted locator records `locator_step`."""
+    materialized = {_expected_step_key("run-1", "wf-1", 1, i): 1 for i in range(f2_prefix)}
+    emitter = _FakeEmitter()
+    ctx = _FakeCtx(
+        ledger=_FakeLedger(prior_entries=f2_prefix),
+        emitter=emitter,
+        ledger_reader=_FakeLedgerReader(materialized),
+    )
+    recovery = _RecordingRecoveryLoop()
+    ctx.engine_recovery_loop = recovery
+    dispatcher = _EchoDispatcher()
+    result = execute_workflow(
+        manifest_entry=_manifest(engine_class=engine_class),
+        steps=[_step(0), _step(1), _step(2)],
+        run_id="run-1",
+        ctx=cast(DriverContext, ctx),
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=_registry(cast(StepDispatcher, dispatcher)),
+        engine_resume=EngineResumePrefix(step_index=locator_step),
+    )
+    return result, dispatcher, recovery, emitter
+
+
+_ENGINE_LOCATOR_CLASSES = pytest.mark.parametrize(
+    "engine_class", [EngineClass.WAL_SEGMENT, EngineClass.RECONCILER_LOOP]
+)
+
+
+@_ENGINE_LOCATOR_CLASSES
+@pytest.mark.parametrize(
+    ("f2_prefix", "locator_step"),
+    [(0, 2), (2, 1), (1, 2)],
+    ids=["f2-prefix-lost", "f2-prefix-longer", "f2-prefix-shorter"],
+)
+def test_engine_resume_prefix_skew_fails_closed_before_any_effect(
+    engine_class: EngineClass, f2_prefix: int, locator_step: int
+) -> None:
+    """B-314 fork §3.4 / T05 §6 item 10: an F2 `resume_at` that differs from the locator's
+    `step_index` returns FAILED `RT-FAIL-RESUME-ENGINE-PREFIX-SKEW` under the original
+    run_id, with zero step dispatches, no `attempt_resume` fire and no RESUMPTION emit."""
+    result, dispatcher, recovery, emitter = _engine_resume_run(
+        engine_class, f2_prefix=f2_prefix, locator_step=locator_step
+    )
+    assert result.status is RunStatus.FAILED
+    assert result.fail_class == "RT-FAIL-RESUME-ENGINE-PREFIX-SKEW"
+    assert result.run_id == "run-1"
+    assert dispatcher.dispatched == []
+    assert recovery.fires == []
+    assert WorkflowEventClass.RESUMPTION not in emitter.emits
+
+
+@_ENGINE_LOCATOR_CLASSES
+def test_engine_resume_with_agreeing_prefix_fires_once_and_skips_the_prefix(
+    engine_class: EngineClass,
+) -> None:
+    """B-314 fork §3.4: when the F2 prefix equals the locator's `step_index`, the run fires
+    `attempt_resume` exactly once at that step and dispatches only the steps after it."""
+    result, dispatcher, recovery, _ = _engine_resume_run(engine_class, f2_prefix=2, locator_step=2)
+    assert result.status is RunStatus.SUCCESS
+    assert result.run_id == "run-1"
+    assert [str(d[1].step_id) for d in dispatcher.dispatched] == ["step-2"]
+    assert [fire["step_id"] for fire in recovery.fires] == ["2"]
 
 
 # ---------------------------------------------------------------------------
