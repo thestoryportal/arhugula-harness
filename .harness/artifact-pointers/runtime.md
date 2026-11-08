@@ -10,7 +10,8 @@
 
 | Axis | Spec |
 |---|---|
-| Runtime | `Spec_Harness_Runtime_v1_142.md` (**v1.142 — current cleared HEAD**, 2026-11-07; delta over cleared v1.141; A4 typed resume refusal (ratified LIT `cmt-756042fc`); paired CP v1.131; clearance `spec-harness-runtime-v1-142-cleared-2026-11-07.md`; see `.harness/artifact-heads.md`) |
+| Runtime | `Spec_Harness_Runtime_v1_143.md` (**v1.143 — current cleared HEAD**, 2026-11-08; delta over cleared v1.142; effect-free `DECLARATIVE_STEP` dispatcher (ratified LIT `cmt-eaec8ba7`); clearance `spec-harness-runtime-v1-143-cleared-2026-11-08.md`; see `.harness/artifact-heads.md`) |
+| Runtime | `Spec_Harness_Runtime_v1_142.md` (**v1.142 — former cleared HEAD**, 2026-11-07; delta over cleared v1.141; A4 typed resume refusal (ratified LIT `cmt-756042fc`); paired CP v1.131; clearance `spec-harness-runtime-v1-142-cleared-2026-11-07.md`; see `.harness/artifact-heads.md`) |
 | Runtime | `Spec_Harness_Runtime_v1_141.md` (**v1.141 — former cleared HEAD**, 2026-11-05; delta over cleared v1.140; daemon MCP resume B-311; clearance `spec-harness-runtime-v1-141-cleared-2026-11-05.md`; see `.harness/artifact-heads.md`) |
 | Runtime | `Spec_Harness_Runtime_v1_140.md` (**v1.140 — former cleared HEAD**, 2026-11-05; delta over cleared v1.139; paired CP v1.130; clearance `Spec_Harness_Runtime-v1_140-cleared-2026-11-05.md`; see `.harness/artifact-heads.md`) |
 | Runtime | `Spec_Harness_Runtime_v1_139.md` (**v1.139 — former cleared HEAD**, 2026-11-05; delta over cleared v1.138; clearance `Spec_Harness_Runtime-v1_139-cleared-2026-11-05.md`; see `.harness/artifact-heads.md`) |

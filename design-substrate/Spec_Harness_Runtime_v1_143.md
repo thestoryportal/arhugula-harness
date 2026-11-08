@@ -6,8 +6,9 @@ unbound (`Spec_Harness_Runtime_v1_132.md:4652`), the matching parenthetical in t
 "body-of-prose evaluation" description and future-binding clause are both replaced. None of these sites is amended by v1.133 through v1.142. Every other
 v1.142 and earlier term remains in force. Cleared predecessor files are not edited.*
 
-**Status: PROPOSED.** Not cleared. Requires independent contract review and integration-lead
-ratification before any source-conformance claim.
+**Status: CLEARED 2026-11-08 — ratified by the integration lead at LIT `cmt-eaec8ba7-4450-4cd0-afb8-c80f1592921e`
+on the reviewed body at `72e1f5b596a3d3241c35d8d2c89c7e1efc72b8c8` (independent APPROVE
+`cmt-a51a00d7-f76e-443a-b22e-70719db3ba22`); clearance `.harness/clearance/spec-harness-runtime-v1-143-cleared-2026-11-08.md`.**
 
 **Authority:** integration-lead disposition LIT `arhugula-harness-trial-193.qrf`
 `cmt-de679744-ad1b-4a04-8664-67f4d7a536db` (option A of `cmt-f2f25126-a27f-4765-a20f-87568d53ba13`),

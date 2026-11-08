@@ -67,7 +67,7 @@ Canonical spec heads — **one family per row, so each version stays bound to it
 | AS | `Spec_Action_Surface_v1.md` | **v1.14** (cleared 2026-07-15) |
 | CP | `Spec_Control_Plane_v1_131.md` | **v1.131** (cleared 2026-11-07) |
 | OD | `Spec_Operational_Discipline_v1_43.md` | **v1.43** (cleared 2026-11-04) |
-| Runtime | `Spec_Harness_Runtime_v1_142.md` | **v1.142** (cleared 2026-11-07) |
+| Runtime | `Spec_Harness_Runtime_v1_143.md` | **v1.143** (cleared 2026-11-08) |
 | Memory | `Spec_Memory_Substrate_v1.md` | **v1.3** (cleared 2026-08-06) |
 
 Full per-version change-note lineage lives at `.harness/artifact-pointers/spec-heads.md` and, per family, at `.harness/artifact-pointers/{is,as,cp,od,runtime,memory}.md` — **query, do not read wholesale** (`rg <term> .harness/artifact-pointers/*.md`).
