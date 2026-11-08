@@ -53,7 +53,9 @@ stores and keys are unchanged.
 EnginePauseLocator (journal record kind "engine-pause-locator")
   workflow_id:  str          # plain workflow id (the handle)
   run_id:       str          # ORIGINAL run id; the engine key is run_scoped_substrate_key(workflow_id, run_id)
-  engine_class: "wal-segment" | "reconciler-loop"   # closed; no other EngineClass value is writable
+  engine_class: "WAL-segment" | "reconciler-loop"   # EngineClass.WAL_SEGMENT / .RECONCILER_LOOP values,
+                                                    # serialized exactly as harness-cp engine_class.py:46,50
+                                                    # define them; no normalization; no other value writable
   step_index:   int >= 0     # the pause step; steps [0, step_index) completed before capture
   depth:        0            # root only; see §4
   locator_hash: sha256 over the canonical fields above (the claim's snapshot_hash analogue)
@@ -83,6 +85,8 @@ EnginePauseLocator (journal record kind "engine-pause-locator")
    all use it, and none re-implements a check.
    - The existing order and checks are kept: the protocol is bound and durable; the read; the
      superseded check; the depth check; the workflow match; the step range; then staleness, last.
+     The locator variant adds the engine-class match (`ResumeEngineClassMismatchError`) right after
+     the workflow match.
    - One check is added after the step range: **engine presence**.
      `has_pause_record(engine_class, workflow_id, run_id)` must be `True`, read from the same store
      directories the factory binds through the same `resolve_state_path(StateKind.ENGINE_RECOVERY_*)`
@@ -118,27 +122,37 @@ EnginePauseLocator (journal record kind "engine-pause-locator")
 
 ## 4. Refusal and outcome table (contract item 3)
 
-Every refusal below happens before bootstrap or before the first dispatch. It makes zero model calls,
-tool calls or step dispatches, makes no `attempt_resume` fire and starts no fresh run.
+**4a. Pre-admission refusals.** Each happens before the claim and before bootstrap. It writes no
+journal or claim record, makes no `attempt_resume` fire and no `cp.resume-attempted` entry, makes zero
+model calls, tool calls or step dispatches, and starts no fresh run.
 
 | Case | Representation (exact) | Exit |
 | --- | --- | ---: |
 | No record for the handle | `ResumeHandleUnknownError`, existing five causes, `kind=handle` | 6 |
 | Corrupt locator line | same, the existing corrupt cause (fail-closed read returns `None`) | 6 |
+| Stored locator's `workflow_id` differs from the handle it was read for | same, the existing reader cause `PauseJournalReadCause.WORKFLOW_MISMATCH` (`journal_workflow_pause_store.py:986-997`, surfaced by `api.py:1334-1354`); the five-cause reader contract is unchanged | 6 |
 | Locator present, engine record absent | **new** `ResumeEnginePauseRecordAbsentError`, `kind=engine-pause-record-absent`, message names the engine class only (no path, digest or run) | 6 |
-| Engine record present but corrupt | admitted (presence is not validity); body fires `attempt_resume`, gets `ABORT_SNAPSHOT_CORRUPTED`, returns `FAILED` with `fail_class=CP_FAIL_PAUSE_SNAPSHOT_CORRUPTION`; zero dispatches; claim consumed | 1 |
-| Revalidation abort | existing `ABORT_REVALIDATION_FAILED` → `CP_FAIL_RESUME_MATERIAL_DIFF_DETECTED`; zero dispatches | 1 |
-| Wrong workflow (locator `workflow_id` or `engine_class` differs from the supplied workflow) | `ResumeWorkflowMismatchError`, `kind=workflow-mismatch` | 6 |
+| Valid locator whose `workflow_id` differs from the supplied `WorkflowObject` | `ResumeWorkflowMismatchError`, `kind=workflow-mismatch` | 6 |
+| Valid locator whose `engine_class` differs from the supplied workflow's manifest engine class | **new** `ResumeEngineClassMismatchError`, `kind=engine-class-mismatch`, message names both engine classes only | 6 |
 | Step out of range (the workflow changed) | `ResumeStepIndexOutOfRangeError`, `kind=step-index-out-of-range` | 6 |
 | Direct child (`depth != 0`, unknown or malformed) | `ResumeDirectChildHandleError`, `kind=depth` | 6 |
 | Stale composed `resume_context` | `ResumePauseStateStaleError`, `kind=pause-state-stale` | 6 |
 | Superseded (a later fresh run was admitted) | `ResumePauseRecordSupersededError`, `kind=pause-record-superseded` | 6 |
 | Busy (claim lease held) | `ResumeClaimRefusedError` reason `claim-busy`, `kind=claim` | 7 |
 | Already used (claimed earlier, any outcome) | `ResumeClaimRefusedError` reason `claim-refused`, `kind=claim` | 7 |
-| Prefix skew after admission | `FAILED`, `fail_class=RT-FAIL-RESUME-ENGINE-PREFIX-SKEW`, zero dispatches | 1 |
 | Protocol not bound / not durable | existing `ResumeProtocolNotBoundError` / `ResumeArgsError` | 6 |
 
-- The B-313 closed refusal value gains exactly one arm, `engine-pause-record-absent`, the tenth. The
+**4b. Admitted failed outcomes.** The claim is made (`started` fsynced) and stays consumed, so a
+repeat is `claim-refused`. Zero step dispatches and zero model or tool calls. No fresh run.
+
+| Case | Representation (exact) | `attempt_resume` / `cp.resume-attempted` | Exit |
+| --- | --- | --- | ---: |
+| Prefix skew (F2 `resume_at` != locator `step_index`) | `FAILED`, `fail_class=RT-FAIL-RESUME-ENGINE-PREFIX-SKEW` | none (checked before the fire) | 1 |
+| Engine record present but corrupt (presence is not validity) | `FAILED`, `fail_class=CP_FAIL_PAUSE_SNAPSHOT_CORRUPTION` | exactly one, outcome `abort-snapshot-corrupted` | 1 |
+| Revalidation abort | `FAILED`, `fail_class=CP_FAIL_RESUME_MATERIAL_DIFF_DETECTED` | exactly one, outcome `abort-revalidation-failed` | 1 |
+
+- The B-313 closed refusal value gains exactly two arms, `engine-pause-record-absent` (tenth) and
+  `engine-class-mismatch` (eleventh). The
   three refusal classes (arguments/handle/depth vs read refusals vs claim) stay distinct
   (constraint 4).
 - `harness run` remains a fresh run and never resumes.
@@ -154,7 +168,7 @@ tool calls or step dispatches, makes no `attempt_resume` fire and starts no fres
     `harness resume <workflow>`.
   - Pauses captured before T05 have no locator. They stay non-resumable, and their engine files stay
     on disk as operator-owned data.
-  - The exit 6 kind list gains `engine-pause-record-absent`.
+  - The exit 6 kind list gains `engine-pause-record-absent` and `engine-class-mismatch`.
 - **MCP.** `resume_workflow` gets the same admission and the same closed refusal value. HTTP stays only
   the daemon's MCP transport (constraint 6).
 - **Inspection.** The §14.14.9 pause-state accessor projects a locator as
@@ -172,7 +186,7 @@ tool calls or step dispatches, makes no `attempt_resume` fire and starts no fres
   - the locator record kind and its writer condition;
   - the engine admission variant and the presence check;
   - the prefix-skew fail class;
-  - the tenth closed-value arm;
+  - the tenth and eleventh closed-value arms;
   - the exit 5 row (b), exit 6 list and §14.14.9 projection text.
 - The next plan version adds one U-RT unit, T05.
 - One clearance file for each of the two.
@@ -180,15 +194,19 @@ tool calls or step dispatches, makes no `attempt_resume` fire and starts no fres
 
 None of this is applied by T04.
 
-**T05 acceptance (literal).** Every refusal assertion also checks: no new journal or claim records,
-no new `cp.resume-attempted` entry, zero step dispatches, zero model or tool calls and no new
-`run_id`.
+**T05 acceptance (literal).** Every §4a pre-admission refusal assertion also checks: no new journal
+or claim records, no `attempt_resume` fire, no new `cp.resume-attempted` entry, zero step dispatches,
+zero model or tool calls and no new `run_id`. Every §4b admitted failure checks the claim is consumed,
+zero step dispatches, zero model or tool calls, no new `run_id`, and exactly the
+`cp.resume-attempted` count its §4b row states.
 
 1. **WAL resume.** A real WAL pause at step 1 through `api.run`, then
    `harness resume <wf>` in a new process:
    - the run exits 0, and its `RunResult.run_id` is the original;
    - step 0 is not re-dispatched;
-   - exactly one `cp.resume-attempted` entry is written, with `resume-clean`.
+   - exactly one `cp.resume-attempted` entry is written, with `resume-clean`;
+   - the journaled locator round-trips: its serialized `engine_class` is the literal `"WAL-segment"`
+     and parses back to `EngineClass.WAL_SEGMENT` (likewise `"reconciler-loop"` in 2).
 2. **Reconciler resume.** The same as 1 for `RECONCILER_LOOP`, through the daemon MCP `resume_workflow`.
 3. **Repeat.** Resuming the same handle again returns exit 7 with `reason=claim-busy` during the run
    and `reason=claim-refused` after it.
@@ -197,13 +215,16 @@ no new `cp.resume-attempted` entry, zero step dispatches, zero model or tool cal
 5. **Engine record removed.** Locator kept, engine record deleted: exit 6,
    `kind=engine-pause-record-absent`.
 6. **Engine record corrupted.** Exit 1, `fail_class=CP_FAIL_PAUSE_SNAPSHOT_CORRUPTION`, zero
-   dispatches.
-7. **Corrupt locator line.** Exit 6, `kind=handle`, the existing corrupt cause.
+   dispatches, exactly one `cp.resume-attempted` with `abort-snapshot-corrupted`, claim consumed.
+7. **Corrupt locator line.** Exit 6, `kind=handle`, the existing corrupt cause. A stored locator
+   whose `workflow_id` differs from its handle: exit 6, `kind=handle`,
+   `cause=PauseJournalReadCause.WORKFLOW_MISMATCH`.
 8. **Engine class changed.** The workflow file's engine class was changed: exit 6,
-   `kind=workflow-mismatch`.
+   `kind=engine-class-mismatch`. A supplied `WorkflowObject` with a different `workflow_id` than a
+   valid locator: exit 6, `kind=workflow-mismatch`.
 9. **Child depth.** A locator with depth 1 is injected: exit 6, `kind=depth`.
 10. **F2 prefix lost.** Simulated by resuming with an empty state ledger: `FAILED`
-    `RT-FAIL-RESUME-ENGINE-PREFIX-SKEW`, zero dispatches. T05 also records whether the production F2
+    `RT-FAIL-RESUME-ENGINE-PREFIX-SKEW`, zero dispatches, no `attempt_resume` fire, claim consumed. T05 also records whether the production F2
     ledger survives a process restart.
 11. **Coexistence.** A workflow-layer snapshot followed by a later engine locator: the engine record
     wins. The reverse order: the snapshot wins. The earlier record is not resumable.
