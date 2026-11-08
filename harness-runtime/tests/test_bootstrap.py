@@ -47,6 +47,7 @@ from harness_runtime.bootstrap import (
 )
 from harness_runtime.bootstrap import stage_4_od as _stage_4_od_mod
 from harness_runtime.bootstrap.mutable_context import _MutableHarnessContext
+from harness_runtime.lifecycle.declarative_step_dispatcher import DeclarativeStepDispatcher
 from harness_runtime.lifecycle.procedural_tier_snapshot import (
     resolve_procedural_tier_snapshot,
 )
@@ -884,8 +885,8 @@ async def test_bootstrap_stage_5_binds_inference_and_sub_agent_dispatchers(
     assert sub_agent_step.inner is ctx.sub_agent_dispatcher
 
     # TOOL_STEP bound at U-RT-68 cluster-close per spec v1.16 §14.9.3 +
-    # §14.11 C-RT-21 RetryBreakerToolDispatcher wrap. HITL / DECLARATIVE
-    # remain unbound (follow-on composer arcs).
+    # §14.11 C-RT-21 RetryBreakerToolDispatcher wrap. HITL remains unbound
+    # (follow-on composer arc); DECLARATIVE is bound provider-free below.
     #
     # R-FS-1 `B-TOOL-GATE` (CP spec v1.35 §19.1.2 Producer ¶) — the TOOL_STEP
     # registry path now wraps the tool dispatcher in a third RuntimeHITLGateComposer
@@ -902,9 +903,11 @@ async def test_bootstrap_stage_5_binds_inference_and_sub_agent_dispatchers(
     assert tool_step.inner.mcp_trust_tier_resolver is not None
     assert isinstance(ctx.hitl_tool_loop, RuntimeHITLToolLoop)
     assert isinstance(ctx.engine_recovery_loop, RuntimeEngineRecoveryLoop)
-    for unbound in (StepKind.HITL_STEP, StepKind.DECLARATIVE_STEP):
-        with pytest.raises(StepKindDispatcherNotBoundError):
-            ctx.step_dispatchers.lookup(unbound)
+    assert isinstance(
+        ctx.step_dispatchers.lookup(StepKind.DECLARATIVE_STEP), DeclarativeStepDispatcher
+    )
+    with pytest.raises(StepKindDispatcherNotBoundError):
+        ctx.step_dispatchers.lookup(StepKind.HITL_STEP)
 
 
 # ---------------------------------------------------------------------------
