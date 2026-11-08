@@ -1563,9 +1563,8 @@ def manifest_diff(
     )
 
 
-def guest_stage_verify(root: Path, a5: Path, mounts: Collection[str]) -> list[str]:
+def guest_stage_verify(stage: Stage, a5: Path) -> list[str]:
     """Write /a5/meta/stage-manifest.json and return why the stage may not boot."""
-    stage = scan_stage(root, a5, mounts)
     # [LAW:effects-at-boundaries] The manifest is written as evidence whatever the
     # judgement; its sha256 is STAGE_MANIFEST_SHA256 only on a stage with no problem.
     (a5 / "meta" / "stage-manifest.json").write_bytes(_canonical(stage.manifest))
@@ -2088,6 +2087,73 @@ def root_manifest(root: Path) -> dict[str, Mapping[str, Any]]:
     return {guest: _node(host) for guest, host in _walk(root, "/", ())}
 
 
+def _privileged_scan(gate: Path, stage: str, *paths: Path) -> dict[str, Any]:
+    """Read the root-owned stage inside a fresh, networkless privileged process."""
+    argv = [
+        "sudo",
+        "-n",
+        "--",
+        "/usr/bin/env",
+        "-i",
+        *(f"{name}={value}" for name, value in INSTALL_ENV.items()),
+        "/usr/bin/unshare",
+        "--net",
+        "--",
+        "/usr/bin/setpriv",
+        "--no-new-privs",
+        "--inh-caps",
+        "-all",
+        "--ambient-caps",
+        "-all",
+        "--bounding-set",
+        ",".join(f"-{name}" for name, _ in FORBIDDEN_CAPS),
+        "--",
+        "/usr/bin/python3",
+        "-I",
+        str(gate),
+        "guest-stage",
+        stage,
+        *(str(path) for path in paths),
+    ]
+    try:
+        result = subprocess.run(
+            argv, check=True, capture_output=True, close_fds=True, timeout=BOOTSTRAP_TIMEOUT
+        )
+    except subprocess.CalledProcessError as exc:
+        # [LAW:no-silent-failure] Preserve the privileged child's diagnostic on refusal.
+        raise Q0Error(f"privileged {stage} failed: {exc.stderr.decode(errors='replace')}") from exc
+    except (OSError, subprocess.SubprocessError) as exc:
+        # [LAW:no-silent-failure] An unreadable root cannot become an incomplete manifest.
+        raise Q0Error(f"privileged {stage} failed: {exc}") from exc
+    return _object(result.stdout, stage)
+
+
+def privileged_root_manifest(gate: Path, root: Path) -> dict[str, Mapping[str, Any]]:
+    raw = _privileged_scan(gate, "root-manifest", root)
+    if any(type(path) is not str or type(node) is not dict for path, node in raw.items()):
+        raise Q0Error("privileged root-manifest has malformed nodes")
+    return cast(dict[str, Mapping[str, Any]], raw)
+
+
+def privileged_stage(gate: Path, root: Path, a5: Path) -> Stage:
+    raw = _privileged_scan(gate, "scan-stage", root, a5)
+    manifest, pth, meta = raw.get("manifest"), raw.get("pth"), raw.get("meta")
+    if (
+        type(manifest) is not dict
+        or type(pth) is not dict
+        or type(meta) is not list
+        or any(type(path) is not str or type(node) is not dict for path, node in manifest.items())
+        or any(type(path) is not str or type(value) is not str for path, value in pth.items())
+        or any(type(name) is not str for name in meta)
+    ):
+        raise Q0Error("privileged scan-stage has malformed fields")
+    return Stage(
+        cast(dict[str, Mapping[str, Any]], manifest),
+        cast(dict[str, str], pth),
+        tuple(cast(list[str], meta)),
+    )
+
+
 def installed_root(
     gate: Path, root: Path, host_netns: str, boot: Bootstrap, record: Path
 ) -> tuple[dict[str, Any], dict[str, Mapping[str, Any]]]:
@@ -2096,7 +2162,7 @@ def installed_root(
     run = guest_install(gate, root, host_netns, boot.pool, debs, record)
     if problems := run_problems(run, debs):
         raise Q0Error(f"install into {root}: " + "; ".join(problems))
-    return run, root_manifest(root)
+    return run, privileged_root_manifest(gate, root)
 
 
 @dataclass(frozen=True)
@@ -2981,7 +3047,7 @@ def q0_host(
     run_steps([host_env_origin_argv(at.a5)], at.a5 / "src", BOOTSTRAP_TIMEOUT)
     # [LAW:no-ambient-temporal-coupling] The manifest is taken after the last write to
     # the stage, so STAGE_MANIFEST_SHA256 names the stage as it boots.
-    if problems := guest_stage_verify(at.root, at.a5, ()):
+    if problems := guest_stage_verify(privileged_stage(gate, at.root, at.a5), at.a5):
         raise Q0Error("stage: " + "; ".join(problems))
     facts = HostFacts(
         boot.base_packages,
@@ -3237,7 +3303,7 @@ def q0_post_launch(
         debs = closure_debs(_read(meta / "host.json"), _read(binding_env))
         # [LAW:no-ambient-temporal-coupling] Rescanned after vng has exited, with the
         # host's own walk, so any write the guest made to the stage changes the digest.
-        stage = scan_stage(root, a5, ()).manifest
+        stage = privileged_stage(Path(__file__).resolve(), root, a5).manifest
     except (Q0Error, OSError) as exc:
         return {"completed_observation": False, "problems": [f"host: {exc}"]}
     # [LAW:one-source-of-truth] The run's identity is the job's own bindings and the
@@ -3293,6 +3359,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     ns.add_argument("--host-netns", required=True)
     ns.add_argument("--evidence", type=Path, required=True)
     ns.add_argument("debs", nargs="+")
+    root_scan = stages.add_parser("root-manifest")
+    root_scan.add_argument("root", type=Path)
+    stage_scan = stages.add_parser("scan-stage")
+    stage_scan.add_argument("root", type=Path)
+    stage_scan.add_argument("a5", type=Path)
     probe = commands.add_parser("observe", parents=[common])
     probe.add_argument("--meta", type=Path, required=True)
     probe.add_argument("--out", type=Path, required=True)
@@ -3315,6 +3386,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     for name in ("root", "out", "launched", "evidence"):
         collect.add_argument(f"--{name}", type=Path, required=True)
     args = parser.parse_args(argv)
+
+    if args.command == "guest-stage" and args.stage in ("root-manifest", "scan-stage"):
+        # [LAW:effects-at-boundaries] The privileged child emits only measured data.
+        measured = (
+            root_manifest(args.root)
+            if args.stage == "root-manifest"
+            else asdict(scan_stage(args.root, args.a5, ()))
+        )
+        sys.stdout.buffer.write(_canonical(measured))
+        return 0
 
     raw_bytes = args.expectations.read_bytes()
     try:

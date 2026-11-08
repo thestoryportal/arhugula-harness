@@ -1438,7 +1438,7 @@ def test_stage_manifest_records_the_stage_by_guest_path_and_judges_it_clean(
     tmp_path: Path,
 ) -> None:
     root, a5 = _stage(tmp_path)
-    assert gate.guest_stage_verify(root, a5, _MOUNTS) == []
+    assert gate.guest_stage_verify(gate.scan_stage(root, a5, _MOUNTS), a5) == []
     written = json.loads((a5 / "meta" / "stage-manifest.json").read_bytes())
     assert sorted(written) == [
         "/",
@@ -1530,7 +1530,7 @@ def test_stage_refuses_a_pth_line_outside_a5_src(tmp_path: Path, line: str) -> N
 def test_stage_refuses_an_a5_meta_entry_beyond_the_four(tmp_path: Path) -> None:
     root, a5 = _stage(tmp_path)
     (a5 / "meta" / "outcomes.json").write_text("{}")
-    assert gate.guest_stage_verify(root, a5, _MOUNTS) == [
+    assert gate.guest_stage_verify(gate.scan_stage(root, a5, _MOUNTS), a5) == [
         f"/a5/meta/outcomes.json is not one of {list(gate.STAGE_META)}"
     ]
 
@@ -2586,6 +2586,7 @@ def _staging(
 
     monkeypatch.setattr(gate, "run_steps", steps)
     monkeypatch.setattr(gate, "install_argv", entry)
+    monkeypatch.setattr(gate, "privileged_root_manifest", lambda _, root: gate.root_manifest(root))
     pool = tmp_path / "pool"
     pool.mkdir()
     (pool / "git_1_amd64.deb").write_bytes(b"git")
@@ -2612,6 +2613,60 @@ def test_stage_twice_keeps_the_root_and_exposes_the_path_two_builds_disagree_on(
     assert staged.install["wrapper_exit"] == 0
     assert staged.install["namespace"] == json.loads((work / "install-ns-root.json").read_text())
     assert (work / "install-ns-repeat.json").is_file()
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root can traverse mode-000 directories")
+def test_privileged_scans_keep_an_unreadable_private_path_and_its_mode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, a5 = tmp_path / "root", tmp_path / "a5"
+    private = root / "etc" / "ssl" / "private"
+    private.mkdir(parents=True)
+    secret = private / "key.pem"
+    secret.write_bytes(b"fixture key")
+    secret.chmod(0o600)
+    (a5 / "meta").mkdir(parents=True)
+    root_record = gate.root_manifest(root)
+    stage_record = asdict(gate.scan_stage(root, a5, ()))
+    cli = [sys.executable, str(Path(gate.__file__).resolve()), "guest-stage"]
+    for command, paths, expected in (
+        ("root-manifest", (root,), root_record),
+        ("scan-stage", (root, a5), stage_record),
+    ):
+        result = subprocess.run(
+            [*cli, command, *(str(path) for path in paths)],
+            check=True,
+            capture_output=True,
+        )
+        assert json.loads(result.stdout) == json.loads(json.dumps(expected))
+    private.chmod(0)
+    root_record["/etc/ssl/private"] = dict(root_record["/etc/ssl/private"], mode=0)
+    stage_record["manifest"]["/etc/ssl/private"]["mode"] = 0
+
+    def privileged(argv: Sequence[str], **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
+        assert argv[:5] == ["sudo", "-n", "--", "/usr/bin/env", "-i"]
+        assert argv[8:11] == ["/usr/bin/unshare", "--net", "--"]
+        assert private.stat().st_mode & 0o777 == 0
+        return subprocess.CompletedProcess(
+            argv,
+            0,
+            gate._canonical(root_record if "root-manifest" in argv else stage_record),  # pyright: ignore[reportPrivateUsage]
+            b"",
+        )
+
+    monkeypatch.setattr(gate.subprocess, "run", privileged)
+    try:
+        with pytest.raises(PermissionError):
+            gate.root_manifest(root)
+        manifest = gate.privileged_root_manifest(Path(gate.__file__), root)
+        stage = gate.privileged_stage(Path(gate.__file__), root, a5)
+        assert manifest["/etc/ssl/private"]["mode"] == 0
+        assert manifest["/etc/ssl/private/key.pem"]["sha256"] == _sha(b"fixture key")
+        assert stage.manifest["/etc/ssl/private/key.pem"] == manifest["/etc/ssl/private/key.pem"]
+        assert private.stat().st_mode & 0o777 == 0
+    finally:
+        private.chmod(0o700)
+    assert secret.read_bytes() == b"fixture key"
 
 
 @pytest.mark.parametrize(("exits", "steps"), [((1, 0), ["tar"]), ((0, 1), ["tar", "tar", "rm"])])
@@ -2679,9 +2734,9 @@ class _Host:
             if argv == [gate.host_env_origin_argv(self.at.a5)]:
                 (meta / "host-env-origin.json").write_text('{"verdict": "pass"}')
 
-        def verify(root: Path, a5: Path, mounts: Any) -> list[str]:
+        def verify(stage: gate.Stage, a5: Path) -> list[str]:
             (meta / "stage-manifest.json").write_text('{"/a5/src": {}}')
-            return record("verify", (root, a5, tuple(mounts)), list(problems))
+            return record("verify", (stage, a5), list(problems))
 
         stdout = {"dpkg-query": "virtme-ng 1.40-2 amd64 ii\n", "vng": _VNG_HELP}
         staged = gate.Staged(doc["install"], manifests)
@@ -2690,6 +2745,7 @@ class _Host:
         monkeypatch.setattr(gate, "guest_kernel", lambda *a: record("guest_kernel", a, kernel))
         monkeypatch.setattr(gate, "stage_a5", stage_a5)
         monkeypatch.setattr(gate, "run_steps", steps)
+        monkeypatch.setattr(gate, "privileged_stage", lambda *_: gate.Stage({}, {}, ()))
         monkeypatch.setattr(gate, "guest_stage_verify", verify)
         monkeypatch.setattr(
             gate, "_stdout", lambda argv, cwd: record("stdout", argv, stdout[argv[0]])
@@ -2721,7 +2777,7 @@ def test_q0_host_writes_records_binding_the_stage_it_built(
     assert calls["guest_kernel"][:2] == (at.work / "kernel", tmp_path)
     assert calls["stage_a5"][2] == "job-CI_TESTED"
     assert calls["run_steps"] == ([gate.host_env_origin_argv(at.a5)], at.a5 / "src")
-    assert calls["verify"] == (at.root, at.a5, ())
+    assert calls["verify"] == (gate.Stage({}, {}, ()), at.a5)
     env = gate.parse_binding_env((meta / "binding.env").read_bytes())
     assert {key: env[key] for key in gate.JOB_BINDINGS} == _JOB
     assert env["STAGE_MANIFEST_SHA256"] == _sha((meta / "stage-manifest.json").read_bytes())
@@ -3304,7 +3360,8 @@ class PostLaunch(dict[str, Path]):
 
 
 @pytest.fixture
-def post(tmp_path: Path) -> PostLaunch:
+def post(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> PostLaunch:
+    monkeypatch.setattr(gate, "privileged_stage", lambda _, root, a5: gate.scan_stage(root, a5, ()))
     paths = PostLaunch({name: tmp_path / name for name in ("root", "a5", "out", "evidence")})
     paths["meta"] = paths["a5"] / "meta"
     for directory in paths.values():
@@ -3321,7 +3378,9 @@ def post(tmp_path: Path) -> PostLaunch:
     _git_out(src, "add", "-A")
     _git_out(src, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "tested")
     paths.tested = _git_out(src, "rev-parse", "HEAD")
-    assert gate.guest_stage_verify(paths["root"], paths["a5"], ()) == []
+    assert (
+        gate.guest_stage_verify(gate.scan_stage(paths["root"], paths["a5"], ()), paths["a5"]) == []
+    )
     paths["launched"] = tmp_path / "launched"
     paths["launched"].touch()
     paths.write([asdict(package) for package in _CLOSURE])
