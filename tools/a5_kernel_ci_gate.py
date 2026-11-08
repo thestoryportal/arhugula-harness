@@ -40,11 +40,12 @@ import sys
 import time
 import xml.etree.ElementTree as ET
 from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, fields
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any, cast
-from urllib.parse import unquote
+from urllib.parse import quote, unquote
 
 ROOT = Path(__file__).resolve().parents[1]
 EXPECTATIONS = ROOT / "tools" / "a5_kernel_ci_expectations.json"
@@ -1646,13 +1647,14 @@ def closure(
     return tuple(added)
 
 
+def _fetch(target: Path, url: str) -> list[str]:
+    return ["curl", "-fsSL", "--proto", "=https", "-o", str(target), url]
+
+
 def kernel_fetch(work: Path) -> list[list[str]]:
     """Acquire the tarball, its developer signature and the autosigned checksum list."""
     names = (KERNEL_TARBALL, KERNEL_TARBALL.replace(".xz", ".sign"), "sha256sums.asc")
-    return [
-        ["curl", "-fsSL", "--proto", "=https", "-o", str(work / name), f"{KERNEL_URL}{name}"]
-        for name in names
-    ]
+    return [_fetch(work / name, f"{KERNEL_URL}{name}") for name in names]
 
 
 def kernel_build(source: Path, fragment: Path, jobs: int) -> list[list[str]]:
@@ -1682,6 +1684,127 @@ def run_steps(steps: Sequence[Sequence[str]], cwd: Path, timeout: float) -> None
         except (OSError, subprocess.SubprocessError) as exc:
             # [LAW:no-silent-failure] No retry and no fallback artifact.
             raise Q0Error(f"step {list(argv)} failed: {exc}") from exc
+
+
+# --- Q0 bootstrap on the host (steps 1, 2, 3a acquisition and 3g) ---------------------
+
+BOOTSTRAP_TIMEOUT = 20 * 60  # seconds for each bootstrap step; a miss fails Q0 closed
+
+
+def base_fetch(work: Path, base: BaseInput) -> list[list[str]]:
+    """Step 1 acquisition: the checksum list, its detached signature and the tarball."""
+    names = ("SHA256SUMS", "SHA256SUMS.gpg", base.tarball)
+    return [_fetch(work / name, f"{base.release_dir}{name}") for name in names]
+
+
+def pool_fetch(pool: Path, snapshot_id: str, packages: Sequence[PoolPackage]) -> list[list[str]]:
+    """Step 3a acquisition: exactly the closure's files, by their verified pool path."""
+    source = f"{SNAPSHOT_URL}{snapshot_id}/"
+    return [_fetch(pool / entry.deb.file, source + quote(entry.filename)) for entry in packages]
+
+
+def extract_argv(tarball: Path, root: Path) -> list[str]:
+    return ["tar", "--numeric-owner", "-xpf", str(tarball), "-C", str(root)]
+
+
+def discard_argv(root: Path) -> list[str]:
+    """The self-test's namespace dpkg leaves root-owned files, so only root removes them."""
+    return ["sudo", "-n", "--", "rm", "-rf", "--one-file-system", "--", str(root)]
+
+
+def _stdout(argv: Sequence[str], cwd: Path) -> str:
+    try:
+        return subprocess.run(
+            argv,
+            cwd=cwd,
+            check=True,
+            capture_output=True,
+            text=True,
+            close_fds=True,
+            timeout=BOOTSTRAP_TIMEOUT,
+        ).stdout
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise Q0Error(f"{list(argv)} failed: {exc}") from exc
+
+
+def verified_base(work: Path, keyring: Path, base: BaseInput) -> Path:
+    """Step 1 before extraction: gpgv over SHA256SUMS, then the tarball's two-way pin."""
+    sums = work / "SHA256SUMS"
+    gpgv = subprocess.run(
+        gpgv_argv(keyring, work / "SHA256SUMS.gpg", sums),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    tarball = work / base.tarball
+    problems = signature_problems(gpgv.stdout, gpgv.returncode, base.signing_key)
+    problems += base_problems(_read(sums), _sha256(_read(tarball)), base)
+    if problems:
+        raise Q0Error("; ".join(problems))
+    return tarball
+
+
+@contextmanager
+def fresh_base(tarball: Path, root: Path) -> Iterator[Path]:
+    """A fresh extraction of the verified base, discarded by its creator however it ends."""
+    root.mkdir()
+    try:
+        run_steps([extract_argv(tarball, root)], root.parent, BOOTSTRAP_TIMEOUT)
+        yield root
+    finally:
+        run_steps([discard_argv(root)], root.parent, BOOTSTRAP_TIMEOUT)
+
+
+def resolve_closure(
+    work: Path, root: Path, keyring: Path, archive: ArchiveInput, base: Sequence[Package]
+) -> tuple[PoolPackage, ...]:
+    """Step 2: host apt under the private configuration verifies InRelease -> Packages."""
+    apt = work / "apt"
+    for name in ("lists/partial", "cache/archives/partial", "empty"):
+        (apt / name).mkdir(parents=True)
+    for name, text in apt_private(apt, root, keyring, archive).items():
+        (apt / name).write_text(text)
+    _stdout(apt_argv(apt, "update"), apt)
+    uris = _stdout(apt_argv(apt, *CLOSURE_COMMAND), apt)
+    index = {
+        filename: entry
+        for path in sorted((apt / "lists").glob("*_Packages"))
+        for filename, entry in packages_index(path.read_text()).items()
+    }
+    return closure(uris, index, archive.snapshot_id, base)
+
+
+@dataclass(frozen=True)
+class Bootstrap:
+    tarball: Path  # verified; the real root is its second extraction
+    base_packages: tuple[Package, ...]
+    closure: tuple[PoolPackage, ...]
+    pool: Path  # downloaded, unverified: deliver_debs checks it against `closure` at entry
+    self_test: dict[str, Any]
+
+
+def bootstrap(
+    gate: Path,
+    inputs: Inputs,
+    work: Path,
+    keyrings: tuple[Path, Path],
+    host_netns: str,
+    sentinel: str,
+) -> Bootstrap:
+    """Steps 1, 2, 3a acquisition and 3g; `keyrings` hold only the base and archive keys."""
+    base_keyring, archive_keyring = keyrings
+    run_steps(base_fetch(work, inputs.base), work, BOOTSTRAP_TIMEOUT)
+    tarball = verified_base(work, base_keyring, inputs.base)
+    with fresh_base(tarball, work / "base") as fresh:
+        packages = base_packages(_stdout(dpkg_query_argv(fresh), work))
+        # [LAW:no-ambient-temporal-coupling] apt reads this extraction's status file, so
+        # the closure is resolved before the self-test's fixture install changes it.
+        added = resolve_closure(work, fresh, archive_keyring, inputs.archive, packages)
+        test = self_test(gate, fresh, host_netns, work, sentinel)
+    pool = work / "pool"
+    pool.mkdir()
+    run_steps(pool_fetch(pool, inputs.archive.snapshot_id, added), work, BOOTSTRAP_TIMEOUT)
+    return Bootstrap(tarball, packages, added, pool, test)
 
 
 # --- CLI ----------------------------------------------------------------------------

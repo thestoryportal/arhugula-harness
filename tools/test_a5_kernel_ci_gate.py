@@ -18,6 +18,7 @@ import socket
 import subprocess
 import sys
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -1897,3 +1898,65 @@ def test_guest_install_removes_the_delivered_pool_even_after_a_failed_entry(
     run = gate.guest_install(tmp_path / "gate.py", root, "net:[1]", pool, debs, record)
     assert run == {"wrapper_exit": 1, "namespace": None}
     assert root.is_dir() and not (root / gate.DEB_CACHE).exists()
+
+
+# --- Q0 bootstrap orchestration: steps 1, 2 and the 3g extraction lifecycle ----------
+
+
+def test_fresh_base_is_discarded_by_root_even_when_its_user_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ran: list[list[str]] = []
+    monkeypatch.setattr(gate, "run_steps", lambda steps, *_: ran.extend(map(list, steps)))
+    tarball, root = tmp_path / "base.tar.gz", tmp_path / "base"
+    with pytest.raises(RuntimeError, match="self-test"), gate.fresh_base(tarball, root) as fresh:
+        assert fresh == root and root.is_dir()
+        raise RuntimeError("self-test")
+    assert ran == [gate.extract_argv(tarball, root), gate.discard_argv(root)]
+    assert ran[1][:5] == ["sudo", "-n", "--", "rm", "-rf"] and ran[1][-1] == str(root)
+
+
+def _signed_base(tmp_path: Path, tarball: bytes) -> tuple[Path, gate.BaseInput]:
+    home, fpr, keyring = _signer(tmp_path, "cdimage")
+    name = "ubuntu-base-26.04-base-amd64.tar.gz"
+    pin = hashlib.sha256(b"base").hexdigest()
+    sums = tmp_path / "SHA256SUMS"
+    sums.write_text(f"{pin} *{name}\n")
+    _gpg(home, "--detach-sign", "-o", str(tmp_path / "SHA256SUMS.gpg"), str(sums))
+    (tmp_path / name).write_bytes(tarball)
+    sums_sha256 = hashlib.sha256(sums.read_bytes()).hexdigest()
+    return keyring, gate.BaseInput("https://cdimage.invalid/", name, pin, sums_sha256, fpr)
+
+
+def test_verified_base_requires_the_pinned_signer_and_the_pinned_tarball(tmp_path: Path) -> None:
+    keyring, base = _signed_base(tmp_path, b"base")
+    assert gate.verified_base(tmp_path, keyring, base) == tmp_path / base.tarball
+    with pytest.raises(gate.Q0Error, match="no valid signature by pinned"):
+        gate.verified_base(tmp_path, keyring, replace(base, signing_key="F" * 40))
+    (tmp_path / base.tarball).write_bytes(b"other")
+    with pytest.raises(gate.Q0Error, match=base.tarball):
+        gate.verified_base(tmp_path, keyring, base)
+
+
+def test_resolve_closure_reads_every_verified_component_index_after_update(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[str] = []
+    git, perl = _INDEX.split("\n\n")
+
+    def apt(argv: list[str], cwd: Path) -> str:
+        calls.append(argv[-1])
+        if argv[-1] == "update":
+            lists = cwd / "lists"
+            (lists / "snap_dists_resolute_main_binary-amd64_Packages").write_text(git)
+            (lists / "snap_dists_resolute_universe_binary-amd64_Packages").write_text(perl)
+        return _URIS
+
+    monkeypatch.setattr(gate, "_stdout", apt)
+    archive = gate.ArchiveInput("20261101T000000Z", "resolute", ("main", "universe"), "A" * 40)
+    added = gate.resolve_closure(
+        tmp_path, tmp_path / "base", tmp_path / "k.gpg", archive, _BASE_SET
+    )
+    assert calls == ["update", "git"]
+    assert added == gate.closure(_URIS, gate.packages_index(_INDEX), archive.snapshot_id, _BASE_SET)
+    assert "Dir::State::status" in (tmp_path / "apt" / "apt.conf").read_text()
