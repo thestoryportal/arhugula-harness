@@ -928,6 +928,93 @@ def binding_verify(
     }
 
 
+# --- Guest identity (bindings_crossing_guest: guest identity, tree and blobs) ----------
+
+# The product files the guarded node IDs are defined by; the reviewed expectations bind
+# their blobs, and the Q0 guest re-reads exactly these from its own checkout.
+BOUND_PRODUCT = (
+    "harness-runtime/src/harness_runtime/lifecycle/cli_read_boundary.py",
+    "harness-runtime/tests/test_cli_read_boundary.py",
+    "harness-runtime/tests/test_external_cli_codex_read_boundary.py",
+)
+
+
+@dataclass(frozen=True)
+class GuestIdentity:
+    """The kernel the guest booted and the checkout it ran, as the guest measured them."""
+
+    release: str
+    lsm: tuple[str, ...]  # /sys/kernel/security/lsm, in the kernel's order
+    tree: str
+    blobs: Mapping[str, str | None]  # BOUND_PRODUCT path -> git blob of the guest's file
+
+
+@dataclass(frozen=True)
+class TestedTree:
+    """The tested commit's tree and BOUND_PRODUCT blobs, as the host's clone names them."""
+
+    tree: str
+    blobs: Mapping[str, str]
+
+
+def tested_tree(src: Path, tested: str) -> TestedTree:
+    def rev(spec: str) -> str:
+        return _stdout(["git", "-C", str(src), "rev-parse", "--verify", spec], src).strip()
+
+    return TestedTree(rev(f"{tested}^{{tree}}"), {p: rev(f"{tested}:{p}") for p in BOUND_PRODUCT})
+
+
+def parse_guest_identity(raw: object) -> GuestIdentity:
+    # [LAW:parse-dont-validate] The guest's record crosses into the host check here once.
+    if not isinstance(raw, Mapping):
+        raise Q0Error("observation.json guest_identity is absent or not an object")
+    record = cast(Mapping[str, Any], raw)
+    release, lsm, tree, blobs = (record.get(key) for key in ("release", "lsm", "tree", "blobs"))
+    if (
+        type(release) is not str
+        or type(tree) is not str
+        or type(lsm) is not list
+        or not all(type(name) is str for name in cast(list[object], lsm))
+        or not isinstance(blobs, Mapping)
+        or not all(type(b) in (str, type(None)) for b in cast(Mapping[str, object], blobs).values())
+    ):
+        raise Q0Error(f"observation.json guest_identity {dict(record)!r} is malformed")
+    return GuestIdentity(
+        release, tuple(cast(list[str], lsm)), tree, dict(cast(Mapping[str, str | None], blobs))
+    )
+
+
+def guest_identity_problems(guest: GuestIdentity, tested: TestedTree) -> list[str]:
+    """The guest booted the pinned kernel with Landlock and ran the tested checkout."""
+    judged = [
+        (
+            guest.release == GUEST_RELEASE,
+            f"guest release {guest.release!r} is not {GUEST_RELEASE!r}",
+        ),
+        ("landlock" in guest.lsm, f"guest LSMs {list(guest.lsm)} do not include landlock"),
+        (guest.tree == tested.tree, f"guest tree {guest.tree} is not the tested {tested.tree}"),
+    ]
+    return [problem for held, problem in judged if not held] + [
+        f"guest {path} is blob {guest.blobs.get(path)}, tested {tested.blobs.get(path)}"
+        for path in sorted(guest.blobs.keys() | tested.blobs.keys())
+        if guest.blobs.get(path) != tested.blobs.get(path)
+    ]
+
+
+def guest_identity(guest_record: Path, tested: TestedTree) -> dict[str, Any]:
+    # [LAW:single-enforcer] The guest only measures; this host check alone judges.
+    try:
+        raw = _object(_read(guest_record), guest_record.name).get("guest_identity")
+        guest = parse_guest_identity(raw)
+    except Q0Error as exc:
+        return {"tested": asdict(tested), "problems": [str(exc)]}
+    return {
+        "guest": asdict(guest),
+        "tested": asdict(tested),
+        "problems": guest_identity_problems(guest, tested),
+    }
+
+
 # --- Install boundary (guest_package_closure step 3) --------------------------------
 
 # [LAW:one-source-of-truth] The capabilities the install may not hold, with their
@@ -1277,10 +1364,11 @@ def q0_observe(
     host_stage: Path,
     install_ns: Path,
     debs: Sequence[Deb],
+    tested: TestedTree,
 ) -> dict[str, Any]:
-    """Collect, then binding-verify, then install-binding (reviewer F8-R1).
+    """Collect, then binding-verify, install-binding and guest-identity (reviewer F8-R1).
 
-    The observation is completed only when all three pass; the guest having written
+    The observation is completed only when all of them pass; the guest having written
     observation.json is never enough.
     """
     try:
@@ -1288,8 +1376,8 @@ def q0_observe(
     except Q0Error as exc:
         return {"completed_observation": False, "problems": [f"collect: {exc}"]}
     guest = evidence / "observation.json"
-    # [LAW:dataflow-not-control-flow] Both binding checks always run and persist their
-    # evidence; a failure in either leaves the collected file but fails the bindings.
+    # [LAW:dataflow-not-control-flow] Every host check always runs and persists its
+    # evidence; a failure in any leaves the collected file but fails the bindings.
     checks = {
         "binding-verify": _persist(
             evidence / "binding-verify.json",
@@ -1299,6 +1387,7 @@ def q0_observe(
             evidence / "install-binding.json",
             install_binding(install_ns, binding_env, guest, debs),
         ),
+        "guest-identity": _persist(evidence / "guest-identity.json", guest_identity(guest, tested)),
     }
     problems = [f"{name}: {p}" for name, check in checks.items() for p in check["problems"]]
     return {
@@ -1884,6 +1973,9 @@ def bootstrap(
 # --- guest kernel on the host (design.guest_kernel) -----------------------------------
 
 KERNEL_SOURCE = KERNEL_TARBALL.removesuffix(".tar.xz")
+# [LAW:one-source-of-truth] The release the guest must report is the pinned source built
+# with this gate's LOCALVERSION: '7.3.1-a5guest'.
+GUEST_RELEASE = KERNEL_SOURCE.removeprefix("linux-") + KERNEL_LOCALVERSION
 BZIMAGE = "arch/x86/boot/bzImage"
 
 
@@ -2397,6 +2489,7 @@ HOST_FACTS = tuple(field.name for field in fields(HostFacts))
 # What the guest reads from its binding environment rather than computing itself.
 GUEST_BOUND = (*(key for key in Q0_IDENTITY if key != "INPUTS_SHA256"), "INSTALL_NS_SHA256")
 SHARE_FSTYPES = ("virtiofs", "9p")
+SECURITY_LSM = Path("/sys/kernel/security/lsm")
 _MOUNT_ESCAPE = re.compile(r"\\([0-7]{3})")
 
 
@@ -2408,6 +2501,7 @@ class GuestFacts:
     mountinfo: str
     shares: tuple[Mapping[str, Any], ...]
     packages: tuple[Package, ...]
+    identity: GuestIdentity
 
 
 def mounts(mountinfo: str) -> list[dict[str, str]]:
@@ -2480,6 +2574,24 @@ def guest_facts() -> GuestFacts:
             if (mp := share["mountpoint"])
         ),
         packages=base_packages(listing),
+        identity=GuestIdentity(
+            release=platform.release(),
+            lsm=tuple(_read(SECURITY_LSM).decode().strip().split(",")),
+            # The staged checkout is owned by the host's uid, which the guest user need not be.
+            tree=_stdout(
+                [
+                    "git",
+                    "-c",
+                    f"safe.directory={ROOT}",
+                    "-C",
+                    str(ROOT),
+                    "rev-parse",
+                    "HEAD^{tree}",
+                ],
+                ROOT,
+            ).strip(),
+            blobs={path: _read_blob(ROOT / path) for path in BOUND_PRODUCT},
+        ),
     )
 
 
@@ -2519,6 +2631,7 @@ def observation(
             "mountinfo": guest.mountinfo,
             "shares": list(guest.shares),
             "packages": [asdict(package) for package in guest.packages],
+            "guest_identity": asdict(guest.identity),
         }
     )
 
@@ -3103,6 +3216,8 @@ def q0_post_launch(
     binding_env = meta / "binding.env"
     try:
         job = job_bindings(environ)
+        # The stage clone holds the tested commit; its tree and blobs are named by that id.
+        tested = tested_tree(a5 / "src", job["CI_TESTED"])
         debs = closure_debs(_read(meta / "host.json"), _read(binding_env))
         # [LAW:no-ambient-temporal-coupling] Rescanned after vng has exited, with the
         # host's own walk, so any write the guest made to the stage changes the digest.
@@ -3121,6 +3236,7 @@ def q0_post_launch(
         evidence / "host-stage.json",
         evidence / "install-ns.json",
         debs,
+        tested,
     )
     # [LAW:dataflow-not-control-flow] The post-run check always runs and persists, whether
     # or not the observation collected.

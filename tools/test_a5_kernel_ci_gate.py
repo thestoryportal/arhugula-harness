@@ -610,6 +610,11 @@ _IDENTITY = {
     "GITHUB_RUN_ATTEMPT": "2",
     "INPUTS_SHA256": "1" * 64,
 }
+# The tested commit's tree and bound blobs, and a guest that booted and ran exactly them.
+_TESTED = gate.TestedTree("e" * 40, {path: "f" * 40 for path in gate.BOUND_PRODUCT})
+_GUEST_IDENTITY = gate.GuestIdentity(
+    gate.GUEST_RELEASE, ("lockdown", "capability", "landlock"), _TESTED.tree, dict(_TESTED.blobs)
+)
 
 
 def _sha(data: bytes) -> str:
@@ -690,6 +695,7 @@ class Q0(dict[str, Path]):
             **_IDENTITY,
             "binding_env_sha256": _sha(self["binding_env"].read_bytes()),
             "INSTALL_NS_SHA256": env["INSTALL_NS_SHA256"],
+            "guest_identity": asdict(_GUEST_IDENTITY),
             **fields,
         }
         self["out"].joinpath("observation.json").write_text(
@@ -713,6 +719,7 @@ class Q0(dict[str, Path]):
             self["host_stage"],
             self["install_ns"],
             _DEBS,
+            _TESTED,
         )
 
 
@@ -759,6 +766,8 @@ def test_q0_fresh_bound_observation_completes(q0: Q0) -> None:
     assert verify["guest_record_sha256"] == record["observation_sha256"]
     install = json.loads((q0["evidence"] / "install-binding.json").read_text())
     assert install["verdict"] == "pass"
+    identity = json.loads((q0["evidence"] / "guest-identity.json").read_text())
+    assert identity["verdict"] == "pass" and identity["tested"] == asdict(_TESTED)
     assert (q0["evidence"] / "observation.json").read_bytes() == (
         q0["out"] / "observation.json"
     ).read_bytes()
@@ -899,6 +908,68 @@ def test_q0_binding_verify_refuses_an_unbound_guest_record(
     monkeypatch.setenv("binding_env_sha256", _sha(q0["binding_env"].read_bytes()))
     assert gate.binding_verify(q0["binding_env"], q0["host_stage"], guest, _IDENTITY)["problems"]
     _completed_nothing(q0.observe())
+
+
+def test_guest_release_is_the_pinned_source_built_with_the_gate_localversion() -> None:
+    assert gate.GUEST_RELEASE == "7.3.1-a5guest"
+
+
+def test_the_guest_rereads_exactly_the_blobs_the_expectations_bind() -> None:
+    assert set(gate.BOUND_PRODUCT) == set(_EXPECTED.bound_blobs)
+
+
+_FIRST, *_ = gate.BOUND_PRODUCT
+_GUEST_IDENTITY_MUTATIONS: dict[str, Any] = {
+    "release-unsuffixed": asdict(replace(_GUEST_IDENTITY, release="7.3.1")),
+    "release-host-kernel": asdict(replace(_GUEST_IDENTITY, release="6.17.0-1-azure")),
+    "no-landlock": asdict(replace(_GUEST_IDENTITY, lsm=("lockdown", "capability"))),
+    "landlock-substring": asdict(replace(_GUEST_IDENTITY, lsm=("nolandlock",))),
+    "other-tree": asdict(replace(_GUEST_IDENTITY, tree="d" * 40)),
+    **{
+        f"blob-{path.rsplit('/', 1)[1]}": asdict(
+            replace(_GUEST_IDENTITY, blobs=dict(_TESTED.blobs) | {path: "0" * 40})
+        )
+        for path in gate.BOUND_PRODUCT
+    },
+    "blob-missing-file": asdict(
+        replace(_GUEST_IDENTITY, blobs=dict(_TESTED.blobs) | {_FIRST: None})
+    ),
+    "blob-unmeasured": asdict(
+        replace(_GUEST_IDENTITY, blobs={p: b for p, b in _TESTED.blobs.items() if p != _FIRST})
+    ),
+}
+# Records the host check cannot parse: refused before any value is compared.
+_UNPARSABLE_GUEST_IDENTITY: dict[str, Any] = {
+    "absent": None,
+    "not-an-object": [],
+    "lsm-as-text": asdict(_GUEST_IDENTITY) | {"lsm": "landlock"},
+    "no-tree": {k: v for k, v in asdict(_GUEST_IDENTITY).items() if k != "tree"},
+    "blob-not-text": asdict(_GUEST_IDENTITY) | {"blobs": {_FIRST: 7}},
+}
+
+
+@pytest.mark.parametrize(
+    "guest_identity", _GUEST_IDENTITY_MUTATIONS.values(), ids=_GUEST_IDENTITY_MUTATIONS
+)
+def test_q0_guest_identity_refuses_a_wrong_kernel_or_checkout(q0: Q0, guest_identity: Any) -> None:
+    q0.observation(guest_identity=guest_identity)
+    record = q0.observe()
+    _completed_nothing(record)
+    assert all(p.startswith("guest-identity: ") for p in record["problems"]), record["problems"]
+    assert json.loads((q0["evidence"] / "guest-identity.json").read_text())["verdict"] == "fail"
+    assert json.loads((q0["evidence"] / "binding-verify.json").read_text())["verdict"] == "pass"
+
+
+@pytest.mark.parametrize(
+    "guest_identity", _UNPARSABLE_GUEST_IDENTITY.values(), ids=_UNPARSABLE_GUEST_IDENTITY
+)
+def test_q0_guest_identity_refuses_an_unparsable_record(q0: Q0, guest_identity: Any) -> None:
+    q0.observation(guest_identity=guest_identity)
+    _completed_nothing(q0.observe())
+    kept = json.loads((q0["evidence"] / "guest-identity.json").read_text())
+    assert kept["verdict"] == "fail" and "guest" not in kept
+    [problem] = kept["problems"]
+    assert problem.startswith("observation.json guest_identity ")
 
 
 # Group 6: install-binding ties install-ns.json, binding.env and the guest's value.
@@ -1735,7 +1806,7 @@ _FACTS = gate.HostFacts(
     guest_scripts={gate.GUEST_RUN: "b" * 64, gate.Q0_PROBE: "c" * 64},
 )
 _HOST_FACTS: dict[str, Any] = asdict(_FACTS)
-_GUEST = gate.GuestFacts(("a5", "bin", "out"), _MOUNTINFO, (), (_GIT,))
+_GUEST = gate.GuestFacts(("a5", "bin", "out"), _MOUNTINFO, (), (_GIT,), _GUEST_IDENTITY)
 
 
 def _guest_inputs(**host: Any) -> tuple[bytes, bytes, dict[str, str]]:
@@ -1773,6 +1844,8 @@ def test_q0_observation_records_bindings_facts_and_no_verdict() -> None:
     assert record["INSTALL_NS_SHA256"] == env["INSTALL_NS_SHA256"]
     assert record["root_manifest_diff"] == ["/x"]
     assert record["packages"] == [{"name": "git", "version": "1:2.51", "architecture": "amd64"}]
+    assert record["guest_identity"] == json.loads(json.dumps(asdict(_GUEST_IDENTITY)))
+    assert gate.parse_guest_identity(record["guest_identity"]) == _GUEST_IDENTITY
     # The host collector accepts what the guest writes, bound to the same run.
     parsed = gate.parse_observation(data)
     assert parsed.identity == {key: record[key] for key in gate.Q0_IDENTITY}
@@ -3132,14 +3205,28 @@ _RUN_ENV = _JOB | {key: _IDENTITY[key] for key in gate.Q0_IDENTITY if key in _JO
 _Q0_INPUTS = replace(parse_inputs(_RAW["inputs"]), sha256=_IDENTITY["INPUTS_SHA256"])
 
 
+def _git_out(src: Path, *args: str) -> str:
+    return subprocess.run(
+        ["git", "-C", str(src), *args], check=True, capture_output=True, text=True
+    ).stdout.strip()
+
+
 class PostLaunch(dict[str, Path]):
     """The host's retained records as q0_host lays them out, and one fresh guest /out."""
 
-    def write(self, closure: Any) -> None:
+    tested: str  # the commit the stage clone holds, bound as this run's CI_TESTED
+
+    @property
+    def environ(self) -> dict[str, str]:
+        return _RUN_ENV | {"CI_TESTED": self.tested}
+
+    def write(self, closure: Any, **guest_identity: Any) -> None:
         manifest = (self["meta"] / "stage-manifest.json").read_bytes()
+        src = self["a5"] / "src"
         gate.write_host_records(
             _records(
-                values=_binding_values() | {"STAGE_MANIFEST_SHA256": _sha(manifest)},
+                values=_binding_values()
+                | {"CI_TESTED": self.tested, "STAGE_MANIFEST_SHA256": _sha(manifest)},
                 host={"closure": closure},
             ),
             gate.HostRecords(
@@ -3150,19 +3237,27 @@ class PostLaunch(dict[str, Path]):
             ),
         )
         binding_env = (self["meta"] / "binding.env").read_bytes()
+        identity = {
+            "release": gate.GUEST_RELEASE,
+            "lsm": ["capability", "landlock"],
+            "tree": _git_out(src, "rev-parse", "HEAD^{tree}"),
+            "blobs": {p: gate.git_blob((src / p).read_bytes()) for p in gate.BOUND_PRODUCT},
+        }
         observation = {
             **_IDENTITY,
+            "CI_TESTED": self.tested,
             "binding_env_sha256": _sha(binding_env),
             "INSTALL_NS_SHA256": gate.parse_binding_env(binding_env)["INSTALL_NS_SHA256"],
+            "guest_identity": identity | guest_identity,
         }
         (self["out"] / "observation.json").write_text(json.dumps(observation))
 
     def run(
-        self, environ: Mapping[str, str] = _RUN_ENV, inputs: gate.Inputs = _Q0_INPUTS
+        self, environ: Mapping[str, str] | None = None, inputs: gate.Inputs = _Q0_INPUTS
     ) -> dict[str, Any]:
         return gate.q0_post_launch(
             inputs,
-            environ,
+            self.environ if environ is None else environ,
             self["root"],
             self["a5"],
             self["out"],
@@ -3179,8 +3274,16 @@ def post(tmp_path: Path) -> PostLaunch:
         directory.mkdir()
     (paths["root"] / "etc").mkdir()
     (paths["root"] / "etc" / "x").write_text("x")
-    (paths["a5"] / "src").mkdir()
-    (paths["a5"] / "src" / "y.py").write_text("y")
+    src = paths["a5"] / "src"
+    src.mkdir()
+    (src / "y.py").write_text("y")
+    for path in gate.BOUND_PRODUCT:
+        (src / path).parent.mkdir(parents=True, exist_ok=True)
+        (src / path).write_text(f"# {path}\n")
+    _git_out(src, "init", "-q")
+    _git_out(src, "add", "-A")
+    _git_out(src, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "tested")
+    paths.tested = _git_out(src, "rev-parse", "HEAD")
     assert gate.guest_stage_verify(paths["root"], paths["a5"], ()) == []
     paths["launched"] = tmp_path / "launched"
     paths["launched"].touch()
@@ -3217,6 +3320,44 @@ def test_q0_post_launch_refuses_a_stage_the_guest_run_changed(
     assert problem.startswith("stage-unchanged: post-run stage ")
     unchanged = json.loads((post["evidence"] / "stage-unchanged.json").read_text())
     assert unchanged["verdict"] == "fail"
+
+
+def test_q0_post_launch_binds_the_guest_to_the_tested_commit_in_the_stage_clone(
+    post: PostLaunch,
+) -> None:
+    assert post.run()["completed_observation"] is True
+    src = post["a5"] / "src"
+    tested = json.loads((post["evidence"] / "guest-identity.json").read_text())["tested"]
+    assert tested == {
+        "tree": _git_out(src, "rev-parse", f"{post.tested}^{{tree}}"),
+        "blobs": {p: _git_out(src, "rev-parse", f"{post.tested}:{p}") for p in gate.BOUND_PRODUCT},
+    }
+
+
+@pytest.mark.parametrize(
+    "guest_identity",
+    [
+        pytest.param({"release": "7.3.1-generic"}, id="release"),
+        pytest.param({"lsm": ["capability"]}, id="no-landlock"),
+        pytest.param({"tree": "d" * 40}, id="tree"),
+        pytest.param({"blobs": dict.fromkeys(gate.BOUND_PRODUCT, "0" * 40)}, id="blobs"),
+    ],
+)
+def test_q0_post_launch_refuses_a_guest_of_another_kernel_or_checkout(
+    post: PostLaunch, guest_identity: dict[str, Any]
+) -> None:
+    post.write([asdict(package) for package in _CLOSURE], **guest_identity)
+    record = post.run()
+    _completed_nothing(record)
+    assert all(p.startswith("guest-identity: guest ") for p in record["problems"])
+
+
+def test_q0_post_launch_refuses_a_tested_commit_the_stage_clone_lacks(post: PostLaunch) -> None:
+    record = post.run(post.environ | {"CI_TESTED": "c" * 40})
+    _completed_nothing(record)
+    [problem] = record["problems"]
+    assert problem.startswith("host: ['git', '-C', ") and "rev-parse" in problem
+    assert list(post["evidence"].glob("observation.json")) == []
 
 
 def test_closure_debs_are_the_closure_q0_host_installs() -> None:
@@ -3270,8 +3411,8 @@ def test_q0_post_launch_judges_a_debs_list_the_install_record_does_not_hold(
 
 @pytest.mark.parametrize("key", ["CI_TESTED", "GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT"])
 def test_q0_post_launch_takes_the_run_identity_from_the_job(post: PostLaunch, key: str) -> None:
-    _completed_nothing(post.run(_RUN_ENV | {key: "other"}))
-    unset = post.run({k: v for k, v in _RUN_ENV.items() if k != key})
+    _completed_nothing(post.run(post.environ | {key: "other"}))
+    unset = post.run({k: v for k, v in post.environ.items() if k != key})
     assert unset["problems"] == [f"host: job environment lacks {[key]}"]
 
 
@@ -3285,7 +3426,7 @@ def test_q0_collect_command_keeps_its_record_and_exits_on_completion(
     post: PostLaunch, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     monkeypatch.setattr(gate, "A5", post["a5"])
-    for key, value in _RUN_ENV.items():
+    for key, value in post.environ.items():
         monkeypatch.setenv(key, value)
     monkeypatch.setattr(gate, "parse_inputs", lambda raw: _Q0_INPUTS)
     (doc := post["a5"].parent / "inputs.json").write_text(json.dumps({"inputs": _RAW["inputs"]}))
