@@ -1223,7 +1223,7 @@ def test_failed_wrapper_never_reaches_dpkg(tmp_path: Path) -> None:
     record = tmp_path / "ns.json"
     argv = gate.install_argv(tmp_path / "gate.py", tmp_path / "root", "net:[1]", record, _DEBS)
     rejects = [sys.executable, "-c", "raise SystemExit(1)", *argv]  # setpriv rejecting an option
-    run = gate.install_run(rejects, record)
+    run = gate.install_run(rejects, record, os.environ)
     assert run == {"wrapper_exit": 1, "namespace": None} and not record.exists()
     assert gate.run_problems(run, _DEBS)
 
@@ -1232,7 +1232,7 @@ def test_install_run_refuses_a_namespace_record_from_before_the_run(tmp_path: Pa
     record = tmp_path / "ns.json"
     record.write_text(json.dumps(_install_run_record(_DEBS)["namespace"]))
     with pytest.raises(gate.Q0Error, match="not fresh"):
-        gate.install_run([sys.executable, "-c", "pass"], record)
+        gate.install_run([sys.executable, "-c", "pass"], record, os.environ)
 
 
 def _root(tmp_path: Path) -> Path:
@@ -1835,3 +1835,65 @@ def test_q2_check_refuses_an_observation_as_outcomes(tmp_path: Path) -> None:
     preflight_record.write_text(json.dumps(_record("e" * 64)))
     record = gate.check(venue, _EXPECTED, "e" * 64, _IDENTITY, leg, preflight_record, observation)
     assert any("junit" in problem.lower() for problem in record["problems"]), record["problems"]
+
+
+def test_route_source_is_the_hosts_non_loopback_address() -> None:
+    route = "192.0.2.1 via 10.0.2.2 dev enp0s1 src 10.0.2.15 uid 1000 \n    cache \n"
+    assert gate.route_source(route) == "10.0.2.15"
+    for refused in ("192.0.2.1 dev lo src 127.0.0.1 uid 1000", "unreachable 192.0.2.1"):
+        with pytest.raises(gate.Q0Error, match="non-loopback"):
+            gate.route_source(refused)
+
+
+def _self_test_without_namespace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    """Step 3g run for real except dpkg-deb (absent here) and the sudo namespace entry.
+
+    The stand-in entry runs the postinst with no namespace at all, so a correct
+    self-test must report the boundary as crossed.
+    """
+    root = tmp_path / "fresh-root"
+    root.mkdir()
+
+    def build(steps: list[list[str]], cwd: Path, timeout: float) -> None:
+        Path(steps[0][-1]).write_bytes(Path(steps[0][-2], "DEBIAN", "postinst").read_bytes())
+
+    def entry(gate_path: Path, at: Path, netns: str, record: Path, debs: Any) -> list[str]:
+        deb = at / gate.DEB_CACHE / debs[0].file
+        ns = _install_run_record(tuple(debs))["namespace"]
+        write = f"import json,sys; open(sys.argv[1],'w').write(json.dumps({ns!r}))"
+        # The postinst body minus its absolute redirect, its output landing in the root.
+        run = f'tail -n +3 "$1" | bash > "$5/{gate.NETPROBE_OUT}" && "$2" -c "$3" "$4"'
+        return ["sh", "-c", run, "-", str(deb), sys.executable, write, str(record), str(at)]
+
+    monkeypatch.setattr(gate, "run_steps", build)
+    monkeypatch.setattr(gate, "install_argv", entry)
+    return gate.self_test(tmp_path / "gate.py", root, "net:[1]", tmp_path, "s3nt")
+
+
+def test_self_test_without_a_namespace_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    test = _self_test_without_namespace(tmp_path, monkeypatch)
+    problems = gate.netprobe_problems(test)
+    assert "inside net=connected" in problems and "inside sentinel='s3nt'" in problems
+    assert "listener accepted 2 connections, not 1" in problems
+    assert not any(p.startswith("non-discriminating control") for p in problems)
+    assert test["deb"]["file"] == "a5-netprobe_1_all.deb"
+
+
+def test_guest_install_removes_the_delivered_pool_even_after_a_failed_entry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pool, root = tmp_path / "pool", tmp_path / "root"
+    pool.mkdir()
+    (pool / "git.deb").write_bytes(b"deb")
+    debs = [gate.Deb("git.deb", 3, hashlib.sha256(b"deb").hexdigest())]
+
+    def reject(*_: object) -> list[str]:
+        return [sys.executable, "-c", "raise SystemExit(1)"]
+
+    monkeypatch.setattr(gate, "install_argv", reject)
+    record = tmp_path / "ns.json"
+    run = gate.guest_install(tmp_path / "gate.py", root, "net:[1]", pool, debs, record)
+    assert run == {"wrapper_exit": 1, "namespace": None}
+    assert root.is_dir() and not (root / gate.DEB_CACHE).exists()

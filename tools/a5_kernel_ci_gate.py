@@ -1058,11 +1058,13 @@ def ns_install(root: Path, host_netns: str, evidence: Path, files: Sequence[str]
     return 0 if record["dpkg_exit"] == 0 else 1
 
 
-def install_run(argv: Sequence[str], namespace_record: Path) -> dict[str, Any]:
+def install_run(
+    argv: Sequence[str], namespace_record: Path, env: Mapping[str, str]
+) -> dict[str, Any]:
     """Run one 3b argv on the host; its record is the wrapper exit plus ns-install's."""
     if namespace_record.exists():
         raise Q0Error(f"{namespace_record.name} exists before the run: not fresh")
-    wrapper_exit = subprocess.run(argv, close_fds=True, check=False).returncode
+    wrapper_exit = subprocess.run(argv, env=env, close_fds=True, check=False).returncode
     try:
         namespace: object = _object(_read(namespace_record), namespace_record.name)
     except Q0Error:
@@ -1137,6 +1139,79 @@ def netprobe_problems(raw: object) -> list[str]:
     if test.get("accepted") != 1:
         problems.append(f"listener accepted {test.get('accepted')!r} connections, not 1")
     return problems + run_problems(test.get("run"), [Deb(**cast(dict[str, Any], deb))])
+
+
+TEST_NET = "192.0.2.1"  # RFC 5737: the route lookup names the host's outbound source only
+_ROUTE_SRC = re.compile(r"\bsrc (\S+)")
+DPKG_DEB_TIMEOUT = 60  # seconds, for two gate-written files
+
+
+def route_source(route: str) -> str:
+    """`ip -4 route get TEST_NET` output -> the host's own non-loopback source address."""
+    match = _ROUTE_SRC.search(route)
+    if match is None or match[1].startswith("127."):
+        raise Q0Error(f"no non-loopback source address in route {route!r}")
+    return match[1]
+
+
+def _accepted(listener: socket.socket) -> int:
+    # Each probe's connect has completed (or failed) before its process exited, so the
+    # backlog is final here: draining it counts every connection the listener accepted.
+    listener.setblocking(False)
+    count = 0
+    while True:
+        try:
+            listener.accept()[0].close()
+        except BlockingIOError:
+            return count
+        count += 1
+
+
+def self_test(
+    gate: Path, fresh_root: Path, host_netns: str, work: Path, sentinel: str
+) -> dict[str, Any]:
+    """Step 3g on the host: the control probe, then the fixture through steps 3b-3d.
+
+    `fresh_root` is a fresh base extraction, never /a5-guest/root; its creator discards it.
+    """
+    route = subprocess.run(
+        ["ip", "-4", "route", "get", TEST_NET], capture_output=True, text=True, check=True
+    ).stdout
+    address = route_source(route)
+    env = {**os.environ, "A5_SENTINEL_ENV": sentinel}
+    package, control_script = work / "a5-netprobe", work / "a5-netprobe-control"
+    pool, record = work / "a5-netprobe-pool", work / "self-test-ns.json"
+    deb_path = pool / "a5-netprobe_1_all.deb"
+    pool.mkdir()
+    with socket.create_server((address, 0)) as listener:
+        port = listener.getsockname()[1]
+        for name, text in netprobe_package(address, port).items():
+            (package / name).parent.mkdir(parents=True, exist_ok=True)
+            (package / name).write_text(text)
+        (package / "DEBIAN" / "postinst").chmod(0o755)
+        control_script.write_text(netprobe_script(address, port))
+        control = subprocess.run(
+            ["bash", str(control_script)], env=env, capture_output=True, text=True, check=False
+        ).stdout
+        run_steps(
+            [["dpkg-deb", "--root-owner-group", "--build", str(package), str(deb_path)]],
+            work,
+            DPKG_DEB_TIMEOUT,
+        )
+        deb = Deb(**_deb(deb_path))
+        deliver_debs(pool, fresh_root, [deb])
+        run = install_run(install_argv(gate, fresh_root, host_netns, record, [deb]), record, env)
+        accepted = _accepted(listener)
+    inside = fresh_root / NETPROBE_OUT
+    return {
+        "sentinel": sentinel,
+        "control": control,
+        # A postinst that never ran leaves no file; the evaluator refuses the null.
+        "inside": inside.read_text() if inside.is_file() else None,
+        "accepted": accepted,
+        "deb": asdict(deb),
+        "run": run,
+    }
 
 
 def evaluate_install_ns(data: bytes, debs: Sequence[Deb]) -> list[str]:
@@ -1395,6 +1470,18 @@ def deliver_debs(pool: Path, root: Path, debs: Sequence[Deb]) -> None:
         shutil.copyfile(pool / deb.file, cache / deb.file)
 
 
+def guest_install(
+    gate: Path, root: Path, host_netns: str, pool: Path, debs: Sequence[Deb], record: Path
+) -> dict[str, Any]:
+    """Steps 3a-3e for the real root: deliver, install once in the namespace, remove."""
+    deliver_debs(pool, root, debs)
+    run = install_run(install_argv(gate, root, host_netns, record, debs), record, os.environ)
+    # [LAW:dataflow-not-control-flow] Step 3e runs whatever the run's outcome; the run
+    # record carries any failure and the stage manifest refuses a remaining cache path.
+    shutil.rmtree(root / DEB_CACHE)
+    return run
+
+
 # --- Bootstrap, closure (guest_package_closure steps 1-2) and the guest kernel ----------
 
 SNAPSHOT_URL = "https://snapshot.ubuntu.com/ubuntu/"
@@ -1621,7 +1708,7 @@ class GuestFacts:
 
 def shares(mountinfo: str) -> list[dict[str, str]]:
     """The host-backed mounts in /proc/self/mountinfo: mountpoint, fstype, tag, options."""
-    rows = []
+    rows: list[dict[str, str]] = []
     for line in mountinfo.splitlines():
         mount, _, filesystem = line.partition(" - ")
         fields_, (fstype, source, options) = mount.split(), filesystem.split()
@@ -1673,10 +1760,11 @@ def observation(
     ]
     if missing:
         raise Q0Error(f"observation lacks {missing}")
-    manifests = host["root_manifests"]
-    if type(manifests) is not list or len(manifests) != 2:
+    raw = host["root_manifests"]
+    manifests = cast(list[Mapping[str, Mapping[str, Any]]], raw) if type(raw) is list else []
+    if len(manifests) != 2:
         raise Q0Error("host.json root_manifests is not the two stagings")
-    first, second = cast(list[Mapping[str, Mapping[str, Any]]], manifests)
+    first, second = manifests
     return _canonical(
         {key: environ[key] for key in GUEST_BOUND}
         | {key: host[key] for key in HOST_FACTS}
