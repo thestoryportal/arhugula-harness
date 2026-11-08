@@ -31,10 +31,6 @@ from harness_runtime.lifecycle.journal_workflow_pause_store import (
     PAUSE_JOURNAL_SUBDIR,
     JournalWorkflowPauseStore,
 )
-from harness_runtime.lifecycle.pause_journal_root_resolver import (
-    INSTALLATION_STATE,
-    InstallationState,
-)
 from harness_runtime.lifecycle.root_resume_admission import FreshRunAdmission
 from harness_runtime.resume_refusal import HandleCause, HandleRefusal, project
 from harness_runtime.shutdown import shutdown
@@ -43,7 +39,7 @@ from .integration.test_r_cc_1_api_resume import (
     _patched_runtime,  # noqa: F401  # pyright: ignore[reportPrivateUsage, reportUnusedImport]
     _snapshot_for,  # pyright: ignore[reportPrivateUsage]
 )
-from .pause_journal_roots import declare_pause_journal_root
+from .pause_journal_roots import declare_pause_journal_root, write_installation_state
 from .test_admin_inspect import _write_n_entries  # pyright: ignore[reportPrivateUsage]
 from .test_b104_root_resume_facade import (
     _WORKFLOW_ID,  # pyright: ignore[reportPrivateUsage]
@@ -242,7 +238,7 @@ def test_an_unresolved_root_other_than_unbound_is_an_unreadable_directory(
 ) -> None:
     """A populated ledger default is never the fallback for a declared-but-unresolved root."""
     ledger, _, _ = _inventory_site(tmp_path)
-    INSTALLATION_STATE.set(InstallationState(pause_journal_root_declarations=declarations))
+    write_installation_state(json.dumps({"pause_journal_root_declarations": list(declarations)}))
 
     code = main(["--ledger-path", str(ledger), "--runtime-config", _runtime_config(tmp_path)])
     assert code == _EXIT_INSPECT_PATH

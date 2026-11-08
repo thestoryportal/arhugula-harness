@@ -739,12 +739,14 @@ def main(argv: list[str] | None = None) -> int:
     # established summary; it never replaces a section and never governs the
     # exit code (enumeration is a read, not a verdict).
     from harness_runtime.config_source import RuntimeConfigLoadError
+    from harness_runtime.lifecycle.installation_state import installation_state_bound
     from harness_runtime.lifecycle.pause_journal_root_resolver import (
         PauseJournalRootUnresolvedError,
     )
 
     try:
-        journals = _enumerate_pause_journals_if_engaged(args, ledger_path)
+        with installation_state_bound():
+            journals = _enumerate_pause_journals_if_engaged(args, ledger_path)
     # [LAW:no-silent-failure] Rule B8: a root that is declared but cannot be resolved is
     # an unreadable directory, never a fallback to the legacy default.
     except (OSError, PauseJournalRootUnresolvedError, RuntimeConfigLoadError) as exc:
@@ -1070,13 +1072,13 @@ def _pause_journal_inventory_dir(args: argparse.Namespace, ledger_path: Path) ->
     both as an unreadable pause-journal directory. The result is a diagnostic read,
     never a journal location.
     """
-    from harness_is.pause_journal_root import Unresolved, UnresolvedCause, parse_declarations
+    from harness_is.pause_journal_root import Unresolved, UnresolvedCause
 
     from harness_runtime.config_source import RuntimeConfigSource
     from harness_runtime.lifecycle.journal_workflow_pause_store import PAUSE_JOURNAL_SUBDIR
     from harness_runtime.lifecycle.pause_journal_root_resolver import (
-        INSTALLATION_STATE,
         PauseJournalRootUnresolvedError,
+        installation_root_declaration,
         resolve_pause_journal_root,
     )
 
@@ -1086,7 +1088,7 @@ def _pause_journal_inventory_dir(args: argparse.Namespace, ledger_path: Path) ->
     # declarations alone, judged by the one IS parser the resolver also uses. Config is
     # loaded only to resolve one well-formed declaration, so an unbound installation
     # inventories the legacy default without config and a malformed one reports its own cause.
-    match parse_declarations(INSTALLATION_STATE.get().pause_journal_root_declarations):
+    match installation_root_declaration():
         case Unresolved(cause=UnresolvedCause.UNBOUND):
             return ledger_path.parent / PAUSE_JOURNAL_SUBDIR
         case Unresolved(cause=cause):

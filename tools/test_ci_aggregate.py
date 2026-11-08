@@ -5,7 +5,8 @@ table, restated here independently and enumerated over every input combination, 
 the aggregate step's own command with the env the workflow wires. The graph lens pins the
 ci.yml contract that the verdict depends on: the exact required name, `always()`, both
 constituents independent of each other, one coverage-enabled suite execution, and the
-unchanged set of required contexts."""
+unchanged set of required contexts. The uv bootstrap every uv-using job starts with is run
+as wired against stub tools, since every suite verdict sits downstream of it."""
 
 from __future__ import annotations
 
@@ -359,12 +360,150 @@ def test_parity_job_provides_just_and_zsh_then_runs_the_parity_script() -> None:
     steps = _jobs()["parity-tests"]["steps"]
     uses = [str(s.get("uses", "")) for s in steps]
     runs = _runs(_jobs()["parity-tests"])
-    assert any(u.startswith("extractions/setup-just@") for u in uses)
+    [install_step] = [s for s in steps if "rust-just" in str(s.get("run", ""))]
+    assert not install_step.get("continue-on-error", False)
+    install = str(install_step["run"])
+    assert re.search(r"^uv tool install rust-just==\d+\.\d+\.\d+$", install, re.M)
+    assert '"$(uv tool dir --bin)/just" --version' in install
+    assert 'uv tool dir --bin >> "$GITHUB_PATH"' in install
+    assert not any(u.startswith("extractions/setup-just@") for u in uses)
     assert any("apt-get install -y zsh" in r for r in runs)
     assert runs[-1] == "bash tools/codex-parity-check.sh"
     job = _jobs()["parity-tests"]
     assert not job.get("continue-on-error", False)
     assert not steps[-1].get("continue-on-error", False)
+
+
+_UV_BOOTSTRAP = "bash .github/scripts/install-uv.sh"
+_RUNS_UV = re.compile(r"(?:^|[\s;&|(])uvx? ", re.M)
+
+
+def test_every_uv_job_bootstraps_uv_from_the_checked_out_helper_first() -> None:
+    uv_jobs = 0
+    for job_id, job in _jobs().items():
+        steps = job.get("steps", [])
+        assert not any("setup-uv" in str(s.get("uses", "")) for s in steps), job_id
+        uses_uv = [i for i, s in enumerate(steps) if _RUNS_UV.search(str(s.get("run", "")))]
+        boots = [i for i, s in enumerate(steps) if s.get("run") == _UV_BOOTSTRAP]
+        assert len(boots) == (1 if uses_uv else 0), job_id
+        assert all(b < u for b in boots for u in uses_uv), job_id
+        assert not any(steps[b].get("continue-on-error", False) for b in boots), job_id
+        checkouts = [i for i, s in enumerate(steps) if "checkout@" in str(s.get("uses", ""))]
+        assert all(any(c < b for c in checkouts) for b in boots), job_id
+        uv_jobs += bool(uses_uv)
+    assert uv_jobs > 0
+
+
+# Stand-ins for the runner's python3, the bootstrap venv's pip and the uv it installs: the
+# stub uv reports whichever version pip was asked for unless STUB_UV_VERSION overrides it.
+_STUB_PYTHON3 = """#!/usr/bin/env bash
+set -eu
+test "$1 $2" = "-m venv"
+mkdir -p "$3/bin"
+cp "$STUBS/venv-python" "$3/bin/python"
+"""
+_STUB_VENV_PYTHON = """#!/usr/bin/env bash
+set -eu
+echo "$*" > "$STUB_LOG/pip-args"
+cp "${@: -1}" "$STUB_LOG/requirements.txt"
+test -z "${STUB_PIP_FAILS:-}"
+sed -n 's/^uv==\\([^ ]*\\).*/\\1/p' "${@: -1}" > "$STUB_LOG/requested"
+cp "$STUBS/uv" "$(dirname "$0")/uv"
+cp "$STUBS/uv" "$(dirname "$0")/uvx"
+"""
+_STUB_UV = """#!/usr/bin/env bash
+set -eu
+case "$1" in
+  --version) echo "uv ${STUB_UV_VERSION:-$(cat "$STUB_LOG/requested")} (x86_64-linux)" ;;
+  venv) echo "$* UV_PYTHON=$UV_PYTHON UV_CACHE_DIR=$UV_CACHE_DIR" > "$STUB_LOG/venv-args"
+        mkdir -p .venv/bin ;;
+  *) exit 64 ;;
+esac
+"""
+
+
+def _run_uv_bootstrap(tmp_path: Path, **stub_env: str) -> subprocess.CompletedProcess[str]:
+    # Execute the step exactly as wired, from a checkout holding the real helper.
+    stubs, ws = tmp_path / "stubs", tmp_path / "ws"
+    for d in (stubs, tmp_path / "log", ws / ".github" / "scripts", tmp_path / "runner-temp"):
+        d.mkdir(parents=True)
+    stub_bodies = {"python3": _STUB_PYTHON3, "venv-python": _STUB_VENV_PYTHON, "uv": _STUB_UV}
+    for name, body in stub_bodies.items():
+        (stubs / name).write_text(body)
+        (stubs / name).chmod(0o755)
+    helper = ws / ".github" / "scripts" / "install-uv.sh"
+    helper.write_bytes((_REPO / ".github" / "scripts" / "install-uv.sh").read_bytes())
+    (tmp_path / "github-env").touch()
+    (tmp_path / "github-path").touch()
+    [step] = [s for s in _jobs()["package-tests"]["steps"] if s.get("run") == _UV_BOOTSTRAP]
+    env = {
+        "PATH": f"{stubs}:/usr/bin:/bin",
+        "HOME": str(tmp_path / "home"),
+        "RUNNER_TEMP": str(tmp_path / "runner-temp"),
+        "GITHUB_ENV": str(tmp_path / "github-env"),
+        "GITHUB_PATH": str(tmp_path / "github-path"),
+        "STUBS": str(stubs),
+        "STUB_LOG": str(tmp_path / "log"),
+        **stub_env,
+    }
+    return subprocess.run(
+        ["bash", "-e", "-c", str(step["run"])], cwd=ws, env=env, capture_output=True, text=True
+    )
+
+
+def test_uv_bootstrap_installs_only_the_hash_pinned_pypi_wheel(tmp_path: Path) -> None:
+    p = _run_uv_bootstrap(tmp_path)
+    assert p.returncode == 0, p.stdout + p.stderr
+    args = (tmp_path / "log" / "pip-args").read_text().split()
+    assert args[:3] == ["-m", "pip", "install"]
+    assert {"--require-hashes", "--no-deps", "--only-binary"} <= set(args)
+    assert args[args.index("--only-binary") + 1] == ":all:"
+    requirement = (tmp_path / "log" / "requirements.txt").read_text()
+    assert re.match(r"uv==\d+\.\d+\.\d+ \\\n", requirement)
+    assert re.search(r"--hash=sha256:[0-9a-f]{64}\b", requirement)
+    version = (tmp_path / "log" / "requested").read_text().strip()
+    assert f"uv {version} (" in p.stdout
+
+
+def test_uv_bootstrap_leaves_the_job_environment_setup_uv_left(tmp_path: Path) -> None:
+    p = _run_uv_bootstrap(tmp_path)
+    assert p.returncode == 0, p.stdout + p.stderr
+    temp, ws = tmp_path / "runner-temp", tmp_path / "ws"
+    assert (tmp_path / "github-env").read_text().splitlines() == [
+        "UV_PYTHON=3.12",
+        f"UV_CACHE_DIR={temp}/setup-uv-cache",
+        f"VIRTUAL_ENV={ws}/.venv",
+    ]
+    # GitHub prepends each line in turn: the workspace .venv resolves first, then uv.
+    assert (tmp_path / "github-path").read_text().splitlines() == [
+        f"{tmp_path}/home/.local/bin",
+        f"{temp}/uv-bootstrap/bin",
+        f"{ws}/.venv/bin",
+    ]
+    assert sorted(os.listdir(temp / "uv-bootstrap" / "bin")) == ["uv", "uvx"]
+    assert (tmp_path / "log" / "venv-args").read_text().split() == [
+        "venv",
+        "--python",
+        "3.12",
+        ".venv",
+        "UV_PYTHON=3.12",
+        f"UV_CACHE_DIR={temp}/setup-uv-cache",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("stub_env", "reported"),
+    [({"STUB_UV_VERSION": "0.0.1"}, "::error::expected uv "), ({"STUB_PIP_FAILS": "1"}, "")],
+    ids=["wrong-binary", "pip-fails"],
+)
+def test_a_failed_uv_bootstrap_stops_before_exporting_anything(
+    tmp_path: Path, stub_env: dict[str, str], reported: str
+) -> None:
+    p = _run_uv_bootstrap(tmp_path, **stub_env)
+    assert p.returncode != 0
+    assert reported in p.stderr
+    assert (tmp_path / "github-env").read_text() == ""
+    assert (tmp_path / "github-path").read_text() == ""
 
 
 def test_reducer_regressions_have_an_independently_required_blocking_job() -> None:
