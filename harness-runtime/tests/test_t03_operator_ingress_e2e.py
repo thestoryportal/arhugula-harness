@@ -22,6 +22,7 @@ import sys
 import threading
 import time
 from collections.abc import Iterator
+from datetime import UTC, datetime
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -29,9 +30,17 @@ from typing import Any
 import pytest
 import typer
 import yaml
+from harness_cp.hitl_placement import HITLResponse, HITLResult, PendingHITLDecision
+from harness_cp.pause_resume_protocol_types import (
+    HITLDeliveryCell,
+    ResumeContext,
+    WorkflowPauseReason,
+)
 from harness_runtime import api
 from harness_runtime.bootstrap import stage_1_is
 from harness_runtime.config import state_placement as sp
+from harness_runtime.lifecycle import hitl_gate_composer as composer
+from harness_runtime.lifecycle.ask_user_question_surface import AskUserQuestionResult
 from harness_runtime.lifecycle.hitl_gate_composer import post_mutation_payload_hash
 from harness_runtime.lifecycle.installation_state import (
     installation_state_bound,
@@ -47,6 +56,7 @@ from harness_runtime.lifecycle.operator_input import (
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from pydantic import ValidationError
 
 from .integration.test_r_cc_1_api_resume import (
     _patched_runtime,  # noqa: F401  # pyright: ignore[reportPrivateUsage, reportUnusedImport]
@@ -570,3 +580,236 @@ def test_8_one_daemon_serves_an_approve_then_a_reject_on_a_terminal(
     assert gated.marker() == [_GATED_STEP]
     approve, reject = gated.hitl_audits()
     assert (approve["audit.cp.response"], reject["audit.cp.response"]) == ("approve", "reject")
+
+
+# --- `hold` into the durable pause, then one public resume (C3, C4) ----------------------------
+
+
+class Resumed:
+    """What the public resume admitted and what the resumed gate routed for it."""
+
+    def __init__(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self.entries: list[Any] = []
+        self.routed: list[HITLResult] = []
+        self.live_action_kinds: list[str] = []
+        admit, build = api.admit_root_resume, composer._hitl_result_from_pending  # pyright: ignore[reportPrivateUsage]
+        derive = composer._compose_hitl_handoff_context  # pyright: ignore[reportPrivateUsage]
+
+        async def admitted(*args: Any, **kwargs: Any) -> Any:
+            entry = await admit(*args, **kwargs)
+            self.entries.append(entry)
+            return entry
+
+        def routed(*args: Any, **kwargs: Any) -> HITLResult:
+            result = build(*args, **kwargs)
+            self.routed.append(result)
+            return result
+
+        def live(*args: Any, **kwargs: Any) -> Any:
+            context = derive(*args, **kwargs)
+            self.live_action_kinds.append(str(context.proposed_action.action_kind))
+            return context
+
+        monkeypatch.setattr(api, "admit_root_resume", admitted)
+        monkeypatch.setattr(composer, "_hitl_result_from_pending", routed)
+        monkeypatch.setattr(composer, "_compose_hitl_handoff_context", live)
+
+
+@pytest.fixture
+def resumed(monkeypatch: pytest.MonkeyPatch) -> Resumed:
+    return Resumed(monkeypatch)
+
+
+def _harness_resume(
+    gated: Scenario,
+    response: Any = None,
+    edited_proposal: str | None = None,
+) -> int:
+    """`harness resume <manifest> [--hitl-response ...]`; the manifest names the handle."""
+    with pytest.raises(typer.Exit) as exit_:
+        cli.resume_command(
+            gated.manifest(),
+            config=gated.layout.config,
+            tenant_id=None,
+            output=cli.OutputFormat.json,
+            hitl_response=response,
+            edited_proposal=edited_proposal,
+            response_text=None,
+            rejection_reason=None,
+        )
+    return exit_.value.exit_code
+
+
+def _held(gated: Scenario) -> Any:
+    """`api.run` whose operator holds: PAUSED at the gate with the durable resume handle."""
+    result = _run(gated, _answering(OperatorDecision(action="hold"), []))
+    assert result.status == "paused", result
+    assert result.pause_snapshot.workflow_id == _WORKFLOW_ID
+    assert result.pause_snapshot.pause_reason is WorkflowPauseReason.HITL_PENDING
+    assert gated.marker() == []
+    assert gated.hitl_audits() == []
+    return result.pause_snapshot
+
+
+def test_9_hold_then_one_public_resume_approves_under_the_gates_own_audit_identity(
+    gated: Scenario, resumed: Resumed
+) -> None:
+    snapshot = _held(gated)
+    started = datetime.now(UTC)
+
+    assert _harness_resume(gated, cli.HITLResumeResponse.approve) == cli.EXIT_SUCCESS
+
+    assert gated.marker() == [_GATED_STEP]
+    [entry] = resumed.entries
+    context = entry.resume_context
+    assert context.pending_hitl_decision == PendingHITLDecision(response=HITLResponse.APPROVE)
+    assert (context.hitl_response, context.hitl_responses) == (None, None)
+    # Neither a child run nor any other run id is addressed by the pending decision.
+    assert context.hitl_response_for(snapshot.run_id) is None
+    [routed] = resumed.routed  # the resumed root gate consumed it once
+    [audit] = gated.hitl_audits()
+    audit_id = audit["audit.cp.action_id"]
+    assert routed.audit_ledger_entry_id == audit_id
+    approve = AskUserQuestionResult(response=HITLResponse.APPROVE, latency_ms=0.0)
+    assert routed.response_summary_hash == composer._compute_response_summary_hash(approve)  # pyright: ignore[reportPrivateUsage]
+    assert started <= datetime.fromisoformat(routed.timestamp) <= datetime.now(UTC)
+    assert audit_id != snapshot.state_ledger_anchor
+    assert entry.pause_snapshot.state_ledger_anchor == snapshot.state_ledger_anchor
+
+
+def test_9_the_pending_decision_is_one_response_authority_consumed_once() -> None:
+    pending = PendingHITLDecision(response=HITLResponse.APPROVE)
+    approve = HITLResult(
+        response=HITLResponse.APPROVE,
+        timestamp="t",
+        audit_ledger_entry_id="a",
+        response_summary_hash="h",
+    )
+    with pytest.raises(ValidationError):
+        ResumeContext(pending_hitl_decision=pending, hitl_response=approve)
+    with pytest.raises(ValidationError):
+        ResumeContext(pending_hitl_decision=pending, hitl_responses={"run": approve})
+    cell = HITLDeliveryCell(pending)
+    assert cell.consume_and_clear() == pending
+    assert cell.consume_and_clear() is None
+
+
+def test_9_hold_on_a_terminal_pauses_then_resumes_once(gated: Scenario, terminal: Terminal) -> None:
+    operator = Operator(gated, terminal, "hold")
+
+    assert _harness_run(gated, terminal.stdin, terminal.stderr) == cli.EXIT_PAUSED
+    _assert_gate_shown(operator.done())
+    assert (gated.marker(), gated.hitl_audits()) == ([], [])
+
+    assert _harness_resume(gated, cli.HITLResumeResponse.approve) == cli.EXIT_SUCCESS
+    assert gated.marker() == [_GATED_STEP]
+
+
+def test_9_a_decision_against_a_non_hitl_pause_is_refused_before_any_claim(
+    gated: Scenario,
+) -> None:
+    snapshot = _held(gated)
+    other = snapshot.model_copy(update={"pause_reason": WorkflowPauseReason.EXPLICIT_OPERATOR})
+
+    with pytest.raises(api.ResumeArgsError):
+        api.operator_resume_context(other, OperatorDecision(action="approve"))
+    # The refusal spent nothing: the held handle still resumes, once.
+    assert _harness_resume(gated, cli.HITLResumeResponse.approve) == cli.EXIT_SUCCESS
+    assert gated.marker() == [_GATED_STEP]
+
+
+def test_10_hold_without_the_durable_pause_binding_is_an_audited_reject(gated: Scenario) -> None:
+    binding = "[runtime.pause_resume_protocol_config]\ndurable = true\n"
+    config = gated.layout.config.read_text()
+    assert config.count(binding) == 1
+    gated.layout.config.write_text(config.replace(binding, ""))
+
+    result = _run(gated, _answering(OperatorDecision(action="hold"), []))
+
+    _assert_rejected(result)
+    assert gated.marker() == []
+    [audit] = gated.hitl_audits()
+    assert audit["audit.cp.response"] == "reject", audit
+    reason = "hold unavailable: no durable pause binding"
+    assert audit["audit.cp.rejection_reason_hash"] == _sha(reason), audit
+
+
+def test_11_a_second_resume_of_a_resumed_handle_is_refused(gated: Scenario) -> None:
+    _held(gated)
+    assert _harness_resume(gated, cli.HITLResumeResponse.approve) == cli.EXIT_SUCCESS
+
+    assert _harness_resume(gated, cli.HITLResumeResponse.approve) == cli.EXIT_RESUME_CLAIM_REFUSED
+    assert gated.marker() == [_GATED_STEP]
+
+
+def test_17_public_resume_edit_keeps_the_live_action_kind_and_dispatches_the_edit(
+    gated: Scenario, resumed: Resumed
+) -> None:
+    _held(gated)
+    [live_kind] = resumed.live_action_kinds  # the held gate's own derivation, before the hold
+    edited = {"tool_id": "witness.a", "tool_args": {"value": "edited"}}
+
+    code = _harness_resume(gated, cli.HITLResumeResponse.edit, json.dumps(edited))
+
+    assert code == cli.EXIT_SUCCESS
+    [routed] = resumed.routed
+    assert routed.edited_proposal is not None
+    assert str(routed.edited_proposal.action_kind) == live_kind
+    assert routed.edited_proposal.payload == edited
+    assert gated.marker() == ["edited"]
+    [audit] = gated.hitl_audits()
+    assert audit["audit.cp.edited_proposal_hash"] == post_mutation_payload_hash(edited), audit
+
+
+@pytest.mark.parametrize("proposal", ["not json", "[1]"])
+def test_17_an_undecodable_edit_is_refused_without_spending_the_handle(
+    gated: Scenario, proposal: str
+) -> None:
+    _held(gated)
+
+    code = _harness_resume(gated, cli.HITLResumeResponse.edit, proposal)
+
+    assert code == cli.EXIT_RESUME_REFUSED
+    assert (gated.marker(), gated.hitl_audits()) == ([], [])
+    assert _harness_resume(gated, cli.HITLResumeResponse.approve) == cli.EXIT_SUCCESS
+    assert gated.marker() == [_GATED_STEP]
+
+
+async def _daemon_resume(socket_path: Path, manifest: Path, decision: dict[str, str]) -> Any:
+    """The daemon's public `resume_workflow` tool over its Unix socket, as a client calls it."""
+    import httpx
+    from mcp import ClientSession
+    from mcp.client.streamable_http import streamable_http_client
+
+    transport = httpx.AsyncHTTPTransport(uds=str(socket_path))
+    timeout = httpx.Timeout(_CLI_BOUND_SECONDS)
+    async with (
+        httpx.AsyncClient(transport=transport, timeout=timeout) as http,
+        streamable_http_client(
+            cli._DAEMON_CLIENT_STREAMABLE_HTTP_URL,  # pyright: ignore[reportPrivateUsage]
+            http_client=http,
+        ) as (read, write, _session_id),
+        ClientSession(read, write) as session,
+    ):
+        await session.initialize()
+        arguments = {"workflow_id": str(manifest), "operator_decision": decision}
+        return await session.call_tool("resume_workflow", arguments)
+
+
+def test_9_hold_through_the_daemon_pauses_then_its_resume_approves_once(
+    gated: Scenario, daemon: Path
+) -> None:
+    with Terminal() as pty:
+        operator = Operator(gated, pty, "hold")
+        code = _harness_run(gated, pty.stdin, pty.stderr, socket_path=daemon)
+        _assert_gate_shown(operator.done())
+    assert code == cli.EXIT_PAUSED
+    assert (gated.marker(), gated.hitl_audits()) == ([], [])
+
+    reply = asyncio.run(_daemon_resume(daemon, gated.manifest(), {"action": "approve"}))
+
+    assert not reply.isError, reply
+    assert reply.structuredContent["status"] == "completed", reply
+    assert gated.marker() == [_GATED_STEP]
+    [audit] = gated.hitl_audits()
+    assert audit["audit.cp.response"] == "approve", audit
