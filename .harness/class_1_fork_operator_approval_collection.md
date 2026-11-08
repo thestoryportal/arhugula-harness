@@ -143,7 +143,9 @@ to `approve`, `edit`, `reject`, `respond`), never a `HITLResult`:
   (`harness-cp/src/harness_cp/pause_resume_protocol_types.py:1640-1659`), so CP owns the carrier:
   `PendingHITLDecision` in `harness_cp.hitl_placement`, beside `HITLResult` (frozen, extra
   forbidden): `kind: Literal["pending"]`, `response: HITLResponse` (approve/edit/reject/respond),
-  `edited_proposal_payload: dict[str, Any] | None` (required for edit only), `response_text`
+  `edited_proposal_payload: dict[str, Any] | None` (required for edit only; at admission `--edited-proposal` must decode under the existing
+  `_decode_edit_proposal` rules (`:830`) to a JSON object, else an argument-class refusal before
+  the claim with zero dispatch), `response_text`
   (required for respond only), `rejection_reason`. It has no timestamp, hash or audit ID. The
   runtime maps its C1 `OperatorDecision` onto it at admission; runtime-to-CP is the existing
   import direction.
@@ -164,7 +166,12 @@ to `approve`, `edit`, `reject`, `respond`), never a `HITLResult`:
   `api.admit_root_resume` after the durable snapshot is read and before the claim is taken,
   returns `ResumeContext(pending_hitl_decision=...)`.
 - **The resumed gate owns the identity.** Composer step 0 (`P/lifecycle/hitl_gate_composer.py:1906`)
-  is the single owner. On a consumed `PendingHITLDecision` it builds the `HITLResult` itself:
+  is the single owner. On a consumed `PendingHITLDecision` it builds the `HITLResult` itself. For `edit`,
+  `edited_proposal` is the live gate's own derivation,
+  `_compose_hitl_handoff_context(step_context, step).proposed_action` (`:905-955`), copied with
+  only `payload` replaced by the pending `edited_proposal_payload`; `action_kind` and `brief` are
+  never invented or supplied by the operator. Step 0 then applies it through the existing
+  edited-payload path (`:1977-1985`, `:2019-2030`). Additionally:
   `audit_ledger_entry_id` is the `EntryID` under which it persists its own step-4h audit for this
   response (the `hitl_action_id`-keyed entry it already writes), `timestamp` is its clock read at
   consumption, and `response_summary_hash` comes from `_compute_response_summary_hash` (`:867`),
@@ -265,6 +272,12 @@ the gated step. "Audit" is the step-4h `CPAuditLedgerEntry`; "ingress" is the sp
 16. A pseudo-TTY run whose step payload exceeds 8192 bytes of canonical JSON, with a key
     `danger_tail` placed last: stderr contains `danger_tail` and its value before any answer is
     read, and `approve` dispatches only after that full display.
+17. Public resume EDIT: `harness resume <manifest> --hitl-response edit --edited-proposal
+    '{"k": "edited"}'` against a held gate: the routed `HITLResult.edited_proposal.action_kind`
+    equals the held gate's live-derived `action_kind`, the gated step dispatches once with exactly
+    the edited payload, and the step-4h audit's `edited_proposal_hash` is
+    `post_mutation_payload_hash` of that payload. With `--edited-proposal 'not json'` or `'[1]'`:
+    argument refusal, zero dispatch, claim not spent, handle still resumable.
 
 ## Fork rulings (review pass 1, `cmt-53ad3553-8352-47a3-b855-d19c9239b45e`)
 
@@ -283,10 +296,12 @@ the gated step. "Audit" is the step-4h `CPAuditLedgerEntry`; "ingress" is the sp
 - **Pass 4 (`cmt-bcf3867c-9b7f-41b1-a04c-d5d9414c37ba`):** G1 CP-owned `PendingHITLDecision`,
   one response authority by validator, unchanged `hitl_response_for`, root-only
   `hitl_delivery_for`, discriminated one-shot cell.
+- **Pass 5 (`cmt-09022ab9-455a-4fac-b0d5-e97db03cef30`):** H1 resumed EDIT builds `ProposedAction`
+  from the live gate's `_compose_hitl_handoff_context` derivation with the payload replaced.
 - **Open for Buford ratification:** the 900 s constant.
 
 ## Disposition (on ratification)
 
 The C1–C5 contract, with the CP §26.8.1 `PendingHITLDecision`, `ResumeContext.pending_hitl_decision`, `hitl_delivery_for` and `HITLDeliveryCell` amendment, becomes the next free Runtime spec version's §14.8 amendment to C-RT-18, with
-one plan unit for T03 carrying assertions 1–16, materialized in P2 before T03 claims conformance.
+one plan unit for T03 carrying assertions 1–17, materialized in P2 before T03 claims conformance.
 No source or test change is made by this stage.
