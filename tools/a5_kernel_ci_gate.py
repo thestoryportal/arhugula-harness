@@ -31,6 +31,8 @@ import hashlib
 import json
 import os
 import platform
+import re
+import stat
 import subprocess
 import sys
 import xml.etree.ElementTree as ET
@@ -484,6 +486,262 @@ def check(
         return record | {"problems": [*problems, f"JUnit not usable: {exc}"]}
     observed, outcome_problems = judge_outcomes(required_outcomes(expectations, venue), outcomes)
     return record | {"outcomes": observed, "problems": problems + outcome_problems}
+
+
+# --- Q0 observation (host side) -----------------------------------------------------
+#
+# Provisional record contract from correction-8 (proposal 09276d9f):
+# design.bindings_crossing_guest, guest_package_closure step 3h and
+# qualification_sequence.Q0_observation. The guest `observe` producer, reviewed input
+# pins and the CI job are not built yet, so nothing calls these outside their tests.
+
+# The one binding.env schema: the host writer, the guest and these checks share it.
+BINDING_ENV_KEYS = (
+    "CI_HEAD",
+    "CI_BASE",
+    "CI_TESTED",
+    "CI_PARENTS",
+    "CI_EVENT",
+    "CI_REF",
+    "GITHUB_RUN_ID",
+    "GITHUB_RUN_ATTEMPT",
+    "GITHUB_WORKFLOW",
+    "ImageOS",
+    "ImageVersion",
+    "RUNNER_NAME",
+    "RUNNER_ENVIRONMENT",
+    "GUEST_BZIMAGE_SHA256",
+    "GUEST_CONFIG_SHA256",
+    "GUEST_SOURCE_SHA256",
+    "BASE_ROOTFS_SHA256",
+    "INPUTS_SHA256",
+    "HOST_JSON_SHA256",
+    "STAGE_MANIFEST_SHA256",
+    "HOST_ENV_SHA256",
+    "INSTALL_NS_SHA256",
+)
+# What binds one observation to one run: the host's tested commit, run and attempt, and
+# the reviewed inputs it was built from.
+Q0_IDENTITY = ("CI_TESTED", "GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT", "INPUTS_SHA256")
+_HEX64 = re.compile(r"[0-9a-f]{64}")
+
+
+class Q0Error(ValueError):
+    """A Q0 record is absent, not fresh, malformed or not bound to this run."""
+
+
+def _sha256(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def _read(path: Path) -> bytes:
+    try:
+        return path.read_bytes()
+    except OSError as exc:
+        raise Q0Error(f"{path.name} unreadable: {exc}") from exc
+
+
+def _object(data: bytes, name: str) -> dict[str, Any]:
+    try:
+        raw = json.loads(data)
+    except ValueError as exc:
+        raise Q0Error(f"{name} is not JSON: {exc}") from exc
+    if type(raw) is not dict:
+        raise Q0Error(f"{name} is not a JSON object")
+    return cast(dict[str, Any], raw)
+
+
+def _hex64(raw: Mapping[str, Any], key: str, name: str) -> str:
+    value = raw.get(key)
+    if type(value) is not str or not _HEX64.fullmatch(value):
+        raise Q0Error(f"{name} {key} {value!r} is not 64 lowercase hex")
+    return value
+
+
+def parse_binding_env(data: bytes) -> Mapping[str, str]:
+    # [LAW:single-enforcer] Every key exactly once, nothing else, no empty value: a
+    # missing, extra, repeated or malformed line fails here with no default.
+    try:
+        lines = data.decode().splitlines()
+    except UnicodeDecodeError as exc:
+        raise Q0Error(f"binding.env is not UTF-8: {exc}") from exc
+    pairs = [line.partition("=") for line in lines]
+    if any(not sep or not value for _, sep, value in pairs):
+        raise Q0Error("binding.env has a line that is not KEY=VALUE")
+    if sorted(key for key, _, _ in pairs) != sorted(BINDING_ENV_KEYS):
+        raise Q0Error(f"binding.env keys {[key for key, _, _ in pairs]} are not the schema")
+    env = {key: value for key, _, value in pairs}
+    for key in BINDING_ENV_KEYS:
+        if key.endswith("_SHA256"):
+            _hex64(env, key, "binding.env")
+    return env
+
+
+@dataclass(frozen=True)
+class Q0Observation:
+    identity: Mapping[str, str]
+    binding_env_sha256: str
+    install_ns_sha256: str
+    sha256: str
+
+
+def parse_observation(data: bytes) -> Q0Observation:
+    # [LAW:parse-dont-validate] Q0 has no preflight, outcomes or verdict; a record missing
+    # its identity or either binding hash is refused before anything compares it.
+    raw = _object(data, "observation.json")
+    identity = {key: raw.get(key) for key in Q0_IDENTITY}
+    if any(type(value) is not str or not value for value in identity.values()):
+        raise Q0Error(f"observation.json identity {identity!r} is incomplete")
+    _hex64(raw, "INPUTS_SHA256", "observation.json")
+    return Q0Observation(
+        identity=cast(dict[str, str], identity),
+        binding_env_sha256=_hex64(raw, "binding_env_sha256", "observation.json"),
+        install_ns_sha256=_hex64(raw, "INSTALL_NS_SHA256", "observation.json"),
+        sha256=_sha256(data),
+    )
+
+
+def read_fresh(path: Path, launched: Path) -> bytes:
+    """The bytes of a regular file written no earlier than the pre-launch marker."""
+    try:
+        launched_ns = launched.stat().st_mtime_ns
+        # O_NOFOLLOW refuses a symlink and O_NONBLOCK keeps a FIFO from hanging; fstat
+        # then judges the very descriptor whose bytes are returned.
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError as exc:
+        raise Q0Error(f"{path.name} unreadable: {exc}") from exc
+    try:
+        status = os.fstat(fd)
+        if not stat.S_ISREG(status.st_mode):
+            raise Q0Error(f"{path.name} is not a regular file")
+        if status.st_mtime_ns < launched_ns:
+            raise Q0Error(f"{path.name} predates the guest launch: reused, not fresh")
+        with open(fd, "rb", closefd=False) as stream:
+            return stream.read()
+    finally:
+        os.close(fd)
+
+
+def q0_collect(
+    out: Path, launched: Path, identity: Mapping[str, str], evidence: Path
+) -> Q0Observation:
+    """Copy this run's fresh guest observation into evidence, or refuse it."""
+    data = read_fresh(out / "observation.json", launched)
+    observation = parse_observation(data)
+    # [LAW:no-silent-failure] A timestamp alone cannot tell this attempt from a copied
+    # prior one; the identity can, and there is no fallback to any other record.
+    mismatches = [
+        f"observation.json {key}={observation.identity[key]!r} is not this run's {identity[key]!r}"
+        for key in Q0_IDENTITY
+        if observation.identity[key] != identity[key]
+    ]
+    if mismatches:
+        raise Q0Error("; ".join(mismatches))
+    (evidence / "observation.json").write_bytes(data)
+    return observation
+
+
+def _agreement(values: Mapping[str, str], key: str) -> list[str]:
+    return [] if len(set(values.values())) == 1 else [f"{key} values differ: {dict(values)}"]
+
+
+def binding_verify(
+    binding_env: Path, host_stage: Path, guest_record: Path, identity: Mapping[str, str]
+) -> dict[str, Any]:
+    # [LAW:one-source-of-truth] binding.env is hashed from its retained bytes on each side
+    # of the boundary; no hash supplied through the environment is consulted. Its identity
+    # must be the run's too, or equal hashes would bind a record of another run.
+    record: dict[str, Any] = {}
+    try:
+        env_bytes = _read(binding_env)
+        env = parse_binding_env(env_bytes)
+        stage_bytes, guest_bytes = _read(host_stage), _read(guest_record)
+        record["host_stage_sha256"] = _sha256(stage_bytes)
+        record["guest_record_sha256"] = _sha256(guest_bytes)
+        values = {
+            "retained": _sha256(env_bytes),
+            "host_stage": _hex64(
+                _object(stage_bytes, "host-stage.json"), "binding_env_sha256", "host-stage.json"
+            ),
+            "guest": _hex64(
+                _object(guest_bytes, guest_record.name), "binding_env_sha256", guest_record.name
+            ),
+        }
+    except Q0Error as exc:
+        return record | {"problems": [str(exc)]}
+    return record | {
+        "binding_env_sha256": values,
+        "problems": _agreement(values, "binding_env_sha256")
+        + [
+            f"binding.env {key}={env[key]!r} is not this run's {identity[key]!r}"
+            for key in Q0_IDENTITY
+            if env[key] != identity[key]
+        ],
+    }
+
+
+def install_binding(install_ns: Path, binding_env: Path, guest_record: Path) -> dict[str, Any]:
+    # The step-3c boundary evaluator does not exist yet; install-ns.json must at least
+    # parse as an object, and its bytes are what INSTALL_NS_SHA256 names.
+    try:
+        ns_bytes = _read(install_ns)
+        _object(ns_bytes, "install-ns.json")
+        values = {
+            "install_ns": _sha256(ns_bytes),
+            "binding_env": parse_binding_env(_read(binding_env))["INSTALL_NS_SHA256"],
+            "guest": _hex64(
+                _object(_read(guest_record), guest_record.name),
+                "INSTALL_NS_SHA256",
+                guest_record.name,
+            ),
+        }
+    except Q0Error as exc:
+        return {"problems": [str(exc)]}
+    return {"INSTALL_NS_SHA256": values, "problems": _agreement(values, "INSTALL_NS_SHA256")}
+
+
+def _persist(path: Path, record: dict[str, Any]) -> dict[str, Any]:
+    record = record | {"verdict": "fail" if record["problems"] else "pass"}
+    path.write_text(json.dumps(record, indent=2) + "\n")
+    return record
+
+
+def q0_observe(
+    out: Path,
+    launched: Path,
+    identity: Mapping[str, str],
+    evidence: Path,
+    binding_env: Path,
+    host_stage: Path,
+    install_ns: Path,
+) -> dict[str, Any]:
+    """Collect, binding-verify, install-binding: the host-side bindings of one observation.
+
+    A completed observation also needs the step-3c install-ns evaluator and the guest
+    producer (Q0b), so this result never claims one.
+    """
+    try:
+        observation = q0_collect(out, launched, identity, evidence)
+    except Q0Error as exc:
+        return {"bindings_verified": False, "problems": [f"collect: {exc}"]}
+    guest = evidence / "observation.json"
+    # [LAW:dataflow-not-control-flow] Both binding checks always run and persist their
+    # evidence; a failure in either leaves the collected file but fails the bindings.
+    checks = {
+        "binding-verify": _persist(
+            evidence / "binding-verify.json",
+            binding_verify(binding_env, host_stage, guest, identity),
+        ),
+        "install-binding": _persist(
+            evidence / "install-binding.json", install_binding(install_ns, binding_env, guest)
+        ),
+    }
+    problems = [f"{name}: {p}" for name, check in checks.items() for p in check["problems"]]
+    return {
+        "observation_sha256": observation.sha256,
+        "bindings_verified": not problems,
+        "problems": problems,
+    }
 
 
 # --- CLI ----------------------------------------------------------------------------

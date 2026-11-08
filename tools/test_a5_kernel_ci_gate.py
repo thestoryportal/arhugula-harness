@@ -480,3 +480,323 @@ def test_unusable_expectations_exit_2(tmp_path: Path, monkeypatch: pytest.Monkey
     (tmp_path / "expectations.json").write_text('{"venues": {}}')
     assert main(argv) == 2
     assert main([*argv[:2], "nowhere", *argv[3:]]) == 2  # unknown venue
+
+
+# --- Q0 observation (host side) -----------------------------------------------------
+
+_IDENTITY = {
+    "CI_TESTED": "c" * 40,
+    "GITHUB_RUN_ID": "4242",
+    "GITHUB_RUN_ATTEMPT": "2",
+    "INPUTS_SHA256": "1" * 64,
+}
+
+
+def _sha(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+class Q0(dict[str, Path]):
+    """One consistent Q0 fixture: retained host records, a pre-launch marker, a fresh /out."""
+
+    def observation(self, **fields: Any) -> None:
+        env = gate.parse_binding_env(self["binding_env"].read_bytes())
+        raw = {
+            **_IDENTITY,
+            "binding_env_sha256": _sha(self["binding_env"].read_bytes()),
+            "INSTALL_NS_SHA256": env["INSTALL_NS_SHA256"],
+            **fields,
+        }
+        self["out"].joinpath("observation.json").write_text(
+            json.dumps({k: v for k, v in raw.items() if v is not None})
+        )
+
+    def binding_env(self, install_ns_sha256: str, **fields: str) -> bytes:
+        values = (
+            {
+                key: ("9" * 64 if key.endswith("_SHA256") else f"v-{key}")
+                for key in gate.BINDING_ENV_KEYS
+            }
+            | {k: v for k, v in _IDENTITY.items()}
+            | {"INSTALL_NS_SHA256": install_ns_sha256}
+        )
+        return "".join(f"{k}={v}\n" for k, v in (values | fields).items()).encode()
+
+    def observe(self) -> dict[str, Any]:
+        return gate.q0_observe(
+            self["out"],
+            self["launched"],
+            _IDENTITY,
+            self["evidence"],
+            self["binding_env"],
+            self["host_stage"],
+            self["install_ns"],
+        )
+
+
+@pytest.fixture
+def q0(tmp_path: Path) -> Q0:
+    paths = Q0({name: tmp_path / name for name in ("host", "out", "evidence")})
+    for directory in paths.values():
+        directory.mkdir()
+    paths |= {
+        "install_ns": paths["host"] / "install-ns.json",
+        "binding_env": paths["host"] / "binding.env",
+        "host_stage": paths["host"] / "host-stage.json",
+        "launched": paths["host"] / "launched",
+    }
+    paths["install_ns"].write_text('{"dpkg_exit": 0}\n')
+    env = paths.binding_env(_sha(paths["install_ns"].read_bytes()))
+    paths["binding_env"].write_bytes(env)
+    paths["host_stage"].write_text(json.dumps({"binding_env_sha256": _sha(env)}))
+    paths["launched"].touch()
+    paths.observation()
+    return paths
+
+
+def _completed_nothing(record: dict[str, Any]) -> None:
+    assert record["bindings_verified"] is False and record["problems"]
+    assert "completed_observation" not in record
+
+
+# Group 1: the passing control.
+def test_q0_fresh_bound_observation_completes(q0: Q0) -> None:
+    record = q0.observe()
+    assert record == {
+        "observation_sha256": _sha((q0["out"] / "observation.json").read_bytes()),
+        "bindings_verified": True,
+        "problems": [],
+    }
+    verify = json.loads((q0["evidence"] / "binding-verify.json").read_text())
+    assert verify["verdict"] == "pass"
+    assert set(verify["binding_env_sha256"].values()) == {_sha(q0["binding_env"].read_bytes())}
+    assert verify["host_stage_sha256"] == _sha(q0["host_stage"].read_bytes())
+    assert verify["guest_record_sha256"] == record["observation_sha256"]
+    install = json.loads((q0["evidence"] / "install-binding.json").read_text())
+    assert install["verdict"] == "pass"
+    assert (q0["evidence"] / "observation.json").read_bytes() == (
+        q0["out"] / "observation.json"
+    ).read_bytes()
+    assert not {"verdict", "outcomes", "preflight"} & record.keys()
+
+
+def _replace(path: Path, make: Callable[[Path], None]) -> None:
+    path.unlink()
+    make(path)
+
+
+# Group 2: the collector refuses what is not one regular, complete record.
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        pytest.param(lambda p: p.unlink(), id="missing"),
+        pytest.param(lambda p: _replace(p, Path.mkdir), id="directory"),
+        pytest.param(lambda p: _replace(p, os.mkfifo), id="fifo"),
+        pytest.param(lambda p: p.write_text(""), id="empty"),
+        pytest.param(lambda p: p.write_text("{"), id="malformed"),
+        pytest.param(lambda p: p.write_text("[]"), id="not-an-object"),
+        *[
+            pytest.param(
+                lambda p, key=key: p.write_text(
+                    json.dumps({k: v for k, v in json.loads(p.read_text()).items() if k != key})
+                ),
+                id=f"no-{key}",
+            )
+            for key in (*_IDENTITY, "binding_env_sha256", "INSTALL_NS_SHA256")
+        ],
+    ],
+)
+def test_q0_collector_refuses_an_unusable_observation(q0: Q0, mutate: Any) -> None:
+    mutate(q0["out"] / "observation.json")
+    record = q0.observe()
+    _completed_nothing(record)
+    assert record["problems"][0].startswith("collect:")
+    assert list(q0["evidence"].iterdir()) == []
+
+
+def test_q0_collector_refuses_a_symlink_to_a_fresh_record(q0: Q0) -> None:
+    real = q0["host"] / "elsewhere.json"
+    (q0["out"] / "observation.json").rename(real)
+    (q0["out"] / "observation.json").symlink_to(real)
+    _completed_nothing(q0.observe())
+
+
+# Group 3: freshness against the pre-launch marker, and why a timestamp is not enough.
+def test_q0_collector_refuses_a_record_predating_the_launch(q0: Q0) -> None:
+    launched = q0["launched"].stat().st_mtime_ns
+    os.utime(q0["out"] / "observation.json", ns=(launched - 10**9, launched - 10**9))
+    record = q0.observe()
+    _completed_nothing(record)
+    assert "predates the guest launch" in record["problems"][0]
+
+
+def test_q0_collector_refuses_a_prior_attempt_copied_after_a_new_launch(q0: Q0) -> None:
+    prior = {**_IDENTITY, "GITHUB_RUN_ATTEMPT": "1"}
+    q0.observation(GITHUB_RUN_ATTEMPT=prior["GITHUB_RUN_ATTEMPT"])
+    data = (q0["out"] / "observation.json").read_bytes()
+    q0["launched"].touch()
+    (q0["out"] / "observation.json").write_bytes(data)
+    record = q0.observe()
+    _completed_nothing(record)
+    assert "GITHUB_RUN_ATTEMPT" in record["problems"][0]
+
+
+# Group 4: each identity mismatch refuses before binding-verify, with no fallback.
+@pytest.mark.parametrize("key", _IDENTITY)
+def test_q0_collector_refuses_another_runs_identity(q0: Q0, key: str) -> None:
+    q0.observation(**{key: "2" * 64 if key == "INPUTS_SHA256" else "other"})
+    (q0["host"] / "host.json").write_text(json.dumps(_IDENTITY))
+    record = q0.observe()
+    _completed_nothing(record)
+    assert key in record["problems"][0] and len(record["problems"]) == 1
+    assert list(q0["evidence"].iterdir()) == []
+
+
+# Group 5: binding-verify needs three equal, lowercase-hex hashes of the retained bytes.
+def _drop(path: Path, key: str) -> None:
+    raw = json.loads(path.read_text())
+    del raw[key]
+    path.write_text(json.dumps(raw))
+
+
+def _set(path: Path, key: str, value: str) -> None:
+    path.write_text(json.dumps(json.loads(path.read_text()) | {key: value}))
+
+
+_HOST_BINDING_MUTATIONS = {
+    "binding-env-missing": lambda q: q["binding_env"].unlink(),
+    "binding-env-malformed": lambda q: q["binding_env"].write_text("not a binding\n"),
+    "binding-env-extra-key": lambda q: q["binding_env"].write_bytes(
+        q["binding_env"].read_bytes() + b"EXTRA=1\n"
+    ),
+    "binding-env-one-byte": lambda q: q["binding_env"].write_bytes(
+        q["binding_env"].read_bytes().replace(b"v-CI_HEAD", b"v-CI_HEAE")
+    ),
+    "host-stage-missing": lambda q: q["host_stage"].unlink(),
+    "host-stage-malformed": lambda q: q["host_stage"].write_text("{"),
+    "host-stage-no-hash": lambda q: _drop(q["host_stage"], "binding_env_sha256"),
+}
+
+
+@pytest.mark.parametrize("mutate", _HOST_BINDING_MUTATIONS.values(), ids=_HOST_BINDING_MUTATIONS)
+def test_q0_binding_verify_failure_keeps_raw_evidence_but_withholds_completion(
+    q0: Q0, mutate: Callable[[Q0], None]
+) -> None:
+    mutate(q0)
+    record = q0.observe()
+    _completed_nothing(record)
+    assert any(p.startswith("binding-verify:") for p in record["problems"])
+    assert (q0["evidence"] / "observation.json").is_file()
+    verify = json.loads((q0["evidence"] / "binding-verify.json").read_text())
+    assert verify["verdict"] == "fail"
+
+
+_GUEST_BINDING_MUTATIONS = {
+    "absent": lambda p: p.unlink(),
+    "malformed": lambda p: p.write_text("{"),
+    "no-hash": lambda p: _drop(p, "binding_env_sha256"),
+    "uppercase": lambda p: _set(p, "binding_env_sha256", "A" * 64),
+    "short": lambda p: _set(p, "binding_env_sha256", "a" * 63),
+    "differs": lambda p: _set(p, "binding_env_sha256", "a" * 64),
+}
+
+
+@pytest.mark.parametrize("mutate", _GUEST_BINDING_MUTATIONS.values(), ids=_GUEST_BINDING_MUTATIONS)
+def test_q0_binding_verify_refuses_an_unbound_guest_record(
+    q0: Q0, mutate: Callable[[Path], None], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    guest = q0["out"] / "observation.json"
+    assert (
+        gate.binding_verify(q0["binding_env"], q0["host_stage"], guest, _IDENTITY)["problems"] == []
+    )
+    mutate(guest)
+    # An environment-supplied hash is never a substitute for the recorded one.
+    monkeypatch.setenv("binding_env_sha256", _sha(q0["binding_env"].read_bytes()))
+    assert gate.binding_verify(q0["binding_env"], q0["host_stage"], guest, _IDENTITY)["problems"]
+    _completed_nothing(q0.observe())
+
+
+# Group 6: install-binding ties install-ns.json, binding.env and the guest's value.
+_INSTALL_MUTATIONS = {
+    "absent": lambda q: q["install_ns"].unlink(),
+    "malformed": lambda q: q["install_ns"].write_text("{"),
+    "changed-after-binding": lambda q: q["install_ns"].write_text('{"dpkg_exit": 1}\n'),
+}
+
+
+@pytest.mark.parametrize("mutate", _INSTALL_MUTATIONS.values(), ids=_INSTALL_MUTATIONS)
+def test_q0_install_binding_failure_withholds_completion(
+    q0: Q0, mutate: Callable[[Q0], None]
+) -> None:
+    mutate(q0)
+    record = q0.observe()
+    _completed_nothing(record)
+    assert all(p.startswith("install-binding:") for p in record["problems"])
+    assert json.loads((q0["evidence"] / "binding-verify.json").read_text())["verdict"] == "pass"
+
+
+def test_q0_install_binding_refuses_a_guest_value_that_differs(q0: Q0) -> None:
+    q0.observation(INSTALL_NS_SHA256="a" * 64)
+    record = q0.observe()
+    _completed_nothing(record)
+    assert record["problems"] == [
+        p for p in record["problems"] if p.startswith("install-binding: INSTALL_NS_SHA256")
+    ]
+
+
+def test_q0_install_binding_refuses_a_binding_env_value_that_differs(q0: Q0) -> None:
+    env = q0.binding_env("b" * 64)
+    q0["binding_env"].write_bytes(env)
+    q0["host_stage"].write_text(json.dumps({"binding_env_sha256": _sha(env)}))
+    q0.observation(INSTALL_NS_SHA256=_sha(q0["install_ns"].read_bytes()))
+    record = q0.observe()
+    _completed_nothing(record)
+    assert all(p.startswith("install-binding:") for p in record["problems"])
+
+
+# Group 7: Q0 and Q2 records are not interchangeable.
+def test_q2_check_refuses_a_q0_observation(q0: Q0) -> None:
+    leg = Leg(HostReport("x86_64", 9, None), "k", "os", "c" * 40, ())
+    venue = next(iter(_EXPECTED.venues))
+    record = gate.check(
+        venue,
+        _EXPECTED,
+        "e" * 64,
+        _IDENTITY,
+        leg,
+        q0["out"] / "observation.json",
+        q0["out"] / "junit.xml",
+    )
+    assert record["problems"] and "preflight record unusable" in record["problems"][0]
+
+
+def test_q0_collector_refuses_a_q2_preflight_record(q0: Q0) -> None:
+    (q0["out"] / "observation.json").write_text(json.dumps(_record("e" * 64)))
+    _completed_nothing(q0.observe())
+
+
+# FQ0a-1: every hash agrees, but the retained binding.env names another run.
+@pytest.mark.parametrize("key", _IDENTITY)
+def test_q0_binding_verify_refuses_a_binding_env_of_another_run(q0: Q0, key: str) -> None:
+    other = "2" * 64 if key == "INPUTS_SHA256" else "other"
+    env = q0.binding_env(_sha(q0["install_ns"].read_bytes()), **{key: other})
+    q0["binding_env"].write_bytes(env)
+    q0["host_stage"].write_text(json.dumps({"binding_env_sha256": _sha(env)}))
+    q0.observation()
+    record = q0.observe()
+    _completed_nothing(record)
+    assert record["problems"] == [
+        f"binding-verify: binding.env {key}={other!r} is not this run's {_IDENTITY[key]!r}"
+    ]
+
+
+# FQ0a-2: agreeing hashes over an install the evaluator would refuse claim no completion.
+def test_q0_bindings_over_a_failed_install_claim_no_completed_observation(q0: Q0) -> None:
+    q0["install_ns"].write_text('{"dpkg_exit": 1}\n')
+    env = q0.binding_env(_sha(q0["install_ns"].read_bytes()))
+    q0["binding_env"].write_bytes(env)
+    q0["host_stage"].write_text(json.dumps({"binding_env_sha256": _sha(env)}))
+    q0.observation()
+    record = q0.observe()
+    assert record["bindings_verified"] is True
+    assert "completed_observation" not in record
