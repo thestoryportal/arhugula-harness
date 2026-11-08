@@ -56,8 +56,8 @@ def _locator(engine_class: EngineClass, *, step_index: int = 0) -> dict[str, obj
     }
 
 
-def _workflow(engine_class: EngineClass) -> _Workflow:
-    workflow = _Workflow(_Dispatcher())
+def _workflow(engine_class: EngineClass, workflow_id: str = _WORKFLOW_ID) -> _Workflow:
+    workflow = _Workflow(_Dispatcher(), workflow_id)
     workflow.manifest_entry = workflow.manifest_entry.model_copy(
         update={"engine_class": engine_class}
     )
@@ -75,33 +75,43 @@ def _superseded(h: Harness) -> None:
     h.journal().supersede(_WORKFLOW_ID, "run-fresh")
 
 
-_CASES: dict[str, tuple[Callable[[Harness], None], EngineClass, RefusalKind]] = {
+# Each case: how the journal is arranged, the workflow supplied to the resume, and the refusal.
+_CASES: dict[str, tuple[Callable[[Harness], None], Callable[[], _Workflow], RefusalKind]] = {
     "engine record removed": (
         lambda h: _journal(h, _locator(EngineClass.WAL_SEGMENT)),
-        EngineClass.WAL_SEGMENT,
+        lambda: _workflow(EngineClass.WAL_SEGMENT),
         RefusalKind.ENGINE_PAUSE_RECORD_ABSENT,
     ),
     "engine class changed to non-engine": (
         lambda h: _journal(h, _locator(EngineClass.RECONCILER_LOOP)),
-        EngineClass.PURE_PATTERN_NO_ENGINE,
+        lambda: _workflow(EngineClass.PURE_PATTERN_NO_ENGINE),
         RefusalKind.ENGINE_CLASS_MISMATCH,
     ),
     "engine class changed between engines": (
         lambda h: _journal(h, _locator(EngineClass.WAL_SEGMENT)),
-        EngineClass.RECONCILER_LOOP,
+        lambda: _workflow(EngineClass.RECONCILER_LOOP),
         RefusalKind.ENGINE_CLASS_MISMATCH,
+    ),
+    "another workflow supplied": (
+        lambda h: _journal(h, _locator(EngineClass.WAL_SEGMENT)),
+        lambda: _workflow(EngineClass.WAL_SEGMENT, workflow_id="wf-b104-other"),
+        RefusalKind.WORKFLOW_MISMATCH,
     ),
     "child depth": (
         lambda h: _journal(h, {**_locator(EngineClass.WAL_SEGMENT), "depth": 1}),
-        EngineClass.WAL_SEGMENT,
+        lambda: _workflow(EngineClass.WAL_SEGMENT),
         RefusalKind.DEPTH,
     ),
     "step out of range": (
         lambda h: _journal(h, _locator(EngineClass.WAL_SEGMENT, step_index=5)),
-        EngineClass.WAL_SEGMENT,
+        lambda: _workflow(EngineClass.WAL_SEGMENT),
         RefusalKind.STEP_INDEX_OUT_OF_RANGE,
     ),
-    "superseded": (_superseded, EngineClass.WAL_SEGMENT, RefusalKind.PAUSE_RECORD_SUPERSEDED),
+    "superseded": (
+        _superseded,
+        lambda: _workflow(EngineClass.WAL_SEGMENT),
+        RefusalKind.PAUSE_RECORD_SUPERSEDED,
+    ),
 }
 
 
@@ -136,10 +146,10 @@ async def _refused(
 async def test_an_engine_locator_refusal_runs_nothing_and_writes_nothing(
     harness: Harness, monkeypatch: pytest.MonkeyPatch, case: str
 ) -> None:
-    arrange, workflow_engine, kind = _CASES[case]
+    arrange, supplied, kind = _CASES[case]
     arrange(harness)
 
-    refusal = await _refused(harness, monkeypatch, _workflow(workflow_engine))
+    refusal = await _refused(harness, monkeypatch, supplied())
 
     assert refusal.kind is kind
 
