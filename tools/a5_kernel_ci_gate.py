@@ -1810,9 +1810,24 @@ def bootstrap(
 # --- CLI ----------------------------------------------------------------------------
 
 
-# Host facts Q0_observation names that only the host can measure. They reach the guest
-# only inside /a5/meta/host.json, the one host record that crosses into it.
-HOST_FACTS = ("base_packages", "closure", "host_packages", "root_manifests", "vng_help")
+@dataclass(frozen=True)
+class HostFacts:
+    """What Q0_observation needs that only the host can measure.
+
+    They reach the guest only inside /a5/meta/host.json, the one host record that
+    crosses into it: `asdict` of this value is that record's facts.
+    """
+
+    base_packages: tuple[Package, ...]
+    closure: tuple[PoolPackage, ...]
+    host_packages: Mapping[str, str]  # package name -> installed version on the host
+    # [LAW:types-are-the-program] Exactly the two stagings whose difference Q0 exposes.
+    root_manifests: tuple[Mapping[str, Mapping[str, Any]], Mapping[str, Mapping[str, Any]]]
+    vng_help: str
+
+
+# [LAW:one-source-of-truth] The keys observe requires are the fields the host writes.
+HOST_FACTS = tuple(field.name for field in fields(HostFacts))
 # What the guest reads from its binding environment rather than computing itself.
 GUEST_BOUND = (*(key for key in Q0_IDENTITY if key != "INPUTS_SHA256"), "INSTALL_NS_SHA256")
 SHARE_FSTYPES = ("virtiofs", "9p")

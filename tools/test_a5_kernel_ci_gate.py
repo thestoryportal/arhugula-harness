@@ -18,7 +18,7 @@ import socket
 import subprocess
 import sys
 from collections.abc import Callable
-from dataclasses import replace
+from dataclasses import asdict, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -1712,16 +1712,16 @@ _MOUNTINFO = (
     "30 22 0:31 / /a5 ro,relatime - virtiofs a5 ro\n"
     "31 22 0:32 / /out\\040dir rw shared:1 - 9p out rw,trans=virtio\n"
 )
-_GUEST = gate.GuestFacts(
-    ("a5", "bin", "out"), _MOUNTINFO, (), (gate.Package("git", "1:2.51", "amd64"),)
+_GIT = gate.Package("git", "1:2.51", "amd64")
+_FACTS = gate.HostFacts(
+    base_packages=(gate.Package("bash", "5.2", "amd64"),),
+    closure=(gate.PoolPackage(_GIT, "pool/main/g/git/git_2.51_amd64.deb", 10, "a" * 64),),
+    host_packages={"virtme-ng": "1.40-2"},
+    root_manifests=({"/x": {"type": "dir"}}, {"/x": {"type": "file"}}),
+    vng_help="usage: vng",
 )
-_HOST_FACTS: dict[str, Any] = {
-    "base_packages": [],
-    "closure": ["git"],
-    "host_packages": {"virtme-ng": "1.40-2"},
-    "root_manifests": [{"/x": {"type": "dir"}}, {"/x": {"type": "file"}}],
-    "vng_help": "usage: vng",
-}
+_HOST_FACTS: dict[str, Any] = asdict(_FACTS)
+_GUEST = gate.GuestFacts(("a5", "bin", "out"), _MOUNTINFO, (), (_GIT,))
 
 
 def _guest_inputs(**host: Any) -> tuple[bytes, bytes, dict[str, str]]:
@@ -1765,6 +1765,22 @@ def test_q0_observation_records_bindings_facts_and_no_verdict() -> None:
     assert {key: env[key] for key in gate.GUEST_BOUND} == {k: record[k] for k in gate.GUEST_BOUND}
 
 
+def test_q0_host_facts_reach_the_observation_as_the_host_measured_them() -> None:
+    record = json.loads(_observation())
+    assert record["base_packages"] == [{"name": "bash", "version": "5.2", "architecture": "amd64"}]
+    assert record["closure"] == [
+        {
+            "package": {"name": "git", "version": "1:2.51", "architecture": "amd64"},
+            "filename": "pool/main/g/git/git_2.51_amd64.deb",
+            "size": 10,
+            "sha256": "a" * 64,
+        }
+    ]
+    assert record["host_packages"] == {"virtme-ng": "1.40-2"}
+    assert record["root_manifests"] == [{"/x": {"type": "dir"}}, {"/x": {"type": "file"}}]
+    assert record["vng_help"] == "usage: vng"
+
+
 # Test 44: the record is of the parsed bytes; no variable and no host field names it.
 def test_q0_binding_env_record_ignores_an_environment_claim() -> None:
     assert _observation(binding_env_sha256="0" * 64) == _observation()
@@ -1776,7 +1792,7 @@ def test_q0_binding_env_record_ignores_an_environment_claim() -> None:
 @pytest.mark.parametrize(
     ("host", "environ"),
     [
-        ({"vng_help": None}, {}),
+        *(({fact: None}, {}) for fact in gate.HOST_FACTS),
         ({"root_manifests": [{}]}, {}),
         ({}, {"INSTALL_NS_SHA256": ""}),
         ({}, {"GITHUB_RUN_ID": ""}),
