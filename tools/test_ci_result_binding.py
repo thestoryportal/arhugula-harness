@@ -635,6 +635,25 @@ def test_title_edit_reruns_the_title_dependent_check():
     assert "--shape-title-env PR_TITLE" in commands
 
 
+def test_metadata_title_gate_bootstraps_uv_from_the_checked_out_helper():
+    steps = _workflow("pr-metadata.yml")["jobs"]["title-shape"]["steps"]
+    checkout = next(
+        i for i, step in enumerate(steps) if "actions/checkout@" in step.get("uses", "")
+    )
+    bootstrap = [
+        i for i, step in enumerate(steps) if step.get("run") == "bash .github/scripts/install-uv.sh"
+    ]
+    assert len(bootstrap) == 1
+    assert checkout < bootstrap[0]
+    assert bootstrap[0] < next(
+        i
+        for i, step in enumerate(steps)
+        if "uv sync --locked --all-packages" in str(step.get("run", ""))
+    )
+    assert not any("setup-uv@" in str(step.get("uses", "")) for step in steps)
+    assert not steps[bootstrap[0]].get("continue-on-error", False)
+
+
 def test_main_sha_groups_do_not_cancel_each_other():
     ci = _workflow("ci.yml")
     landing_a = _group(ci, _ctx("push", ci["name"], sha="1" * 40, ref="refs/heads/main"))
