@@ -28,9 +28,10 @@ __all__ = [
 class DeclarativeStepPayload(BaseModel):
     """The whole `DECLARATIVE_STEP` payload: the step's declared output, nothing else."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    # [LAW:types-are-the-program] JSON values only, finite numbers included: the output is
+    # recorded and joined as data, and a TOML `nan`/`inf` has no JSON form to round-trip.
+    model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
 
-    # [LAW:types-are-the-program] JSON values only: the output is recorded and joined as data.
     output: dict[str, JsonValue]
 
 

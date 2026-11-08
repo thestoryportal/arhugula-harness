@@ -2,9 +2,8 @@
 
 *Delta-only file. Amendment sites: the C-RT-17 §14.7.1 registry bullet that leaves `DECLARATIVE_STEP`
 unbound (`Spec_Harness_Runtime_v1_132.md:4652`), the matching parenthetical in the
-`RT-FAIL-STEP-KIND-DISPATCHER-NOT-BOUND` taxonomy row (`:4802`), and the "Bootstrap leaves this binding
-for the declarative-evaluator composer arc (future)" clause of the C-RT-18 §14.8.1 wrap-asymmetry row
-for `DECLARATIVE_STEP` (`:4868`). None of these sites is amended by v1.133 through v1.142. Every other
+`RT-FAIL-STEP-KIND-DISPATCHER-NOT-BOUND` taxonomy row (`:4802`), and the whole C-RT-18 §14.8.1 wrap-asymmetry row for `DECLARATIVE_STEP` (`:4868`), whose
+"body-of-prose evaluation" description and future-binding clause are both replaced. None of these sites is amended by v1.133 through v1.142. Every other
 v1.142 and earlier term remains in force. Cleared predecessor files are not edited.*
 
 **Status: PROPOSED.** Not cleared. Requires independent contract review and integration-lead
@@ -30,8 +29,12 @@ Stage 5 (LOOP_INIT) binds `StepKind.DECLARATIVE_STEP → DeclarativeStepDispatch
 `ctx.requires_inference`, because a declarative step never reaches a provider and the §2.1 (v1.47)
 inference-need predicate already excludes the kind. The binding is the bare dispatcher, without a
 HITL gate composer, retry/breaker wrapper or `SyncDispatcherFacade`: the dispatcher is synchronous and
-has no action surface to gate. The C-RT-18 §14.8.1 row's "not in HITL gate composer scope" statement
-stands; only its "bootstrap leaves this binding … (future)" clause is superseded.
+has no action surface to gate. The C-RT-18 §14.8.1 `DECLARATIVE_STEP` row is replaced in full by:
+
+| `DECLARATIVE_STEP` | NOT in HITL gate composer scope — a declarative step returns the constant output its payload declares (§0.2); it has no action surface to gate. Stage 5 binds the bare `DeclarativeStepDispatcher`. | n/a | n/a |
+
+The earlier "body-of-prose evaluation" description no longer applies to the kind: §0.2 is its only
+semantics, and §0.3 lists the evaluation behaviors it excludes.
 
 `HITL_STEP` remains unbound. The `RT-FAIL-STEP-KIND-DISPATCHER-NOT-BOUND` row's trigger and behavior
 are unchanged; its parenthetical list of unbound kinds no longer includes `DECLARATIVE_STEP`.
@@ -39,8 +42,9 @@ are unchanged; its parenthetical list of unbound kinds no longer includes `DECLA
 ### §0.2 Payload and output
 
 1. **Payload.** `step.step_payload` is exactly `{"output": <object>}`: a single required `output` key
-   whose value is a JSON object with string keys and JSON values. Any other key, a missing `output` or
-   a non-object `output` is mis-shaped.
+   whose value is a JSON object with string keys and JSON values. Numbers are finite: a TOML `nan` or
+   `inf` at any depth has no JSON representation. Any other key, a missing `output`, a non-object
+   `output` or a nonfinite number is mis-shaped.
 2. **Output.** Dispatch returns the declared `output` mapping as the step output, unchanged. The
    dispatcher does not read `step_context`, the effective binding, sibling or upstream outputs, and
    does not interpret the output; for example, it never extracts or checks a `worker_plan`. The CP
@@ -65,7 +69,8 @@ unchanged.
 `harness-runtime/tests/test_declarative_step_dispatch.py` runs manifest files through `api.run`, whose
 bootstrap builds the production registry with no injected dispatcher. It checks that a declarative
 orchestrator with nested declarative leaves runs plans `[c, a]` and `[b]` in order, with each worker's
-lead brief and the join; that invalid plans and mis-shaped payloads dispatch no worker; and that a
+lead brief bound to its own fan-out ordinal through the per-worker dispatch audit, and the join; that
+invalid plans and mis-shaped payloads, including nested TOML `nan`/`inf`, dispatch no worker; and that a
 declarative-only workflow completes without a provider. Each of these checks fails against the
 unbound v1.142 stage 5 with `StepKindDispatcherNotBoundError`.
 `harness-runtime/tests/test_bootstrap.py` asserts the bound dispatcher and that `HITL_STEP` stays

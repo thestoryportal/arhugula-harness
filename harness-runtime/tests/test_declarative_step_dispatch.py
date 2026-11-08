@@ -107,18 +107,36 @@ def _run(manifest: Path, placed_root: Path, monkeypatch: pytest.MonkeyPatch) -> 
 
 
 @pytest.fixture
-def hashed_briefs(monkeypatch: pytest.MonkeyPatch) -> list[str]:
-    """Objectives of the briefs the production sub-agent dispatcher hashes into its audit
-    entry, one per dispatched worker; the hash itself is computed as before."""
-    objectives: list[str] = []
-    original = RuntimeHandoffRegistry.dispatch_response_hash
+def audited_briefs(monkeypatch: pytest.MonkeyPatch) -> dict[int, str]:
+    """Objective of the effective brief in each worker's dispatch audit entry, keyed by the
+    entry's fan-out ordinal. The production registry computes the brief hash and composes
+    the entry as before; the two recordings join on that hash."""
+    objective_by_hash: dict[str, str] = {}
+    audited: dict[int, str] = {}
+    hash_brief = RuntimeHandoffRegistry.dispatch_response_hash
+    compose_audit = RuntimeHandoffRegistry.compose_dispatch_audit
 
-    def record(self: RuntimeHandoffRegistry, brief: Any) -> str:
-        objectives.append(brief.objective)
-        return original(self, brief)
+    def record_hash(self: RuntimeHandoffRegistry, brief: Any) -> str:
+        brief_hash = hash_brief(self, brief)
+        objective_by_hash[brief_hash] = brief.objective
+        return brief_hash
 
-    monkeypatch.setattr(RuntimeHandoffRegistry, "dispatch_response_hash", record)
-    return objectives
+    def record_audit(
+        self: RuntimeHandoffRegistry,
+        parent_action_id: Any,
+        descent: Any,
+        brief_hash: str,
+        *,
+        sub_agent_idx: int = 0,
+    ) -> Any:
+        audited[sub_agent_idx] = objective_by_hash[brief_hash]
+        return compose_audit(
+            self, parent_action_id, descent, brief_hash, sub_agent_idx=sub_agent_idx
+        )
+
+    monkeypatch.setattr(RuntimeHandoffRegistry, "dispatch_response_hash", record_hash)
+    monkeypatch.setattr(RuntimeHandoffRegistry, "compose_dispatch_audit", record_audit)
+    return audited
 
 
 @pytest.mark.parametrize("order", [("c", "a"), ("b",)], ids=["c-a", "b"])
@@ -127,7 +145,7 @@ def test_a_declarative_lead_plan_selects_orders_briefs_and_joins_nested_workers(
     tmp_path: Path,
     placed_root: Path,
     monkeypatch: pytest.MonkeyPatch,
-    hashed_briefs: list[str],
+    audited_briefs: dict[int, str],
 ) -> None:
     plan = [_plan_entry(worker, f"lead {worker}") for worker in order]
     result = _run(_lead_plan_manifest(tmp_path, plan), placed_root, monkeypatch)
@@ -137,7 +155,8 @@ def test_a_declarative_lead_plan_selects_orders_briefs_and_joins_nested_workers(
     joined = result.terminal_state["worker_outputs"]
     assert list(joined) == list(order)
     assert joined == {w: {"orchestrator": {"leaf": w}, "worker_outputs": {}} for w in order}
-    assert sorted(hashed_briefs) == sorted(f"lead {worker}" for worker in order)
+    # Fan-out ordinal i dispatches plan entry i, so each worker's audit carries its own brief.
+    assert audited_briefs == {i: f"lead {worker}" for i, worker in enumerate(order)}
 
 
 @pytest.mark.parametrize(
@@ -156,7 +175,7 @@ def test_an_invalid_declarative_lead_plan_dispatches_no_worker(
     tmp_path: Path,
     placed_root: Path,
     monkeypatch: pytest.MonkeyPatch,
-    hashed_briefs: list[str],
+    audited_briefs: dict[int, str],
 ) -> None:
     result = _run(_lead_plan_manifest(tmp_path, plan), placed_root, monkeypatch)
 
@@ -166,7 +185,7 @@ def test_an_invalid_declarative_lead_plan_dispatches_no_worker(
         result.failure_cause.validator_fail_class == f"orchestrator-workers-plan-invalid: {reason}"
     )
     assert result.terminal_state == {}
-    assert hashed_briefs == []
+    assert audited_briefs == {}
 
 
 @pytest.mark.parametrize(
@@ -184,7 +203,7 @@ def test_a_mis_shaped_declarative_payload_fails_its_step_before_any_worker(
     tmp_path: Path,
     placed_root: Path,
     monkeypatch: pytest.MonkeyPatch,
-    hashed_briefs: list[str],
+    audited_briefs: dict[int, str],
 ) -> None:
     manifest = _write(
         tmp_path,
@@ -199,7 +218,37 @@ def test_a_mis_shaped_declarative_payload_fails_its_step_before_any_worker(
         "orchestrator-workers-orchestrator-failure: DeclarativeStepPayloadShapeError: "
         "RT-FAIL-PAYLOAD-SHAPE: DECLARATIVE_STEP 'orch'"
     )
-    assert hashed_briefs == []
+    assert audited_briefs == {}
+
+
+@pytest.mark.parametrize("literal", ["nan", "inf", "-inf"])
+def test_a_nonfinite_declared_number_fails_its_step_before_any_worker(
+    literal: str,
+    tmp_path: Path,
+    placed_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    audited_briefs: dict[int, str],
+) -> None:
+    """TOML admits `nan`/`inf`, which have no JSON form; the declared output must be JSON."""
+    plan = [_plan_entry("a", "lead a")]
+    payload = {"output": {"worker_plan": plan, "nested": {"value": "NONFINITE"}}}
+    manifest = _write(
+        tmp_path,
+        [_declarative("orch", payload), *map(_worker, _WORKERS)],
+        worker_selection=WorkerSelection.LEAD_PLAN.value,
+    )
+    toml = manifest.read_text()
+    assert toml.count('"NONFINITE"') == 1
+    manifest.write_text(toml.replace('"NONFINITE"', literal))
+    result = _run(manifest, placed_root, monkeypatch)
+
+    assert result.status == "failed"
+    assert result.failure_cause is not None
+    assert str(result.failure_cause.validator_fail_class).startswith(
+        "orchestrator-workers-orchestrator-failure: DeclarativeStepPayloadShapeError: "
+        "RT-FAIL-PAYLOAD-SHAPE: DECLARATIVE_STEP 'orch'"
+    )
+    assert audited_briefs == {}
 
 
 def test_a_declarative_only_workflow_runs_provider_free(
