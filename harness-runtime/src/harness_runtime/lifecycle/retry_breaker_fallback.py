@@ -884,7 +884,8 @@ class RetryBreakerFallbackDispatcher:
                             # emit anyway, so the release is already complete
                             # without the emission — and the machine ends
                             # `open` with a FRESH deadline, exactly as an
-                            # inconclusive trial does (§14.6.4 cells 3 / 6-9).
+                            # inconclusive trial does (§14.6.4 cells 3 / 6-9
+                            # and cell 10 non-provider).
                             breaker.re_arm_half_open_trial(
                                 now=self.monotonic(), trial_token=trial_token
                             )
@@ -988,7 +989,7 @@ class RetryBreakerFallbackDispatcher:
                         )
                     raise
                 except BaseException as _in_flight:
-                    # §14.6.4 cells 6-8 — an audit-signing hard failure, a
+                    # §14.6.4 cells 6-8 and cell 10 non-provider — an audit-signing hard failure, a
                     # terminal HITL control-flow signal, or a
                     # `DispatchFenceTrippedSignal` (a BaseException, so no
                     # `except Exception` arm inside the loop sees it) all
@@ -1549,7 +1550,7 @@ class RetryBreakerFallbackDispatcher:
         in_flight: BaseException | None = None,
     ) -> None:
         """Re-arm an INCONCLUSIVE half-open trial and emit its transition
-        (`B-118`, §14.6.4 cells 3 / 6-8).
+        (`B-118`, §14.6.4 cells 3 / 6-8 and cell 10 non-provider).
 
         A no-op unless the machine is still ``half_open`` — which is exactly
         the "the trial recorded neither success nor a charging failure" test,
@@ -1559,14 +1560,16 @@ class RetryBreakerFallbackDispatcher:
         machine (the §14.6 step-4 protected-region rule).
 
         ``in_flight`` is the exception currently PROPAGATING, when the release
-        runs on an exception path (cells 6-8). Its presence flips the emitter's
+        runs on an exception path (cells 6-8 and cell 10 non-provider). Its presence
+        flips the emitter's
         failure disposition, and the flip is the whole point of the parameter:
 
         - ``None`` (cell 3, the ordinary post-dispatch release — no exception in
           flight): an emitter failure PROPAGATES as its own fault, matching the
           pre-`B-118` posture at every other `harness.breaker.*` emission site,
           which are likewise unguarded.
-        - **non-None** (cells 6-8): the emitter failure is SUPPRESSED in favour
+        - **non-None** (cells 6-8 and cell 10 non-provider): the emitter failure
+          is SUPPRESSED in favour
           of the in-flight exception. `AuditSigningFailedError`, the terminal
           HITL control-flow signals and `DispatchFenceTrippedSignal` are
           contracted to propagate VERBATIM — the driver maps each to its

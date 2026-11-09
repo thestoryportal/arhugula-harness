@@ -41,6 +41,7 @@ from harness_runtime.lifecycle.llm_dispatch import (
     LLMDispatchPayloadShapeError,
     RuntimeLLMDispatcher,
 )
+from harness_runtime.lifecycle.post_tool_effect import PostToolEffectError
 from harness_runtime.lifecycle.retry_breaker import DEFAULT_RETRY_POLICY, RuntimeRetryBreaker
 from harness_runtime.lifecycle.retry_breaker_fallback import (
     RESERVED_LLM_DISPATCH_KEY,
@@ -884,3 +885,57 @@ async def test_a_no_dispatch_answer_then_a_transient_failure_is_re_asked_not_rep
         assert raised is None, "a no-dispatch answer is not an effect: the attempt retries"
         assert (len(tools.calls), len(attempts.calls)) == (0, 2)
         assert prompted == audited == rewrites.rewrite_ids == ["toolu_a", "toolu_b"]
+
+
+async def test_later_batch_audit_failure_after_effect_is_terminal(tmp_path: Path) -> None:
+    fault = RuntimeError("audit unavailable after prior effect")
+    tools = _Tools()
+
+    class FaultingAuditor(_Auditor):
+        async def record(
+            self,
+            *,
+            call: ModelToolCall,
+            context: HITLToolLoopContext,
+            level: GateLevel,
+            decision: Any,
+        ) -> None:
+            self.calls.append((call, level, decision))
+            raise fault
+
+    auditor = FaultingAuditor()
+    loop = RuntimeHITLToolLoop(
+        wiring=_wiring(tmp_path),
+        placement_registry=RuntimeHITLPlacementRegistry(),
+        assess=lambda call, _context: HITLToolCallAssessment(
+            GateLevel.AUTO if call.tool_call_id == "toolu_a" else GateLevel.ASK,
+            "mcp-main",
+        ),
+        gate=_Gate(),
+        dispatcher=tools,
+        response_auditor=auditor,
+    )
+    adapter = _AnthropicAdapter(
+        [_anthropic_tool_turn("toolu_a"), _anthropic_tool_turn("toolu_b"), _anthropic_text()]
+    )
+    attempts = _Attempts(
+        RuntimeLLMDispatcher(
+            providers={"anthropic": adapter},
+            tracer_provider=TracerProvider(),
+            hitl_tool_loop=loop,
+        )
+    )
+    wrapper = _wrapper(attempts, "anthropic", ProviderFamily.ANTHROPIC)
+
+    # [LAW:behavior-not-structure] The first actual effect makes the later
+    # gate-owned audit fault terminal without retrying or charging the provider.
+    raised = await _run(wrapper, "anthropic", _anthropic_step())
+
+    assert type(raised) is PostToolEffectError
+    assert raised.fault is raised.__cause__ is fault
+    assert raised.origin.value == "non-provider"
+    assert [call.tool_call_id for call in tools.calls] == ["toolu_a"]
+    assert [call.tool_call_id for call, _, _ in auditor.calls] == ["toolu_b"]
+    assert len(adapter.client.messages.create.calls) == 2
+    assert len(attempts.calls) == 1
+    assert wrapper.retry_breaker.get_breaker(BreakerScope.PER_MODEL, "anthropic:m").fail_count == 0

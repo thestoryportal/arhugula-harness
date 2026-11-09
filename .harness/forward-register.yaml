@@ -74,11 +74,11 @@ snapshot:
   total: 313
   open: 4
   design_substrate_gated: 5
-  registered_finding: 131
+  registered_finding: 130
   operator_gated: 3
   held: 4
-  closed: 166
-  identity_digest: 5bf74ced56695805
+  closed: 167
+  identity_digest: 49dfdc989646a541
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -12261,11 +12261,11 @@ items:
   council: "NO — one historical evidence-portability gap with no new design decision."
 - id: "B-307"
   title: "PR #1633 A3 authority prose follow-up"
-  status: "registered_finding"
+  status: "closed"
   pr: "#1633"
-  heading: "### B-307 · PR #1633 A3 authority prose follow-up *(pass-1 P3 carry, 2026-10-02; REGISTERED)*"
+  heading: "### B-307 · PR #1633 A3 authority prose follow-up *(pass-1 P3 carry, 2026-10-02; CLOSED 2026-11-09)*"
   summary: "PR #1633 pass 1 at 3e9631796b347c92f03dfd924acb7ffe81fdc834 raised Codex P3 finding codex_review_wrapper:3e9631796b347c92f03dfd924acb7ffe81fdc834:9d2b85e59817:1: the authority record's attached-file hash wording conflicts with its qualification that the design-verdict SHA256 belongs to the original payload rather than the Markdown wrapper. The spec-conformance lens approved with separate nonblocking notes: the location header still says outside this repo; the fork's authorizing assignment is not among the attached comment snapshots; its not-yet-reviewed label needs checking against actual review provenance; and the deferred A5/A4 numbering dependency needs checking when those documents land. These are head-bound prose and evidence-portability residuals, not clearance or installed acceptance. The hash wording is an unfired register-pr-prose qualification rule. Pass 3 at 525c31c8dfb6d899afac8c2cfaa73d8add2b096a approved with two additional standalone prose notes: the Runtime v1.132:6526 run-in paragraph lies in §14.14.8, whose heading is Harness-owned durable snapshot persistence; and Spec v1.134 Scope wording No new refusal reason means reused refusal text despite a new offer-membership condition. Source: unit5-pass3-merge-gate-spec-conformance.txt, SHA256 fc0991d574ed962b4b4f4d8a2c74acd5765bd6caa22ce28e7f2e318148150bc3, retained at the root orchestration checkout .local/24h-acceptance/buford-workflow-optimization-20261002/parallel-resume/. These notes have no new structured finding IDs and remain OPEN."
-  close_out: "PARTIAL 2026-10-04. The deferred A5/A4 numbering cross-check was fulfilled by PR #1641 and remains recorded in .harness/a3_runtime_fence_fold_authority.md. The source arc prepares the original-payload/wrapper hash and repository-location qualification, the actual portable authorizing assignment cmt-5b08f51a-a023-4f11-bba6-3970a76bc2a4, review-status wording grounded in the independent source/spec GO at the 14-path bytes of a06c0abd, the Runtime v1.132:6526 run-in paragraph under section 14.14.8 Harness-owned durable snapshot persistence, and reused refusal text with a new offer-membership refusal condition. The row remains OPEN until those corrections pass formal review and land with successful post-main CI. Source-consumption clearance does not close shipping or installed gates. The original three PR1641 notes remain verbatim in the single existing open follow-up arhugula-harness-trial-193.5i4 and its portable snapshot; APPROVE/findings=[] is unchanged. Nearby-cell-10 comment notes remain a nonblocking follow-up without source edits."
+  close_out: "CLOSED 2026-11-09 for B-307 source/prose. PR #1643 merged at 8d684b42a1f07ddd43f1c43c093cca5f77764eca after the recorded independent source review; exact own-main CI run 37288061295 completed SUCCESS with 22 successful jobs. Current main contains the original-payload versus Markdown-wrapper hash qualification and repository-location correction (.harness/a3_runtime_fence_fold_authority.md:4,10-12), portable authorizing assignment (same file:89), reviewed-status wording (.harness/class_1_fork_a3_ollama_mcp_loop_and_post_effect_retry.md:25), §14.14.8 run-in pointer (same fork:37), and reused refusal text with a new offer-membership condition (design-substrate/Spec_Harness_Runtime_v1_134.md:100). PR #1641 already recorded the A5/A4 numbering cross-check. This closes only B-307 prose/provenance; the original three PR1641 notes and APPROVE/findings=[] remain unchanged in 193.5i4. Cell-10 comments, other Source09 carry, and installed acceptance retain their separate gates."
   council: "NO — one bounded prose and provenance follow-up with no new runtime or design decision."
 - id: "B-308"
   title: "PR #1635 A5 authority and fork prose follow-up"

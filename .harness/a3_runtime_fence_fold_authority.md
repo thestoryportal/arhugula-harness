@@ -71,14 +71,13 @@ any edit that moves spec line 57, which the candidate cites by line number.
   it, as do the test docstrings `harness-runtime/tests/test_post_tool_effect_replay.py`
   line 4, `test_ollama_mcp_tool_loop.py` line 1 and `test_post_tool_effect_cell10.py`
   line 1.
-- On main, A5 Runtime v1.135 is a delta over Proposed v1.134
-  (`Spec_Harness_Runtime_v1_135.md:1,5`). A4 v1.136 is grounded on cleared v1.133 and
-  folds after v1.134 and v1.135 without overlapping their amendment sites, in the order
-  A3 (U-RT-157) → A5 (U-RT-158) → A4 (U-RT-159) (`Spec_Harness_Runtime_v1_136.md:12-14`).
-  Plan v2.66 is layered on Proposed v2.65
-  (`Implementation_Plan_Harness_Runtime_v2_66.md:3`), and plan v2.67 states the same order
-  (`Implementation_Plan_Harness_Runtime_v2_67.md:3-5`). CP spec v1.128 line 13 names
-  "A3 v1.134".
+- At the original A3 preparation boundary, A5 Runtime v1.135 / plan v2.66 were
+  Proposed over A3 v1.134 / v2.65; the A4 drafts then used Runtime v1.136 /
+  plan v2.67, and CP v1.128 named A3 v1.134. This records the historical
+  numbering cross-check, not a current dependency. A4's authority now selects
+  Runtime v1.142 / plan v2.70 over cleared v1.141 / v2.69
+  (`.harness/a4_contract_authority.md:59-64`). The current release defers A5
+  and its associated units; this historical lineage does not reactivate them.
 
 Cleared predecessors: Runtime v1.133 / plan v2.64 at main
 `5d93b0bf27e4a6c602ffff7dad49e5dd21be1f22`. The §14.6.4 matrix text is in
