@@ -10,7 +10,8 @@
 
 | Axis | Spec |
 |---|---|
-| Runtime | `Spec_Harness_Runtime_v1_143.md` (**v1.143 — current cleared HEAD**, 2026-11-08; delta over cleared v1.142; effect-free `DECLARATIVE_STEP` dispatcher (ratified LIT `cmt-eaec8ba7`); clearance `spec-harness-runtime-v1-143-cleared-2026-11-08.md`; see `.harness/artifact-heads.md`) |
+| Runtime | `Spec_Harness_Runtime_v1_145.md` (**v1.145 — current cleared HEAD**, 2026-11-09; delta over cleared v1.143; engine-native resume B-314, P3/T05; clearance `spec-harness-runtime-v1-145-cleared-2026-11-09.md`; P2 v1.144 remains separate; see `.harness/artifact-heads.md`) |
+| Runtime | `Spec_Harness_Runtime_v1_143.md` (**v1.143 — former cleared HEAD**, 2026-11-08; delta over cleared v1.142; effect-free `DECLARATIVE_STEP` dispatcher (ratified LIT `cmt-eaec8ba7`); clearance `spec-harness-runtime-v1-143-cleared-2026-11-08.md`; see `.harness/artifact-heads.md`) |
 | Runtime | `Spec_Harness_Runtime_v1_142.md` (**v1.142 — former cleared HEAD**, 2026-11-07; delta over cleared v1.141; A4 typed resume refusal (ratified LIT `cmt-756042fc`); paired CP v1.131; clearance `spec-harness-runtime-v1-142-cleared-2026-11-07.md`; see `.harness/artifact-heads.md`) |
 | Runtime | `Spec_Harness_Runtime_v1_141.md` (**v1.141 — former cleared HEAD**, 2026-11-05; delta over cleared v1.140; daemon MCP resume B-311; clearance `spec-harness-runtime-v1-141-cleared-2026-11-05.md`; see `.harness/artifact-heads.md`) |
 | Runtime | `Spec_Harness_Runtime_v1_140.md` (**v1.140 — former cleared HEAD**, 2026-11-05; delta over cleared v1.139; paired CP v1.130; clearance `Spec_Harness_Runtime-v1_140-cleared-2026-11-05.md`; see `.harness/artifact-heads.md`) |
@@ -31,7 +32,8 @@
 
 | Axis | Plan | Unit count |
 |---|---|---|
-| Runtime | `Implementation_Plan_Harness_Runtime_v2_70.md` (**v2.70 — current cleared HEAD**, 2026-11-07; delta over v2.69; U-RT-159; Proposed v2.66 (A5) not cleared; clearance `implementation-plan-harness-runtime-v2-70-cleared-2026-11-07.md`; see `.harness/artifact-heads.md`) | — |
+| Runtime | `Implementation_Plan_Harness_Runtime_v2_72.md` (**v2.72 — current cleared HEAD**, 2026-11-09; U-RT-163 engine-native resume B-314; clearance `implementation-plan-harness-runtime-v2-72-cleared-2026-11-09.md`; P2 v2.71/U-RT-162 remains separate; see `.harness/artifact-heads.md`) | — |
+| Runtime | `Implementation_Plan_Harness_Runtime_v2_70.md` (**v2.70 — former cleared HEAD**, 2026-11-07; delta over v2.69; U-RT-159; Proposed v2.66 (A5) not cleared; clearance `implementation-plan-harness-runtime-v2-70-cleared-2026-11-07.md`; see `.harness/artifact-heads.md`) | — |
 | Runtime | `Implementation_Plan_Harness_Runtime_v2_69.md` (**v2.69 — former cleared HEAD**, 2026-11-05; delta over v2.68; U-RT-161; Proposed v2.66/v2.67 not cleared; clearance `implementation-plan-harness-runtime-v2-69-cleared-2026-11-05.md`; see `.harness/artifact-heads.md`) | — |
 | Runtime | `Implementation_Plan_Harness_Runtime_v2_68.md` (**v2.68 — former cleared HEAD**, 2026-11-04; delta over v2.65; Proposed v2.66/v2.67 not cleared; clearance `implementation-plan-harness-runtime-v2-68-cleared-2026-11-04.md`; see `.harness/artifact-heads.md`) | — |
 | Runtime | `Implementation_Plan_Harness_Runtime_v2_65.md` (**v2.65 — former cleared HEAD**, 2026-10-04; clearance `implementation-plan-harness-runtime-v2-65-cleared-2026-10-04.md`; see `.harness/artifact-heads.md`) | — |

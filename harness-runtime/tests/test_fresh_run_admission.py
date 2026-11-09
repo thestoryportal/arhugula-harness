@@ -397,17 +397,19 @@ async def test_concurrent_daemon_runs_each_keep_their_own_run_id_and_failure(
     f_failed, s_projected = threading.Event(), threading.Event()
     real_run = FreshRunAdmission.run
 
-    def forced(self: FreshRunAdmission, ctx: Any, body: Callable[[object], Any]) -> Any:
+    def forced(
+        self: FreshRunAdmission, ctx: Any, body: Callable[[object], Any], locate: Any
+    ) -> Any:
         admissions[self.workflow_id] = self
         both_constructed.wait()
         if self.workflow_id == _WORKFLOW_ID:  # F: fails first, projected only after S
             try:
-                return real_run(self, ctx, body)
+                return real_run(self, ctx, body, locate)
             finally:
                 f_failed.set()
                 assert s_projected.wait(timeout=30)
         assert f_failed.wait(timeout=30)  # S: admitted after F recorded its failure
-        return real_run(self, ctx, body)
+        return real_run(self, ctx, body, locate)
 
     monkeypatch.setattr(FreshRunAdmission, "run", forced)
     f_dispatcher, s_dispatcher = _Dispatcher(), _Dispatcher()

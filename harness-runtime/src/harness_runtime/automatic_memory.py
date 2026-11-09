@@ -558,7 +558,7 @@ def _policy_from_config(config: RuntimeConfig) -> MemoryPolicyDocument:
             if memory.capture_run_events or memory.capture_turns
             else CaptureDecision.DENY
         ),
-        promotion_decision=PromotionDecision.PROPOSE_SEMANTIC,
+        promotion_decision=PromotionDecision(memory.promotion_decision),
         retrieval_access=AccessDecision.RETRIEVAL_ONLY,
         injection_access=(
             AccessDecision.PROMPT_PACKET if memory.prompt_packet_enabled else AccessDecision.DENY

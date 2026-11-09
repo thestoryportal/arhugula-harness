@@ -72,12 +72,19 @@ resume claim is spent. The command also accepts `--config`, `--tenant-id` and
 caller-supplied snapshot or resume context. Resume runs in one-shot mode and
 keeps the paused run's `run_id`.
 
-Only the latest workflow-layer journal record for the `workflow_id` can be
-resumed. If the workflow paused only inside its engine, with no earlier
-workflow-layer record, the resume is refused as `handle` with cause `absent`.
-If any run of the same workflow started after the pause, the resume is refused
-as `pause-record-superseded`, so do not `harness run` a paused workflow you
-mean to resume.
+Only the latest pause journal record for the `workflow_id` can be resumed.
+That record is either a workflow-layer pause or an engine-native pause of a
+WAL-segment or reconciler-loop workflow; both resume the same way and keep
+the original `run_id`. An engine-native resume continues at the paused step
+and never re-runs the steps that completed before the pause. If the engine's
+own pause record is gone, the resume is refused as
+`engine-pause-record-absent`; if the manifest now declares a different engine
+class, it is refused as `engine-class-mismatch`. An engine-native pause
+captured by a runtime older than this one has no journal record of its own;
+when the workflow has no other record, its resume is refused as `handle` with
+cause `absent`. If any run of the same workflow
+started after the pause, the resume is refused as `pause-record-superseded`,
+so do not `harness run` a paused workflow you mean to resume.
 
 A resume that the runtime refuses before the workflow starts exits 6, or 7
 when the refusal is a claim refusal. With `--output json`, stdout carries one
@@ -174,6 +181,59 @@ uv run harness-shutdown --help
 Use `inspect` for read-only state and trace summaries. Use `shutdown` to signal
 a running harness process to drain and exit through the admin shutdown path.
 
+## Review Captured Memory
+
+Captured memory becomes reusable only through an operator decision. The
+operator entrypoint wraps the existing promotion and redaction services; it
+loads `harness.toml` (or `--config`) for the memory root and the runtime's
+memory policy, and records `--operator` as the actor on every ledger entry:
+
+```sh
+M="uv run python -m harness_runtime.admin.memory_operator --operator <you> --run-id <run>"
+$M operations                                    # memory-operation ledger
+$M inspect <memory-id>                           # one record, audit view
+$M propose <source-id> --kind convention --statement "<what to keep>"
+$M propose <source-id> --kind procedural_update --statement "<how to work>"
+$M approve <proposal-id> --source <source-id> --injection-policy retrieval_only
+$M deny <proposal-id> --source <source-id> --reason "<why>"
+$M tombstone <memory-id> --reason "<why>"          # dry run: reports, changes nothing
+$M tombstone <memory-id> --reason "<why>" --apply  # performs it
+$M migrate <legacy-root> /memories/<path> --migration-id <id>          # dry run
+$M migrate <legacy-root> /memories/<path> --migration-id <id> --apply
+$M compact <compaction-id> --source <source-id> --summary "<what>"      # lists candidates
+$M compact <compaction-id> --source <source-id> --summary "<what>" \
+   --disposition <candidate-id> keep_episodic "<why>" --apply
+```
+
+- `propose` accepts the semantic kinds and `procedural_update`; the candidate
+  keeps the source's scope and source references and stays `proposed`, which
+  retrieval excludes. Preference candidates are not part of this recipe.
+- The memory policy must name the target: `propose_semantic`/`promote_semantic`
+  for semantic kinds, `propose_procedural`/`promote_procedural` for
+  `procedural_update`. The runtime policy takes its target from
+  `[runtime.memory] promotion_decision`: `propose_semantic` (default) or
+  `propose_procedural`; any other value fails config loading. Review mode
+  `forbidden` refuses both. `approve` re-checks the loaded policy at decision
+  time, so a proposal made under one target is refused under the other.
+- `approve` and `deny` re-derive the proposal from the named source and refuse,
+  writing nothing, when the record is not `proposed`, was proposed from a
+  different source, or the source's scope has changed since the proposal.
+- `redact`, `tombstone` and `expire` take the same arguments (plus an optional
+  `--replacement-summary`); without `--apply` the output has `"applied": false`.
+- `migrate` reads legacy filesystem callback memory under `<legacy-root>` and,
+  with `--apply`, writes it through the canonical native-memory adapter under
+  `--visibility` (default `private`) in this project. The adapter requires a
+  policy with native-memory access and full capture; otherwise it is refused.
+- `compact` lists the promotion candidates carried by the sources; with
+  `--apply` it records exactly one `--disposition` per candidate (`discard`,
+  `keep_episodic`, `queue` or `promote`, the last also needing
+  `--promoted-to <candidate-id> <memory-id>`). It records decisions; it does not
+  promote or compact anything itself.
+- `migrate` and `compact` need `--run-id`.
+
+Output is JSON on stdout. Exit `0` is success, `1` is a refusal (reason on
+stderr) and `2` is argument usage.
+
 ## Exit Codes
 
 | Code | Meaning |
@@ -183,8 +243,8 @@ a running harness process to drain and exit through the admin shutdown path.
 | `2` | CLI option usage, workflow manifest load, or admissibility error. |
 | `3` | Runtime config load error. |
 | `4` | Bootstrap, daemon connection/startup, or daemon MCP result error. |
-| `5` | Workflow paused: the one-shot run result or daemon workflow status is `paused`. A workflow-layer pause can be continued with `harness resume`. Engine-native pauses have no safe resume through any command, and running the workflow again with `harness run` starts a new run instead of resuming. A pause captured before the runtime bound its pause-journal root cannot be resumed; its journal files stay on disk as operator-owned data. |
-| `6` | Resume refused before the workflow started (`RESUME_REFUSED`): the refusal `kind` is `arguments`, `handle`, `depth`, `protocol-not-bound`, `pause-state-stale`, `workflow-mismatch`, `step-index-out-of-range` or `pause-record-superseded`. |
+| `5` | Workflow paused: the one-shot run result or daemon workflow status is `paused`. Continue it with `harness resume`, whether it paused at the workflow layer or inside a WAL-segment or reconciler-loop engine. Running the workflow again with `harness run` starts a new run instead of resuming. A pause captured before the runtime bound its pause-journal root, or an engine-native pause captured before the runtime journaled engine pauses, cannot be resumed; its files stay on disk as operator-owned data. |
+| `6` | Resume refused before the workflow started (`RESUME_REFUSED`): the refusal `kind` is `arguments`, `handle`, `depth`, `protocol-not-bound`, `pause-state-stale`, `workflow-mismatch`, `step-index-out-of-range`, `pause-record-superseded`, `engine-pause-record-absent` or `engine-class-mismatch`. |
 | `7` | Resume claim refused (`RESUME_CLAIM_REFUSED`): refusal kind `claim`, with its `reason`. |
 
 ## Config Practices
@@ -202,8 +262,11 @@ This page is grounded in `harness-runtime/src/harness_runtime/cli/app.py`,
 `harness-runtime/src/harness_runtime/resume_refusal.py`, `harness-runtime/pyproject.toml`,
 `harness-runtime/src/harness_runtime/admin/inspect.py`,
 `harness-runtime/src/harness_runtime/admin/shutdown_cli.py`,
+`harness-runtime/src/harness_runtime/admin/memory_operator.py`,
 `harness-runtime/src/harness_runtime/lifecycle/installation_state.py`,
 `harness-runtime/src/harness_runtime/lifecycle/pause_journal_root_resolver.py`,
+`harness-runtime/src/harness_runtime/lifecycle/journal_workflow_pause_store.py`,
+`harness-runtime/src/harness_runtime/lifecycle/engine_recovery_loop.py`,
 `harness-is/src/harness_is/pause_journal_root.py`,
 `harness-runtime/src/harness_runtime/config_source.py`, `harness.toml.example`,
 and `justfile`.

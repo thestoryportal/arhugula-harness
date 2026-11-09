@@ -57,6 +57,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
+from harness_cp.workflow_driver_types import EngineResumePrefix
 from mcp.server.fastmcp import Context, FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import CallToolResult, TextContent
@@ -108,9 +109,11 @@ if TYPE_CHECKING:
     from harness_cp.pause_resume_protocol_types import PauseSnapshot, ResumeContext
 
     from harness_runtime.api import WorkflowObject
+    from harness_runtime.lifecycle.journal_workflow_pause_store import EnginePauseLocator
     from harness_runtime.resume_refusal import ResumeRefusalError
 
 __all__ = [
+    "EngineResumedEntry",
     "FreshEntry",
     "HarnessMCPServer",
     "ResumedEntry",
@@ -138,6 +141,7 @@ class FreshEntry:
     run_id: str = field(default_factory=lambda: uuid.uuid4().hex)
     pause_snapshot: None = field(default=None, init=False)
     resume_context: None = field(default=None, init=False)
+    engine_resume: None = field(default=None, init=False)
     admission: FreshRunAdmission = field(init=False)
 
     def __post_init__(self) -> None:
@@ -156,15 +160,37 @@ class ResumedEntry:
     pause_snapshot: PauseSnapshot
     admission: ResumeAdmission
     resume_context: ResumeContext | None
+    engine_resume: None = field(default=None, init=False)
 
     @property
     def run_id(self) -> str:
         return self.pause_snapshot.run_id
 
 
+@dataclass(frozen=True)
+class EngineResumedEntry:
+    """A resume of a root engine-native pause (B-314 fork §3.1): the run continues under the
+    locator's original `run_id`, and the engine's own store record is the state, so no
+    `PauseSnapshot` is carried or synthesized."""
+
+    locator: EnginePauseLocator
+    admission: ResumeAdmission
+    resume_context: ResumeContext | None
+    pause_snapshot: None = field(default=None, init=False)
+
+    @property
+    def run_id(self) -> str:
+        return self.locator.run_id
+
+    @property
+    def engine_resume(self) -> EngineResumePrefix:
+        """The completed-effect prefix the driver's F2 `resume_at` must match (fork §3.4)."""
+        return EngineResumePrefix(step_index=self.locator.step_index)
+
+
 # [LAW:types-are-the-program] Runtime spec v1.141 §3.1: the body receives exactly one of these,
 # so a snapshot with a fresh `run_id`, or a durable admission without a snapshot, has no value.
-type RootEntry = FreshEntry | ResumedEntry
+type RootEntry = FreshEntry | ResumedEntry | EngineResumedEntry
 
 # B-INTERSTEP-PERRUN-ISOLATION (runtime spec §14.21 C-RT-34 invariant 7;
 # B-INTERSTEP fork §3/§5) — SUPERSEDES B-INTERSTEP's per-loop single-flight
@@ -534,6 +560,7 @@ def materialize_mcp_server_stage(
                 default_model_binding=workflow.default_model_binding,
                 step_dispatchers=cast(Any, effective_step_dispatchers),
                 pause_snapshot_input=_resume_snapshot,
+                engine_resume=entry.engine_resume,
                 resume_context=_resume_context,
                 child_resume_authority=child_resume_authority,
                 validator_run=validator_run,
@@ -542,6 +569,23 @@ def materialize_mcp_server_stage(
                     _effect_fence_uniform_fallback_eligible_key
                 ),
                 effect_fence_tree_wide_abort_present=(_effect_fence_tree_wide_abort_present),
+            )
+
+        def _locate(result: _CpRunResult) -> EnginePauseLocator | None:
+            from harness_runtime.lifecycle.engine_recovery_loop import (
+                bind_engine_substrates,
+                engine_pause_locator,
+            )
+
+            # [LAW:one-source-of-truth] The stores the R-CXA-2 factory bound for this context.
+            return engine_pause_locator(
+                result,
+                workflow_id=workflow.workflow_id,
+                run_id=run_id,
+                engine_class=workflow.manifest_entry.engine_class,
+                substrates=bind_engine_substrates(
+                    harness_ctx.config, harness_ctx.verified_state_root
+                ),
             )
 
         try:
@@ -555,7 +599,7 @@ def materialize_mcp_server_stage(
             # durable root's claim, `started` fsync and lease span exactly the body's life,
             # even when `wait_for` below has already answered `drained`.
             cp_result = await asyncio.wait_for(
-                asyncio.to_thread(_admission.run, harness_ctx, _execute),
+                asyncio.to_thread(_admission.run, harness_ctx, _execute, _locate),
                 timeout=drain_timeout_seconds,
             )
             return cp_result.model_dump(mode="json")

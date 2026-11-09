@@ -69,6 +69,8 @@ _EXIT_BY_KIND = {
     "workflow-mismatch": 6,
     "step-index-out-of-range": 6,
     "pause-record-superseded": 6,
+    "engine-pause-record-absent": 6,
+    "engine-class-mismatch": 6,
     "claim": 7,
 }
 

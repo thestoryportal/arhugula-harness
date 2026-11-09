@@ -311,6 +311,20 @@ def refusal_message(refusal: ResumeRefusal, detail: str) -> str:
     return f"child resume refused ({reasons}){': ' + detail if detail else ''}"
 
 
+class EngineResumePrefix(BaseModel):
+    """The completed-effect prefix an admitted root engine-pause locator records (B-314 fork §3.4).
+
+    Steps `[0, step_index)` already took effect. The driver's F2-derived `resume_at` must equal
+    `step_index` before it dispatches or fires `attempt_resume`, so the effect boundary does not
+    depend on the F2 ledger surviving the resume process.
+    [LAW:one-way-deps] Runtime's locator type stays in Runtime; CP receives only this value.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    step_index: int = Field(ge=0)
+
+
 @runtime_checkable
 class ChildResumeAuthority(Protocol):
     """The Runtime-owned permission to run one durable paused child, carried by CP as opaque data.

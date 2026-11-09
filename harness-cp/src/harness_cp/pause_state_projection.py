@@ -72,6 +72,7 @@ from pydantic import (
     model_serializer,
 )
 
+from harness_cp.engine_class import EngineClass
 from harness_cp.hitl_placement import HITLPlacementKind, HITLResult, PendingHITLDecision
 from harness_cp.pause_resume_protocol_types import (
     EffectFenceResolution,
@@ -86,6 +87,7 @@ __all__ = [
     "BranchEffectFenceAddressableLocation",
     "CrashReconstructionEffectFenceAddressableLocation",
     "DepthZeroRootUniformFallbackOnlyLocation",
+    "EnginePausedState",
     "HitlAddressableLocation",
     "KeyAbsentLinearEffectFenceAddressableLocation",
     "KeyAbsentOrchestratorEffectFenceAddressableLocation",
@@ -94,6 +96,7 @@ __all__ = [
     "PauseLocationProjection",
     "PauseLocationSourceShape",
     "PauseLocationVariant",
+    "PauseState",
     "PauseTreeWalkEntry",
     "PausedWorkflowState",
     "PreDispatchUniformFallbackOnlyLocation",
@@ -470,6 +473,9 @@ class PausedWorkflowState(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
+    pause_layer: Literal["workflow"] = "workflow"
+    """The latest record is a workflow-layer `PauseSnapshot` (B-314 fork §5)."""
+
     workflow_id: str
     """The read's only key."""
 
@@ -485,6 +491,37 @@ class PausedWorkflowState(BaseModel):
 
     locations: tuple[PauseLocationProjection, ...]
     """The ORDERED sequence of typed location projections."""
+
+
+class EnginePausedState(BaseModel):
+    """The root claim a §14.14.9 accessor read returns for an engine-native pause.
+
+    B-314 fork §5: the latest record is an engine-pause locator, an address rather than a
+    snapshot, so there are no locations to project and no capture timestamp. Only the
+    locator's identity is exposed; the engine store's path and digests never are.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    pause_layer: Literal["engine"] = "engine"
+    workflow_id: str
+    run_id: str
+    """The paused run's identity, which an engine resume keeps."""
+
+    step_index: int = Field(ge=0)
+    """Steps `[0, step_index)` completed before the engine paused."""
+
+    depth: Literal[0] = 0
+    """A locator is root-only."""
+
+    engine_class: Literal[EngineClass.WAL_SEGMENT, EngineClass.RECONCILER_LOOP]
+    staleness_token: str = Field(min_length=1)
+    """The accessor-minted token, under the same §30 property as a workflow-layer read."""
+
+
+PauseState = Annotated[PausedWorkflowState | EnginePausedState, Field(discriminator="pause_layer")]
+"""What a §14.14.9 read returns: the latest durable pause record's layer decides the
+variant, so a consumer handles both exhaustively (B-314 fork §5)."""
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -600,7 +637,7 @@ class AccessorDerivedResumeContext(ResumeContext):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    pause_state: PausedWorkflowState
+    pause_state: PauseState
     """The §14.14.9 projection these responses were composed against. The projection
     is the sole capability: the token rides it, and cannot be supplied as a bare
     string."""
@@ -613,7 +650,7 @@ class AccessorDerivedResumeContext(ResumeContext):
     @classmethod
     def from_pause_state(
         cls,
-        pause_state: PausedWorkflowState,
+        pause_state: PauseState,
         *,
         hitl_response: HITLResult | None = None,
         hitl_responses: dict[str, HITLResult] | None = None,

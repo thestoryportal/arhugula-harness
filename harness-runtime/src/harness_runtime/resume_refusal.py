@@ -1,7 +1,8 @@
 """The closed `harness.resume-refusal.v1` value: a root resume refused before its body ran.
 
-Runtime spec v1.137 §D (the adopted B-313 v2 value plus the §D.5 ninth arm). A refusal is
-built only from one of the nine typed `resume()` refusals (`project`), crosses a text boundary
+Runtime spec v1.137 §D (the adopted B-313 v2 value plus the §D.5 ninth arm), with the B-314
+tenth and eleventh engine arms. A refusal is
+built only from one of the eleven typed `resume()` refusals (`project`), crosses a text boundary
 as one JSON object (`to_json`), and is recovered on the receiving side only by the strict
 `parse`, which returns the same discriminated value or raises `ResumeRefusalProtocolError`.
 Nothing here reads an exception message: the value carries the typed facts of its arm and
@@ -20,6 +21,8 @@ from harness_runtime.api import (
     ResumeArgsError,
     ResumeClaimRefusedError,
     ResumeDirectChildHandleError,
+    ResumeEngineClassMismatchError,
+    ResumeEnginePauseRecordAbsentError,
     ResumeHandleUnknownError,
     ResumePauseRecordSupersededError,
     ResumePauseStateStaleError,
@@ -56,7 +59,7 @@ PROTOCOL: Final = "harness.resume-refusal.v1"
 
 
 class RefusalKind(StrEnum):
-    """The nine closed arms; each kind has exactly one `fail_class` (`fail_class`)."""
+    """The eleven closed arms; each kind has exactly one `fail_class` (`fail_class`)."""
 
     ARGUMENTS = "arguments"
     HANDLE = "handle"
@@ -67,6 +70,8 @@ class RefusalKind(StrEnum):
     STEP_INDEX_OUT_OF_RANGE = "step-index-out-of-range"
     CLAIM = "claim"
     PAUSE_RECORD_SUPERSEDED = "pause-record-superseded"
+    ENGINE_PAUSE_RECORD_ABSENT = "engine-pause-record-absent"
+    ENGINE_CLASS_MISMATCH = "engine-class-mismatch"
 
 
 class HandleCause(StrEnum):
@@ -89,6 +94,8 @@ type ValidationKind = Literal[
     RefusalKind.WORKFLOW_MISMATCH,
     RefusalKind.STEP_INDEX_OUT_OF_RANGE,
     RefusalKind.PAUSE_RECORD_SUPERSEDED,
+    RefusalKind.ENGINE_PAUSE_RECORD_ABSENT,
+    RefusalKind.ENGINE_CLASS_MISMATCH,
 ]
 
 
@@ -135,12 +142,14 @@ type ResumeRefusalError = (
     | ResumeStepIndexOutOfRangeError
     | ResumeClaimRefusedError
     | ResumePauseRecordSupersededError
+    | ResumeEnginePauseRecordAbsentError
+    | ResumeEngineClassMismatchError
 )
-"""The nine typed refusals a root `resume()` raises before its body runs. Bootstrap, invalid
+"""The eleven typed refusals a root `resume()` raises before its body runs. Bootstrap, invalid
 workflow, concurrent-run and transport failures are not among them and keep their own class."""
 
 # [LAW:one-source-of-truth] The catchable form of the alias above, derived from it, so a surface
-# that maps refusals catches exactly the nine and no list of them can drift.
+# that maps refusals catches exactly the eleven and no list of them can drift.
 REFUSAL_ERRORS: Final[tuple[type[Exception], ...]] = get_args(ResumeRefusalError.__value__)
 
 
@@ -156,6 +165,8 @@ _FAIL_CLASS: Final[Mapping[RefusalKind, str]] = {
     RefusalKind.STEP_INDEX_OUT_OF_RANGE: "RT-FAIL-RESUME-STEP-INDEX-OUT-OF-RANGE",
     RefusalKind.CLAIM: "RT-FAIL-RESUME-CLAIM-REFUSED",
     RefusalKind.PAUSE_RECORD_SUPERSEDED: "RT-FAIL-RESUME-PAUSE-RECORD-SUPERSEDED",
+    RefusalKind.ENGINE_PAUSE_RECORD_ABSENT: "RT-FAIL-RESUME-ENGINE-PAUSE-RECORD-ABSENT",
+    RefusalKind.ENGINE_CLASS_MISMATCH: "RT-FAIL-RESUME-ENGINE-CLASS-MISMATCH",
 }
 
 _EXTRA_FIELDS: Final[Mapping[RefusalKind, tuple[str, ...]]] = {kind: () for kind in RefusalKind} | {
@@ -208,6 +219,10 @@ def project(error: ResumeRefusalError) -> ResumeRefusal:
             return ClaimRefusal(error.reason)
         case ResumePauseRecordSupersededError():
             return ValidationRefusal(RefusalKind.PAUSE_RECORD_SUPERSEDED)
+        case ResumeEnginePauseRecordAbsentError():
+            return ValidationRefusal(RefusalKind.ENGINE_PAUSE_RECORD_ABSENT)
+        case ResumeEngineClassMismatchError():
+            return ValidationRefusal(RefusalKind.ENGINE_CLASS_MISMATCH)
         case _:
             assert_never(error)
 

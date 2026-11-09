@@ -113,6 +113,48 @@ def test_config_file_runtime_memory_table_loads_operator_overrides(tmp_path: Pat
     assert cfg.memory.native_provider_enabled is True
 
 
+def _memory_promotion_config(tmp_path: Path, decision: str) -> Path:
+    config_file = tmp_path / "harness.toml"
+    config_file.write_text(
+        "[runtime]\n"
+        'deployment_surface = "local-development"\n'
+        f'repository_root = "{tmp_path}"\n'
+        'default_topology = "single-threaded-linear"\n'
+        "\n"
+        "[runtime.otel]\n"
+        'otlp_endpoint = "http://localhost:4318"\n'
+        "\n"
+        "[runtime.memory]\n"
+        f'promotion_decision = "{decision}"\n',
+        encoding="utf-8",
+    )
+    return config_file
+
+
+def test_memory_promotion_decision_defaults_to_semantic_proposal() -> None:
+    assert RuntimeConfig(**_minimum_required_overrides()).memory.promotion_decision == (
+        "propose_semantic"
+    )
+
+
+def test_memory_promotion_decision_loads_procedural_proposal(tmp_path: Path) -> None:
+    cfg = RuntimeConfigSource.load(
+        config_file=_memory_promotion_config(tmp_path, "propose_procedural")
+    )
+
+    assert cfg.memory.promotion_decision == "propose_procedural"
+
+
+@pytest.mark.parametrize(
+    "decision", ["promote_semantic", "promote_procedural", "keep_episodic", "discard", "auto"]
+)
+def test_memory_promotion_decision_refuses_non_proposal_values(
+    tmp_path: Path, decision: str
+) -> None:
+    with pytest.raises(RuntimeConfigLoadError, match="promotion_decision"):
+        RuntimeConfigSource.load(config_file=_memory_promotion_config(tmp_path, decision))
+
+
 # AC #2 — HARNESS_TENANT_ID → config.tenant_id.
 def test_env_var_supplies_tenant_id(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("HARNESS_TENANT_ID", "acme")
