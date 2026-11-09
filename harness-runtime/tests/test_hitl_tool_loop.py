@@ -33,6 +33,7 @@ from harness_runtime.lifecycle.hitl_tool_loop import (
     ModelToolCall,
     RuntimeHITLToolLoop,
 )
+from harness_runtime.lifecycle.post_tool_effect import PostToolEffectError
 from harness_runtime.lifecycle.state_ledger import LedgerWriter, materialize_state_ledger
 from harness_runtime.types import (
     CollectorConfig,
@@ -291,3 +292,43 @@ def test_hitl_tool_loop_reject_skips_dispatch(tmp_path: Path) -> None:
     assert dispatcher.calls == []
     entries = read_ledger(loop.wiring.ledger_writer.handle)
     assert [entry.action_id for entry in entries] == ["cp.hitl-tool-call-rewriting"]
+
+
+@pytest.mark.parametrize("answer", [HITLResponse.REJECT, HITLResponse.RESPOND])
+def test_no_dispatch_answer_then_later_gate_failure_keeps_fault_identity(
+    tmp_path: Path, answer: HITLResponse
+) -> None:
+    fault = RuntimeError("later gate unavailable")
+
+    class GateThenFail(_Gate):
+        async def decide(
+            self,
+            *,
+            call: ModelToolCall,
+            context: HITLToolLoopContext,
+            palette: frozenset[HITLResponse],
+        ) -> HITLGateDecision:
+            if call.tool_call_id == "call-later":
+                raise fault
+            return await super().decide(call=call, context=context, palette=palette)
+
+    auditor = _Auditor()
+    dispatcher = _Dispatcher()
+    loop, _, _ = _loop(
+        tmp_path,
+        hitl_required_ids=frozenset({"call-first", "call-later"}),
+        gate=GateThenFail(response=answer),
+        dispatcher=dispatcher,
+        auditor=auditor,
+    )
+
+    # [LAW:behavior-not-structure] An answer without dispatch leaves the later
+    # gate failure pre-effect, including the original exception object.
+    with pytest.raises(RuntimeError) as raised:
+        asyncio.run(loop.run_tool_calls([_call("call-first"), _call("call-later")], _context()))
+
+    assert raised.value is fault
+    assert type(raised.value) is RuntimeError
+    assert not isinstance(raised.value, PostToolEffectError)
+    assert dispatcher.calls == []
+    assert [call.tool_call_id for call, _, _ in auditor.calls] == ["call-first"]

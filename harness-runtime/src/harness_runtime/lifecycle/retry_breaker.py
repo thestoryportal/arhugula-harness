@@ -422,7 +422,8 @@ class BreakerStateMachine:
         self, *, now: float, trial_token: int | None = None
     ) -> BreakerTransition | None:
         """Return an INCONCLUSIVE half-open trial to `open` with a FRESH
-        cooldown (v1.114 `B-118`; Runtime spec §14.6.4 matrix cells 3 / 6-9).
+        cooldown (v1.114 `B-118`; Runtime spec §14.6.4 matrix cells 3 / 6-9
+        and cell 10 non-provider).
 
         A trial whose outcome was NOT attributable to the `{provider, model}`
         — a waived fail-fast per §14.6.3, an audit-signing hard failure, a

@@ -1,0 +1,210 @@
+{
+  "record": "arhugula-harness-trial-193.5i4",
+  "claim": "cmt-749d0660-391b-4b00-af7f-671a1f5ee762",
+  "author_session": "01a1bee8-b9df-7920-9712-1c594fdf66a7",
+  "reviewer_session": "01a1beb8-d6a7-7f72-8719-040ce06b7fcf",
+  "checkout": "/home/robbo/Work/wt-p4-source09-20261109",
+  "baseline": "d2f385ccad821b27be4f8f1122f64e4267e4b523",
+  "python": "/home/robbo/Work/wt-p4-source09-20261109/.venv/bin/python",
+  "uv_lock_sha256": "8824a1e60f98bb6e0d4434168b7dbca68daf65d5d20bab6adad7fb95beb8e616",
+  "source_diffs": "Each exact original mutation differs from current baseline hitl_tool_loop.py by its one specified line; original file hashes matched the active brief. Shadow copies exclude preexisting bytecode and run with PYTHONDONTWRITEBYTECODE=1.",
+  "historical_import_status": "Unknown; new observations do not backfill historical import provenance.",
+  "runs": {
+    "baseline": {
+      "source_sha256": "971bdaf4f9b0c4ec729bf9fc5d9ebcad49e96fc660b288ffbce9eb0d1a313919",
+      "import_origin": "/home/robbo/Work/wt-p4-source09-20261109/harness-runtime/src/harness_runtime/lifecycle/hitl_tool_loop.py",
+      "origin_and_sha_asserted_before_pytest": true,
+      "exit_code": 0,
+      "tests": 268,
+      "failures": 0,
+      "errors": 0,
+      "failed_test_ids": [],
+      "raw_log": "/mnt/mac/arhugula-artifacts/p4-source09-01a1bee8-20261109/baseline.log",
+      "raw_log_sha256": "175caa5820fe7ceb6c97af2d3cf92faa1da830dd08ae3d33bced533885a39d1f",
+      "junit": "/mnt/mac/arhugula-artifacts/p4-source09-01a1bee8-20261109/baseline.xml",
+      "junit_sha256": "cd4ad2184ca0c3ebfd2da835bc8b61e37e6f64dc52f591efdf91dfd75086bbe6"
+    },
+    "m1": {
+      "source_sha256": "2f97b0a098fd87412b4f5f03884a9d073e17c5a590071d9eafc478eb31dcb385",
+      "import_origin": "/home/robbo/Work/arhugula-omarchy/.local/tmp/p4-source09/m1/harness_runtime/lifecycle/hitl_tool_loop.py",
+      "origin_and_sha_asserted_before_pytest": true,
+      "exit_code": 1,
+      "tests": 268,
+      "failures": 6,
+      "errors": 0,
+      "failed_test_ids": [
+        "harness-runtime.tests.test_post_effect_hitl_cp::test_terminal_hitl_identity_and_cp_fail_class_depend_on_prior_effect[anthropic-pre-effect-closed]",
+        "harness-runtime.tests.test_post_effect_hitl_cp::test_terminal_hitl_identity_and_cp_fail_class_depend_on_prior_effect[anthropic-pre-effect-half-open]",
+        "harness-runtime.tests.test_post_effect_hitl_cp::test_terminal_hitl_identity_and_cp_fail_class_depend_on_prior_effect[ollama-pre-effect-closed]",
+        "harness-runtime.tests.test_post_effect_hitl_cp::test_terminal_hitl_identity_and_cp_fail_class_depend_on_prior_effect[ollama-pre-effect-half-open]",
+        "harness-runtime.tests.test_hitl_tool_loop::test_no_dispatch_answer_then_later_gate_failure_keeps_fault_identity[reject]",
+        "harness-runtime.tests.test_hitl_tool_loop::test_no_dispatch_answer_then_later_gate_failure_keeps_fault_identity[respond]"
+      ],
+      "raw_log": "/mnt/mac/arhugula-artifacts/p4-source09-01a1bee8-20261109/m1.log",
+      "raw_log_sha256": "a273148f91d3c133cba87b0383c526a5553234435ad167883589b53b0790d2f4",
+      "junit": "/mnt/mac/arhugula-artifacts/p4-source09-01a1bee8-20261109/m1.xml",
+      "junit_sha256": "d18078c3df889c2705a6464c34accaea32e180cd51745ae0f5782325c5f5a695"
+    },
+    "m2": {
+      "source_sha256": "c407cab3f56b2f9ce49cf476b96e44115f4e3afe8a24f206a429b93b48f8a7c2",
+      "import_origin": "/home/robbo/Work/arhugula-omarchy/.local/tmp/p4-source09/m2/harness_runtime/lifecycle/hitl_tool_loop.py",
+      "origin_and_sha_asserted_before_pytest": true,
+      "exit_code": 1,
+      "tests": 268,
+      "failures": 7,
+      "errors": 0,
+      "failed_test_ids": [
+        "harness-runtime.tests.test_post_tool_effect_replay::test_an_ambiguous_tool_dispatch_failure_is_never_replayed",
+        "harness-runtime.tests.test_post_tool_effect_replay::test_a_non_provider_post_effect_failure_never_charges_the_breaker[closed]",
+        "harness-runtime.tests.test_post_tool_effect_replay::test_a_non_provider_post_effect_failure_never_charges_the_breaker[half-open]",
+        "harness-runtime.tests.test_post_tool_effect_replay::test_an_anthropic_non_provider_post_effect_failure_never_charges_the_breaker[closed]",
+        "harness-runtime.tests.test_post_tool_effect_replay::test_an_anthropic_non_provider_post_effect_failure_never_charges_the_breaker[half-open]",
+        "harness-runtime.tests.test_post_tool_effect_cell10::test_a_failing_re_arm_emission_is_noted_on_the_carrier_that_still_propagates[anthropic-non-provider]",
+        "harness-runtime.tests.test_post_tool_effect_cell10::test_post_effect_attempt_span_carries_terminal_and_origin[non-provider]"
+      ],
+      "raw_log": "/mnt/mac/arhugula-artifacts/p4-source09-01a1bee8-20261109/m2.log",
+      "raw_log_sha256": "38a476258e408555025849d84aaa250a5477bf0e5d16134fb0612e161802ee6d",
+      "junit": "/mnt/mac/arhugula-artifacts/p4-source09-01a1bee8-20261109/m2.xml",
+      "junit_sha256": "d07f83c32d07d2170fd04f8cf6b86027f61732f0bb102c6cbd0bca7eba38c16c"
+    }
+  },
+  "dispositions": [
+    {
+      "id": "O1",
+      "prior_classification": "met",
+      "current_status": "retained_met",
+      "evidence_or_remaining": "Original PR1641 notes, APPROVE and findings=[] remain in lit-followup-193-5i4.json.md."
+    },
+    {
+      "id": "O2",
+      "prior_classification": "met",
+      "current_status": "retained_met",
+      "evidence_or_remaining": "One B-309 Source09 follow-up remains; no duplicate row."
+    },
+    {
+      "id": "O3",
+      "prior_classification": "partial",
+      "current_status": "landed",
+      "evidence_or_remaining": "B-307 refusal text/new-condition qualification is on main via PR1643 merge 8d684b42; own-main CI37288061295 SUCCESS."
+    },
+    {
+      "id": "O4",
+      "prior_classification": "met",
+      "current_status": "retained_met",
+      "evidence_or_remaining": "A5/A4 numbering cross-check is historical PR1641 progress; A5 implementation remains deferred."
+    },
+    {
+      "id": "O5",
+      "prior_classification": "partial",
+      "current_status": "landed",
+      "evidence_or_remaining": "B-307 hash, repository location, portable assignment, review status, section pointer and Scope wording verified at main; register transit recorded in this candidate."
+    },
+    {
+      "id": "O6",
+      "prior_classification": "met",
+      "current_status": "separate_open",
+      "evidence_or_remaining": "B-295 schema/APPROVE prose conflict remains attributed to B-295."
+    },
+    {
+      "id": "O7",
+      "prior_classification": "met",
+      "current_status": "separate_open",
+      "evidence_or_remaining": "B-298 doc-only/next-pass divergence remains attributed to B-298."
+    },
+    {
+      "id": "O8",
+      "prior_classification": "owed",
+      "current_status": "imported_review_pending",
+      "evidence_or_remaining": "Buford-authored exact post-1635 prior paragraph imported once between post-1639 and post-1633; support patch SHA256 6ae19630fe9b0b4ce3e51f55023e53c925ffbabd61a305523f3965f1c7f1ebfc. Independent consolidated review pending."
+    },
+    {
+      "id": "O9",
+      "prior_classification": "partial",
+      "current_status": "retained_met",
+      "evidence_or_remaining": "Current main already contains post-1641 prior paragraph once; no duplicate archive round."
+    },
+    {
+      "id": "O10",
+      "prior_classification": "partial",
+      "current_status": "imported_review_pending",
+      "evidence_or_remaining": "Buford-authored source09 and original T01 rows imported through the canonical holder-gated support delta; contract-fold row retained once. All 72 JSONL rows parse, three target arcs unique, original prefix unchanged. Source09/T01 queues remain held until committed-main proof."
+    },
+    {
+      "id": "O11",
+      "prior_classification": "partial",
+      "current_status": "observed_review_pending",
+      "evidence_or_remaining": "Original M1 before-gate bytes imported from exact shadow; 6 of 268 provider-free tests fail, including two new no-dispatch cases."
+    },
+    {
+      "id": "O12",
+      "prior_classification": "partial",
+      "current_status": "observed_review_pending",
+      "evidence_or_remaining": "Original M2 entering-effect removal bytes imported from exact shadow; 7 of 268 provider-free tests fail. Historical runtime import remains unknown."
+    },
+    {
+      "id": "O13",
+      "prior_classification": "owed",
+      "current_status": "corrected_review_pending",
+      "evidence_or_remaining": "Still-current cell-10 release/re-arm comments corrected in retry_breaker_fallback.py and retry_breaker.py; behavior unchanged."
+    },
+    {
+      "id": "O14",
+      "prior_classification": "met",
+      "current_status": "retained_met",
+      "evidence_or_remaining": "B-309 preserves merge-gate-spec-conformance:06cf67784e86718217886f490918b982e90bf415:e5ba78985fe7:1."
+    },
+    {
+      "id": "O15",
+      "prior_classification": "owed",
+      "current_status": "corrected_review_pending",
+      "evidence_or_remaining": "Source09 authority paragraph now labels old A4/A5 numbering as historical and cites current A4-selected v1.142/v2.70 at .harness/a4_contract_authority.md:59-64. A5-associated units remain deferred; independent review pending."
+    },
+    {
+      "id": "O16",
+      "prior_classification": "partial",
+      "current_status": "witnessed_review_pending",
+      "evidence_or_remaining": "New first-no-dispatch/later-gate fault identity and earlier-effect/later-batch audit identity/no-retry tests pass on baseline."
+    },
+    {
+      "id": "O17",
+      "prior_classification": "partial",
+      "current_status": "landing_pending",
+      "evidence_or_remaining": "P4 exact PR-head CI, merge, own-main CI and installed acceptance remain unproved."
+    }
+  ],
+  "gate": "Evidence captured before freeze; exact candidate head/tree/diff digest is recorded in LIT after commit. Independent P4 review, exact-head CI, landing and installed acceptance remain open.",
+  "support_delta": {
+    "material_author": "01a1befe-288c-70a1-b5d4-96695a30e3b4",
+    "patch": "/home/robbo/Work/arhugula-omarchy/.local/release-campaign-20261108/codex-only-20261109/P4-Buford-bookkeeping-01a1befe.patch",
+    "patch_sha256": "6ae19630fe9b0b4ce3e51f55023e53c925ffbabd61a305523f3965f1c7f1ebfc",
+    "imported_diff_sha256": "6ae19630fe9b0b4ce3e51f55023e53c925ffbabd61a305523f3965f1c7f1ebfc",
+    "receipt": "/home/robbo/Work/arhugula-omarchy/.local/release-campaign-20261108/codex-only-20261109/root-01a1befe-P4-bookkeeping-ready.json",
+    "source09_drain_receipt": "/home/robbo/Work/arhugula-omarchy/.local/release-campaign-20261108/codex-only-20261109/root-01a1befe-P4-source09-drain-receipt.json",
+    "queue_release_gate": "Committed origin/main ledger proof, not local topic append"
+  },
+  "material_authors": [
+    "01a1bee8-b9df-7920-9712-1c594fdf66a7",
+    "01a1befe-288c-70a1-b5d4-96695a30e3b4"
+  ],
+  "mutation_bindings": {
+    "m1": {
+      "original_file": "/home/robbo/Work/arhugula-omarchy/.local/tmp/claude-1000/-home-robbo-Work-arhugula-omarchy/1e6bbaa0-8c97-4724-9c65-91f0b1ec099f/scratchpad/m1/harness_runtime/lifecycle/hitl_tool_loop.py",
+      "original_bytes": 15979,
+      "original_sha256": "2f97b0a098fd87412b4f5f03884a9d073e17c5a590071d9eafc478eb31dcb385",
+      "current_base_sha256": "971bdaf4f9b0c4ec729bf9fc5d9ebcad49e96fc660b288ffbce9eb0d1a313919",
+      "one_mutation_delta": [
+        "+        fence.started = True  # MUTATION M1: a gate answer starts the fence"
+      ]
+    },
+    "m2": {
+      "original_file": "/home/robbo/Work/arhugula-omarchy/.local/tmp/claude-1000/-home-robbo-Work-arhugula-omarchy/1e6bbaa0-8c97-4724-9c65-91f0b1ec099f/scratchpad/m2/harness_runtime/lifecycle/hitl_tool_loop.py",
+      "original_bytes": 15934,
+      "original_sha256": "c407cab3f56b2f9ce49cf476b96e44115f4e3afe8a24f206a429b93b48f8a7c2",
+      "current_base_sha256": "971bdaf4f9b0c4ec729bf9fc5d9ebcad49e96fc660b288ffbce9eb0d1a313919",
+      "one_mutation_delta": [
+        "-        with fence.entering_effect():",
+        "+        if True:  # MUTATION M2: dispatch no longer starts the fence"
+      ]
+    }
+  }
+}
