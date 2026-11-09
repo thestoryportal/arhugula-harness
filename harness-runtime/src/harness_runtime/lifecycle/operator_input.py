@@ -154,17 +154,21 @@ def parse_operator_gate_message(message: str, options: tuple[str, ...]) -> Opera
     if not all(line.startswith(p) for line, p in zip(lines, prefixes, strict=True)):
         raise ValueError("not a C1a HITL gate message")
     step_id, _, kind = step.removeprefix("step: ").rpartition(" (")
-    parsed_payload = json.loads(payload.removeprefix("payload: "))
+    parsed_payload: object = json.loads(payload.removeprefix("payload: "))
     if not kind.endswith(")") or not isinstance(parsed_payload, dict):
         raise ValueError("not a C1a HITL gate message")
-    return OperatorRequest(
-        position=gate.removeprefix("HITL gate at "),
-        step_id=step_id,
-        step_kind=kind.removesuffix(")"),
-        payload=parsed_payload,
-        payload_sha256=digest.removeprefix("payload sha256: "),
-        options=options,
-        message=message,
+    # [LAW:parse-dont-validate] The declared request schema stamps decoded JSON
+    # at the ingress boundary before an operator can receive it.
+    return OperatorRequest.model_validate(
+        {
+            "position": gate.removeprefix("HITL gate at "),
+            "step_id": step_id,
+            "step_kind": kind.removesuffix(")"),
+            "payload": parsed_payload,
+            "payload_sha256": digest.removeprefix("payload sha256: "),
+            "options": options,
+            "message": message,
+        }
     )
 
 
