@@ -340,7 +340,7 @@ def _parse_reply_ingress(raw: str | None) -> OperatorIngress:
         raise MCPSurfaceCallbackNotBoundError(
             f"ctx.elicit returned ingress={raw!r} outside the harness ingress set"
         )
-    return cast("OperatorIngress", raw)
+    return raw
 
 
 def _parse_accepted_reply(data: AskUserQuestionElicitationSchema) -> AskUserQuestionResult:

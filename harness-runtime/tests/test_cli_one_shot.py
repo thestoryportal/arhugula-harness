@@ -190,6 +190,8 @@ def mock_api_run(monkeypatch: pytest.MonkeyPatch) -> Callable[..., None]:
             workflow: Any,
             *,
             config: Any = None,
+            operator: Any = None,
+            operator_ingress: Any = "python",
         ) -> RunResult:
             captured["workflow"] = workflow
             captured["config"] = config

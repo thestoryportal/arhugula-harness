@@ -7,10 +7,11 @@ one-shot delivery (`:5174`) and §14.8.9 timeout degradation (`:5234`). v1.133 t
 none of these sites. Every other v1.143 and earlier term remains in force. Cleared predecessor files
 are not edited.*
 
-**Status: PROPOSED — contract ratified by the integration lead at LIT `arhugula-harness-trial-193`
-`cmt-1802376e-01d6-43d6-96dc-928e87271e38` (independent contract GO
-`cmt-9ded37e9-976a-4f79-9b5b-5d491948146a`, five changes-required passes retained). This file
-materializes that contract; its review rides the T03 frozen candidate. Not cleared.**
+**Status: CLEARED FOR SOURCE CONSUMPTION at LIT `arhugula-harness-trial-193`
+`cmt-d4450204-4f4f-4b8a-866d-a224f0634abf`. The integration lead ratified the contract at
+`cmt-1802376e-01d6-43d6-96dc-928e87271e38` after independent contract GO
+`cmt-9ded37e9-976a-4f79-9b5b-5d491948146a`; five changes-required passes remain spent.
+T03 source review is recorded at `cmt-54fa4480-6872-4428-8a90-418bba985d9f`.**
 
 **Authority:** forward-register row B-315; fork record
 `.harness/class_1_fork_operator_approval_collection.md` at `ce46421ab851253d87bff5b3d5e477254b522ee0`,
@@ -27,8 +28,9 @@ approval store, claim store or HTTP operator service.
 ## §1 Normative terms (NEW, C-RT-18 §14.8.12)
 
 The sections **C1, C1a, C2, C3, C3a, C4 and C5** of the fork record named under *Authority*, at the
-stated SHA256, are adopted verbatim as C-RT-18 §14.8.12.1–§14.8.12.7 respectively. They are the one
-normative text; this file does not restate them. Ratified values:
+stated SHA256, govern C-RT-18 §14.8.12.1–§14.8.12.7 respectively. CP v1.132 §2 applies the
+integration lead's accepted C4 correction: the resumed root uses its uniform response or pending
+decision, and keyed response maps remain child-only (`cmt-d4450204-4f4f-4b8a-866d-a224f0634abf`). Ratified values:
 `OPERATOR_ELICITATION_DEADLINE_SECONDS = 900`, overridden only by an existing `placement.timeout`;
 no new configuration surface.
 

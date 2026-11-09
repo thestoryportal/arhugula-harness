@@ -6,8 +6,10 @@
 C-CP-01 … C-CP-29 term remains in force. No `RunStatus` value, `HITLResponse` member, pause-snapshot
 hash byte or fail-class prefix is added or changed.*
 
-**Status: PROPOSED — contract ratified with Runtime v1.144 at LIT `arhugula-harness-trial-193`
-`cmt-1802376e-01d6-43d6-96dc-928e87271e38`; review rides the T03 frozen candidate. Not cleared.**
+**Status: CLEARED FOR SOURCE CONSUMPTION with Runtime v1.144 at LIT
+`arhugula-harness-trial-193` `cmt-d4450204-4f4f-4b8a-866d-a224f0634abf`; the underlying
+contract was ratified at `cmt-1802376e-01d6-43d6-96dc-928e87271e38`, and T03 source
+review is recorded at `cmt-54fa4480-6872-4428-8a90-418bba985d9f`.**
 
 **Authority:** C4 of `.harness/class_1_fork_operator_approval_collection.md` at
 `ce46421ab851253d87bff5b3d5e477254b522ee0` (SHA256
@@ -36,12 +38,13 @@ assigns those (Runtime v1.144 §2, §14.8.8.5).
   the pending value addresses only the root's own gate and is built inside the root admission from
   the same durable snapshot read.
 
-**T03 review disposition:** Ratified C4 named `hitl_delivery_for(run_id)`, but its required
+**Accepted C4 correction:** Ratified C4 named `hitl_delivery_for(run_id)`, but its required
 `hitl_response_for(run_id)` lookup lets a map entry keyed by the root run ID override the root's
 uniform response. That conflicts with the existing root precedence in
-`test_workflow_driver_hitl_uniform_fallback_property4.py`. The method had no caller and is removed
-in this candidate. Independent review and Buford must accept this explicit contract correction
-before this proposed CP delta is cleared.
+`test_workflow_driver_hitl_uniform_fallback_property4.py`. The unused method is removed.
+Independent T03 source review accepted this at `cmt-d8f06a38-a636-4a7e-aa8a-cd192f315370`;
+Buford accepted it for source consumption at `cmt-d4450204-4f4f-4b8a-866d-a224f0634abf`.
+The resumed root uses its uniform response or pending decision; keyed maps remain child-only.
 
 ## §3 `HITLDeliveryCell` (AMENDED)
 
