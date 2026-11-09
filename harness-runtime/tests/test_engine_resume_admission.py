@@ -15,11 +15,18 @@ from typing import Any
 import pytest
 from harness_cp import workflow_driver
 from harness_cp.engine_class import EngineClass
-from harness_runtime.api import resume
+from harness_cp.pause_resume_protocol_types import (
+    PausedChildBranchResumeState,
+    PeerFanOutResumeState,
+    WorkflowPauseReason,
+)
+from harness_runtime import bootstrap as bootstrap_module
+from harness_runtime.api import ResumeArgsError, resume
 from harness_runtime.lifecycle.journal_workflow_pause_store import (
     EnginePauseLocator,
     PauseJournalReadCause,
 )
+from harness_runtime.lifecycle.operator_input import OperatorDecision
 from harness_runtime.resume_refusal import (
     REFUSAL_ERRORS,
     HandleRefusal,
@@ -27,7 +34,11 @@ from harness_runtime.resume_refusal import (
     ResumeRefusal,
     project,
 )
+from harness_runtime.shutdown import shutdown
 
+from .integration.test_r_cc_1_api_resume import (
+    _patched_runtime,  # noqa: F401  # pyright: ignore[reportPrivateUsage, reportUnusedImport]
+)
 from .test_b104_root_resume_facade import (
     _WORKFLOW_ID,  # pyright: ignore[reportPrivateUsage]
     Harness,
@@ -152,6 +163,89 @@ async def test_an_engine_locator_refusal_runs_nothing_and_writes_nothing(
     refusal = await _refused(harness, monkeypatch, supplied())
 
     assert refusal.kind is kind
+
+
+@pytest.mark.asyncio
+async def test_operator_decision_cannot_claim_an_engine_pause(harness: Harness) -> None:
+    _journal(harness, _locator(EngineClass.WAL_SEGMENT))
+    before = harness.journal().read_latest_attributed(_WORKFLOW_ID)
+
+    # [LAW:behavior-not-structure] A workflow gate answer cannot claim an engine pause.
+    with pytest.raises(ResumeArgsError, match="workflow HITL-gate pause"):
+        await resume(
+            _workflow(EngineClass.WAL_SEGMENT),
+            resume_handle=_WORKFLOW_ID,
+            operator_decision=OperatorDecision(action="approve"),
+            config=harness.config,
+        )
+
+    after = harness.journal().read_latest_attributed(_WORKFLOW_ID)
+    assert (after.record_count, after.latest_record_digest) == (
+        before.record_count,
+        before.latest_record_digest,
+    )
+    assert harness.claim_files() == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_patched_runtime")
+async def test_operator_decision_refuses_a_durable_root_paused_on_a_child_gate(
+    harness: Harness,
+) -> None:
+    from harness_core.workload_class import WorkloadClass
+
+    ctx = await bootstrap_module.run_bootstrap(
+        harness.config, workload_class=WorkloadClass.SOFTWARE_ENGINEERING
+    )
+    try:
+        protocol = ctx.pause_resume_protocol
+        assert protocol is not None
+        child = await protocol.capture_pause_snapshot(
+            workflow_id=_WORKFLOW_ID,
+            run_id="child-run",
+            step_index=0,
+            pause_reason=WorkflowPauseReason.HITL_PENDING,
+            descent_depth=1,
+        )
+        assert child.record_ref is not None
+        root = await protocol.capture_pause_snapshot(
+            workflow_id=_WORKFLOW_ID,
+            run_id="run-root",
+            step_index=0,
+            pause_reason=WorkflowPauseReason.HITL_PENDING,
+            peer_fan_out_resume=PeerFanOutResumeState(
+                branches=(),
+                branch_count=1,
+                paused_child_branches=(
+                    PausedChildBranchResumeState(
+                        branch_index=0,
+                        step_id="step-0",
+                        child_snapshot=child.snapshot,
+                        child_record_ref=child.record_ref,
+                    ),
+                ),
+            ),
+            descent_depth=0,
+        )
+        assert root.record_ref is not None
+    finally:
+        await shutdown(ctx)
+
+    before = harness.journal().read_latest_attributed(_WORKFLOW_ID)
+    assert before.snapshot == root.snapshot
+    with pytest.raises(ResumeArgsError, match="root-owned HITL gate"):
+        await resume(
+            _workflow(EngineClass.PURE_PATTERN_NO_ENGINE),
+            resume_handle=_WORKFLOW_ID,
+            operator_decision=OperatorDecision(action="approve"),
+            config=harness.config,
+        )
+    after = harness.journal().read_latest_attributed(_WORKFLOW_ID)
+    assert (after.record_count, after.latest_record_digest) == (
+        before.record_count,
+        before.latest_record_digest,
+    )
+    assert harness.claim_files() == []
 
 
 @pytest.mark.asyncio

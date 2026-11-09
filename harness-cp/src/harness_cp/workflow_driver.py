@@ -88,6 +88,7 @@ from harness_cp.hitl_placement import (
     HITLPlacementKind,
     HITLResult,
     LoosenablePlacementKind,
+    PendingHITLDecision,
 )
 from harness_cp.pause_resume_protocol import (
     CP_FAIL_PAUSE_SNAPSHOT_CORRUPTION,
@@ -5454,7 +5455,7 @@ def _execute_workflow_body(
         # a `hitl_responses` entry that happens to be keyed by the root's OWN
         # run_id (stale/conflicting caller data) can never override the root
         # gate's uniform `hitl_response`.
-        _resolved_hitl: HITLResult | None = None
+        _resolved_hitl: HITLResult | PendingHITLDecision | None = None
         _mapped_hitl = (
             resume_context.hitl_responses.get(run_id)
             if descent_depth > 0 and resume_context.hitl_responses
@@ -5463,7 +5464,14 @@ def _execute_workflow_body(
         if _mapped_hitl is not None:
             _resolved_hitl = _mapped_hitl
         elif run_id == hitl_uniform_fallback_eligible_run_id:
-            _resolved_hitl = resume_context.hitl_response
+            # CP v1.132 §26.8.1: a pending operator decision is parent-gate scope, so
+            # only the depth-0 root's resumed step may receive it; a descended child
+            # keeps the uniform `hitl_response` alone.
+            _resolved_hitl = (
+                resume_context.hitl_response
+                if descent_depth > 0
+                else resume_context.hitl_response or resume_context.pending_hitl_decision
+            )
         if _resolved_hitl is not None:
             # B-79 impl leg slice 2 (CP spec v1.111 §1.2 property 7, §1.1(d)) — the
             # LINEAR site's FIRST-EVER per-step material-diff guard: this site

@@ -144,7 +144,9 @@ def _install_mocks(
             raise config_raises
         return _runtime_config()
 
-    async def _fake_api_run(workflow: Any, *, config: Any = None) -> RunResult:
+    async def _fake_api_run(
+        workflow: Any, *, config: Any = None, operator: Any = None, operator_ingress: Any = "python"
+    ) -> RunResult:
         captured["workflow"] = workflow
         captured["config"] = config
         return run_result if run_result is not None else _run_result()
@@ -830,7 +832,11 @@ def test_one_shot_and_daemon_client_pass_same_manifest_path(
     daemon_captured: dict[str, Any] = {}
 
     async def _fake_daemon_dispatch(
-        *, workflow_file: Path, socket_path: Path, result_timeout_seconds: float
+        *,
+        workflow_file: Path,
+        socket_path: Path,
+        result_timeout_seconds: float,
+        operator: Any = None,
     ) -> dict[str, Any]:
         daemon_captured["workflow_file"] = workflow_file
         daemon_captured["socket_path"] = socket_path
@@ -2587,6 +2593,7 @@ def test_ac6_daemon_concurrent_two_clients_complete_independently(
         ),
         verified_state_root=SimpleNamespace(realpath=placed_root.resolve()),
         pause_resume_protocol=None,
+        pause_requested_flag=asyncio.Event(),
     )
 
     def _fake_workflow(wf_id: str) -> SimpleNamespace:

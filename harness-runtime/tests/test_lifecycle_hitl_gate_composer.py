@@ -2108,7 +2108,7 @@ class _TimeoutAskSurface:
         )
 
         self.calls.append((prompt, list(options), timeout))
-        raise AskUserQuestionTimeoutError("mock timeout")
+        raise AskUserQuestionTimeoutError("mock timeout", ingress="none")
 
 
 class _MockWebhookComposer:

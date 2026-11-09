@@ -10,7 +10,8 @@
 
 | Axis | Spec |
 |---|---|
-| CP | `Spec_Control_Plane_v1_131.md` (**v1.131 — current cleared HEAD**, 2026-11-07; delta over cleared v1.130; A4 typed resume refusal (ratified LIT `cmt-756042fc`); paired Runtime v1.142; clearance `spec-control-plane-v1-131-cleared-2026-11-07.md`; see `.harness/artifact-heads.md`) |
+| CP | `Spec_Control_Plane_v1_132.md` (**v1.132 — current cleared HEAD**, 2026-11-09; delta over cleared v1.131; B-315 root pending HITL decision and accepted C4 correction (LIT `cmt-d4450204`); clearance `Spec_Control_Plane-v1_132-cleared-2026-11-09.md`; see `.harness/artifact-heads.md`) |
+| CP | `Spec_Control_Plane_v1_131.md` (**v1.131 — former cleared HEAD**, 2026-11-07; delta over cleared v1.130; A4 typed resume refusal (ratified LIT `cmt-756042fc`); paired Runtime v1.142; clearance `spec-control-plane-v1-131-cleared-2026-11-07.md`; see `.harness/artifact-heads.md`) |
 | CP | `Spec_Control_Plane_v1_130.md` (**v1.130 — former cleared HEAD**, 2026-11-05; delta over cleared v1.129; paired Runtime v1.140; clearance `Spec_Control_Plane-v1_130-cleared-2026-11-05.md`; see `.harness/artifact-heads.md`) |
 | CP | `Spec_Control_Plane_v1_129.md` (**v1.129 — former cleared HEAD**, 2026-11-05; delta over v1.124; Proposed v1.125–v1.128 not heads; clearance `spec-control-plane-v1-129-cleared-2026-11-05.md`; see `.harness/artifact-heads.md`) |
 | CP | `Spec_Control_Plane_v1_119.md` (**v1.119 — former HEAD**, 2026-08-13 the `B-71` spec leg — see the §1.2 archive cell below for the full note) |

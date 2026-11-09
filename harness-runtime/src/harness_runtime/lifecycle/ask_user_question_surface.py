@@ -30,16 +30,31 @@ discretion.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Protocol, runtime_checkable
+from typing import Literal, Protocol, runtime_checkable
 
 from harness_cp.hitl_response_palette import HITLResponse
 from pydantic import BaseModel, ConfigDict
 
 __all__ = [
+    "HARNESS_OPERATOR_INGRESSES",
+    "AskUserQuestionHoldRequestedError",
     "AskUserQuestionResult",
     "AskUserQuestionSurface",
     "AskUserQuestionTimeoutError",
+    "OperatorIngress",
 ]
+
+OperatorIngress = Literal[
+    "python", "cli-tty", "daemon-client-tty", "unattended", "unreported", "none"
+]
+"""Where an operator answer came from (Runtime v1.144 C5). The first four are reported
+by a harness ingress; `unreported` is a reply without the field (or an MCP-native
+decline/cancel) and `none` is a silent elicitation deadline. Client-reported, not
+authenticated."""
+
+HARNESS_OPERATOR_INGRESSES: frozenset[OperatorIngress] = frozenset(
+    {"python", "cli-tty", "daemon-client-tty", "unattended"}
+)
 
 
 class AskUserQuestionTimeoutError(Exception):
@@ -51,7 +66,26 @@ class AskUserQuestionTimeoutError(Exception):
     catches this and opens the canonical `hitl.invocation.timed_out` span
     + raises `HITLGateTimeoutError` mapping to `RT-FAIL-HITL-GATE-TIMEOUT`
     per `Spec_Harness_Runtime_v1.md` v1.11 §14.8 failure-mode taxonomy.
+
+    `ingress` records who ended the wait (Runtime v1.144 C5), because this path never
+    opens the responded span that would otherwise carry it.
     """
+
+    def __init__(self, message: str, *, ingress: OperatorIngress) -> None:
+        super().__init__(message)
+        self.ingress: OperatorIngress = ingress
+
+
+class AskUserQuestionHoldRequestedError(Exception):
+    """The operator asked to hold the gate (Runtime v1.144 C3).
+
+    Not a palette response: the composer turns it into the existing escalate-pause
+    when a durable pause is bound, else an audited REJECT.
+    """
+
+    def __init__(self, *, ingress: OperatorIngress) -> None:
+        super().__init__(f"operator requested hold via {ingress}")
+        self.ingress: OperatorIngress = ingress
 
 
 class AskUserQuestionResult(BaseModel):
@@ -94,6 +128,10 @@ class AskUserQuestionResult(BaseModel):
     rejection_reason: str | None = None
     """Operator-authored rejection reason. Populated only when
     `response == HITLResponse.REJECT`."""
+
+    ingress: OperatorIngress = "unreported"
+    """The reply's validated ingress (Runtime v1.144 C5); surfaces that do not report
+    one leave it `unreported`."""
 
 
 @runtime_checkable
