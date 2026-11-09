@@ -41,12 +41,19 @@ what they mean for `run`. It has no `--provider`, `--model` or `--daemon`, and
 it takes no snapshot or resume context. Resume runs in one-shot mode and keeps
 the paused run's `run_id`.
 
-Only the latest workflow-layer journal record for the `workflow_id` can be
-resumed. If the workflow paused only inside its engine, with no earlier
-workflow-layer record, the resume is refused as `handle` with cause `absent`.
-If any run of the same workflow started after the pause, the resume is refused
-as `pause-record-superseded`, so do not `harness run` a paused workflow you
-mean to resume.
+Only the latest pause journal record for the `workflow_id` can be resumed.
+That record is either a workflow-layer pause or an engine-native pause of a
+WAL-segment or reconciler-loop workflow; both resume the same way and keep
+the original `run_id`. An engine-native resume continues at the paused step
+and never re-runs the steps that completed before the pause. If the engine's
+own pause record is gone, the resume is refused as
+`engine-pause-record-absent`; if the manifest now declares a different engine
+class, it is refused as `engine-class-mismatch`. An engine-native pause
+captured by a runtime older than this one has no journal record of its own;
+when the workflow has no other record, its resume is refused as `handle` with
+cause `absent`. If any run of the same workflow
+started after the pause, the resume is refused as `pause-record-superseded`,
+so do not `harness run` a paused workflow you mean to resume.
 
 A resume that the runtime refuses before the workflow starts exits 6, or 7
 when the refusal is a claim refusal. With `--output json`, stdout carries one
@@ -205,8 +212,8 @@ stderr) and `2` is argument usage.
 | `2` | CLI option usage, workflow manifest load, or admissibility error. |
 | `3` | Runtime config load error. |
 | `4` | Bootstrap, daemon connection/startup, or daemon MCP result error. |
-| `5` | Workflow paused: the one-shot run result or daemon workflow status is `paused`. A workflow-layer pause can be continued with `harness resume`. Engine-native pauses have no safe resume through any command, and running the workflow again with `harness run` starts a new run instead of resuming. A pause captured before the runtime bound its pause-journal root cannot be resumed; its journal files stay on disk as operator-owned data. |
-| `6` | Resume refused before the workflow started (`RESUME_REFUSED`): the refusal `kind` is `arguments`, `handle`, `depth`, `protocol-not-bound`, `pause-state-stale`, `workflow-mismatch`, `step-index-out-of-range` or `pause-record-superseded`. |
+| `5` | Workflow paused: the one-shot run result or daemon workflow status is `paused`. Continue it with `harness resume`, whether it paused at the workflow layer or inside a WAL-segment or reconciler-loop engine. Running the workflow again with `harness run` starts a new run instead of resuming. A pause captured before the runtime bound its pause-journal root, or an engine-native pause captured before the runtime journaled engine pauses, cannot be resumed; its files stay on disk as operator-owned data. |
+| `6` | Resume refused before the workflow started (`RESUME_REFUSED`): the refusal `kind` is `arguments`, `handle`, `depth`, `protocol-not-bound`, `pause-state-stale`, `workflow-mismatch`, `step-index-out-of-range`, `pause-record-superseded`, `engine-pause-record-absent` or `engine-class-mismatch`. |
 | `7` | Resume claim refused (`RESUME_CLAIM_REFUSED`): refusal kind `claim`, with its `reason`. |
 
 ## Config Practices
@@ -227,6 +234,8 @@ This page is grounded in `harness-runtime/src/harness_runtime/cli/app.py`,
 `harness-runtime/src/harness_runtime/admin/memory_operator.py`,
 `harness-runtime/src/harness_runtime/lifecycle/installation_state.py`,
 `harness-runtime/src/harness_runtime/lifecycle/pause_journal_root_resolver.py`,
+`harness-runtime/src/harness_runtime/lifecycle/journal_workflow_pause_store.py`,
+`harness-runtime/src/harness_runtime/lifecycle/engine_recovery_loop.py`,
 `harness-is/src/harness_is/pause_journal_root.py`,
 `harness-runtime/src/harness_runtime/config_source.py`, `harness.toml.example`,
 and `justfile`.

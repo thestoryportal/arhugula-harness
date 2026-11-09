@@ -706,7 +706,9 @@ class ResumeClaimStore:
             or latest.latest_record_digest != ref.latest_digest
         ):
             raise ClaimRefusedError("stale or missing journal record")
-        record = self._journal.read_exact(ref)
+        # B-314 fork §3.2: a root claim admits the latest record of either kind, snapshot or
+        # engine-pause locator; the kind already selected the resume at admission.
+        record = self._journal.read_exact_record(ref)
         if record is None:
             raise ClaimRefusedError("invalid exact journal record")
         # [LAW:parse-dont-validate] The journal's verified depth is the only proof of rootness;

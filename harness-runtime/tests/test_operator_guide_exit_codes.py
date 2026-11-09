@@ -36,12 +36,12 @@ def test_operator_guide_lists_exactly_the_cli_exit_codes() -> None:
     assert {cli_app_mod.EXIT_RESUME_REFUSED, cli_app_mod.EXIT_RESUME_CLAIM_REFUSED} == {6, 7}
 
 
-def test_paused_row_states_which_pauses_have_no_resume() -> None:
-    # Spec v1.137 §F row 5(b) and Rule B8 (witness I.12): the operator learns from the paused
-    # row that engine-native pauses and pre-root pauses cannot be resumed.
+def test_paused_row_states_current_resume_and_legacy_refusals() -> None:
+    # [LAW:behavior-not-structure] The row must distinguish resumable pauses from legacy records.
     paused_row = dict(_documented_rows())[cli_app_mod.EXIT_PAUSED]
 
-    assert "Engine-native pauses have no safe resume" in paused_row
-    assert "captured before the runtime bound its pause-journal root cannot be resumed" in (
-        paused_row
-    )
+    assert "Continue it with `harness resume`" in paused_row
+    assert "WAL-segment or reconciler-loop engine" in paused_row
+    assert "pause captured before the runtime bound its pause-journal root" in paused_row
+    assert "engine-native pause captured before the runtime journaled engine pauses" in paused_row
+    assert "cannot be resumed" in paused_row

@@ -648,6 +648,7 @@ def test_engine_recovery_journals_follow_the_placement(
     site: Site, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stamped: bool
 ) -> None:
     from harness_runtime.bootstrap.factories import r_cxa_2_producer_loop_factory as factory
+    from harness_runtime.lifecycle import engine_recovery_loop as owner
 
     from .test_r_cxa_2_producer_loop_factory import _post_tool_dispatcher_context
 
@@ -666,14 +667,14 @@ def test_engine_recovery_journals_follow_the_placement(
         return _Spy
 
     monkeypatch.setattr(
-        factory,
+        owner,
         "WALSegmentEnginePauseResumeSubstrate",
-        _spy("wal", factory.WALSegmentEnginePauseResumeSubstrate),
+        _spy("wal", owner.WALSegmentEnginePauseResumeSubstrate),
     )
     monkeypatch.setattr(
-        factory,
+        owner,
         "ReconcilerEnginePauseResumeSubstrate",
-        _spy("reconciler", factory.ReconcilerEnginePauseResumeSubstrate),
+        _spy("reconciler", owner.ReconcilerEnginePauseResumeSubstrate),
     )
     if not stamped:
         with pytest.raises(StateRootPlacementError) as excinfo:
@@ -702,19 +703,20 @@ def test_without_placement_engine_recovery_journals_keep_their_legacy_paths(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from harness_runtime.bootstrap.factories import r_cxa_2_producer_loop_factory as factory
+    from harness_runtime.lifecycle import engine_recovery_loop as owner
 
     from .test_r_cxa_2_producer_loop_factory import _post_tool_dispatcher_context
 
     ctx, config, _ask, _tools = _post_tool_dispatcher_context(tmp_path, [])
     dirs: list[Path] = []
-    real = factory.WALSegmentEnginePauseResumeSubstrate
+    real = owner.WALSegmentEnginePauseResumeSubstrate
 
     class _Spy(real):
         def __init__(self, *, journal_dir: Path, **kwargs: Any) -> None:
             dirs.append(journal_dir)
             super().__init__(journal_dir=journal_dir, **kwargs)
 
-    monkeypatch.setattr(factory, "WALSegmentEnginePauseResumeSubstrate", _Spy)
+    monkeypatch.setattr(owner, "WALSegmentEnginePauseResumeSubstrate", _Spy)
 
     factory.materialize_r_cxa_2_producer_loop_stage(ctx, config)
 

@@ -21,6 +21,7 @@ from typing import Any, cast
 
 import pytest
 from harness_cp import workflow_driver
+from harness_cp.engine_class import EngineClass
 from harness_cp.pause_resume_protocol_types import ResumeContext
 from harness_cp.pause_state_projection import AccessorDerivedResumeContext
 from harness_cp.workflow_driver_types import RunResult as CpRunResult
@@ -29,6 +30,7 @@ from harness_runtime import api as api_module
 from harness_runtime import bootstrap as bootstrap_module
 from harness_runtime.api import resume
 from harness_runtime.lifecycle.claimed_child_admission import ClaimedChildAdmission
+from harness_runtime.lifecycle.journal_workflow_pause_store import EnginePauseLocator
 from harness_runtime.lifecycle.root_resume_admission import RootResumeRefusal
 from harness_runtime.resume_refusal import (
     ClaimRefusal,
@@ -315,6 +317,32 @@ async def _superseded(h: Harness) -> _Arranged:
     return _Arranged(h.config, _Workflow(_Dispatcher()), {})
 
 
+def _journal_locator(h: Harness, engine_class: EngineClass) -> None:
+    h.site.stamp(h.config)
+    h.journal().capture_locator(
+        EnginePauseLocator(
+            workflow_id=_WORKFLOW_ID,
+            run_id="run-root",
+            engine_class=engine_class,  # pyright: ignore[reportArgumentType]
+            step_index=0,
+        )
+    )
+
+
+async def _engine_record_absent(h: Harness) -> _Arranged:
+    _journal_locator(h, EngineClass.WAL_SEGMENT)
+    workflow = _Workflow(_Dispatcher())
+    workflow.manifest_entry = workflow.manifest_entry.model_copy(
+        update={"engine_class": EngineClass.WAL_SEGMENT}
+    )
+    return _Arranged(h.config, workflow, {})
+
+
+async def _engine_class_changed(h: Harness) -> _Arranged:
+    _journal_locator(h, EngineClass.RECONCILER_LOOP)
+    return _Arranged(h.config, _Workflow(_Dispatcher()), {})
+
+
 _ARRANGE: dict[RefusalKind, Callable[[Harness], Awaitable[_Arranged]]] = {
     RefusalKind.ARGUMENTS: _malformed_context,
     RefusalKind.HANDLE: _no_capture,
@@ -324,6 +352,8 @@ _ARRANGE: dict[RefusalKind, Callable[[Harness], Awaitable[_Arranged]]] = {
     RefusalKind.STEP_INDEX_OUT_OF_RANGE: _workflow_without_steps,
     RefusalKind.CLAIM: _already_claimed,
     RefusalKind.PAUSE_RECORD_SUPERSEDED: _superseded,
+    RefusalKind.ENGINE_PAUSE_RECORD_ABSENT: _engine_record_absent,
+    RefusalKind.ENGINE_CLASS_MISMATCH: _engine_class_changed,
 }
 
 

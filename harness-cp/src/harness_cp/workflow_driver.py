@@ -170,6 +170,7 @@ from harness_cp.workflow_driver_types import (
     ChildResumeAuthority,
     ChildResumeRefusal,
     ChildResumeRefusedError,
+    EngineResumePrefix,
     ResumeRefusal,
     RunResult,
     RunStatus,
@@ -337,6 +338,7 @@ _ENGINE_RESUME_ABORT_FAIL_CLASS: dict[ResumeOutcomeKind, str] = {
     ResumeOutcomeKind.ABORT_SNAPSHOT_CORRUPTED: CP_FAIL_PAUSE_SNAPSHOT_CORRUPTION,
     ResumeOutcomeKind.ABORT_REVALIDATION_FAILED: CP_FAIL_RESUME_MATERIAL_DIFF_DETECTED,
 }
+_ENGINE_RESUME_PREFIX_SKEW_FAIL_CLASS = "RT-FAIL-RESUME-ENGINE-PREFIX-SKEW"
 
 
 # ---------------------------------------------------------------------------
@@ -2631,6 +2633,28 @@ def _run_protocol_method_sync[TProtocolResult](
     return asyncio.run(coro)
 
 
+def _engine_prefix_skew(
+    engine_resume: EngineResumePrefix | None, *, resume_at: int, workflow_id: str, run_id: str
+) -> RunResult | None:
+    """The `FAILED` result of an engine resume whose F2 prefix disagrees with its locator.
+
+    B-314 fork §3.4: steps `[0, step_index)` must not re-dispatch, so a lost or longer F2
+    prefix fails closed instead of guessing. The claim stays consumed; manual recovery is the
+    audited route. `None` means no engine resume, or one whose prefix agrees.
+    """
+    if engine_resume is None or engine_resume.step_index == resume_at:
+        return None
+    return RunResult(
+        workflow_id=workflow_id,
+        run_id=run_id,
+        status=RunStatus.FAILED,
+        terminal_step_index=None,
+        partial_state=None,
+        final_state=None,
+        fail_class=_ENGINE_RESUME_PREFIX_SKEW_FAIL_CLASS,
+    )
+
+
 def _attempt_reconciler_engine_resume_gate(
     *,
     ctx: DriverContext,
@@ -3283,6 +3307,7 @@ def execute_workflow(
     default_model_binding: ModelBinding,
     step_dispatchers: StepDispatcherRegistry,
     pause_snapshot_input: PauseSnapshot | None = None,
+    engine_resume: EngineResumePrefix | None = None,
     reconstruct_final_state: bool = True,
     resume_context: ResumeContext | None = None,
     child_resume_authority: ChildResumeAuthority | None = None,
@@ -3306,6 +3331,7 @@ def execute_workflow(
         default_model_binding=default_model_binding,
         step_dispatchers=step_dispatchers,
         pause_snapshot_input=pause_snapshot_input,
+        engine_resume=engine_resume,
         reconstruct_final_state=reconstruct_final_state,
         descent_depth=0,
         resume_context=resume_context,
@@ -3327,6 +3353,7 @@ def execute_workflow_at_depth(
     step_dispatchers: StepDispatcherRegistry,
     descent_depth: int,
     pause_snapshot_input: PauseSnapshot | None = None,
+    engine_resume: EngineResumePrefix | None = None,
     reconstruct_final_state: bool = True,
     parent_gate_floor: GateLevel = GateLevel.AUTO,
     resume_context: ResumeContext | None = None,
@@ -3386,6 +3413,11 @@ def execute_workflow_at_depth(
         `ValueError`. This is the CP carrier only; the Runtime `ChildWorkflowRunner`
         that feeds it and the composer that selects the governing placement are a
         separate slice.
+    engine_resume
+        B-314 fork §3.4: the completed-effect prefix of an admitted root engine-pause
+        locator. A WAL-segment or reconciler-loop run whose F2-derived `resume_at`
+        differs from it returns `FAILED` `RT-FAIL-RESUME-ENGINE-PREFIX-SKEW` with zero
+        step dispatches and no `attempt_resume` fire.
 
     Returns
     -------
@@ -3659,6 +3691,7 @@ def execute_workflow_at_depth(
             # passes None. Gated on `resume_at_step_index is not None` so only a
             # `attempt_resume`-validated snapshot reaches the strategy.
             resume_snapshot=(pause_snapshot_input if resume_at_step_index is not None else None),
+            engine_resume=engine_resume,
             # B-CHILD-CRASH-RESUME-FINAL-STATE-RECONSTRUCT (R-FS-1) — opt-in (a child
             # sub-workflow run; default-off for top-level runs): on a durable-engine-class
             # resume, seed the suffix-only `accumulated` with the durably-stored committed
@@ -3714,6 +3747,7 @@ def _execute_workflow_body(
     inherited_hitl_placements: tuple[HITLPlacement, ...],
     resume_at_step_index_override: int | None = None,
     resume_snapshot: PauseSnapshot | None = None,
+    engine_resume: EngineResumePrefix | None = None,
     reconstruct_final_state: bool = True,
     descent_depth: int,
     resume_context: ResumeContext | None = None,
@@ -5032,6 +5066,16 @@ def _execute_workflow_body(
             step_count=len(steps),
             workload_class=manifest_entry.workload_class,
         )
+        # B-314 fork §3.4: an admitted engine resume checks its effect boundary before the
+        # RESUMPTION emit, any replay and the `attempt_resume` fire below.
+        _skew = _engine_prefix_skew(
+            engine_resume,
+            resume_at=resume_at,
+            workflow_id=manifest_entry.workflow_id,
+            run_id=run_id,
+        )
+        if _skew is not None:
+            return _skew, 0
         # U-CP-97 (R-FS-1 E-impl-3c) — RECONCILER_LOOP engine-layer recovery-loop
         # RESUME firing. The engine-native reconverge analogue of the workflow-layer
         # resume, mirroring the U-CP-95 WAL_SEGMENT RESUME firing (below) — duck-typed
@@ -5132,6 +5176,16 @@ def _execute_workflow_body(
             step_count=len(steps),
             workload_class=manifest_entry.workload_class,
         )
+        # B-314 fork §3.4: an admitted engine resume checks its effect boundary before the
+        # RESUMPTION emit, any replay and the `attempt_resume` fire below.
+        _skew = _engine_prefix_skew(
+            engine_resume,
+            resume_at=resume_at,
+            workflow_id=manifest_entry.workflow_id,
+            run_id=run_id,
+        )
+        if _skew is not None:
+            return _skew, 0
         # U-CP-95 (R-FS-1 E-impl-2) — engine-layer recovery-loop RESUME firing.
         # Fire `ctx.engine_recovery_loop.attempt_resume` → `cp.resume-attempted`
         # (C-CP-50) through the CP→IS wiring (R-CXA-2 engine-layer seam),

@@ -15,16 +15,17 @@ from harness_as.sandbox_tier import BlastRadiusTier, SandboxTier
 from harness_cp.cp_shared_types import ActorIdentity, MCPTrustTier, ModelBinding
 from harness_cp.engine_class import EngineClass
 from harness_cp.gate_level_rule import GateLevel, GateLevelInput, gate_level, max_gate_level
-from harness_cp.handoff_context import StateSummary
 from harness_cp.hitl_response_palette import HITLResponse
 from harness_cp.per_step_override_evaluator import StepEffectiveBinding
 from harness_cp.workflow_driver_types import StepExecutionContext
-from harness_is.state_ledger_entry_schema import Actor, ActorClass, Identifier
+from harness_is.state_ledger_entry_schema import Actor, ActorClass
 
 from harness_runtime.bootstrap.mutable_context import _MutableHarnessContext
-from harness_runtime.config.state_placement import StateKind, resolve_state_path
 from harness_runtime.lifecycle.cp_is_wiring import RuntimeCpIsWiring
-from harness_runtime.lifecycle.engine_recovery_loop import RuntimeEngineRecoveryLoop
+from harness_runtime.lifecycle.engine_recovery_loop import (
+    RuntimeEngineRecoveryLoop,
+    bind_engine_substrates,
+)
 from harness_runtime.lifecycle.hitl_placement import RuntimeHITLPlacementRegistry
 from harness_runtime.lifecycle.hitl_tool_loop import (
     HITLGateDecision,
@@ -35,18 +36,12 @@ from harness_runtime.lifecycle.hitl_tool_loop import (
     model_tool_call_step,
 )
 from harness_runtime.lifecycle.hitl_tool_response_audit import RuntimeHITLToolResponseAuditor
-from harness_runtime.lifecycle.reconciler_pause_resume_substrate import (
-    ReconcilerEnginePauseResumeSubstrate,
-)
 from harness_runtime.lifecycle.step_blast_radius import resolve_step_blast_radius
 from harness_runtime.lifecycle.step_mcp_trust_tier import resolve_tool_owner
 from harness_runtime.lifecycle.tool_search import (
     SEARCH_TOOLS_TOOL_NAME,
     compute_deferred_tool_index,
     dispatch_search_tools,
-)
-from harness_runtime.lifecycle.wal_segment_pause_resume_substrate import (
-    WALSegmentEnginePauseResumeSubstrate,
 )
 from harness_runtime.types import RuntimeConfig, ToolName
 
@@ -343,20 +338,7 @@ def materialize_r_cxa_2_producer_loop_stage(
     # loop (the driver gates on engine_class), so no files are written for them.
     engine_recovery_loop = RuntimeEngineRecoveryLoop(
         wiring=wiring,
-        substrate_by_engine_class={
-            EngineClass.WAL_SEGMENT: WALSegmentEnginePauseResumeSubstrate(
-                journal_dir=resolve_state_path(
-                    StateKind.ENGINE_RECOVERY_SEGMENTS, config, ctx.verified_state_root
-                ),
-                state_summary_provider=_default_engine_state_summary,
-            ),
-            EngineClass.RECONCILER_LOOP: ReconcilerEnginePauseResumeSubstrate(
-                journal_dir=resolve_state_path(
-                    StateKind.ENGINE_RECOVERY_RECONCILER, config, ctx.verified_state_root
-                ),
-                state_summary_provider=_default_engine_state_summary,
-            ),
-        },
+        substrate_by_engine_class=bind_engine_substrates(config, ctx.verified_state_root),
         actor=actor,
     )
     ctx.hitl_tool_loop = hitl_tool_loop
@@ -371,16 +353,6 @@ def _actor_identity_from_context(ctx: _MutableHarnessContext) -> ActorIdentity:
     actor = getattr(ctx.ledger_writer, "actor", None)
     actor_id = getattr(actor, "actor_id", "harness-runtime")
     return ActorIdentity(str(actor_id))
-
-
-def _default_engine_state_summary() -> StateSummary:
-    return StateSummary(
-        relevant_entries=(),
-        summary_text="",
-        summary_hash="0" * 64,
-        idempotency_key=Identifier("r-cxa-2-engine-state"),
-        external_references=(),
-    )
 
 
 def _reject_nonfinite_edit_constant(constant: str) -> NoReturn:
