@@ -2510,6 +2510,7 @@ def test_ac6_daemon_concurrent_two_clients_complete_independently(
 
     from harness_cp.workflow_driver_types import RunResult as _CpRunResult
     from harness_cp.workflow_driver_types import RunStatus as _CpRunStatus
+    from harness_runtime.lifecycle import engine_recovery_loop
     from harness_runtime.lifecycle.mcp_server import materialize_mcp_server_stage
 
     # The handler at `lifecycle/mcp_server.py:328` calls
@@ -2532,6 +2533,7 @@ def test_ac6_daemon_concurrent_two_clients_complete_independently(
         step_dispatchers: Any = None,
         descent_depth: int = 0,
         pause_snapshot_input: Any = None,
+        engine_resume: Any = None,
         resume_context: Any = None,
         child_resume_authority: Any = None,
         validator_run: Any = None,
@@ -2541,6 +2543,7 @@ def test_ac6_daemon_concurrent_two_clients_complete_independently(
     ) -> _CpRunResult:
         _ = descent_depth  # B-104 Task 4a — the depth-0 root run path.
         _ = pause_snapshot_input  # C-RT-35 resume threading — None on the run path.
+        assert engine_resume is None  # [LAW:behavior-not-structure] Fresh daemon runs are not resumes.
         _ = resume_context  # B-39 Slice B — None on the (non-resume) run path.
         assert child_resume_authority is None  # B-104 — a daemon run is unclaimed.
         _ = validator_run  # Runtime v1.138 §14.13.8(2) — the run's own binding.
@@ -2565,6 +2568,8 @@ def test_ac6_daemon_concurrent_two_clients_complete_independently(
     # Patching the source module attribute makes the lazy import pick up the
     # fake on first invocation of the registered tool.
     monkeypatch.setattr("harness_cp.workflow_driver.execute_workflow", _fake_execute_workflow)
+    # [LAW:behavior-not-structure] This witness isolates the handler ContextVar, not engine stores.
+    monkeypatch.setattr(engine_recovery_loop, "bind_engine_substrates", lambda _config, _verified: {})
 
     server = materialize_mcp_server_stage(drain_timeout_seconds=30.0)
     # Each fresh run's admission (Runtime spec v1.137 Rules B1/B3) places the declared journal
@@ -2584,7 +2589,7 @@ def test_ac6_daemon_concurrent_two_clients_complete_independently(
         return SimpleNamespace(
             workflow_id=wf_id,
             workload_class=None,
-            manifest_entry=SimpleNamespace(workflow_id=wf_id),
+            manifest_entry=SimpleNamespace(workflow_id=wf_id, engine_class=None),
             steps=(),
             default_model_binding=None,
             step_dispatchers=None,
