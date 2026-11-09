@@ -40,12 +40,28 @@ from harness_runtime.config_source import (
     RuntimeConfigSource,
 )
 from harness_runtime.lifecycle.installation_state import installation_state_bound
+from harness_runtime.lifecycle.operator_input import (
+    OperatorDecision,
+    OperatorInput,
+    observe_run_result,
+    operator_elicitation_callback,
+    terminal_operator,
+)
 from harness_runtime.lifecycle.workflow_manifest_loader import (
     LoadedWorkflow,
     ManifestAdmissibilityError,
     WorkflowManifestLoader,
     WorkflowManifestLoadError,
 )
+
+
+class HITLResumeResponse(StrEnum):
+    """The decisions `harness resume --hitl-response` can deliver to a held gate (C4)."""
+
+    approve = "approve"
+    edit = "edit"
+    reject = "reject"
+    respond = "respond"
 
 
 class OutputFormat(StrEnum):
@@ -285,6 +301,7 @@ async def _daemon_client_dispatch(
     workflow_file: Path,
     socket_path: Path,
     result_timeout_seconds: float,
+    operator: OperatorInput,
 ) -> dict[str, Any]:
     """Connect to the running daemon via Unix-socket; invoke run_workflow.
 
@@ -331,11 +348,23 @@ async def _daemon_client_dispatch(
                     terminate_on_close=False,
                 )
             )
+            observed, forwarded_write, armed, arrived = await stack.enter_async_context(
+                observe_run_result(read_stream, write_stream)
+            )
             session = await stack.enter_async_context(
-                ClientSession(read_stream, write_stream, read_timeout_seconds=timedelta(seconds=30))
+                ClientSession(
+                    observed,
+                    forwarded_write,
+                    read_timeout_seconds=timedelta(seconds=30),
+                    # Runtime v1.144 C2: the daemon's gates prompt this client's terminal.
+                    elicitation_callback=operator_elicitation_callback(
+                        operator, "daemon-client-tty", arrived
+                    ),
+                )
             )
             await session.initialize()
             phase = "run_workflow"
+            armed.set()
             tool_result = await session.call_tool(
                 "run_workflow",
                 {"workflow_id": str(workflow_file)},
@@ -533,6 +562,7 @@ def run_command(
                     workflow_file=workflow_file,
                     socket_path=resolved_socket,
                     result_timeout_seconds=daemon_result_timeout_seconds or 3600.0,
+                    operator=terminal_operator(sys.stdin, sys.stderr),
                 )
             )
         except (DaemonStartupError, DaemonResultError) as exc:
@@ -549,9 +579,31 @@ def run_command(
     workflow = _apply_workflow_overrides(workflow, provider=provider, model=model)
     from harness_runtime.api import run as _api_run
 
-    _exit_with_run_result(
-        _dispatch_one_shot(_api_run(workflow, config=runtime_config)), output=output
+    dispatch = _api_run(
+        workflow,
+        config=runtime_config,
+        operator=terminal_operator(sys.stdin, sys.stderr),
+        operator_ingress="cli-tty",
     )
+    _exit_with_run_result(_dispatch_one_shot(dispatch), output=output)
+
+
+def _operator_decision(
+    response: HITLResumeResponse | None,
+    **fields: str | None,
+) -> OperatorDecision | None:
+    """The `--hitl-response` flags parsed once into the decision `api.resume` admits (C4)."""
+    carried = {name: value for name, value in fields.items() if value is not None}
+    if response is None:
+        if carried:
+            raise typer.BadParameter(
+                f"{sorted(carried)} requires --hitl-response", param_hint="--hitl-response"
+            )
+        return None
+    try:
+        return OperatorDecision(action=response.value, **carried)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc), param_hint="--hitl-response") from exc
 
 
 @app.command("resume")
@@ -575,8 +627,30 @@ def resume_command(
         OutputFormat,
         typer.Option("--output", help="RunResult or refusal output format"),
     ] = OutputFormat.text,
+    hitl_response: Annotated[
+        HITLResumeResponse | None,
+        typer.Option("--hitl-response", help="Operator decision for a held HITL gate"),
+    ] = None,
+    edited_proposal: Annotated[
+        str | None,
+        typer.Option("--edited-proposal", help="JSON object replacing the payload (edit)"),
+    ] = None,
+    response_text: Annotated[
+        str | None,
+        typer.Option("--response-text", help="Response text (respond)"),
+    ] = None,
+    rejection_reason: Annotated[
+        str | None,
+        typer.Option("--rejection-reason", help="Rejection reason (reject)"),
+    ] = None,
 ) -> None:
     """Resume the latest durable workflow-layer pause of the manifest's workflow (v1.137 §E)."""
+    operator_decision = _operator_decision(
+        hitl_response,
+        edited_proposal=edited_proposal,
+        response_text=response_text,
+        rejection_reason=rejection_reason,
+    )
     workflow, runtime_config = _load_admissible_workflow(
         workflow_file, config=config, tenant_id=tenant_id
     )
@@ -585,7 +659,12 @@ def resume_command(
 
     # [LAW:single-enforcer] `api.resume` owns the handle read, claim, journal and run_id; this
     # surface only names the handle, so it holds no store, lease or snapshot input of its own.
-    dispatch = _api_resume(workflow, resume_handle=workflow.workflow_id, config=runtime_config)
+    dispatch = _api_resume(
+        workflow,
+        resume_handle=workflow.workflow_id,
+        operator_decision=operator_decision,
+        config=runtime_config,
+    )
     try:
         run_result = _dispatch_one_shot(dispatch)
     except REFUSAL_ERRORS as exc:

@@ -86,9 +86,12 @@ from harness_core import JournalRecordRef
 from harness_core.identity import WorkflowID
 from harness_core.workload_class import WorkloadClass
 from harness_cp.cp_shared_types import ModelBinding
+from harness_cp.hitl_placement import PendingHITLDecision
+from harness_cp.hitl_response_palette import HITLResponse
 from harness_cp.pause_resume_protocol_types import PauseSnapshot, ResumeContext
 from harness_cp.pause_state_projection import (
     AccessorDerivedResumeContext,
+    DepthZeroRootUniformFallbackOnlyLocation,
     EnginePausedState,
     PausedWorkflowState,
     PauseLocationProjection,
@@ -110,6 +113,10 @@ from harness_od.cross_family_rollup import (
 from harness_od.idempotency_join_dedup import SpanCostRecord
 from pydantic import BaseModel, ConfigDict, ValidationError
 
+from harness_runtime.lifecycle.hitl_gate_composer import (
+    HITLGateEditDecodeError,
+    _decode_edit_proposal,  # pyright: ignore[reportPrivateUsage]
+)
 from harness_runtime.lifecycle.installation_state import installation_state_bound
 from harness_runtime.lifecycle.journal_workflow_pause_store import (
     EnginePauseLocator,
@@ -118,6 +125,13 @@ from harness_runtime.lifecycle.journal_workflow_pause_store import (
     PauseJournalReadResult,
 )
 from harness_runtime.lifecycle.mcp_server import EngineResumedEntry, ResumedEntry
+from harness_runtime.lifecycle.operator_input import (
+    AttendedIngress,
+    OperatorDecision,
+    OperatorInput,
+    observe_run_result,
+    operator_elicitation_callback,
+)
 from harness_runtime.lifecycle.protected_result_store import normalize_tenant_scope
 from harness_runtime.lifecycle.root_resume_admission import (
     UNCLAIMED,
@@ -570,39 +584,11 @@ _run_lock: asyncio.Lock = asyncio.Lock()
 # ---------------------------------------------------------------------------
 
 
-async def _refuse_elicitation_in_api_run(context: Any, params: Any) -> Any:
-    """Elicitation callback for `api.run()`'s in-process ClientSession.
-
-    Per the operator-ratified Q2+Q3 reading at the C-RT-18 v1.12 fork:
-    `api.run()` is the carrier-preservation surface for the 4 existing
-    test callsites importing `from harness_runtime.api import run`.
-    Production HITL routes via Claude Code as the registered MCP client
-    per Reading α; `api.run()` is NOT structurally an HITL-bearing
-    entry point at v1.12 MVP.
-
-    If a workflow invoked via `api.run()` fires a HITL gate, this callback
-    runs on the in-process ClientSession side. We respond with `decline`
-    + a clear rejection reason — the composer at step 4i REJECT branch
-    maps this to a controlled workflow termination (rather than a hang
-    or silent absorption). Future arcs may bind a richer test-fixture
-    callback to exercise the elicitation surface from api.run-driven
-    integration tests.
-    """
-    _ = (context, params)
-    from mcp.shared.context import (
-        RequestContext,  # noqa: F401  # pyright: ignore[reportUnusedImport] — type-pin
-    )
-    from mcp.types import ElicitResult
-
-    return ElicitResult(
-        action="decline",
-        content=None,
-    )
-
-
 async def _invoke_run_workflow_via_in_process_mcp(
     fastmcp_server: Any,
     workflow_id: str,
+    operator: OperatorInput | None = None,
+    operator_ingress: AttendedIngress = "python",
 ) -> _CpRunResult:
     """Open an in-memory MCP client session against `fastmcp_server` +
     call the `run_workflow` tool with `workflow_id`.
@@ -620,22 +606,50 @@ async def _invoke_run_workflow_via_in_process_mcp(
     """
     import json
 
-    from mcp.shared.memory import create_connected_server_and_client_session
+    import anyio
+    from mcp.client.session import ClientSession
+    from mcp.shared.memory import create_client_server_memory_streams
+    from mcp.types import CallToolResult
 
-    async with create_connected_server_and_client_session(
-        fastmcp_server,
-        elicitation_callback=_refuse_elicitation_in_api_run,
-        raise_exceptions=True,
-    ) as session:
-        tool_result = await session.call_tool("run_workflow", {"workflow_id": workflow_id})
+    server = fastmcp_server._mcp_server  # pyright: ignore[reportPrivateUsage]
+    tool_result: CallToolResult | None = None
+    async with create_client_server_memory_streams() as (client_streams, server_streams):
+        client_read, client_write = client_streams
+        server_read, server_write = server_streams
+        async with anyio.create_task_group() as server_tasks:
+            server_tasks.start_soon(
+                lambda: server.run(
+                    server_read,
+                    server_write,
+                    server.create_initialization_options(),
+                    raise_exceptions=True,
+                )
+            )
+            try:
+                async with observe_run_result(client_read, client_write) as (
+                    read_stream,
+                    write_stream,
+                    armed,
+                    arrived,
+                ):
+                    async with ClientSession(
+                        read_stream,
+                        write_stream,
+                        elicitation_callback=operator_elicitation_callback(
+                            operator, operator_ingress, arrived
+                        ),
+                    ) as session:
+                        await session.initialize()
+                        armed.set()
+                        tool_result = await session.call_tool(
+                            "run_workflow", {"workflow_id": workflow_id}
+                        )
+            finally:
+                server_tasks.cancel_scope.cancel()
 
+    if tool_result is None:
+        raise RuntimeError("run_workflow MCP session ended without a tool result")
     if tool_result.isError:
-        # Tool body raised. FastMCP serializes the error text into
-        # `content[0].text`; surface as a runtime error (the existing
-        # api.run semantics propagate driver-side exceptions).
-        # `content[0]` is an mcp content union; `.text` exists only on
-        # TextContent. The bare ignore suppresses the union access (mcp types
-        # are loosely typed), leaving the value Unknown — pin it to str.
         error_text: str = (  # pyright: ignore[reportUnknownVariableType]
             tool_result.content[0].text  # type: ignore[union-attr]  # pyright: ignore[reportUnknownMemberType]
             if tool_result.content
@@ -644,27 +658,18 @@ async def _invoke_run_workflow_via_in_process_mcp(
         raise RuntimeError(
             f"run_workflow MCP tool raised inside in-process invocation: {error_text}"
         )
-
     if not tool_result.content:
         raise RuntimeError(
             "run_workflow MCP tool returned empty content; expected "
             "TextContent with JSON-serialized RunResult dict"
         )
-
     text_block = tool_result.content[0]
     payload_text = getattr(text_block, "text", None)
     if payload_text is None:
         raise RuntimeError(
             f"run_workflow MCP tool returned non-text content: {type(text_block).__name__}"
         )
-
-    # FastMCP wraps dict returns in a top-level JSON object; verify the
-    # shape matches the CP RunResult schema rather than the dict wrapper.
-    parsed = json.loads(payload_text)
-    # FastMCP 1.27.1 returns the dict as-is (not wrapped in {"result": ...});
-    # the v1.11 baseline test substrate validates this assumption via
-    # _CpRunResult.model_validate which raises on schema mismatch.
-    return _CpRunResult.model_validate(parsed)
+    return _CpRunResult.model_validate(json.loads(payload_text))
 
 
 # ---------------------------------------------------------------------------
@@ -703,12 +708,18 @@ async def run(
     workflow: WorkflowObject,
     *,
     config: RuntimeConfig | None = None,
+    operator: OperatorInput | None = None,
+    operator_ingress: AttendedIngress = "python",
 ) -> RunResult:
     """Execute one workflow end-to-end (C-RT-08 Track A operator-facing API).
 
     Bootstrap → execute → shutdown per C-RT-02. Async-only at Track A
     per spec §16 #4 (decided 2026-05-19). Single workflow per call;
     multi-workflow ingest is Track B (out of scope).
+
+    `operator` answers each HITL gate (Runtime v1.144 C2); `None` refuses every gate as
+    unattended. `operator_ingress` names the ingress the operator answers through, recorded
+    as the client-reported `hitl.response.ingress` (C5); the CLI binds `cli-tty`.
 
     Raises
     ------
@@ -813,7 +824,10 @@ async def run(
                     mcp_server.workflow_registry[workflow.workflow_id] = workflow
                     try:
                         cp_result = await _invoke_run_workflow_via_in_process_mcp(
-                            mcp_server.server, workflow.workflow_id
+                            mcp_server.server,
+                            workflow.workflow_id,
+                            operator=operator,
+                            operator_ingress=operator_ingress,
                         )
                     finally:
                         # Defensive cleanup — `_run_lock` serializes invocations but
@@ -1337,10 +1351,81 @@ def parse_resume_context(raw: dict[str, Any] | None) -> ResumeContext | None:
         ) from exc
 
 
+type ResumeResponse = ResumeContext | OperatorDecision | None
+"""What a resume carries for the held gate: a composed context, an operator's decision
+(admitted into a context against the snapshot it answers, Runtime v1.144 C4), or nothing."""
+
+
+def resume_response(
+    resume_context: ResumeContext | None, operator_decision: OperatorDecision | None
+) -> ResumeResponse:
+    """The one response a resume carries; supplying both is the caller's argument error (§4.2)."""
+    if resume_context is not None and operator_decision is not None:
+        raise ResumeArgsError(
+            "supply operator_decision or resume_context, not both (Runtime v1.144 C4)."
+        )
+    return operator_decision or resume_context
+
+
+def parse_resume_response(
+    resume_context: dict[str, Any] | None, operator_decision: dict[str, Any] | None
+) -> ResumeResponse:
+    """A wire resume's response, each argument parsed once into its type."""
+    try:
+        decision = (
+            None
+            if operator_decision is None
+            else OperatorDecision.model_validate(operator_decision)
+        )
+    except ValidationError as exc:
+        raise ResumeArgsError(
+            "operator_decision is not an OperatorDecision (Runtime v1.144 C1)."
+        ) from exc
+    return resume_response(parse_resume_context(resume_context), decision)
+
+
+def operator_resume_context(snapshot: PauseSnapshot, decision: OperatorDecision) -> ResumeContext:
+    """An operator's decision for the held gate `snapshot` paused at, as its resume context (C4).
+
+    Only the HITL-gate pause has a decision to receive, and only approve, edit, reject and
+    respond answer it. An EDIT must decode under the gate's own rules here, so a malformed
+    proposal is refused before any claim instead of failing the resumed step.
+    """
+    # [LAW:one-source-of-truth] CP's public projection alone classifies gate ownership.
+    if not any(
+        isinstance(location, DepthZeroRootUniformFallbackOnlyLocation)
+        for location in project_pause_locations(snapshot)
+    ):
+        raise ResumeArgsError(
+            "operator_decision requires a root-owned HITL gate; a transitive child "
+            "or non-HITL pause cannot receive it (Runtime v1.144 C4)."
+        )
+    try:
+        response = HITLResponse(decision.action)
+        edited = (
+            None
+            if decision.edited_proposal is None
+            else dict(_decode_edit_proposal(decision.edited_proposal))
+        )
+        pending = PendingHITLDecision(
+            response=response,
+            edited_proposal_payload=edited,
+            # C1 permits an optional approval note, while C4 carries text to the gate
+            # only for RESPOND; approval still commits the unchanged action.
+            response_text=(decision.response_text if response is HITLResponse.RESPOND else None),
+            rejection_reason=decision.rejection_reason,
+        )
+    except (ValueError, HITLGateEditDecodeError) as exc:
+        raise ResumeArgsError(
+            f"operator_decision cannot resume a held gate: {exc} (Runtime v1.144 C4)."
+        ) from exc
+    return ResumeContext(pending_hitl_decision=pending)
+
+
 async def admit_root_resume(
     workflow: WorkflowObject,
     source: RootResumeSource,
-    resume_context: ResumeContext | None,
+    response: ResumeResponse,
     config: RuntimeConfig,
 ) -> ResumedEntry | EngineResumedEntry:
     """The one pre-body root resume admission (Runtime spec v1.141 §2.2-§2.3).
@@ -1469,6 +1554,11 @@ async def admit_root_resume(
     # performs its own journal read off the event loop (spec v1.141 §2.2).
     match record:
         case PauseSnapshot():
+            resume_context = (
+                operator_resume_context(record, response)
+                if isinstance(response, OperatorDecision)
+                else response
+            )
             await _enforce_pause_state_staleness_precondition(
                 config, workflow, resume_context, record
             )
@@ -1476,12 +1566,16 @@ async def admit_root_resume(
                 pause_snapshot=record, admission=admission, resume_context=resume_context
             )
         case EnginePauseLocator():
+            # [LAW:parse-dont-validate] An engine locator carries no workflow HITL gate.
+            if isinstance(response, OperatorDecision):
+                raise ResumeArgsError(
+                    "operator_decision answers a workflow HITL-gate pause, not an engine "
+                    "pause (Runtime v1.144 C4)."
+                )
             _require_engine_pause_record(config, record)
             # The token alone binds the read: the locator is the journal's latest record.
-            await _enforce_pause_state_staleness_precondition(config, workflow, resume_context)
-            return EngineResumedEntry(
-                locator=record, admission=admission, resume_context=resume_context
-            )
+            await _enforce_pause_state_staleness_precondition(config, workflow, response)
+            return EngineResumedEntry(locator=record, admission=admission, resume_context=response)
 
 
 def _require_engine_pause_record(config: RuntimeConfig, locator: EnginePauseLocator) -> None:
@@ -1517,6 +1611,7 @@ async def resume(
     pause_snapshot: PauseSnapshot | None = None,
     resume_handle: str | None = None,
     resume_context: ResumeContext | None = None,
+    operator_decision: OperatorDecision | None = None,
     config: RuntimeConfig | None = None,
 ) -> RunResult:
     """Resume a paused workflow — caller-supplied snapshot OR durable-store handle (C-RT-35).
@@ -1597,6 +1692,9 @@ async def resume(
     resume_context
         Operator-supplied resume-time context (e.g. the HITL response the
         paused gate awaits); delivered one-shot to the resumed-step gate.
+    operator_decision
+        An operator's approve/edit/reject/respond for a held HITL gate, admitted against
+        the durable snapshot (Runtime v1.144 C4). Mutually exclusive with `resume_context`.
     config
         Runtime config; `None` → defaults + env per C-RT-03. MUST opt into
         the pause/resume protocol (`pause_resume_protocol_config`) — the same
@@ -1606,7 +1704,9 @@ async def resume(
     ------
     ResumeArgsError
         `RT-FAIL-RESUME-ARGS` — not exactly one of `pause_snapshot` /
-        `resume_handle`, or `resume_handle` without the durable opt-in.
+        `resume_handle`, `resume_handle` without the durable opt-in, both
+        `operator_decision` and `resume_context`, or an `operator_decision` the held
+        pause cannot take (not a HITL-gate pause, not a C4 action, undecodable EDIT).
     ResumeHandleUnknownError
         `RT-FAIL-RESUME-HANDLE-UNKNOWN` — no durable snapshot for the handle.
     ResumeDirectChildHandleError
@@ -1644,6 +1744,7 @@ async def resume(
         )
 
     source = _root_resume_source(pause_snapshot, resume_handle)
+    response = resume_response(resume_context, operator_decision)
     resolved_config = config if config is not None else _default_config()
 
     # Concurrency guard BEFORE every journal read (Codex-caught, C-RT-35): the
@@ -1665,7 +1766,7 @@ async def resume(
         # IS spec v1.17 §1.1: the operator's installation state, bound for this whole call.
         with installation_state_bound():
             # [LAW:single-enforcer] The one admission unit the daemon also calls (spec v1.141 §2.3).
-            entry = await admit_root_resume(workflow, source, resume_context, resolved_config)
+            entry = await admit_root_resume(workflow, source, response, resolved_config)
             # B-INTERSTEP-PERRUN-ISOLATION — isolate this resume's cost accumulator in
             # `COST_ACCUM_VAR` for the whole run (mirrors `run()`); the post-run cost
             # read resolves the SAME accumulator the wrappers appended to, and the

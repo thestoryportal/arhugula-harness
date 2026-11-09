@@ -20,6 +20,7 @@ Strategy:
 from __future__ import annotations
 
 import asyncio
+import io
 import re
 import sys
 from datetime import timedelta
@@ -27,8 +28,10 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import anyio
 import harness_runtime.cli.app as _ensure_import
 import pytest
+from harness_runtime.lifecycle.operator_input import OperatorInput, terminal_operator
 from typer.testing import CliRunner
 
 _cli_app_mod = sys.modules["harness_runtime.cli.app"]
@@ -82,6 +85,10 @@ def _write_yaml(tmp_path: Path) -> Path:
     return path
 
 
+# No terminal: the daemon's gates (none in these fixtures) would be refused.
+_UNATTENDED_TERMINAL = terminal_operator(io.StringIO(), io.StringIO())
+
+
 def _stub_dispatch(
     monkeypatch: pytest.MonkeyPatch,
     *,
@@ -92,8 +99,13 @@ def _stub_dispatch(
     captured: dict[str, Any] = {}
 
     async def _fake(
-        *, workflow_file: Path, socket_path: Path, result_timeout_seconds: float
+        *,
+        workflow_file: Path,
+        socket_path: Path,
+        result_timeout_seconds: float,
+        operator: OperatorInput,
     ) -> dict[str, Any]:
+        _ = operator
         captured["workflow_file"] = workflow_file
         captured["socket_path"] = socket_path
         captured["result_timeout_seconds"] = result_timeout_seconds
@@ -234,14 +246,19 @@ async def test_dispatch_uses_loopback_nominal_url_for_uds_transport(
     an ASGI-accepted Host header to avoid HTTP 421 from the daemon app."""
     import mcp
     import mcp.client.streamable_http as streamable_http_mod
+    from mcp.shared.message import SessionMessage
 
     captured: dict[str, Any] = {}
 
     class _FakeStreamableHTTPClient:
         async def __aenter__(self) -> tuple[object, object, Any]:
-            return object(), object(), lambda: None
+            self.read_send, read = anyio.create_memory_object_stream[SessionMessage | Exception](1)
+            write, self.write_receive = anyio.create_memory_object_stream[SessionMessage](1)
+            return read, write, lambda: None
 
         async def __aexit__(self, *args: object) -> None:
+            await self.read_send.aclose()
+            await self.write_receive.aclose()
             return None
 
     def _fake_streamable_http_client(
@@ -261,9 +278,11 @@ async def test_dispatch_uses_loopback_nominal_url_for_uds_transport(
             read_stream: object,
             write_stream: object,
             read_timeout_seconds: timedelta,
+            elicitation_callback: Any,
         ) -> None:
             captured["session_streams"] = (read_stream, write_stream)
             captured["session_timeout"] = read_timeout_seconds
+            captured["elicitation_callback"] = elicitation_callback
 
         async def __aenter__(self) -> _FakeClientSession:
             return self
@@ -301,6 +320,7 @@ async def test_dispatch_uses_loopback_nominal_url_for_uds_transport(
         workflow_file=workflow,
         socket_path=socket_path,
         result_timeout_seconds=120.0,
+        operator=_UNATTENDED_TERMINAL,
     )
 
     assert payload["status"] == "success"
@@ -310,6 +330,7 @@ async def test_dispatch_uses_loopback_nominal_url_for_uds_transport(
     assert captured["tool_name"] == "run_workflow"
     assert captured["tool_arguments"] == {"workflow_id": str(workflow)}
     assert captured["session_timeout"] == timedelta(seconds=30)
+    assert callable(captured["elicitation_callback"])
     assert captured["result_timeout"] == timedelta(seconds=120)
     assert captured["http_client"].timeout.read is None
     assert captured["http_client"].timeout.connect == 30
@@ -402,6 +423,7 @@ async def test_mixed_mcp_error_group_keeps_connection_detail(
             workflow_file=Path("workflow.toml"),
             socket_path=tmp_path / "daemon.sock",
             result_timeout_seconds=0.1,
+            operator=_UNATTENDED_TERMINAL,
         )
 
 
@@ -445,6 +467,7 @@ async def test_initialize_failure_reports_its_own_budget(
             workflow_file=Path("workflow.toml"),
             socket_path=tmp_path / "daemon.sock",
             result_timeout_seconds=0.1,
+            operator=_UNATTENDED_TERMINAL,
         )
 
 
@@ -496,6 +519,7 @@ async def test_primary_daemon_failure_survives_teardown_failure(
             workflow_file=Path("workflow.toml"),
             socket_path=tmp_path / "daemon.sock",
             result_timeout_seconds=1.0,
+            operator=_UNATTENDED_TERMINAL,
         )
     if failure_kind == "connection":
         assert isinstance(primary.value.__cause__, httpx.ConnectError)
@@ -663,12 +687,14 @@ async def test_real_mcp_result_deadline_and_received_status(
                             workflow_file=workflow,
                             socket_path=socket_path,
                             result_timeout_seconds=0.1,
+                            operator=_UNATTENDED_TERMINAL,
                         )
                 else:
                     payload = await _cli_app_mod._daemon_client_dispatch(
                         workflow_file=workflow,
                         socket_path=socket_path,
                         result_timeout_seconds=0.8,
+                        operator=_UNATTENDED_TERMINAL,
                     )
                     assert payload == {"status": status, "workflow_id": str(workflow)}
     finally:
@@ -764,6 +790,7 @@ async def test_real_mcp_teardown_deadline_after_received_result(
                     workflow_file=Path("workflow.toml"),
                     socket_path=socket_path,
                     result_timeout_seconds=1.5 if cancel_during_tool else 10.0,
+                    operator=_UNATTENDED_TERMINAL,
                 )
             )
             if cancel_during_tool:
@@ -869,6 +896,7 @@ async def test_real_mcp_teardown_closes_get_stream_before_session_delete(
                 workflow_file=Path("workflow.toml"),
                 socket_path=socket_path,
                 result_timeout_seconds=10.0,
+                operator=_UNATTENDED_TERMINAL,
             )
     finally:
         uv_server.should_exit = True

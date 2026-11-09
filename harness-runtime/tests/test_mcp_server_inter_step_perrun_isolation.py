@@ -35,8 +35,10 @@ from harness_runtime.lifecycle.inter_step_output_channel import (
 )
 from harness_runtime.types import (
     COST_ACCUM_VAR,
+    PAUSE_REQUESTED_VAR,
     CostRecordAccumulator,
     RunScopedCostRecordAccumulator,
+    RunScopedPauseRequestedFlag,
 )
 
 # ---------------------------------------------------------------------------
@@ -134,6 +136,39 @@ async def test_negative_control_shared_channel_concurrent_overlap_corrupts() -> 
         f"expected the shared-channel overlap to corrupt to the latest owner, got "
         f"{results!r} — if it no longer corrupts, re-derive the interleave window."
     )
+
+
+@pytest.mark.asyncio
+async def test_one_roots_hold_survives_another_roots_entry_clear() -> None:
+    """A durable hold in one worker stays visible after another root clears its flag."""
+    flag = RunScopedPauseRequestedFlag()
+    held = asyncio.Event()
+    cleared = asyncio.Event()
+
+    async def holding_root() -> bool:
+        token = PAUSE_REQUESTED_VAR.set(asyncio.Event())
+        try:
+            await asyncio.to_thread(flag.set)
+            held.set()
+            await cleared.wait()
+            return await asyncio.to_thread(flag.is_set)
+        finally:
+            PAUSE_REQUESTED_VAR.reset(token)
+
+    async def entering_root() -> bool:
+        await held.wait()
+        token = PAUSE_REQUESTED_VAR.set(asyncio.Event())
+        try:
+            flag.clear()
+            cleared.set()
+            return await asyncio.to_thread(flag.is_set)
+        finally:
+            PAUSE_REQUESTED_VAR.reset(token)
+
+    first, second = await asyncio.gather(holding_root(), entering_root())
+    assert first is True
+    assert second is False
+    assert PAUSE_REQUESTED_VAR.get() is None
 
 
 # ---------------------------------------------------------------------------

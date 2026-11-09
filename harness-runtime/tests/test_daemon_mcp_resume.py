@@ -198,6 +198,37 @@ async def test_a_fresh_run_inside_a_resumed_body_gets_its_own_run_and_no_resume_
     )
 
 
+@pytest.mark.asyncio
+async def test_one_daemon_roots_pause_survives_another_roots_entry(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A second MCP root must not clear the first root's pending pause."""
+    execute_workflow = workflow_driver.execute_workflow
+    replies: list[CallToolResult] = []
+    nested: list[Callable[[], None]] = []
+    observed: dict[str, bool] = {}
+
+    def execute(manifest_entry: Any, steps: Any, run_id: str, ctx: Any, **kwargs: Any) -> Any:
+        if manifest_entry.workflow_id == _WORKFLOW_ID:
+            ctx.pause_requested_flag.set()
+            nested[0]()
+            observed["first_after_second"] = ctx.pause_requested_flag.is_set()
+        else:
+            observed["second_at_entry"] = ctx.pause_requested_flag.is_set()
+        return execute_workflow(manifest_entry, steps, run_id, ctx, **kwargs)
+
+    _record_cp(monkeypatch, execute)
+    first = _Workflow(_Dispatcher())
+    second = _Workflow(_Dispatcher(), "wf-other")
+    async with _daemon(harness.config, first, second) as session:
+        nested.append(_from_body(session, "run_workflow", {"workflow_id": "wf-other"}, replies))
+        first_reply = await session.call_tool("run_workflow", {"workflow_id": _WORKFLOW_ID})
+
+    assert observed == {"second_at_entry": False, "first_after_second": True}
+    assert _run_result(replies[0])["status"] == "success"
+    assert _run_result(first_reply)["status"] == "paused"
+
+
 # --- W2: at most once, across overlapping daemon requests ---------------------------------------
 
 
@@ -408,7 +439,7 @@ async def test_resume_workflow_takes_a_workflow_id_and_an_optional_resume_contex
         tools = {tool.name: tool for tool in (await session.list_tools()).tools}
 
     schema = tools["resume_workflow"].inputSchema
-    assert set(schema["properties"]) == {"workflow_id", "resume_context"}
+    assert set(schema["properties"]) == {"workflow_id", "resume_context", "operator_decision"}
     assert schema["required"] == ["workflow_id"]
 
 

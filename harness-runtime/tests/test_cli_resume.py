@@ -118,7 +118,8 @@ def test_resume_calls_api_resume_once_with_only_the_manifest_handle(
     assert result.exit_code == EXIT_SUCCESS, result.stdout + result.stderr
     [call] = calls
     assert call["resume_handle"] == call["workflow"].workflow_id == "wf-cli-one-shot"
-    assert set(call) == {"workflow", "resume_handle", "config"}
+    assert set(call) == {"workflow", "resume_handle", "config", "operator_decision"}
+    assert call["operator_decision"] is None
 
 
 @pytest.mark.parametrize(

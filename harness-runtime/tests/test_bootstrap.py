@@ -1396,7 +1396,12 @@ async def test_api_run_passes_workload_class_into_bootstrap(
 
     monkeypatch.setattr("harness_runtime.bootstrap.run_bootstrap", _wrapped_fake_bootstrap)
 
-    async def _fake_invoke(fastmcp_server: Any, workflow_id: str) -> Any:
+    async def _fake_invoke(
+        fastmcp_server: Any,
+        workflow_id: str,
+        operator: Any = None,
+        operator_ingress: Any = "python",
+    ) -> Any:
         _ = fastmcp_server, workflow_id
         from harness_cp.workflow_driver_types import (
             RunResult as _CpRR,

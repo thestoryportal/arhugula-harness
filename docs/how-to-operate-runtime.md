@@ -26,6 +26,27 @@ Useful flags:
 | `--socket-path <path>` | Select the daemon Unix socket for daemon-client mode. |
 | `--daemon-result-timeout-seconds <seconds>` | Set a finite positive wait for a daemon workflow result (default: 3600 seconds; requires `--daemon`). |
 
+## Answer An Approval Gate
+
+When a workflow reaches an operator gate, `harness run` prints the gated step ID,
+payload hash and full payload to stderr before reading one answer. The one-shot
+and `--daemon` client use the same terminal input:
+
+| Answer | Result |
+| --- | --- |
+| `approve` | Dispatch the gated step once. |
+| `edit <JSON object>` | Dispatch once with that object as the step payload. |
+| `reject [reason]` | Reject the step without dispatching it. |
+| `respond <text>` | Supply text to the gate. |
+| `hold` | Pause with a resume handle when durable pause is bound. |
+| `cancel` | End the gate without dispatching the step. |
+
+The prompt is available only when stdin and stderr are terminals. A noninteractive
+run or an invalid answer refuses the gate without dispatching the step. A silent
+operator is bounded by the gate's configured placement timeout, or by 900 seconds
+when that timeout is unset. A daemon client displays and reads the prompt locally;
+the daemon keeps the workflow result and audit record.
+
 ## Resume A Paused Workflow
 
 `harness resume` continues the latest durable workflow-layer pause of a
@@ -36,10 +57,20 @@ resume handle:
 uv run harness resume examples/minimal.toml --config harness.toml
 ```
 
-The command accepts only `--config`, `--tenant-id` and `--output`, which mean
-what they mean for `run`. It has no `--provider`, `--model` or `--daemon`, and
-it takes no snapshot or resume context. Resume runs in one-shot mode and keeps
-the paused run's `run_id`.
+To answer a held operator gate, supply its decision on the same resume command:
+
+```sh
+uv run harness resume examples/minimal.toml --config harness.toml --hitl-response approve
+uv run harness resume examples/minimal.toml --config harness.toml --hitl-response edit --edited-proposal '{"k":"edited"}'
+```
+
+`--hitl-response` accepts `approve`, `edit`, `reject` and `respond`. Use
+`--edited-proposal` with a JSON object for edit, `--rejection-reason` for reject,
+or `--response-text` for respond. An invalid combination is refused before the
+resume claim is spent. The command also accepts `--config`, `--tenant-id` and
+`--output`; it has no `--provider`, `--model` or `--daemon`, and it takes no
+caller-supplied snapshot or resume context. Resume runs in one-shot mode and
+keeps the paused run's `run_id`.
 
 Only the latest pause journal record for the `workflow_id` can be resumed.
 That record is either a workflow-layer pause or an engine-native pause of a

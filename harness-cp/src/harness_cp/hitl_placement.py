@@ -34,10 +34,10 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
 
 from harness_core.identity import EntryID
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
 from harness_cp.handoff_context import ProposedAction
 from harness_cp.hitl_response_palette import HITLResponse
@@ -171,6 +171,33 @@ class HITLResult(BaseModel):
 
     response_summary_hash: str
     """SHA-256 hex-64 over the canonicalized response payload."""
+
+
+class PendingHITLDecision(BaseModel):
+    """An operator's HITL decision admitted for a held root gate (CP v1.132 §26.8.1).
+
+    The resumed gate (Runtime composer step 0) turns this into the `HITLResult` it
+    audits, so it carries no timestamp, hash or audit identity: the gate owns those.
+    `edited_proposal_payload` is set exactly for EDIT and `response_text` exactly for
+    RESPOND.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    kind: Literal["pending"] = "pending"
+    response: HITLResponse
+    edited_proposal_payload: dict[str, Any] | None = None
+    response_text: str | None = None
+    rejection_reason: str | None = None
+
+    @model_validator(mode="after")
+    def _fields_match_response(self) -> PendingHITLDecision:
+        # [LAW:parse-dont-validate] admissible only in the C1 shape, so the gate never re-checks it.
+        if (self.edited_proposal_payload is not None) != (self.response is HITLResponse.EDIT):
+            raise ValueError("edited_proposal_payload is required for, and only for, response edit")
+        if (self.response_text is not None) != (self.response is HITLResponse.RESPOND):
+            raise ValueError("response_text is required for, and only for, response respond")
+        return self
 
 
 #: Glob/regex metacharacters refused in a `tool_filter` entry (exact-name matching only).

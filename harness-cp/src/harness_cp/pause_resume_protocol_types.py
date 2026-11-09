@@ -54,7 +54,7 @@ from harness_cp.handoff_context import StateSummary
 from harness_cp.topology_pattern import WorkerSelection
 
 if TYPE_CHECKING:
-    from harness_cp.hitl_placement import HITLResult
+    from harness_cp.hitl_placement import HITLResult, PendingHITLDecision
 
 
 class WorkflowPauseReason(StrEnum):
@@ -1578,6 +1578,22 @@ class ResumeContext(BaseModel):
     mirroring how a LINEAR effect-fence pause consumes `effect_fence_resolution`
     directly (§26.8.1 sibling-field precedent, unamended by this delta)."""
 
+    pending_hitl_decision: PendingHITLDecision | None = None
+    """An operator decision admitted for the depth-0 root's held gate (CP v1.132
+    §26.8.1); the resumed gate builds and audits the `HITLResult` itself. Exclusive
+    with `hitl_response` and `hitl_responses`, and never child-addressed."""
+
+    @model_validator(mode="after")
+    def _one_hitl_response_authority(self) -> ResumeContext:
+        # [LAW:one-source-of-truth] at most one carrier may hold the operator's response.
+        if self.pending_hitl_decision is not None and (
+            self.hitl_response is not None or self.hitl_responses is not None
+        ):
+            raise ValueError(
+                "pending_hitl_decision is exclusive with hitl_response and hitl_responses"
+            )
+        return self
+
     def hitl_response_for(self, child_run_id: str) -> HITLResult | None:
         """The operator's HITL response for one paused GATE-OWNING child's own `run_id`.
 
@@ -1663,13 +1679,13 @@ class HITLDeliveryCell(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    _value: HITLResult | None = PrivateAttr(default=None)
+    _value: HITLResult | PendingHITLDecision | None = PrivateAttr(default=None)
 
-    def __init__(self, resolved: HITLResult | None, **data: Any) -> None:
+    def __init__(self, resolved: HITLResult | PendingHITLDecision | None, **data: Any) -> None:
         super().__init__(**data)
         self._value = resolved
 
-    def consume_and_clear(self) -> HITLResult | None:
+    def consume_and_clear(self) -> HITLResult | PendingHITLDecision | None:
         """Atomically return the cell's value AND clear it to `None`.
 
         Enforces the same one-shot semantic the retired ctx-level holder

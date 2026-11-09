@@ -330,6 +330,7 @@ def test_resume_context_field_shape() -> None:
         "effect_fence_resolution",
         "effect_fence_resolutions",
         "hitl_responses",
+        "pending_hitl_decision",  # v1.132 §26.8.1 (B-315), exclusive with the two HITL carriers
     }
 
 
