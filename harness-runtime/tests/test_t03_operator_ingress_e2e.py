@@ -30,6 +30,7 @@ from typing import Any
 import pytest
 import typer
 import yaml
+from harness_cp import workflow_driver
 from harness_cp.hitl_placement import HITLResponse, HITLResult, PendingHITLDecision
 from harness_cp.pause_resume_protocol_types import (
     HITLDeliveryCell,
@@ -74,6 +75,9 @@ pytestmark = [
 _WORKFLOW_ID = "wf-t03-operator-ingress"
 _GATED_STEP = "s-gated"
 _GATED_PAYLOAD = {"tool_id": "witness.a", "tool_args": {"value": _GATED_STEP}}
+_FOLLOWUP_STEP = "s-followup"
+_FOLLOWUP_PAYLOAD = {"tool_id": "witness.a", "tool_args": {"value": _FOLLOWUP_STEP}}
+_CHILD_STEP = "s-child"
 
 
 def _witness() -> ModuleType:
@@ -95,7 +99,13 @@ pw = _witness()
 cli = importlib.import_module("harness_runtime.cli.app")
 
 
-def _workflow(payload: dict[str, Any] = _GATED_PAYLOAD) -> Any:
+def _workflow(
+    payload: dict[str, Any] = _GATED_PAYLOAD,
+    *,
+    place_gate: bool = True,
+    followup_step: bool = False,
+    child_step: bool = False,
+) -> Any:
     from harness_core.identity import StepID
     from harness_core.persona_tier import PersonaTier
     from harness_core.workload_class import WorkloadClass
@@ -111,6 +121,23 @@ def _workflow(payload: dict[str, Any] = _GATED_PAYLOAD) -> Any:
     from harness_cp.workflow_driver_types import StepKind, WorkflowStep
     from harness_cp.workflow_manifest_entry import WorkflowManifestEntry
 
+    from .test_lifecycle_sub_agent_dispatch import _payload as child_payload
+
+    child = (
+        child_payload(child_step_kinds=(StepKind.DECLARATIVE_STEP,)).model_copy(
+            update={
+                "child_steps": (
+                    WorkflowStep(
+                        step_id=StepID("child-step-0"),
+                        step_kind=StepKind.DECLARATIVE_STEP,
+                        step_payload={"output": {"child": "ok"}},
+                    ),
+                )
+            }
+        )
+        if child_step
+        else None
+    )
     chain = FallbackChain(
         primary=ProviderCandidate(
             provider="ollama", model="llama3.2:3b", family=ProviderFamily.LOCAL_OPEN_WEIGHT
@@ -129,7 +156,9 @@ def _workflow(payload: dict[str, Any] = _GATED_PAYLOAD) -> Any:
         layer_budgets=(),
         fallback_chain=chain,
         hitl_placements=(
-            HITLPlacement(position=HITLPlacementKind.PRE_ACTION, tool_filter=("witness.a",)),
+            (HITLPlacement(position=HITLPlacementKind.PRE_ACTION, tool_filter=("witness.a",)),)
+            if place_gate
+            else ()
         ),
         per_step_overrides={},
     )
@@ -141,9 +170,29 @@ def _workflow(payload: dict[str, Any] = _GATED_PAYLOAD) -> Any:
         manifest_entry = entry
         steps = (
             WorkflowStep(
-                step_id=StepID(_GATED_STEP),
-                step_kind=StepKind.TOOL_STEP,
-                step_payload=payload,
+                step_id=StepID(_GATED_STEP), step_kind=StepKind.TOOL_STEP, step_payload=payload
+            ),
+            *(
+                (
+                    WorkflowStep(
+                        step_id=StepID(_FOLLOWUP_STEP),
+                        step_kind=StepKind.TOOL_STEP,
+                        step_payload=_FOLLOWUP_PAYLOAD,
+                    ),
+                )
+                if followup_step
+                else ()
+            ),
+            *(
+                (
+                    WorkflowStep(
+                        step_id=StepID(_CHILD_STEP),
+                        step_kind=StepKind.SUB_AGENT_DISPATCH,
+                        step_payload=child.model_dump(),
+                    ),
+                )
+                if child is not None
+                else ()
             ),
         )
 
@@ -164,9 +213,30 @@ class Scenario:
         lines = path.read_text().splitlines() if path.exists() else []
         return [json.loads(line)["value"] for line in lines if line.strip()]
 
-    def manifest(self, payload: dict[str, Any] = _GATED_PAYLOAD) -> Path:
+    def gated_dispatch_count(self) -> int:
+        """Count the gated step's durable dispatch facts, independent of the tool marker."""
+        path = self.layout.ledger_dir / "state.jsonl"
+        lines = path.read_text().splitlines() if path.exists() else []
+        action_id = f"workflow:{_WORKFLOW_ID}:step:0"
+        return sum(json.loads(line)["action_id"] == action_id for line in lines if line.strip())
+
+    def assert_zero_effects(self) -> None:
+        # [LAW:behavior-not-structure] A refusal must leave both public effect witnesses empty.
+        assert self.marker() == []
+        assert self.gated_dispatch_count() == 0
+
+    def manifest(
+        self,
+        payload: dict[str, Any] = _GATED_PAYLOAD,
+        *,
+        place_gate: bool = True,
+        followup_step: bool = False,
+        child_step: bool = False,
+    ) -> Path:
         """The gated workflow as the YAML manifest `harness run` loads."""
-        wf = _workflow(payload)
+        wf = _workflow(
+            payload, place_gate=place_gate, followup_step=followup_step, child_step=child_step
+        )
         document = {
             "version": 1,
             "workflow": wf.manifest_entry.model_dump(mode="json", exclude_defaults=True),
@@ -307,6 +377,7 @@ def test_1_approve_dispatches_once_and_the_operator_saw_the_gated_step(gated: Sc
 
     assert result.status == "completed", result
     assert gated.marker() == [_GATED_STEP]
+    assert gated.gated_dispatch_count() == 1
     [audit] = gated.hitl_audits()
     assert audit["audit.cp.response"] == "approve", audit
     [request] = seen
@@ -337,7 +408,7 @@ def test_3_reject_has_zero_effects_and_audits_the_operator_reason(gated: Scenari
     result = _run(gated, _answering(decision, []))
 
     _assert_rejected(result)
-    assert gated.marker() == []
+    gated.assert_zero_effects()
     [audit] = gated.hitl_audits()
     assert audit["audit.cp.response"] == "reject", audit
     assert audit["audit.cp.rejection_reason_hash"] == _sha("no"), audit
@@ -348,7 +419,7 @@ def test_4_no_operator_refuses_as_unattended(gated: Scenario) -> None:
     result = _run(gated, None)
 
     _assert_rejected(result)
-    assert gated.marker() == []
+    gated.assert_zero_effects()
     [audit] = gated.hitl_audits()
     assert audit["audit.cp.response"] == "reject", audit
     assert audit["audit.cp.rejection_reason_hash"] == _sha(UNATTENDED_REASON), audit
@@ -362,7 +433,7 @@ def test_5_a_raising_operator_refuses_naming_the_failure(gated: Scenario) -> Non
     result = _run(gated, failing)
 
     _assert_rejected(result)
-    assert gated.marker() == []
+    gated.assert_zero_effects()
     [audit] = gated.hitl_audits()
     assert audit["audit.cp.response"] == "reject", audit
     reason = "operator input callback failed: ValueError"
@@ -478,7 +549,7 @@ def test_6_harness_run_without_a_terminal_refuses_as_noninteractive(gated: Scena
 
     assert code == cli.EXIT_WORKFLOW_FAIL
     assert time.monotonic() - started < _CLI_BOUND_SECONDS
-    assert gated.marker() == []
+    gated.assert_zero_effects()
     [audit] = gated.hitl_audits()
     assert audit["audit.cp.response"] == "reject", audit
     assert audit["audit.cp.rejection_reason_hash"] == _sha(NONINTERACTIVE_REASON), audit
@@ -503,7 +574,7 @@ def test_7_harness_run_on_a_terminal_refuses_invalid_input(
 
     assert _harness_run(gated, terminal.stdin, terminal.stderr) == cli.EXIT_WORKFLOW_FAIL
     _assert_gate_shown(operator.done())
-    assert gated.marker() == []
+    gated.assert_zero_effects()
     [audit] = gated.hitl_audits()
     assert audit["audit.cp.rejection_reason_hash"] == _sha(INVALID_OPERATOR_INPUT), audit
     assert gated.ingresses() == ["cli-tty"]
@@ -620,6 +691,7 @@ def test_8_one_daemon_serves_an_approve_then_a_reject_on_a_terminal(
         assert operator.done().marker_before_answer == [_GATED_STEP]
     assert code == cli.EXIT_WORKFLOW_FAIL
     assert gated.marker() == [_GATED_STEP]
+    assert gated.gated_dispatch_count() == 1
     approve, reject = gated.hitl_audits()
     assert (approve["audit.cp.response"], reject["audit.cp.response"]) == ("approve", "reject")
     assert _daemon_ingresses(gated) == ["daemon-client-tty", "daemon-client-tty"]
@@ -650,7 +722,7 @@ def test_12_cancel_through_api_run_refuses_under_the_python_ingress(gated: Scena
     result = _run(gated, _answering(OperatorDecision(action="cancel"), []))
 
     _assert_rejected(result)
-    assert gated.marker() == []
+    gated.assert_zero_effects()
     assert gated.ingresses() == ["python"]
 
 
@@ -661,7 +733,7 @@ def test_12_cancel_on_a_terminal_refuses_under_the_cli_tty_ingress(
 
     assert _harness_run(gated, terminal.stdin, terminal.stderr) == cli.EXIT_WORKFLOW_FAIL
     _assert_gate_shown(operator.done())
-    assert gated.marker() == []
+    gated.assert_zero_effects()
     assert gated.ingresses() == ["cli-tty"]
 
 
@@ -674,7 +746,7 @@ def test_12_cancel_through_the_daemon_refuses_under_the_daemon_client_tty_ingres
         _assert_gate_shown(operator.done())
 
     assert code == cli.EXIT_WORKFLOW_FAIL
-    assert gated.marker() == []
+    gated.assert_zero_effects()
     assert _daemon_ingresses(gated) == ["daemon-client-tty"]
 
 
@@ -686,7 +758,7 @@ def test_12_an_mcp_native_cancel_refuses_as_unreported(
     _eliciting(monkeypatch, ElicitResult(action="cancel"))
 
     _assert_rejected(_run(gated, None))
-    assert gated.marker() == []
+    gated.assert_zero_effects()
     assert gated.ingresses() == ["unreported"]
 
 
@@ -716,7 +788,7 @@ def test_13a_an_api_run_operator_that_never_answers_is_refused_at_the_deadline(
 
     _within_deadline(started)
     _assert_rejected(result)
-    assert gated.marker() == []
+    gated.assert_zero_effects()
     assert gated.ingresses() == ["none"]
 
 
@@ -733,7 +805,7 @@ def test_13b_a_daemon_client_killed_at_the_prompt_ends_its_run_then_the_daemon_s
             assert time.monotonic() - started < _CLI_BOUND_SECONDS, "the daemon's gate never ended"
             time.sleep(0.05)
     _within_deadline(started)
-    assert gated.marker() == []
+    gated.assert_zero_effects()
     assert _daemon_ingresses(gated) == ["none"]
 
     with Terminal() as following:
@@ -754,7 +826,7 @@ def test_13c_an_attached_silent_terminal_is_refused_at_the_deadline(
     _within_deadline(started)
     assert code == cli.EXIT_WORKFLOW_FAIL
     assert "answer (" in terminal.read_until("answer (")
-    assert gated.marker() == []
+    gated.assert_zero_effects()
     assert gated.ingresses() == ["none"]
 
 
@@ -768,7 +840,7 @@ def test_13c_an_attached_silent_terminal_through_the_daemon_is_refused_at_the_de
         assert "answer (" in pty.read_until("answer (")
 
     assert code == cli.EXIT_WORKFLOW_FAIL
-    assert gated.marker() == []
+    gated.assert_zero_effects()
     assert _daemon_ingresses(gated) == ["none"]
 
 
@@ -790,7 +862,7 @@ def test_14_a_reply_outside_c1_c5_is_refused_with_zero_effects(
     result = _run(gated, None)
 
     assert result.status == "failed", result
-    assert gated.marker() == []
+    gated.assert_zero_effects()
 
 
 # --- `hold` into the durable pause, then one public resume (C3, C4) ----------------------------
@@ -835,11 +907,17 @@ def _harness_resume(
     gated: Scenario,
     response: Any = None,
     edited_proposal: str | None = None,
+    *,
+    place_gate: bool = True,
+    followup_step: bool = False,
+    child_step: bool = False,
 ) -> int:
     """`harness resume <manifest> [--hitl-response ...]`; the manifest names the handle."""
     with pytest.raises(typer.Exit) as exit_:
         cli.resume_command(
-            gated.manifest(),
+            gated.manifest(
+                place_gate=place_gate, followup_step=followup_step, child_step=child_step
+            ),
             config=gated.layout.config,
             tenant_id=None,
             output=cli.OutputFormat.json,
@@ -857,7 +935,7 @@ def _held(gated: Scenario) -> Any:
     assert result.status == "paused", result
     assert result.pause_snapshot.workflow_id == _WORKFLOW_ID
     assert result.pause_snapshot.pause_reason is WorkflowPauseReason.HITL_PENDING
-    assert gated.marker() == []
+    gated.assert_zero_effects()
     assert gated.hitl_audits() == []
     return result.pause_snapshot
 
@@ -888,6 +966,69 @@ def test_9_hold_then_one_public_resume_approves_under_the_gates_own_audit_identi
     assert entry.pause_snapshot.state_ledger_anchor == snapshot.state_ledger_anchor
 
 
+def test_9_pending_decision_does_not_answer_a_later_gate(gated: Scenario) -> None:
+    result = asyncio.run(
+        api.run(
+            _workflow(followup_step=True),
+            config=gated.config(),
+            operator=_answering(OperatorDecision(action="hold"), []),
+        )
+    )
+    assert result.status == "paused", result
+    gated.assert_zero_effects()
+
+    # The public resume answers step 0. Step 1 has no operator and must refuse.
+    assert (
+        _harness_resume(gated, cli.HITLResumeResponse.approve, followup_step=True)
+        == cli.EXIT_WORKFLOW_FAIL
+    )
+    assert gated.marker() == [_GATED_STEP]
+    assert gated.gated_dispatch_count() == 1
+    assert [audit["audit.cp.response"] for audit in gated.hitl_audits()] == [
+        "approve",
+        "reject",
+    ]
+
+
+def test_9_pending_decision_is_not_delivered_to_a_child_run(
+    gated: Scenario, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    step_context = workflow_driver.StepExecutionContext
+    observed: list[tuple[str, int, bool]] = []
+
+    def record_context(**fields: Any) -> Any:
+        observed.append(
+            (
+                str(fields["parent_action_id"]),
+                int(fields["descent_depth"]),
+                fields.get("hitl_delivery_holder") is None,
+            )
+        )
+        return step_context(**fields)
+
+    monkeypatch.setattr(workflow_driver, "StepExecutionContext", record_context)
+    result = asyncio.run(
+        api.run(
+            _workflow(child_step=True),
+            config=gated.config(),
+            operator=_answering(OperatorDecision(action="hold"), []),
+        )
+    )
+    assert result.status == "paused", result
+    gated.assert_zero_effects()
+
+    assert _harness_resume(gated, cli.HITLResumeResponse.approve, child_step=True) == (
+        cli.EXIT_SUCCESS
+    )
+    assert gated.marker() == [_GATED_STEP]
+    assert gated.gated_dispatch_count() == 1
+    assert (f"workflow:{_WORKFLOW_ID}:step:0", 0, False) in observed
+    assert (f"workflow:{_WORKFLOW_ID}:step:1", 0, True) in observed
+    child = [item for item in observed if item[1] > 0]
+    assert child, observed
+    assert all(no_delivery for _, _, no_delivery in child)
+
+
 def test_9_the_pending_decision_is_one_response_authority_consumed_once() -> None:
     pending = PendingHITLDecision(response=HITLResponse.APPROVE)
     approve = HITLResult(
@@ -910,7 +1051,8 @@ def test_9_hold_on_a_terminal_pauses_then_resumes_once(gated: Scenario, terminal
 
     assert _harness_run(gated, terminal.stdin, terminal.stderr) == cli.EXIT_PAUSED
     _assert_gate_shown(operator.done())
-    assert (gated.marker(), gated.hitl_audits()) == ([], [])
+    gated.assert_zero_effects()
+    assert gated.hitl_audits() == []
 
     assert _harness_resume(gated, cli.HITLResumeResponse.approve) == cli.EXIT_SUCCESS
     assert gated.marker() == [_GATED_STEP]
@@ -918,15 +1060,32 @@ def test_9_hold_on_a_terminal_pauses_then_resumes_once(gated: Scenario, terminal
 
 def test_9_a_decision_against_a_non_hitl_pause_is_refused_before_any_claim(
     gated: Scenario,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    snapshot = _held(gated)
-    other = snapshot.model_copy(update={"pause_reason": WorkflowPauseReason.EXPLICIT_OPERATOR})
+    execute = workflow_driver.execute_workflow
+    pause_first = True
 
-    with pytest.raises(api.ResumeArgsError):
-        api.operator_resume_context(other, OperatorDecision(action="approve"))
-    # The refusal spent nothing: the held handle still resumes, once.
-    assert _harness_resume(gated, cli.HITLResumeResponse.approve) == cli.EXIT_SUCCESS
+    def pause_before_step(manifest_entry: Any, steps: Any, run_id: str, ctx: Any, **kw: Any) -> Any:
+        nonlocal pause_first
+        if pause_first:
+            ctx.pause_requested_flag.set()
+            pause_first = False
+        return execute(manifest_entry, steps, run_id, ctx, **kw)
+
+    monkeypatch.setattr(workflow_driver, "execute_workflow", pause_before_step)
+    result = asyncio.run(api.run(_workflow(place_gate=False), config=gated.config()))
+    assert result.status == "paused", result
+    assert result.pause_snapshot.pause_reason is WorkflowPauseReason.EXPLICIT_OPERATOR
+    gated.assert_zero_effects()
+
+    assert _harness_resume(gated, cli.HITLResumeResponse.approve, place_gate=False) == (
+        cli.EXIT_RESUME_REFUSED
+    )
+    gated.assert_zero_effects()
+    # The public argument refusal spent no claim; the same durable handle still resumes.
+    assert _harness_resume(gated, place_gate=False) == cli.EXIT_SUCCESS
     assert gated.marker() == [_GATED_STEP]
+    assert gated.gated_dispatch_count() == 1
 
 
 def test_10_hold_without_the_durable_pause_binding_is_an_audited_reject(gated: Scenario) -> None:
@@ -938,7 +1097,7 @@ def test_10_hold_without_the_durable_pause_binding_is_an_audited_reject(gated: S
     result = _run(gated, _answering(OperatorDecision(action="hold"), []))
 
     _assert_rejected(result)
-    assert gated.marker() == []
+    gated.assert_zero_effects()
     [audit] = gated.hitl_audits()
     assert audit["audit.cp.response"] == "reject", audit
     reason = "hold unavailable: no durable pause binding"
@@ -951,6 +1110,7 @@ def test_11_a_second_resume_of_a_resumed_handle_is_refused(gated: Scenario) -> N
 
     assert _harness_resume(gated, cli.HITLResumeResponse.approve) == cli.EXIT_RESUME_CLAIM_REFUSED
     assert gated.marker() == [_GATED_STEP]
+    assert gated.gated_dispatch_count() == 1
 
 
 def test_17_public_resume_edit_keeps_the_live_action_kind_and_dispatches_the_edit(
@@ -981,7 +1141,8 @@ def test_17_an_undecodable_edit_is_refused_without_spending_the_handle(
     code = _harness_resume(gated, cli.HITLResumeResponse.edit, proposal)
 
     assert code == cli.EXIT_RESUME_REFUSED
-    assert (gated.marker(), gated.hitl_audits()) == ([], [])
+    gated.assert_zero_effects()
+    assert gated.hitl_audits() == []
     assert _harness_resume(gated, cli.HITLResumeResponse.approve) == cli.EXIT_SUCCESS
     assert gated.marker() == [_GATED_STEP]
 
@@ -1015,7 +1176,8 @@ def test_9_hold_through_the_daemon_pauses_then_its_resume_approves_once(
         code = _harness_run(gated, pty.stdin, pty.stderr, socket_path=daemon)
         _assert_gate_shown(operator.done())
     assert code == cli.EXIT_PAUSED
-    assert (gated.marker(), gated.hitl_audits()) == ([], [])
+    gated.assert_zero_effects()
+    assert gated.hitl_audits() == []
 
     reply = asyncio.run(_daemon_resume(daemon, gated.manifest(), {"action": "approve"}))
 
