@@ -125,6 +125,7 @@ from harness_runtime.lifecycle.operator_input import (
     AttendedIngress,
     OperatorDecision,
     OperatorInput,
+    observe_run_result,
     operator_elicitation_callback,
 )
 from harness_runtime.lifecycle.protected_result_store import normalize_tenant_scope
@@ -584,24 +585,50 @@ async def _invoke_run_workflow_via_in_process_mcp(
     """
     import json
 
-    from mcp.shared.memory import create_connected_server_and_client_session
+    import anyio
+    from mcp.client.session import ClientSession
+    from mcp.shared.memory import create_client_server_memory_streams
+    from mcp.types import CallToolResult
 
-    async with create_connected_server_and_client_session(
-        fastmcp_server,
-        # Runtime v1.144 C2: gates are answered by the bound operator, or refused as
-        # unattended when none is bound.
-        elicitation_callback=operator_elicitation_callback(operator, operator_ingress),
-        raise_exceptions=True,
-    ) as session:
-        tool_result = await session.call_tool("run_workflow", {"workflow_id": workflow_id})
+    server = fastmcp_server._mcp_server  # pyright: ignore[reportPrivateUsage]
+    tool_result: CallToolResult | None = None
+    async with create_client_server_memory_streams() as (client_streams, server_streams):
+        client_read, client_write = client_streams
+        server_read, server_write = server_streams
+        async with anyio.create_task_group() as server_tasks:
+            server_tasks.start_soon(
+                lambda: server.run(
+                    server_read,
+                    server_write,
+                    server.create_initialization_options(),
+                    raise_exceptions=True,
+                )
+            )
+            try:
+                async with observe_run_result(client_read, client_write) as (
+                    read_stream,
+                    write_stream,
+                    armed,
+                    arrived,
+                ):
+                    async with ClientSession(
+                        read_stream,
+                        write_stream,
+                        elicitation_callback=operator_elicitation_callback(
+                            operator, operator_ingress, arrived
+                        ),
+                    ) as session:
+                        await session.initialize()
+                        armed.set()
+                        tool_result = await session.call_tool(
+                            "run_workflow", {"workflow_id": workflow_id}
+                        )
+            finally:
+                server_tasks.cancel_scope.cancel()
 
+    if tool_result is None:
+        raise RuntimeError("run_workflow MCP session ended without a tool result")
     if tool_result.isError:
-        # Tool body raised. FastMCP serializes the error text into
-        # `content[0].text`; surface as a runtime error (the existing
-        # api.run semantics propagate driver-side exceptions).
-        # `content[0]` is an mcp content union; `.text` exists only on
-        # TextContent. The bare ignore suppresses the union access (mcp types
-        # are loosely typed), leaving the value Unknown — pin it to str.
         error_text: str = (  # pyright: ignore[reportUnknownVariableType]
             tool_result.content[0].text  # type: ignore[union-attr]  # pyright: ignore[reportUnknownMemberType]
             if tool_result.content
@@ -610,27 +637,18 @@ async def _invoke_run_workflow_via_in_process_mcp(
         raise RuntimeError(
             f"run_workflow MCP tool raised inside in-process invocation: {error_text}"
         )
-
     if not tool_result.content:
         raise RuntimeError(
             "run_workflow MCP tool returned empty content; expected "
             "TextContent with JSON-serialized RunResult dict"
         )
-
     text_block = tool_result.content[0]
     payload_text = getattr(text_block, "text", None)
     if payload_text is None:
         raise RuntimeError(
             f"run_workflow MCP tool returned non-text content: {type(text_block).__name__}"
         )
-
-    # FastMCP wraps dict returns in a top-level JSON object; verify the
-    # shape matches the CP RunResult schema rather than the dict wrapper.
-    parsed = json.loads(payload_text)
-    # FastMCP 1.27.1 returns the dict as-is (not wrapped in {"result": ...});
-    # the v1.11 baseline test substrate validates this assumption via
-    # _CpRunResult.model_validate which raises on schema mismatch.
-    return _CpRunResult.model_validate(parsed)
+    return _CpRunResult.model_validate(json.loads(payload_text))
 
 
 # ---------------------------------------------------------------------------

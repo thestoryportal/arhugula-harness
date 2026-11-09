@@ -28,13 +28,20 @@ assigns those (Runtime v1.144 §2, §14.8.8.5).
 - A model validator refuses it together with `hitl_response` or `hitl_responses`, so exactly one
   of the three carries a response.
 - `hitl_response_for` is unchanged and never returns the pending value.
-- New `hitl_delivery_for(run_id) -> HITLResult | PendingHITLDecision | None` returns
-  `hitl_response_for(run_id)` when that is not None, else `pending_hitl_decision`. The driver uses it
-  only for the depth-0 root's resumed step (`step_index == resume_at`); child runners keep
-  `hitl_response_for`.
+- The depth-0 root's resumed step (`step_index == resume_at`) consumes the uniform
+  `hitl_response` or `pending_hitl_decision`. It does not read `hitl_responses`, which addresses
+  children by their run IDs. Child runners keep `hitl_response_for` and never receive a pending
+  decision.
 - The v1.112/v1.114 response-provenance carrier is unchanged. It fences keyed child response maps;
   the pending value addresses only the root's own gate and is built inside the root admission from
   the same durable snapshot read.
+
+**T03 review disposition:** Ratified C4 named `hitl_delivery_for(run_id)`, but its required
+`hitl_response_for(run_id)` lookup lets a map entry keyed by the root run ID override the root's
+uniform response. That conflicts with the existing root precedence in
+`test_workflow_driver_hitl_uniform_fallback_property4.py`. The method had no caller and is removed
+in this candidate. Independent review and Buford must accept this explicit contract correction
+before this proposed CP delta is cleared.
 
 ## §3 `HITLDeliveryCell` (AMENDED)
 

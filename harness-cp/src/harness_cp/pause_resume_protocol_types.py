@@ -1594,13 +1594,6 @@ class ResumeContext(BaseModel):
             )
         return self
 
-    def hitl_delivery_for(self, run_id: str) -> HITLResult | PendingHITLDecision | None:
-        """The root resumed gate's delivery: an addressed `HITLResult`, else the pending decision.
-
-        Only the depth-0 root's resumed step reads this; children keep `hitl_response_for`,
-        which never returns the pending value."""
-        return self.hitl_response_for(run_id) or self.pending_hitl_decision
-
     def hitl_response_for(self, child_run_id: str) -> HITLResult | None:
         """The operator's HITL response for one paused GATE-OWNING child's own `run_id`.
 

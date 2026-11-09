@@ -15,9 +15,15 @@ import functools
 import json
 import os
 import threading
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping
+from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, Literal, TextIO
 
+import anyio
+from anyio.abc import ObjectReceiveStream, ObjectSendStream
+from anyio.streams.memory import MemoryObjectReceiveStream, MemoryObjectSendStream
+from mcp.shared.message import SessionMessage
+from mcp.types import JSONRPCError, JSONRPCResponse
 from pydantic import BaseModel, ConfigDict, model_validator
 
 if TYPE_CHECKING:
@@ -194,8 +200,63 @@ UNATTENDED_REASON = "unattended: no operator input bound"
 _GATE_OPTIONS: tuple[str, ...] = ("approve", "edit", "reject", "respond", "hold", "cancel")
 
 
+@asynccontextmanager
+async def observe_run_result(
+    source: ObjectReceiveStream[SessionMessage | Exception],
+    destination: ObjectSendStream[SessionMessage],
+) -> AsyncGenerator[
+    tuple[
+        MemoryObjectReceiveStream[SessionMessage | Exception],
+        MemoryObjectSendStream[SessionMessage],
+        asyncio.Event,
+        asyncio.Event,
+    ]
+]:
+    """Let a blocked elicitation see the run result before the SDK's serial reader does."""
+    send, receive = anyio.create_memory_object_stream[SessionMessage | Exception](1)
+    client_send, relay_read = anyio.create_memory_object_stream[SessionMessage](1)
+    armed = asyncio.Event()
+    arrived = asyncio.Event()
+
+    async def forward() -> None:
+        async with send:
+            try:
+                async for message in source:
+                    # [LAW:no-ambient-temporal-coupling] The one tools/call after initialization
+                    # owns completion, even while the SDK reader awaits an operator answer.
+                    if armed.is_set() and (
+                        isinstance(message, Exception)
+                        or isinstance(message.message.root, (JSONRPCResponse, JSONRPCError))
+                    ):
+                        arrived.set()
+                    await send.send(message)
+            finally:
+                arrived.set()
+
+    async def forward_client() -> None:
+        async with relay_read:
+            async for message in relay_read:
+                # [LAW:no-ambient-temporal-coupling] The server has already completed
+                # the run and retired this elicitation ID; a late reply has no owner.
+                if arrived.is_set() and isinstance(
+                    message.message.root, (JSONRPCResponse, JSONRPCError)
+                ):
+                    continue
+                await destination.send(message)
+
+    async with anyio.create_task_group() as tasks:
+        tasks.start_soon(forward)
+        tasks.start_soon(forward_client)
+        try:
+            yield receive, client_send, armed, arrived
+        finally:
+            tasks.cancel_scope.cancel()
+
+
 def operator_elicitation_callback(
-    operator: OperatorInput | None, ingress: AttendedIngress
+    operator: OperatorInput | None,
+    ingress: AttendedIngress,
+    run_result_arrived: asyncio.Event | None = None,
 ) -> ElicitationFnT:
     """An MCP client `elicitation_callback` that answers every gate through `operator` (C2).
 
@@ -210,12 +271,32 @@ def operator_elicitation_callback(
         if operator is None:
             decision = OperatorDecision(action="refuse", rejection_reason=UNATTENDED_REASON)
             return ElicitResult(action="accept", content=decision.elicitation_content("unattended"))
-        try:
-            answered: object = await operator(
-                parse_operator_gate_message(params.message, _GATE_OPTIONS)
-            )
-        except Exception as exc:  # every failure becomes an audited refusal
-            answered = exc
+        bound_operator: OperatorInput = operator
+        request = parse_operator_gate_message(params.message, _GATE_OPTIONS)
+
+        async def ask_operator() -> object:
+            try:
+                return await bound_operator(request)
+            except Exception as exc:  # every failure becomes an audited refusal
+                return exc
+
+        if run_result_arrived is None:
+            answered = await ask_operator()
+        else:
+            asking = asyncio.create_task(ask_operator())
+            finished = asyncio.create_task(run_result_arrived.wait())
+            try:
+                done, _ = await asyncio.wait(
+                    (asking, finished), return_when=asyncio.FIRST_COMPLETED
+                )
+                if finished in done:
+                    # [LAW:no-ambient-temporal-coupling] A completed run supersedes a late answer.
+                    return ElicitResult(action="cancel")
+                answered = asking.result()
+            finally:
+                for task in (asking, finished):
+                    if not task.done():
+                        task.cancel()
         decision = (
             answered
             if isinstance(answered, OperatorDecision)

@@ -28,6 +28,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import anyio
 import harness_runtime.cli.app as _ensure_import
 import pytest
 from harness_runtime.lifecycle.operator_input import OperatorInput, terminal_operator
@@ -245,14 +246,19 @@ async def test_dispatch_uses_loopback_nominal_url_for_uds_transport(
     an ASGI-accepted Host header to avoid HTTP 421 from the daemon app."""
     import mcp
     import mcp.client.streamable_http as streamable_http_mod
+    from mcp.shared.message import SessionMessage
 
     captured: dict[str, Any] = {}
 
     class _FakeStreamableHTTPClient:
         async def __aenter__(self) -> tuple[object, object, Any]:
-            return object(), object(), lambda: None
+            self.read_send, read = anyio.create_memory_object_stream[SessionMessage | Exception](1)
+            write, self.write_receive = anyio.create_memory_object_stream[SessionMessage](1)
+            return read, write, lambda: None
 
         async def __aexit__(self, *args: object) -> None:
+            await self.read_send.aclose()
+            await self.write_receive.aclose()
             return None
 
     def _fake_streamable_http_client(

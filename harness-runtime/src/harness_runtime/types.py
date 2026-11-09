@@ -42,7 +42,7 @@ from dataclasses import dataclass
 from enum import Enum, StrEnum
 from pathlib import Path
 from types import MappingProxyType  # stdlib `types`, not this module (absolute import)
-from typing import TYPE_CHECKING, Any, ClassVar, NewType, Protocol, Self, runtime_checkable
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, NewType, Protocol, Self, runtime_checkable
 from urllib.parse import urlsplit
 
 # ----------------------------------------------------------------------------
@@ -2724,6 +2724,41 @@ class RunScopedCostRecordAccumulator(CostRecordAccumulator):
 
     def append(self, record: SpanCostRecord) -> None:
         self._current().append(record)
+
+
+PAUSE_REQUESTED_VAR: contextvars.ContextVar[asyncio.Event | None] = contextvars.ContextVar(
+    "harness.pause_requested", default=None
+)
+
+
+class RunScopedPauseRequestedFlag(asyncio.Event):
+    """One stable bootstrap reference that resolves to the active root run's pause flag."""
+
+    def _current(self) -> asyncio.Event:
+        current = PAUSE_REQUESTED_VAR.get()
+        return current if current is not None else self
+
+    def is_set(self) -> bool:
+        current = self._current()
+        return super().is_set() if current is self else current.is_set()
+
+    def set(self) -> None:
+        current = self._current()
+        if current is self:
+            super().set()
+        else:
+            current.set()
+
+    def clear(self) -> None:
+        current = self._current()
+        if current is self:
+            super().clear()
+        else:
+            current.clear()
+
+    async def wait(self) -> Literal[True]:
+        current = self._current()
+        return await super().wait() if current is self else await current.wait()
 
 
 # ----------------------------------------------------------------------------

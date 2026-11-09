@@ -43,6 +43,7 @@ from harness_runtime.lifecycle.installation_state import installation_state_boun
 from harness_runtime.lifecycle.operator_input import (
     OperatorDecision,
     OperatorInput,
+    observe_run_result,
     operator_elicitation_callback,
     terminal_operator,
 )
@@ -347,19 +348,23 @@ async def _daemon_client_dispatch(
                     terminate_on_close=False,
                 )
             )
+            observed, forwarded_write, armed, arrived = await stack.enter_async_context(
+                observe_run_result(read_stream, write_stream)
+            )
             session = await stack.enter_async_context(
                 ClientSession(
-                    read_stream,
-                    write_stream,
+                    observed,
+                    forwarded_write,
                     read_timeout_seconds=timedelta(seconds=30),
                     # Runtime v1.144 C2: the daemon's gates prompt this client's terminal.
                     elicitation_callback=operator_elicitation_callback(
-                        operator, "daemon-client-tty"
+                        operator, "daemon-client-tty", arrived
                     ),
                 )
             )
             await session.initialize()
             phase = "run_workflow"
+            armed.set()
             tool_result = await session.call_tool(
                 "run_workflow",
                 {"workflow_id": str(workflow_file)},

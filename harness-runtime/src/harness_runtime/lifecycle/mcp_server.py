@@ -457,6 +457,9 @@ def materialize_mcp_server_stage(
         # context, where a stale flag re-paused every later run as EXPLICIT_OPERATOR
         # before its first step. A root invocation therefore starts with none pending.
         harness_ctx.pause_requested_flag.clear()
+        from harness_runtime.types import PAUSE_REQUESTED_VAR
+
+        _pause_token = PAUSE_REQUESTED_VAR.set(asyncio.Event())
         # B-INTERSTEP-PERRUN-ISOLATION (runtime spec §14.21 C-RT-34 invariant 7;
         # B-INTERSTEP fork §3/§5) — establish THIS run's isolated holders in their
         # ContextVars before dispatch. The set propagates into the
@@ -575,6 +578,7 @@ def materialize_mcp_server_stage(
             )
             return drained.model_dump(mode="json")
         finally:
+            PAUSE_REQUESTED_VAR.reset(_pause_token)
             _CURRENT_TOOL_CTX.reset(ctx_token)
             # Reset the per-run holder vars THIS handler set (Codex pre-merge
             # [P2]): if the same asyncio task serves a later `run_workflow`

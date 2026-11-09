@@ -26,7 +26,7 @@ from harness_runtime.lifecycle.prompt_selection import (
     reconcile_active_prompt_via_selection,
     resolve_per_role_system_prompts,
 )
-from harness_runtime.types import RuntimeConfig
+from harness_runtime.types import RunScopedPauseRequestedFlag, RuntimeConfig
 
 __all__ = ["execute"]
 
@@ -42,7 +42,9 @@ async def execute(
     # U-RT-87 — `pause_requested_flag` sibling-pattern to `drained_flag` per
     # runtime spec v1.21 §4 + §14.14.3. Caller-side pause-signaling primitive
     # consumed at workflow_driver per-step pre-entry detection.
-    ctx.pause_requested_flag = asyncio.Event()
+    # [LAW:no-shared-mutable-globals] Every root run binds its own event while
+    # bootstrap consumers keep this one stable reference.
+    ctx.pause_requested_flag = RunScopedPauseRequestedFlag()
     ctx.keyring_resolver = make_provider_secret_resolver(config.provider_secrets)
     ctx.actor = Actor(actor_class=ActorClass.AGENT, actor_id="harness-runtime")
     # R-CL-P4 — operator-supplied prompts-management carrier (IS spec v1.5 §5.2
