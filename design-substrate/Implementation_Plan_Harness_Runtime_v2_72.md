@@ -1,8 +1,8 @@
 # Implementation Plan: Harness Runtime — v2.72 (delta over cleared v2.70)
 
-**Status: PROPOSED — implements proposed Runtime spec v1.145, whose contract the integration lead
+**Status: CLEARED FOR SOURCE CONSUMPTION — implements cleared Runtime spec v1.145, whose contract the integration lead
 ratified at LIT `arhugula-harness-trial-193` `cmt-d6410eca-1542-4e49-9ce0-2dbb469c5339`. Its review rides
-the T05 frozen candidate. Not cleared.**
+the T05 frozen candidate; independent source review pass 2 APPROVE is cmt-a2780e77-a67e-47d2-a5d4-897f3a356ac8 and final package ratification is cmt-ffe4f953-6f23-4e3c-9851-c335a47066c2. Main landing, post-main CI and installed acceptance remain owed.**
 Numbered after proposed v2.71 (P2, U-RT-162, B-315), which it does not amend; U-RT-163 is the next unit
 ID unused in this tree. A version and unit-ID collision recheck against v2.71, v1.144 and U-RT-162 is
 owed at landing. Fork: `.harness/class_1_fork_engine_native_resume.md`. Authority: forward-register row

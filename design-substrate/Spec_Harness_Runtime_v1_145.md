@@ -10,12 +10,12 @@ arms reach it through that adoption. It is numbered after proposed v1.144 (P2, B
 C-RT-18 §14.8 and none of these sites. Every other v1.144, v1.143 and earlier term remains in force.
 Cleared predecessor files are not edited.*
 
-**Status: PROPOSED — contract ratified by the integration lead at LIT `arhugula-harness-trial-193`
+**Status: CLEARED FOR SOURCE CONSUMPTION — contract ratified by the integration lead at LIT `arhugula-harness-trial-193`
 `cmt-d6410eca-1542-4e49-9ce0-2dbb469c5339` on the frozen fork record
 `.harness/class_1_fork_engine_native_resume.md` at `3057fb34b3db7542251ba8ebbad9ee1a859d08d3`, SHA256
 `2ac2ba2b4f20714478a605861b57ab88632e5dd6a311a332bb3d52b996060267` (independent APPROVE
 `cmt-19fd8de1-b974-4344-89ed-4c27d76369e8`, three T04 passes spent). This file materializes that
-contract; its review rides the T05 frozen candidate. Not cleared.**
+contract; T05 independent source review pass 2 APPROVE is cmt-a2780e77-a67e-47d2-a5d4-897f3a356ac8 and final package ratification is cmt-ffe4f953-6f23-4e3c-9851-c335a47066c2. Main landing, post-main CI and installed acceptance remain owed.**
 
 **Authority:** forward-register row B-314; the fork record above, section 6 "Disposition on
 ratification"; T05 claim `cmt-e5e48bf4-b6bc-45f0-9512-9c7fa2ac855d`. The fork's disposition names this
