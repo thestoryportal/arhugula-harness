@@ -911,6 +911,7 @@ def _harness_resume(
     place_gate: bool = True,
     followup_step: bool = False,
     child_step: bool = False,
+    response_text: str | None = None,
 ) -> int:
     """`harness resume <manifest> [--hitl-response ...]`; the manifest names the handle."""
     with pytest.raises(typer.Exit) as exit_:
@@ -923,7 +924,7 @@ def _harness_resume(
             output=cli.OutputFormat.json,
             hitl_response=response,
             edited_proposal=edited_proposal,
-            response_text=None,
+            response_text=response_text,
             rejection_reason=None,
         )
     return exit_.value.exit_code
@@ -964,6 +965,30 @@ def test_9_hold_then_one_public_resume_approves_under_the_gates_own_audit_identi
     assert started <= datetime.fromisoformat(routed.timestamp) <= datetime.now(UTC)
     assert audit_id != snapshot.state_ledger_anchor
     assert entry.pause_snapshot.state_ledger_anchor == snapshot.state_ledger_anchor
+
+
+def test_9_optional_approval_note_resumes_as_approval(gated: Scenario, resumed: Resumed) -> None:
+    _held(gated)
+
+    result = asyncio.run(
+        api.resume(
+            _workflow(),
+            resume_handle=_WORKFLOW_ID,
+            operator_decision=OperatorDecision(
+                action="approve", response_text="approved with note"
+            ),
+            config=gated.config(),
+        )
+    )
+
+    assert result.status == "completed"
+    assert gated.marker() == [_GATED_STEP]
+    [entry] = resumed.entries
+    assert entry.resume_context.pending_hitl_decision == PendingHITLDecision(
+        response=HITLResponse.APPROVE
+    )
+    [audit] = gated.hitl_audits()
+    assert audit["audit.cp.response"] == "approve"
 
 
 def test_9_pending_decision_does_not_answer_a_later_gate(gated: Scenario) -> None:
@@ -1054,7 +1079,10 @@ def test_9_hold_on_a_terminal_pauses_then_resumes_once(gated: Scenario, terminal
     gated.assert_zero_effects()
     assert gated.hitl_audits() == []
 
-    assert _harness_resume(gated, cli.HITLResumeResponse.approve) == cli.EXIT_SUCCESS
+    assert (
+        _harness_resume(gated, cli.HITLResumeResponse.approve, response_text="approved with note")
+        == cli.EXIT_SUCCESS
+    )
     assert gated.marker() == [_GATED_STEP]
 
 
@@ -1179,7 +1207,11 @@ def test_9_hold_through_the_daemon_pauses_then_its_resume_approves_once(
     gated.assert_zero_effects()
     assert gated.hitl_audits() == []
 
-    reply = asyncio.run(_daemon_resume(daemon, gated.manifest(), {"action": "approve"}))
+    reply = asyncio.run(
+        _daemon_resume(
+            daemon, gated.manifest(), {"action": "approve", "response_text": "approved with note"}
+        )
+    )
 
     assert not reply.isError, reply
     assert reply.structuredContent["status"] == "success", reply  # the CP RunResult wire value

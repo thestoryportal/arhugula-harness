@@ -88,9 +88,10 @@ from harness_core.workload_class import WorkloadClass
 from harness_cp.cp_shared_types import ModelBinding
 from harness_cp.hitl_placement import PendingHITLDecision
 from harness_cp.hitl_response_palette import HITLResponse
-from harness_cp.pause_resume_protocol_types import PauseSnapshot, ResumeContext, WorkflowPauseReason
+from harness_cp.pause_resume_protocol_types import PauseSnapshot, ResumeContext
 from harness_cp.pause_state_projection import (
     AccessorDerivedResumeContext,
+    DepthZeroRootUniformFallbackOnlyLocation,
     EnginePausedState,
     PausedWorkflowState,
     PauseLocationProjection,
@@ -1390,11 +1391,14 @@ def operator_resume_context(snapshot: PauseSnapshot, decision: OperatorDecision)
     respond answer it. An EDIT must decode under the gate's own rules here, so a malformed
     proposal is refused before any claim instead of failing the resumed step.
     """
-    # [LAW:parse-dont-validate] every refusal is the caller's argument error, raised pre-claim.
-    if snapshot.pause_reason is not WorkflowPauseReason.HITL_PENDING:
+    # [LAW:one-source-of-truth] CP's public projection alone classifies gate ownership.
+    if not any(
+        isinstance(location, DepthZeroRootUniformFallbackOnlyLocation)
+        for location in project_pause_locations(snapshot)
+    ):
         raise ResumeArgsError(
-            f"operator_decision answers a HITL-gate pause; this pause is "
-            f"{snapshot.pause_reason.value!r} (Runtime v1.144 C4)."
+            "operator_decision requires a root-owned HITL gate; a transitive child "
+            "or non-HITL pause cannot receive it (Runtime v1.144 C4)."
         )
     try:
         response = HITLResponse(decision.action)
@@ -1406,7 +1410,9 @@ def operator_resume_context(snapshot: PauseSnapshot, decision: OperatorDecision)
         pending = PendingHITLDecision(
             response=response,
             edited_proposal_payload=edited,
-            response_text=decision.response_text,
+            # C1 permits an optional approval note, while C4 carries text to the gate
+            # only for RESPOND; approval still commits the unchanged action.
+            response_text=(decision.response_text if response is HITLResponse.RESPOND else None),
             rejection_reason=decision.rejection_reason,
         )
     except (ValueError, HITLGateEditDecodeError) as exc:
