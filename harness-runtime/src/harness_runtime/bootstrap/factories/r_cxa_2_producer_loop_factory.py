@@ -26,7 +26,11 @@ from harness_runtime.lifecycle.engine_recovery_loop import (
     RuntimeEngineRecoveryLoop,
     bind_engine_substrates,
 )
-from harness_runtime.lifecycle.hitl_gate_composer import post_mutation_payload_hash
+from harness_runtime.lifecycle.hitl_auto_approve_policy import HITLAutoApprovePolicy
+from harness_runtime.lifecycle.hitl_gate_composer import (
+    _policy_floor_overrides,  # pyright: ignore[reportPrivateUsage]
+    post_mutation_payload_hash,
+)
 from harness_runtime.lifecycle.hitl_placement import RuntimeHITLPlacementRegistry
 from harness_runtime.lifecycle.hitl_tool_loop import (
     HITLGateDecision,
@@ -113,6 +117,10 @@ class _HostTrustGateLevelEvaluator:
 
     lookup_ctx: Any
     """Bootstrap context read for `mcp_client_hosts` when each call is evaluated."""
+    policy: HITLAutoApprovePolicy
+    """The operator's §19.5 floor-override policy (runtime spec §3.8). Applied through the
+    same derivation the PRE_ACTION composer uses, so a manifest tool step and the identical
+    model-initiated call compute one gate level."""
 
     def __call__(self, call: ModelToolCall, context: HITLToolLoopContext) -> HITLToolCallAssessment:
         if call.tool == SEARCH_TOOLS_TOOL_NAME:
@@ -127,12 +135,19 @@ class _HostTrustGateLevelEvaluator:
             if trust is None:
                 return HITLToolCallAssessment(GateLevel.DENY, owner)
             blast = resolve_step_blast_radius(model_tool_call_step(call, context), self.lookup_ctx)
+        # [LAW:single-enforcer] One derivation of the operator's floor overrides for every
+        # gate site; the composer and this evaluator cannot disagree about the policy.
+        persona_floor_override, blast_floor_override = _policy_floor_overrides(
+            self.policy, context.persona_tier, blast
+        )
         computed = gate_level(
             GateLevelInput(
                 per_tool_gate_level=GateLevel.AUTO,
                 persona_tier=context.persona_tier,
                 blast_radius_tier=blast,
                 mcp_trust_tier=trust,
+                persona_floor_override=persona_floor_override,
+                blast_floor_override=blast_floor_override,
             )
         ).computed_gate_level
         # [LAW:single-enforcer] The descended-step parent floor folds in here, once.
@@ -323,7 +338,7 @@ def materialize_r_cxa_2_producer_loop_stage(
     hitl_tool_loop = RuntimeHITLToolLoop(
         wiring=wiring,
         placement_registry=placement_registry,
-        assess=_HostTrustGateLevelEvaluator(ctx),
+        assess=_HostTrustGateLevelEvaluator(ctx, config.hitl_auto_approve_policy),
         gate=_AskUserQuestionGateAdapter(ctx.ask_user_question_surface),
         response_auditor=RuntimeHITLToolResponseAuditor(
             ledger_writer=wiring.ledger_writer,

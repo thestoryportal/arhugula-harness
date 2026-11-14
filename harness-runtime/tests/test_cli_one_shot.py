@@ -473,6 +473,40 @@ def test_ac11_provider_and_model_flags_override_default_model_binding(
     workflow = mock_api_run.captured["workflow"]  # type: ignore[attr-defined]
     assert workflow.default_model_binding.provider == "openai"
     assert workflow.default_model_binding.model == "gpt-4o"
+    # The flags select the dispatched candidate through the per-step tier of the chain
+    # precedence (runtime spec §14.6): every step carries the override.
+    overrides = workflow.manifest_entry.per_step_overrides
+    assert {str(k) for k in overrides} == {str(step.step_id) for step in workflow.steps}
+    for step in workflow.steps:
+        binding = overrides[step.step_id].model_binding
+        assert (binding.provider, binding.model) == ("openai", "gpt-4o")
+
+
+def test_provider_flag_outside_enabled_provider_names_is_refused(
+    tmp_path: Path,
+    mock_config_load: Callable[..., None],
+    mock_api_run: Callable[..., None],
+) -> None:
+    mock_config_load()
+    mock_api_run(result=_run_result(status="completed"))
+    manifest = _write_yaml(tmp_path)
+    result = runner.invoke(app, ["run", str(manifest), "--provider", "nonexistent"])
+    assert result.exit_code != EXIT_SUCCESS
+    assert "not an enabled provider" in _plain(result.stdout + result.stderr)
+    assert "workflow" not in getattr(mock_api_run, "captured", {})  # never dispatched
+
+
+def test_provider_and_model_flags_are_refused_with_daemon(
+    tmp_path: Path,
+    mock_config_load: Callable[..., None],
+    mock_api_run: Callable[..., None],
+) -> None:
+    mock_config_load()
+    mock_api_run(result=_run_result(status="completed"))
+    manifest = _write_yaml(tmp_path)
+    result = runner.invoke(app, ["run", str(manifest), "--daemon", "--provider", "ollama"])
+    assert result.exit_code != EXIT_SUCCESS
+    assert "not applied through the daemon client" in _plain(result.stdout + result.stderr)
 
 
 # ---------------------------------------------------------------------------

@@ -99,7 +99,7 @@ import sys
 import time
 from pathlib import Path
 
-from harness_runtime.admin.pidfile import PidfileError, read_pidfile
+from harness_runtime.admin.pidfile import PidfileError, pid_is_alive, read_pidfile
 
 __all__ = ["build_parser", "main"]
 
@@ -169,21 +169,9 @@ def build_parser() -> argparse.ArgumentParser:
 # ---------------------------------------------------------------------------
 
 
-def _is_alive(pid: int) -> bool:
-    """Return True iff `pid` is currently a live process.
-
-    Uses `os.kill(pid, 0)` — POSIX existence probe. Returns False on
-    `ProcessLookupError` (ESRCH) or `PermissionError` ambiguity (PID
-    exists but caller lacks signal permission; for our purposes treat
-    as not-our-process and surface as stale).
-    """
-    try:
-        os.kill(pid, 0)
-        return True
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return False
+# [LAW:one-source-of-truth] The liveness probe behind stale detection is the one the
+# pidfile claim uses (`admin.pidfile.pid_is_alive`).
+_is_alive = pid_is_alive
 
 
 def _send_sigterm(pid: int) -> bool:

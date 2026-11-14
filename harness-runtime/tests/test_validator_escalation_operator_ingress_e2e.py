@@ -62,14 +62,27 @@ class _EscalatingValidator:
         )
 
 
-def _run(gated: t03.Scenario, operator: Any) -> tuple[Any, float]:
+class _EscalatingWithoutBriefValidator:
+    """ESCALATE with no brief: the framework composes one (C-CP-28 §25.7 invariant 4)."""
+
+    async def validate(self, step: Any, step_result: Any, *, step_context: Any) -> ValidatorResult:
+        _ = step, step_result, step_context
+        return ValidatorResult(
+            outcome=ValidatorOutcome.ESCALATE,
+            fail_class=ValidatorFailClass.SEMANTIC_INCONSISTENCY,
+        )
+
+
+def _run(
+    gated: t03.Scenario, operator: Any, validator: type = _EscalatingValidator
+) -> tuple[Any, float]:
     config = gated.config().model_copy(
         update={
             "validator_framework_config": ValidatorFrameworkConfig(
                 bindings=(
                     ValidatorBinding(
                         step_id=StepID(t03._GATED_STEP),  # pyright: ignore[reportPrivateUsage]
-                        class_qualified_name=f"{__name__}:{_EscalatingValidator.__qualname__}",
+                        class_qualified_name=f"{__name__}:{validator.__qualname__}",
                     ),
                 )
             )
@@ -128,3 +141,22 @@ def test_3_no_operator_refuses_as_unattended_within_the_bound(gated: t03.Scenari
 
     _assert_gate_rejected(result, UNATTENDED_REASON)
     assert elapsed < _BOUND_SECONDS, f"the escalation gate waited {elapsed:.1f}s for a reply"
+
+
+def test_4_an_escalation_without_a_brief_still_asks_with_a_composed_brief(
+    gated: t03.Scenario,
+) -> None:
+    seen: list[OperatorRequest] = []
+
+    result, _ = _run(
+        gated,
+        t03._answering(OperatorDecision(action="approve"), seen),  # pyright: ignore[reportPrivateUsage]
+        _EscalatingWithoutBriefValidator,
+    )
+
+    assert result.status == "completed", result
+    [request] = seen
+    assert request.position == "post-dispatch"
+    assert request.step_id == t03._GATED_STEP  # pyright: ignore[reportPrivateUsage]
+    assert request.payload["fail_class"] == "semantic_inconsistency"
+    assert request.payload["parent_action_id"] == f"workflow:{t03._WORKFLOW_ID}:step:0"  # pyright: ignore[reportPrivateUsage]

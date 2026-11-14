@@ -17,7 +17,7 @@ import contextlib
 import json
 import math
 import sys
-from collections.abc import Awaitable, Callable, Coroutine
+from collections.abc import Awaitable, Callable, Coroutine, Sequence
 from contextlib import AsyncExitStack
 from datetime import timedelta
 from enum import StrEnum
@@ -34,6 +34,7 @@ if TYPE_CHECKING:
 import typer
 from harness_cp.cp_shared_types import ModelBinding
 from harness_cp.engine_class_candidate import ENGINE_CLASS_CANDIDATES
+from harness_cp.workflow_manifest_entry import StepOverride
 
 from harness_runtime.config_source import (
     RuntimeConfigLoadError,
@@ -109,21 +110,45 @@ def _apply_workflow_overrides(
     *,
     provider: str | None,
     model: str | None,
+    enabled_provider_names: Sequence[str],
 ) -> LoadedWorkflow:
     """Apply CLI ``--provider`` / ``--model`` overrides to the workflow.
 
-    Each override replaces the corresponding field of
-    ``workflow.default_model_binding``. When neither flag is set, the workflow
-    is returned unchanged.
+    The dispatched candidate is resolved by the chain at the per-step tier (runtime
+    spec §14.6 precedence ``per-step > per-workload > per-role > routed > default``),
+    so the flags land as every step's ``StepOverride.model_binding``, with
+    ``default_model_binding`` kept in step for the manifest's own readers. A provider
+    the config does not enable is refused at this edge; nothing downstream would
+    dispatch to it. When neither flag is set, the workflow is returned unchanged.
     """
     if provider is None and model is None:
         return workflow
+    # [LAW:parse-dont-validate] The flag becomes a binding only for an enabled provider.
+    if provider is not None and provider not in enabled_provider_names:
+        raise typer.BadParameter(
+            f"{provider!r} is not an enabled provider "
+            f"(enabled_provider_names: {', '.join(enabled_provider_names) or 'none'})",
+            param_hint="--provider",
+        )
     current = workflow.default_model_binding
     new_binding = ModelBinding(
         provider=provider if provider is not None else current.provider,
         model=model if model is not None else current.model,
     )
-    return workflow.model_copy(update={"default_model_binding": new_binding})
+    # [LAW:single-enforcer] Model selection has one authority, the dispatch chain; the
+    # override enters it through the tier the chain already reads.
+    overrides = dict(workflow.manifest_entry.per_step_overrides)
+    for step in workflow.steps:
+        existing = overrides.get(step.step_id)
+        overrides[step.step_id] = (
+            existing.model_copy(update={"model_binding": new_binding})
+            if existing is not None
+            else StepOverride(step_id=step.step_id, model_binding=new_binding)
+        )
+    entry = workflow.manifest_entry.model_copy(update={"per_step_overrides": overrides})
+    return workflow.model_copy(
+        update={"default_model_binding": new_binding, "manifest_entry": entry}
+    )
 
 
 def _check_engine_class_admissibility(workflow: LoadedWorkflow, *, config: Any) -> None:
@@ -511,11 +536,14 @@ def run_command(
     ] = OutputFormat.text,
     provider: Annotated[
         str | None,
-        typer.Option("--provider", help="Override default_model_binding.provider"),
+        typer.Option(
+            "--provider",
+            help="Dispatch every step to this enabled provider (per-step model override)",
+        ),
     ] = None,
     model: Annotated[
         str | None,
-        typer.Option("--model", help="Override default_model_binding.model"),
+        typer.Option("--model", help="Dispatch every step to this model (per-step model override)"),
     ] = None,
     tenant_id: Annotated[
         str | None,
@@ -547,6 +575,14 @@ def run_command(
             raise typer.BadParameter(
                 "must be a finite positive number", param_hint="--daemon-result-timeout-seconds"
             )
+    if daemon and (provider is not None or model is not None):
+        # The daemon loads the manifest itself from its path; a client-side override
+        # would be dropped on the floor, so it is refused rather than ignored.
+        raise typer.BadParameter(
+            "not applied through the daemon client; run one-shot or set the per-step "
+            "model override in the manifest",
+            param_hint="--provider/--model",
+        )
     if daemon:
         # --- Daemon-client mode (U-RT-108 per plan v2.31 §1.8) -----------
         resolved_socket = socket_path if socket_path is not None else _default_daemon_socket_path()
@@ -576,7 +612,12 @@ def run_command(
         workflow_file, config=config, tenant_id=tenant_id
     )
     # Overrides change only the model binding, never the engine_class admissibility checked above.
-    workflow = _apply_workflow_overrides(workflow, provider=provider, model=model)
+    workflow = _apply_workflow_overrides(
+        workflow,
+        provider=provider,
+        model=model,
+        enabled_provider_names=runtime_config.enabled_provider_names,
+    )
     from harness_runtime.api import run as _api_run
 
     dispatch = _api_run(

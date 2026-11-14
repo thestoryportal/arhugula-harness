@@ -1952,11 +1952,11 @@ async def test_shutdown_audit_head_from_real_state_ledger_entry(tmp_path: Path) 
 
 @pytest.mark.asyncio
 async def test_shutdown_removes_pidfile(tmp_path: Path) -> None:
-    """U-RT-48: shutdown() removes the pidfile written by stage 7 per spec §13."""
+    """U-RT-48: shutdown() removes the pidfile this process claimed at stage 7 per spec §13."""
     from harness_runtime.admin.pidfile import write_pidfile
 
     pidfile = tmp_path / ".harness/runtime.pid"
-    write_pidfile(pidfile, 12345)
+    write_pidfile(pidfile, os.getpid())
     assert pidfile.exists()
 
     class _ConfigStub:

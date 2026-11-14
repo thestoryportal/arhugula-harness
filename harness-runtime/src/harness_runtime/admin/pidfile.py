@@ -29,8 +29,11 @@ if TYPE_CHECKING:
 __all__ = [
     "DEFAULT_PIDFILE_BASENAME",
     "PidfileError",
+    "claim_pidfile",
     "default_pidfile_path",
+    "pid_is_alive",
     "read_pidfile",
+    "release_pidfile",
     "remove_pidfile",
     "resolve_pidfile_path",
     "write_pidfile",
@@ -78,6 +81,56 @@ def write_pidfile(path: Path, pid: int) -> None:
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(f"{pid}\n")
     os.replace(tmp, path)
+
+
+def pid_is_alive(pid: int) -> bool:
+    """True iff `pid` is a live process this user may signal (`os.kill(pid, 0)`).
+
+    `ProcessLookupError` is a dead or recycled pid; `PermissionError` is another user's
+    process, which this harness never owns, so both read as not ours and not alive.
+    """
+    try:
+        os.kill(pid, 0)
+    except (ProcessLookupError, PermissionError):
+        return False
+    return True
+
+
+def _recorded_pid(path: Path) -> int | None:
+    """The pid a well-formed pidfile names, else None (missing or malformed)."""
+    try:
+        return read_pidfile(path)
+    except PidfileError:
+        return None
+
+
+def claim_pidfile(path: Path, pid: int) -> bool:
+    """Write `pid` unless the pidfile names another live process; True iff written.
+
+    The pidfile names ONE live harness process under a repository root. A daemon and a
+    one-shot run share the root, so a second process that overwrote the file would make
+    `harness-shutdown` lose the first. A file naming a dead pid is stale and is claimed.
+
+    [LAW:single-enforcer] Ownership is decided here and released in `release_pidfile`;
+    callers never compare pids themselves.
+    """
+    recorded = _recorded_pid(path)
+    if recorded is not None and recorded != pid and pid_is_alive(recorded):
+        return False
+    write_pidfile(path, pid)
+    return True
+
+
+def release_pidfile(path: Path, pid: int) -> bool:
+    """Remove the pidfile iff it names `pid`; True iff removed or already absent.
+
+    A process that did not win the claim leaves the owner's file in place.
+    """
+    recorded = _recorded_pid(path)
+    if recorded is not None and recorded != pid:
+        return False
+    remove_pidfile(path)
+    return True
 
 
 def read_pidfile(path: Path) -> int:

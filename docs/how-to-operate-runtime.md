@@ -19,12 +19,20 @@ Useful flags:
 | --- | --- |
 | `--config <path>` | Use a specific TOML runtime config instead of CWD discovery. |
 | `--output text|json` | Select text or JSON result output. |
-| `--provider <name>` | Override the workflow default provider for this invocation. |
-| `--model <name>` | Override the workflow default model for this invocation. |
+| `--provider <name>` | Dispatch every step of this invocation to this provider (must be one of the config's `enabled_provider_names`; an unknown name is refused). Applied as the per-step model override, the highest tier of the model-resolution precedence. |
+| `--model <name>` | Dispatch every step of this invocation to this model (with `--provider`, or on the workflow default provider). |
 | `--tenant-id <id>` | Override `RuntimeConfig.tenant_id`. |
 | `--daemon` | Dispatch through a running daemon instead of one-shot bootstrap. |
 | `--socket-path <path>` | Select the daemon Unix socket for daemon-client mode. |
 | `--daemon-result-timeout-seconds <seconds>` | Set a finite positive wait for a daemon workflow result (default: 3600 seconds; requires `--daemon`). |
+
+Which provider a step reaches is decided by the model-resolution precedence
+`per-step > per-workload > per-role > routed > default`, where the default is
+the first chain in the config's `[runtime.routing_manifest] fallback_chains`.
+A manifest's `default_model_binding` and `fallback_chain` are metadata and do
+not select the dispatched provider: run the Ollama examples under a config whose
+first chain is Ollama (`examples/ollama.local.toml.example`), or pass
+`--provider ollama`.
 
 ## Answer An Approval Gate
 
@@ -144,7 +152,13 @@ uv run harness daemon --config harness.toml
 
 The `just daemon` recipe runs the same command with `--config harness.toml`.
 Daemon mode loads runtime config once, binds the runtime server, and serves
-until interrupted or shut down.
+until interrupted or shut down. The daemon has no manifest to take a workload
+class from and bootstraps with `software-engineering`, so the config must bind
+the four path classes for that class as well; the shipped profiles under
+`examples/` do. The default socket is `harness-daemon.sock` in the process
+temporary directory (`tempfile.gettempdir()`): `/tmp` on most Linux systems,
+`$TMPDIR` under `/var/folders` on macOS. Pass `--socket-path` on both sides to
+choose another.
 
 Dispatch to a running daemon:
 

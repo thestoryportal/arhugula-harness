@@ -53,6 +53,20 @@ def test_ollama_provider_has_nominal_rates() -> None:
     assert ollama.output_token_rate == Decimal("0")
 
 
+def test_subscription_cli_providers_resolve_at_zero_rates() -> None:
+    """Every external-CLI subscription route has a row, so its dispatches are costed and
+    audited like the local tier instead of raising CP-FAIL-RATE-TABLE-MISSING."""
+    from harness_od.rate_table_v1 import SUBSCRIPTION_CLI_PROVIDERS
+
+    assert set(SUBSCRIPTION_CLI_PROVIDERS) == {"claude_code", "codex", "gemini", "antigravity"}
+    for name in SUBSCRIPTION_CLI_PROVIDERS:
+        rates = RATE_TABLE_V1.providers[name]
+        assert rates.input_token_rate == Decimal("0")
+        assert rates.output_token_rate == Decimal("0")
+        assert rates.cache_read_rate == Decimal("0")
+        assert rates.cache_write_rate == Decimal("0")
+
+
 def test_cpu_rate_per_ms_populated() -> None:
     """AC #4 — cpu_rate_per_ms populated with operator-configurable default."""
     assert RATE_TABLE_V1.cpu_rate_per_ms > Decimal("0")
@@ -77,8 +91,13 @@ def test_webhook_rate_populated() -> None:
 
 
 def test_all_3_adr_f1_providers_present() -> None:
-    """ADR-F1 v1.2 commits to anthropic + openai + ollama. All 3 present."""
-    assert set(RATE_TABLE_V1.providers.keys()) == {"anthropic", "openai", "ollama"}
+    """ADR-F1 v1.2 commits to anthropic + openai + ollama; the subscription CLI routes
+    are the only other rows."""
+    from harness_od.rate_table_v1 import SUBSCRIPTION_CLI_PROVIDERS
+
+    assert set(RATE_TABLE_V1.providers.keys()) == {"anthropic", "openai", "ollama"} | set(
+        SUBSCRIPTION_CLI_PROVIDERS
+    )
 
 
 def test_rate_table_v1_is_immutable() -> None:

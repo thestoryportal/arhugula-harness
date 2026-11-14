@@ -79,6 +79,22 @@ _OLLAMA = ProviderRates(
     cache_write_rate=Decimal("0"),
 )
 
+_SUBSCRIPTION_CLI = ProviderRates(
+    # External-CLI subscription routes (`RuntimeConfig.external_cli_providers`:
+    # claude_code / codex / gemini / antigravity). The subscription carries no
+    # per-token price, so the marginal rate is zero — like the local tier — and
+    # every dispatch still yields its cost record + audit-ledger entry
+    # (§C-OD-26.1 "1 LLM call → 1 cost-record + 1 audit-ledger entry").
+    # Operator may override to attribute a notional rate.
+    input_token_rate=Decimal("0"),
+    output_token_rate=Decimal("0"),
+    cache_read_rate=Decimal("0"),
+    cache_write_rate=Decimal("0"),
+)
+
+#: The provider names the runtime's external-CLI adapters dispatch under.
+SUBSCRIPTION_CLI_PROVIDERS: tuple[str, ...] = ("claude_code", "codex", "gemini", "antigravity")
+
 
 # ---------------------------------------------------------------------------
 # Tool / webhook / per-resource default rates
@@ -122,6 +138,7 @@ RATE_TABLE_V1: RateTable = RateTable(
         "anthropic": _ANTHROPIC,
         "openai": _OPENAI,
         "ollama": _OLLAMA,
+        **{name: _SUBSCRIPTION_CLI for name in SUBSCRIPTION_CLI_PROVIDERS},
     },
     tool_rates=_DEFAULT_TOOL_RATES,
     webhook_rate=_DEFAULT_WEBHOOK_RATE,

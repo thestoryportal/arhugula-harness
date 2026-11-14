@@ -1460,9 +1460,10 @@ async def shutdown(
     try:
         pidfile_path = _resolve_ctx_pidfile_path(ctx)
         if pidfile_path is not None:
-            from harness_runtime.admin.pidfile import remove_pidfile
+            from harness_runtime.admin.pidfile import release_pidfile
 
-            remove_pidfile(pidfile_path)
+            # Only this process's own pidfile is released; one naming a live daemon stays.
+            release_pidfile(pidfile_path, os.getpid())
     except Exception:
         failures.append("pidfile")
 
