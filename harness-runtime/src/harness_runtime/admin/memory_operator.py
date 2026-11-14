@@ -37,7 +37,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 
-from harness_is.memory_operation_ledger import MemoryOperationEntry
+from harness_is.memory_operation_ledger import MemoryOperationEntry, MemoryOperationKind
 from harness_is.memory_path_registry import MemoryRootBinding
 from harness_is.memory_policy import MemoryPolicyResolver, PromotionDecision, ReviewMode
 from harness_is.memory_record_envelope import (
@@ -88,6 +88,7 @@ _EXIT_REFUSED = 1
 OPERATOR_PROPOSAL_KINDS = frozenset(PromotionCandidateKind) - {PromotionCandidateKind.PREFERENCE}
 
 # A target's PROPOSE_* decision permits review of the same target its PROMOTE_* names.
+_DECISION_KINDS = (MemoryOperationKind.PROMOTE, MemoryOperationKind.DENY_PROMOTION)
 _PROPOSE_FOR_PROMOTE = {
     PromotionDecision.PROMOTE_SEMANTIC: PromotionDecision.PROPOSE_SEMANTIC,
     PromotionDecision.PROMOTE_PROCEDURAL: PromotionDecision.PROPOSE_PROCEDURAL,
@@ -379,7 +380,24 @@ class MemoryOperator:
             raise MemoryOperatorRefusedError(
                 f"{proposal_id!s} was not proposed from source {source_id!s}"
             )
+        # The store is content-addressed: a decision writes a NEW record and the proposal
+        # stays `proposed`, so the status check above cannot see an earlier decision. The
+        # append-only operation ledger can: one decision per candidate, ever.
+        # [LAW:one-source-of-truth]
+        decided = self._prior_decision(candidate.candidate_id)
+        if decided is not None:
+            raise MemoryOperatorRefusedError(
+                f"{proposal_id!s} was already decided ({decided.value}); "
+                "a decided candidate cannot be decided again"
+            )
         return candidate
+
+    def _prior_decision(self, candidate_id: str) -> MemoryOperationKind | None:
+        marker = f":{candidate_id}:"
+        for entry in self._store.read_memory_operations():
+            if entry.operation_kind in _DECISION_KINDS and marker in str(entry.action_id):
+                return entry.operation_kind
+        return None
 
     def _read_source(self, source_id: MemoryID) -> MemoryStoreRecord:
         return self._store.read_record(source_id, record_kind_of(source_id), run_id=self._run_id)
