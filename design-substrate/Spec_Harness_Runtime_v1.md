@@ -1,5 +1,9 @@
 # Specification — Harness Runtime v1.129
 
+## Change-note (platform correction, 2026-11-14 — macOS deployment)
+
+**Scope.** One C-RT-36 §14.25 row only. The `fs-undetermined` condition named `/proc/self/mountinfo` as the only source of the state root's filesystem type, so on macOS (no `/proc`) every declared `state_placement`, and every fresh run's pause-journal root placement (§14.25 via Rule B3), refused with `RT-FAIL-STATE-ROOT-PLACEMENT:fs-undetermined`. The row now names the host's mount-table reader per platform (Linux `/proc/self/mountinfo`; macOS `statfs(2)` `f_fstypename`); on a host with neither, the type stays unknown and is still never treated as durable. The `tmpfs`/`ramfs` refusal and every other check are unchanged. Back-flow record: `.harness/class_2_mac_state_root_filesystem_type_resolver.md`. Operator direction: the build targets macOS deployment; Linux-only is no longer a requirement.
+
 ## Change-note (v1.128 → v1.129)
 
 **Status posture (cleared — local isolated source contract only, after independent review; marker `.harness/clearance/spec-harness-runtime-v1-129-cleared-2026-09-25.md`; not local-RC or installed acceptance).** Paired with Control Plane v1.122 (`Spec_Control_Plane_v1_122.md`, cleared), which supplies numeric ancestry, the typed capture result and the exact record reference and states that Runtime owns their verification and refusal, and with Control Plane v1.123 (`Spec_Control_Plane_v1_123.md`, cleared as an isolated source contract by `.harness/clearance/spec-control-plane-v1-123-cleared-2026-09-25.md`), which owns the six `ChildResumeRefusal` values, `ChildResumeRefusedError`, the terminal fail class and family names, and the `proceed` decision order. This version specifies that Runtime half for B-104 Task 4. It amends existing contracts only (C-RT-09, C-RT-35 §30, C-RT-24 §14.14.8) and mints no contract number. C-RT-38 §14.27 (the Anthropic model tool-call DENY) is unchanged.
@@ -7144,7 +7148,7 @@ A refusal raises `StateRootPlacementError` whose message is `RT-FAIL-STATE-ROOT-
 | `contains-checkout` | The resolved root equals or contains the repository root, the transient worktree base or any forbidden root, or itself holds a `.git` entry. |
 | `inside-forbidden` | The resolved root is inside a forbidden root. |
 | `ledger-cell-outside` | ANY `STATE_LEDGER` cell in `path_bindings` — every workload class, not only the bootstrap workload — is relative or resolves outside the root; a cell equal to the root is inside; a config with no `STATE_LEDGER` cell passes this check vacuously. |
-| `fs-undetermined` | The filesystem type of the root (or its nearest existing ancestor) cannot be read from `/proc/self/mountinfo`; unknown is never treated as durable. |
+| `fs-undetermined` | The filesystem type of the root (or its nearest existing ancestor) cannot be read from the host's mount table (`/proc/self/mountinfo` on Linux; `statfs(2)` `f_fstypename` on macOS; no reader on any other host); unknown is never treated as durable. |
 | `non-durable-fs` | The filesystem type is `tmpfs` or `ramfs`. |
 | `permissions` | An existing root is not owned by the effective user, or has ANY group or other permission bit (0700-class required). |
 | `parent-missing` | Bootstrap must create the root and its parent does not exist or is not a directory (parents are never created). |
