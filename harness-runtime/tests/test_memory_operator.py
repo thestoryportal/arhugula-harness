@@ -53,6 +53,13 @@ from harness_runtime.memory_promotion import (
     SemanticInjectionPolicy,
     SemanticRecordStatus,
 )
+from harness_runtime.types import RuntimeMemoryConfig
+
+from .test_state_placement import world  # noqa: F401  (fixture)
+from .test_state_placement_bootstrap import (  # noqa: F401
+    Site,
+    _durable_filesystem,  # autouse fixture: scratch dirs may be tmpfs
+)
 
 _NOW = datetime(2026, 11, 8, 12, 0, 0, tzinfo=UTC)
 _RUN_ID = "run-t01"
@@ -716,3 +723,66 @@ def test_configured_target_selects_the_proposal_kind_for_one_source(
     )
     assert cli("propose_procedural", *approve, "--injection-policy", "retrieval_only") == 0
     assert json.loads(capsys.readouterr().out)["status"] == "active"
+
+
+# --- declared state placement: the operator derives through the verified root ------------
+
+
+@pytest.fixture
+def placement_site(world: Path) -> Site:  # noqa: F811
+    return Site(world / "site")
+
+
+def _install_placement_config(
+    monkeypatch: pytest.MonkeyPatch, site: Site, *, memory_root: Path
+) -> None:
+    config = site.config(placement=True).model_copy(
+        update={"memory": RuntimeMemoryConfig(enabled=True, root_path=memory_root)}
+    )
+    monkeypatch.setattr(
+        "harness_runtime.config_source.RuntimeConfigSource.load",
+        classmethod(lambda cls, **_kw: config),
+    )
+
+
+_PLACEMENT_ARGS = ["--config", "unused.toml", "--operator", "robbo", "--run-id", _RUN_ID]
+
+
+def test_declared_placement_derives_the_memory_root_through_the_verified_stamp(
+    placement_site: Site, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    site = placement_site
+    _install_placement_config(monkeypatch, site, memory_root=site.root / "memory")
+    site.stamp(site.config(placement=True))
+    store = _store(site.root)
+    _seed_source(store, _SOURCE_ID, "turn-1")
+
+    assert memory_operator.main([*_PLACEMENT_ARGS, "inspect", _SOURCE_ID]) == 0
+
+    assert json.loads(capsys.readouterr().out)["envelope"]["memory_id"] == _SOURCE_ID
+
+
+def test_declared_placement_that_cannot_be_verified_refuses_without_a_checkout_path(
+    placement_site: Site, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    site = placement_site
+    # The root was never bootstrapped: the probe never creates it.
+    _install_placement_config(monkeypatch, site, memory_root=site.root / "memory")
+    before = site.snapshot()
+
+    assert memory_operator.main([*_PLACEMENT_ARGS, "operations"]) == 1
+
+    assert "RT-FAIL-STATE-ROOT-PLACEMENT:" in capsys.readouterr().err
+    assert site.snapshot() == before
+
+
+def test_declared_placement_refuses_a_memory_root_outside_the_verified_root(
+    placement_site: Site, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    site = placement_site
+    _install_placement_config(monkeypatch, site, memory_root=site.repo / ".harness" / "memory")
+    site.stamp(site.config(placement=True))
+
+    assert memory_operator.main([*_PLACEMENT_ARGS, "operations"]) == 1
+
+    assert "RT-FAIL-STATE-ROOT-PLACEMENT:" in capsys.readouterr().err
