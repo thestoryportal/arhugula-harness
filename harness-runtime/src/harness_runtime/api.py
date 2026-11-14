@@ -508,7 +508,11 @@ class RunResult(BaseModel):
 
     audit_ledger_head_hash: str
     """Post-execution audit-ledger head hash (hex) for verification.
-    Always present per C-RT-09 invariants."""
+    Always present per C-RT-09 invariants: the audit ledger's head at shutdown. A
+    run that writes no audit entries leaves it unchanged: the per-dispatch audit
+    entry is the cost record's (§C-OD-26.1), and subscription CLI routes are
+    never priced (#1709), so a run served only by them reports the head the
+    ledger already had (`""` on a ledger with no entries yet)."""
 
     trace_ids: tuple[str, ...]
     """Root span trace IDs emitted by the workflow execution.
