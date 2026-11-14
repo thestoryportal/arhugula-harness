@@ -30,11 +30,14 @@ returns a `VerifiedStateRoot` (bootstrap, probe, revalidate).
 
 from __future__ import annotations
 
+import ctypes
+import ctypes.util
 import errno
 import os
 import re
 import secrets
 import stat
+import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
@@ -63,7 +66,9 @@ __all__ = [
     "StateRootPlacementError",
     "VerifiedStateRoot",
     "bootstrap_state_root",
+    "darwin_filesystem_type",
     "filesystem_type_from_mountinfo",
+    "host_filesystem_type",
     "linux_filesystem_type",
     "place_state_dir",
     "probe_declared_state_root",
@@ -253,12 +258,70 @@ def filesystem_type_from_mountinfo(mountinfo: str, path: Path) -> str | None:
 
 
 def linux_filesystem_type(path: Path) -> str | None:
-    """Real resolver: the filesystem type under `path`, or `None` when it cannot be read."""
+    """Linux resolver: the filesystem type under `path` from `/proc/self/mountinfo`, or
+    `None` when it cannot be read."""
     try:
         text = Path("/proc/self/mountinfo").read_text()
     except OSError:
         return None
     return filesystem_type_from_mountinfo(text, path)
+
+
+class _DarwinStatfs(ctypes.Structure):
+    """`struct statfs` of macOS `statfs(2)` (the 64-bit-inode layout every supported macOS
+    uses); only `f_fstypename` is read."""
+
+    _fields_ = (
+        ("f_bsize", ctypes.c_uint32),
+        ("f_iosize", ctypes.c_int32),
+        ("f_blocks", ctypes.c_uint64),
+        ("f_bfree", ctypes.c_uint64),
+        ("f_bavail", ctypes.c_uint64),
+        ("f_files", ctypes.c_uint64),
+        ("f_ffree", ctypes.c_uint64),
+        ("f_fsid", ctypes.c_int32 * 2),
+        ("f_owner", ctypes.c_uint32),
+        ("f_type", ctypes.c_uint32),
+        ("f_flags", ctypes.c_uint32),
+        ("f_fssubtype", ctypes.c_uint32),
+        ("f_fstypename", ctypes.c_char * 16),
+        ("f_mntonname", ctypes.c_char * 1024),
+        ("f_mntfromname", ctypes.c_char * 1024),
+        ("f_flags_ext", ctypes.c_uint32),
+        ("f_reserved", ctypes.c_uint32 * 7),
+    )
+
+
+def darwin_filesystem_type(path: Path) -> str | None:
+    """macOS resolver: the filesystem type under `path` from `statfs(2)` `f_fstypename`
+    (e.g. `apfs`, `devfs`), or `None` when the call fails or libc cannot be loaded."""
+    libc_name = ctypes.util.find_library("c")
+    if libc_name is None:
+        return None
+    try:
+        libc = ctypes.CDLL(libc_name, use_errno=True)
+    except OSError:
+        return None
+    buffer = _DarwinStatfs()
+    if libc.statfs(os.fsencode(path), ctypes.byref(buffer)) != 0:
+        return None
+    name = bytes(buffer.f_fstypename).split(b"\0", 1)[0].decode("ascii", "replace")
+    return name or None
+
+
+def _undetermined_filesystem_type(path: Path) -> None:
+    """Resolver for a host with no mount-table reader: unknown, never durable (C-RT-36)."""
+    _ = path
+    return None
+
+
+# [LAW:one-type-per-behavior] [LAW:dataflow-not-control-flow] The host's mount-table reader
+# is selected ONCE here, as a value; every verifier entry point and journal site takes it
+# as the one `filesystem_type` default instead of branching on the platform per call.
+host_filesystem_type: Callable[[Path], str | None] = {
+    "linux": linux_filesystem_type,
+    "darwin": darwin_filesystem_type,
+}.get(sys.platform, _undetermined_filesystem_type)
 
 
 # --- the verifier -----------------------------------------------------------------------
@@ -513,7 +576,7 @@ def probe_state_root(
     repository_root: Path,
     worktree_base: Path,
     path_bindings: PathBindingConfig,
-    filesystem_type: Callable[[Path], str | None] = linux_filesystem_type,
+    filesystem_type: Callable[[Path], str | None] = host_filesystem_type,
 ) -> VerifiedStateRoot:
     """Verify an EXISTING, marked root without creating or writing anything."""
     judged = _judge(
@@ -551,7 +614,7 @@ def probe_declared_state_root(config: RuntimeConfig) -> VerifiedStateRoot | None
         repository_root=config.repository_root,
         worktree_base=transient_worktree_base(config.repository_root),
         path_bindings=config.path_bindings,
-        filesystem_type=linux_filesystem_type,
+        filesystem_type=host_filesystem_type,
     )
 
 
@@ -561,7 +624,7 @@ def bootstrap_state_root(
     repository_root: Path,
     worktree_base: Path,
     path_bindings: PathBindingConfig,
-    filesystem_type: Callable[[Path], str | None] = linux_filesystem_type,
+    filesystem_type: Callable[[Path], str | None] = host_filesystem_type,
 ) -> VerifiedStateRoot:
     """Verify the placement and, only once every check passed, create root and marker.
 
@@ -659,7 +722,7 @@ def revalidate_state_root(
     repository_root: Path,
     worktree_base: Path,
     path_bindings: PathBindingConfig,
-    filesystem_type: Callable[[Path], str | None] = linux_filesystem_type,
+    filesystem_type: Callable[[Path], str | None] = host_filesystem_type,
 ) -> VerifiedStateRoot:
     """Probe the declared root again and require it to be exactly the stamped one."""
     current = probe_state_root(
@@ -722,7 +785,7 @@ def place_state_dir(
     verified: VerifiedStateRoot | None,
     *,
     what: str,
-    filesystem_type: Callable[[Path], str | None] = linux_filesystem_type,
+    filesystem_type: Callable[[Path], str | None] = host_filesystem_type,
 ) -> PlacedStateDir:
     """Place a durable directory under the verified root, or refuse.
 

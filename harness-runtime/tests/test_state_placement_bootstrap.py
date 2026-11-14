@@ -60,8 +60,8 @@ WORKLOAD = WorkloadClass.SOFTWARE_ENGINEERING
 def _durable_filesystem(monkeypatch: pytest.MonkeyPatch) -> None:
     """Scratch dirs may be tmpfs; the verifier's real resolver is covered in test_state_placement."""
     # raising=False: before S2 stage 1 had no verifier call, so the name may be absent.
-    monkeypatch.setattr(stage_1_is, "linux_filesystem_type", lambda _p: "ext4", raising=False)
-    monkeypatch.setattr(sp, "linux_filesystem_type", lambda _p: "ext4")
+    monkeypatch.setattr(stage_1_is, "host_filesystem_type", lambda _p: "ext4", raising=False)
+    monkeypatch.setattr(sp, "host_filesystem_type", lambda _p: "ext4")
 
 
 class Site:

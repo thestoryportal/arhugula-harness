@@ -86,8 +86,8 @@ def _ext4(_path: Path) -> str | None:
 @pytest.fixture
 def n1(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Scenario]:
     # Scratch dirs may be tmpfs; the real filesystem resolver is covered in test_state_placement.
-    monkeypatch.setattr(stage_1_is, "linux_filesystem_type", _ext4)
-    monkeypatch.setattr(sp, "linux_filesystem_type", _ext4)
+    monkeypatch.setattr(stage_1_is, "host_filesystem_type", _ext4)
+    monkeypatch.setattr(sp, "host_filesystem_type", _ext4)
     for fn in vars(sp).values():  # the placement entry points bind the probe as a default
         if "filesystem_type" in (getattr(fn, "__kwdefaults__", None) or {}):
             monkeypatch.setitem(fn.__kwdefaults__, "filesystem_type", _ext4)
