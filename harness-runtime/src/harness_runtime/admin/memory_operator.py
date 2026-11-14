@@ -490,6 +490,8 @@ def _operator_from_config(args: argparse.Namespace) -> MemoryOperator:
     )
     from harness_runtime.config.state_placement import (
         StateKind,
+        StateRootPlacementError,
+        probe_declared_state_root,
         require_inside_state_root,
         resolve_state_path,
     )
@@ -499,17 +501,24 @@ def _operator_from_config(args: argparse.Namespace) -> MemoryOperator:
         config = RuntimeConfigSource.load(config_file=args.config)
     except RuntimeConfigLoadError as exc:
         raise MemoryOperatorRefusedError(str(exc)) from exc
-    memory_root = (
-        require_inside_state_root(args.memory_root, config, None, what="--memory-root")
-        if args.memory_root is not None
-        else (
-            require_inside_state_root(
-                config.memory.root_path, config, None, what="memory.root_path"
+    # [LAW:one-source-of-truth] The read-only probe every admin consumer calls (inspect,
+    # migrate-audit-sidecar): a declared placement derives its stores from the verified
+    # root; one that cannot be verified refuses, typed, instead of a checkout-local path.
+    try:
+        verified = probe_declared_state_root(config)
+        memory_root = (
+            require_inside_state_root(args.memory_root, config, verified, what="--memory-root")
+            if args.memory_root is not None
+            else (
+                require_inside_state_root(
+                    config.memory.root_path, config, verified, what="memory.root_path"
+                )
+                if config.memory.root_path is not None
+                else resolve_state_path(StateKind.MEMORY, config, verified)
             )
-            if config.memory.root_path is not None
-            else resolve_state_path(StateKind.MEMORY, config, None)
         )
-    )
+    except StateRootPlacementError as exc:
+        raise MemoryOperatorRefusedError(str(exc)) from exc
     policy = _policy_from_config(config)
     store = CanonicalMemoryStore(
         root_binding=MemoryRootBinding(default_root=memory_root),
