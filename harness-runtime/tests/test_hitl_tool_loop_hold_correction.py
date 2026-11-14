@@ -35,6 +35,7 @@ from harness_runtime.lifecycle.hitl_tool_loop import (
     RuntimeHITLToolLoop,
 )
 from harness_runtime.lifecycle.llm_dispatch import RuntimeLLMDispatcher
+from harness_runtime.lifecycle.operator_input import parse_operator_gate_message
 
 from .test_hitl_tool_loop import _Auditor
 from .test_hitl_tool_loop_deny import _Host
@@ -74,6 +75,11 @@ class _Operator:
         self.prompts.append(prompt)
         self.offered.append(frozenset(options))
         return AskUserQuestionResult(response=self.response, latency_ms=1.0)
+
+    def asked(self) -> list[tuple[str, str]]:
+        """`(tool, owner)` of every prompt, read back as the C1a message an ingress parses."""
+        requests = [parse_operator_gate_message(p, ("approve",)) for p in self.prompts]
+        return [(r.payload["tool_id"], r.payload["server"]) for r in requests]
 
 
 def _call(tool: str, server: str, tool_call_id: str = "call-1") -> ModelToolCall:
@@ -248,7 +254,7 @@ def test_the_operator_and_the_rewrite_name_the_registry_owner_whatever_the_model
 
     (result,) = asyncio.run(loop.run_tool_calls([_call(tool, server)], _context()))
 
-    assert operator.prompts == [f"HITL tool call {tool} on {owner}"]
+    assert operator.asked() == [(tool, owner)]
     assert operator.offered == [palette]  # the owner's real trust, not the label's
     assert result.rewritten_tool_call is not None
     assert result.rewritten_tool_call.server == owner
@@ -263,7 +269,7 @@ def test_search_tools_is_asked_as_the_in_process_owner(tmp_path: Path, supplied:
 
     (result,) = asyncio.run(loop.run_tool_calls([_call("search_tools", supplied)], _context()))
 
-    assert operator.prompts == ["HITL tool call search_tools on <in-process>"]
+    assert operator.asked() == [("search_tools", "<in-process>")]
     assert operator.offered == [ALL]
     assert result.rewritten_tool_call is not None
     assert result.rewritten_tool_call.server == "<in-process>"
@@ -278,7 +284,7 @@ def test_an_unregistered_tool_is_asked_as_unregistered_and_never_dispatches(
 
     (result,) = asyncio.run(loop.run_tool_calls([_call("not_a_tool", "real-l3-host")], _context()))
 
-    assert operator.prompts == ["HITL tool call not_a_tool on <unregistered>"]
+    assert operator.asked() == [("not_a_tool", "<unregistered>")]
     assert operator.offered == [DENY_PALETTE]
     assert result.rewritten_tool_call is not None
     assert result.rewritten_tool_call.server == "<unregistered>"

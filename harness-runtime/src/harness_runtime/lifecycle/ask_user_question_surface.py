@@ -29,7 +29,9 @@ discretion.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import Literal, Protocol, runtime_checkable
 
 from harness_cp.hitl_response_palette import HITLResponse
@@ -41,6 +43,7 @@ __all__ = [
     "AskUserQuestionResult",
     "AskUserQuestionSurface",
     "AskUserQuestionTimeoutError",
+    "LoopOwnedAskUserQuestionSurface",
     "OperatorIngress",
 ]
 
@@ -187,3 +190,34 @@ class AskUserQuestionSurface(Protocol):
             `timeout` elapsed before operator responded.
         """
         ...
+
+
+@dataclass(frozen=True)
+class LoopOwnedAskUserQuestionSurface:
+    """`inner` answered on `loop`, whichever event loop the caller awaits from.
+
+    The MCP session that carries an operator elicitation lives on one event loop (the
+    loop running `api.run` or the daemon), and the reply is delivered to that loop. The
+    CP driver fires the validator-escalation gate from its worker thread through
+    `asyncio.run`, a second loop: an `ask` awaited there sends the request but never sees
+    the reply, so the gate hangs until its deadline.
+
+    [LAW:no-ambient-temporal-coupling] The owning loop is named once, at stage-5 binding,
+    and every `ask` is scheduled there and awaited through a loop-safe future; which loop
+    the caller happens to be on is not part of the contract. Cancelling the caller's wait
+    cancels the scheduled ask.
+    """
+
+    inner: AskUserQuestionSurface
+    loop: asyncio.AbstractEventLoop
+
+    async def ask(
+        self,
+        prompt: str,
+        options: Sequence[HITLResponse],
+        timeout: float | None,
+    ) -> AskUserQuestionResult:
+        pending = asyncio.run_coroutine_threadsafe(
+            self.inner.ask(prompt, options, timeout), self.loop
+        )
+        return await asyncio.wrap_future(pending)
