@@ -43,6 +43,7 @@ from harness_runtime.lifecycle.hitl_tool_loop import (
     HITLToolLoopContext,
     ModelToolCall,
 )
+from harness_runtime.lifecycle.operator_input import parse_operator_gate_message
 from harness_runtime.lifecycle.state_ledger import LedgerWriter, materialize_state_ledger
 from harness_runtime.lifecycle.tool_registry import ToolRegistry
 from harness_runtime.types import (
@@ -338,8 +339,13 @@ def test_search_tools_call_answered_without_reaching_tool_dispatcher(tmp_path: P
             "input_schema": {"type": "object"},
         }
     ]
-    # Asked under the in-process owner, not the model-supplied `mcp-main` label.
-    assert ask_surface.calls[0][0] == "HITL tool call search_tools on <in-process>"
+    # Asked under the in-process owner, not the model-supplied `mcp-main` label, in the
+    # C1a gate message every operator ingress parses.
+    asked = parse_operator_gate_message(ask_surface.calls[0][0], ("approve",))
+    assert asked.position == "model-tool-call"
+    assert asked.step_kind == "tool-step"
+    assert asked.payload["server"] == "<in-process>"
+    assert asked.payload["tool_id"] == "search_tools"
 
 
 def test_search_tools_no_match_returns_empty_matches(tmp_path: Path) -> None:

@@ -26,6 +26,7 @@ from harness_runtime.lifecycle.engine_recovery_loop import (
     RuntimeEngineRecoveryLoop,
     bind_engine_substrates,
 )
+from harness_runtime.lifecycle.hitl_gate_composer import post_mutation_payload_hash
 from harness_runtime.lifecycle.hitl_placement import RuntimeHITLPlacementRegistry
 from harness_runtime.lifecycle.hitl_tool_loop import (
     HITLGateDecision,
@@ -36,6 +37,7 @@ from harness_runtime.lifecycle.hitl_tool_loop import (
     model_tool_call_step,
 )
 from harness_runtime.lifecycle.hitl_tool_response_audit import RuntimeHITLToolResponseAuditor
+from harness_runtime.lifecycle.operator_input import compose_operator_gate_message
 from harness_runtime.lifecycle.step_blast_radius import resolve_step_blast_radius
 from harness_runtime.lifecycle.step_mcp_trust_tier import resolve_tool_owner
 from harness_runtime.lifecycle.tool_search import (
@@ -47,6 +49,7 @@ from harness_runtime.types import RuntimeConfig, ToolName
 
 __all__ = [
     "IN_PROCESS_TOOL_OWNER",
+    "MODEL_TOOL_CALL_POSITION",
     "R_CXA_2_MODEL_TOOL_LOOP_PARENT_GATE_LEVEL",
     "UNREGISTERED_TOOL_OWNER",
     "RCXA2ProducerLoopMaterializeError",
@@ -63,6 +66,11 @@ adapter dispatches an approved call. The wrapped C-RT-19 dispatcher does not
 consume this field at HEAD; keeping it at AUTO avoids double-counting a gate
 level at the synthetic tool-step bridge.
 """
+
+
+MODEL_TOOL_CALL_POSITION = "model-tool-call"
+"""The C1a gate position of a model-initiated tool call: the loop asks between the
+provider turn that emitted the call and its dispatch (C-RT-38)."""
 
 
 class RCXA2ProducerLoopMaterializeError(Exception):
@@ -145,9 +153,20 @@ class _AskUserQuestionGateAdapter:
         context: HITLToolLoopContext,
         palette: frozenset[HITLResponse],
     ) -> HITLGateDecision:
-        _ = context
+        step = model_tool_call_step(call, context)
+        # `call.server` is the assessed owner by the time the loop asks, so the operator
+        # judges the host that will be dispatched to, never the model-supplied label.
+        payload = {"server": call.server, **step.step_payload}
+        # [LAW:single-enforcer] The C1a gate message is the one text every operator
+        # ingress parses (Runtime v1.144 C1a); free text is refused before any operator sees it.
         result = await self.ask_user_question_surface.ask(
-            prompt=f"HITL tool call {call.tool} on {call.server}",
+            prompt=compose_operator_gate_message(
+                position=MODEL_TOOL_CALL_POSITION,
+                step_id=str(step.step_id),
+                step_kind=str(step.step_kind),
+                payload=payload,
+                payload_sha256=post_mutation_payload_hash(payload),
+            ),
             options=tuple(sorted(palette)),
             timeout=self.timeout_seconds,
         )

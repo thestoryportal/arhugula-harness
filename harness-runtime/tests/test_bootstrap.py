@@ -829,8 +829,13 @@ async def test_bootstrap_stage_5_binds_inference_and_sub_agent_dispatchers(
     - The 3 unbound step kinds (TOOL / HITL / DECLARATIVE) raise
       ``StepKindDispatcherNotBoundError`` on lookup per registry contract.
     """
+    import asyncio
+
     from harness_cp.hitl_placement import HITLPlacementKind
     from harness_cp.workflow_driver_types import StepKind
+    from harness_runtime.lifecycle.ask_user_question_surface import (
+        LoopOwnedAskUserQuestionSurface,
+    )
     from harness_runtime.lifecycle.engine_recovery_loop import RuntimeEngineRecoveryLoop
     from harness_runtime.lifecycle.hitl_gate_composer import (
         RuntimeHITLGateComposer,
@@ -855,8 +860,12 @@ async def test_bootstrap_stage_5_binds_inference_and_sub_agent_dispatchers(
 
     assert ctx.step_dispatchers is not None
 
-    # AC #13: ask_user_question_surface bound to MCP-backed concrete impl.
-    assert isinstance(ctx.ask_user_question_surface, MCPBackedAskUserQuestionSurface)
+    # AC #13: ask_user_question_surface bound to the MCP-backed concrete impl, owned by
+    # the bootstrap loop so a CP-driver ask from another loop still reaches the session.
+    bound_surface = ctx.ask_user_question_surface
+    assert isinstance(bound_surface, LoopOwnedAskUserQuestionSurface)
+    assert isinstance(bound_surface.inner, MCPBackedAskUserQuestionSurface)
+    assert bound_surface.loop is asyncio.get_running_loop()
 
     # AC #13 row 1: SyncDispatcherFacade(C-RT-16(HITL(PRE_ACTION)(bare C-RT-15)))
     inference_dispatcher = ctx.step_dispatchers.lookup(StepKind.INFERENCE_STEP)

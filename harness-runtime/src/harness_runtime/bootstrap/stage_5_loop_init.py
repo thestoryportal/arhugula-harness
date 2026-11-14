@@ -21,6 +21,7 @@ freshly-materialized emitter.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Any, cast
@@ -53,6 +54,9 @@ from harness_runtime.bootstrap.factories.webhook_delivery_composer_factory impor
     materialize_webhook_delivery_composer_stage,
 )
 from harness_runtime.bootstrap.mutable_context import _MutableHarnessContext
+from harness_runtime.lifecycle.ask_user_question_surface import (
+    LoopOwnedAskUserQuestionSurface,
+)
 from harness_runtime.lifecycle.audit_signing_fail_closed_validation import (
     mtc_audit_prewarm_disabled,
     resolve_audit_signing_fail_closed,
@@ -243,11 +247,17 @@ async def execute(
     # The ask-user surface and TOOL_STEP dispatcher are stage-5 siblings, but
     # R-CXA-2's provider-turn HITL loop needs both before the frozen LLM
     # dispatcher is constructed.
-    ask_surface = materialize_mcp_backed_ask_user_question_surface_stage(
-        cast(Any, ctx.mcp_host),
-        # ctx.mcp_server is the empty `HarnessMCPServer` Protocol; the stage
-        # fn wants the concrete — narrow via Any (mirrors mcp_host above).
-        harness_mcp_server=cast(Any, ctx.mcp_server),
+    # [LAW:no-ambient-temporal-coupling] This loop hosts the MCP session the elicitation
+    # travels on; the CP driver asks from its own `asyncio.run` loop, so the bound surface
+    # routes every ask back here (Runtime v1.144 C1a reaches the operator either way).
+    ask_surface = LoopOwnedAskUserQuestionSurface(
+        inner=materialize_mcp_backed_ask_user_question_surface_stage(
+            cast(Any, ctx.mcp_host),
+            # ctx.mcp_server is the empty `HarnessMCPServer` Protocol; the stage
+            # fn wants the concrete — narrow via Any (mirrors mcp_host above).
+            harness_mcp_server=cast(Any, ctx.mcp_server),
+        ),
+        loop=asyncio.get_running_loop(),
     )
     ctx.ask_user_question_surface = ask_surface
 

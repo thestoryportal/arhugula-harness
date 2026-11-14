@@ -251,7 +251,9 @@ async def test_validator_escalation_composer_happy_path_through_real_ctx(
     # AC #1: composer was invoked + reached AskUserQuestionSurface.ask().
     assert len(surface.invocations) == 1
     invocation = surface.invocations[0]
-    assert "Validator escalation" in invocation["prompt"]
+    # The prompt is the C1a gate message every operator ingress parses (Runtime v1.144).
+    assert invocation["prompt"].startswith("HITL gate at post-dispatch\nstep: step-1 (")
+    assert "test escalation" in invocation["prompt"]
 
     # AC #2: surface received the correct UNION-intersected palette.
     # gate_level=ASK + cross_trust=NONE + default brief palette = FULL.
