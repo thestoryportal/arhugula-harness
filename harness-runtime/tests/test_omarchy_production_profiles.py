@@ -263,15 +263,19 @@ def test_legacy_examples_still_load_without_a_placement(
     assert RuntimeConfigSource.load(config_file=config_file).state_placement is None
 
 
-def test_the_workload_bound_for_the_ledger_is_the_one_the_profiles_serve() -> None:
+def test_the_workloads_bound_for_the_ledger_are_the_ones_the_profiles_serve() -> None:
     # Guards the ledger-cell assertions above: they only mean something for a workload
-    # the profile actually binds.
+    # the profile actually binds. The profiles serve the pipeline-automation examples and
+    # `harness daemon`, which bootstraps with software-engineering (docs/how-to-operate-runtime.md).
     for profile in PROFILES:
         entries = tomllib.loads((ROOT / profile.file).read_text())["runtime"]["path_bindings"][
             "raw_entries"
         ]
         ledger = [e for e in entries if e["path_class"] == PathClass.STATE_LEDGER.value]
-        assert [e["workflow_class"] for e in ledger] == [WorkloadClass.PIPELINE_AUTOMATION.value]
+        assert [e["workflow_class"] for e in ledger] == [
+            WorkloadClass.PIPELINE_AUTOMATION.value,
+            WorkloadClass.SOFTWARE_ENGINEERING.value,
+        ]
 
 
 # --- operator documentation -------------------------------------------------------------
