@@ -40,6 +40,7 @@ from harness_runtime.admin.memory_operator import (
     LifecycleTransition,
     MemoryOperator,
     MemoryOperatorRefusedError,
+    record_kind_of,
 )
 from harness_runtime.lifecycle.memory_migration import MemoryMigrationItemStatus
 from harness_runtime.memory_compaction_safety import (
@@ -262,6 +263,52 @@ def test_only_proposed_records_can_be_decided(tmp_path: Path) -> None:
     with pytest.raises(MemoryOperatorRefusedError, match="is denied, not proposed"):
         operator.approve(
             denied.memory_id,
+            source_id=_SOURCE_ID,
+            injection_policy=SemanticInjectionPolicy.TOOL_ALLOWED,
+            timestamp=_NOW,
+        )
+
+    assert len(store.read_memory_operations()) == before
+
+
+def test_a_denied_candidate_cannot_be_approved_through_its_proposal_id(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    operator = _operator(store)
+    proposal = _propose(operator, PromotionCandidateKind.FACT, "A fact.")
+    operator.deny(proposal, source_id=_SOURCE_ID, reason="no", timestamp=_NOW)
+    before = len(store.read_memory_operations())
+
+    with pytest.raises(MemoryOperatorRefusedError, match="already decided \\(deny_promotion\\)"):
+        operator.approve(
+            proposal,
+            source_id=_SOURCE_ID,
+            injection_policy=SemanticInjectionPolicy.RETRIEVAL_ONLY,
+            timestamp=_NOW,
+        )
+
+    assert len(store.read_memory_operations()) == before
+    assert store.read_record(proposal, record_kind_of(proposal)).content["status"] == "proposed"
+
+
+def test_an_approved_candidate_cannot_be_decided_again(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    operator = _operator(store)
+    proposal = _propose(operator, PromotionCandidateKind.FACT, "A fact.")
+    operator.approve(
+        proposal,
+        source_id=_SOURCE_ID,
+        injection_policy=SemanticInjectionPolicy.RETRIEVAL_ONLY,
+        timestamp=_NOW,
+    )
+    before = len(store.read_memory_operations())
+
+    with pytest.raises(MemoryOperatorRefusedError, match="already decided \\(promote\\)"):
+        operator.deny(proposal, source_id=_SOURCE_ID, reason="late", timestamp=_NOW)
+    with pytest.raises(MemoryOperatorRefusedError, match="already decided \\(promote\\)"):
+        operator.approve(
+            proposal,
             source_id=_SOURCE_ID,
             injection_policy=SemanticInjectionPolicy.TOOL_ALLOWED,
             timestamp=_NOW,
