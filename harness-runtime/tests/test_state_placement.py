@@ -17,6 +17,7 @@ import multiprocessing as mp
 import os
 import shutil
 import stat
+import sys
 import tempfile
 import tomllib
 from collections.abc import Callable, Iterator
@@ -32,7 +33,9 @@ from harness_runtime.config.state_placement import (
     StateRootPlacementError,
     VerifiedStateRoot,
     bootstrap_state_root,
+    darwin_filesystem_type,
     filesystem_type_from_mountinfo,
+    host_filesystem_type,
     linux_filesystem_type,
     probe_state_root,
     revalidate_state_root,
@@ -840,6 +843,25 @@ def test_mountinfo_without_any_covering_mount_is_undetermined() -> None:
 )
 def test_the_real_resolver_identifies_dev_shm_as_volatile(tmp_path: Path) -> None:
     assert linux_filesystem_type(Path("/dev/shm")) in {"tmpfs", "ramfs"}
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS statfs(2) resolver")
+def test_the_darwin_resolver_names_the_root_and_devfs_filesystems() -> None:
+    assert darwin_filesystem_type(Path("/")) == "apfs"
+    assert darwin_filesystem_type(Path("/dev")) == "devfs"
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS statfs(2) resolver")
+def test_the_darwin_resolver_is_undetermined_for_a_missing_path(tmp_path: Path) -> None:
+    assert darwin_filesystem_type(tmp_path / "absent") is None
+
+
+def test_the_host_resolver_is_the_platform_reader() -> None:
+    expected = {"linux": linux_filesystem_type, "darwin": darwin_filesystem_type}.get(sys.platform)
+    if expected is None:
+        assert host_filesystem_type(Path("/")) is None
+    else:
+        assert host_filesystem_type is expected
 
 
 # --- private-state invariant for EXISTING roots and markers (S1 delta) --------------------

@@ -196,7 +196,7 @@ class DurableRootResume:
                 ctx.verified_state_root,
                 what="durable resume journal directory",
                 # Looked up at call time: the same verifier stage 1 stamped the root with.
-                filesystem_type=state_placement.linux_filesystem_type,
+                filesystem_type=state_placement.host_filesystem_type,
             )
             if _run_journal_root(ctx) != self.journal_dir:
                 raise JournalDirectoryMismatchError
@@ -277,7 +277,7 @@ class FreshRunAdmission:
                 ctx.config,
                 ctx.verified_state_root,
                 what="pause-journal root",
-                filesystem_type=state_placement.linux_filesystem_type,
+                filesystem_type=state_placement.host_filesystem_type,
             )
             store = JournalWorkflowPauseStore(
                 journal_dir=placement.path, tenant_id=ctx.config.tenant_id

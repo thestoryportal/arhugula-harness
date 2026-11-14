@@ -2954,7 +2954,7 @@ def declared_root(
 ) -> Iterator[tuple[Path, RuntimeConfig]]:
     """A declared pause-journal root inside a stamped state root, and a config placed there."""
     # The scratch dir may be tmpfs; the verifier's real resolver is not under test here.
-    monkeypatch.setattr(state_placement, "linux_filesystem_type", ext4)
+    monkeypatch.setattr(state_placement, "host_filesystem_type", ext4)
     repo, state = tmp_path / "repo", tmp_path / "state"
     (repo / ".git").mkdir(parents=True)
     state_placement.bootstrap_state_root(

@@ -87,8 +87,8 @@ def _ext4(_path: Path) -> str | None:
 @pytest.fixture(autouse=True)
 def _durable_filesystem(monkeypatch: pytest.MonkeyPatch) -> None:
     """Scratch dirs may be tmpfs; the verifier's real resolver is covered in test_state_placement."""
-    monkeypatch.setattr(stage_1_is, "linux_filesystem_type", _ext4)
-    monkeypatch.setattr(sp, "linux_filesystem_type", _ext4)
+    monkeypatch.setattr(stage_1_is, "host_filesystem_type", _ext4)
+    monkeypatch.setattr(sp, "host_filesystem_type", _ext4)
 
 
 # --- a workflow whose one step reports what it sees ---------------------------------------------
