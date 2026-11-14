@@ -19,7 +19,7 @@ import os
 
 from harness_core.workload_class import WorkloadClass
 
-from harness_runtime.admin.pidfile import resolve_pidfile_path, write_pidfile
+from harness_runtime.admin.pidfile import claim_pidfile, resolve_pidfile_path
 from harness_runtime.bootstrap.mutable_context import _MutableHarnessContext
 from harness_runtime.drain import install_signal_handlers
 from harness_runtime.types import RuntimeConfig
@@ -32,8 +32,13 @@ async def execute(
     config: RuntimeConfig,
     workload_class: WorkloadClass,
 ) -> None:
-    """Freeze the mutable context; install drain signal handlers; write pidfile."""
+    """Freeze the mutable context; install drain signal handlers; claim the pidfile.
+
+    The pidfile names one live process per repository root: a run started beside a live
+    daemon leaves the daemon's pidfile in place (`harness-shutdown` keeps targeting it)
+    and releases nothing at shutdown.
+    """
     _ = workload_class
     ctx.freeze()
     install_signal_handlers(ctx, asyncio.get_running_loop())
-    write_pidfile(resolve_pidfile_path(config), os.getpid())
+    claim_pidfile(resolve_pidfile_path(config), os.getpid())

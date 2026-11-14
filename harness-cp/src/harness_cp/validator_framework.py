@@ -51,6 +51,7 @@ from typing import Any
 from harness_core.identity import StepID
 
 from harness_cp.validator_framework_types import (
+    HITLEscalationBrief,
     Validator,
     ValidatorBurdenLedger,
     ValidatorCatalogMissingError,
@@ -128,6 +129,27 @@ _OUTCOME_TO_NEXT_ACTION: Mapping[ValidatorOutcome, ValidatorNextAction] = {
 def _map_outcome_to_next_action(outcome: ValidatorOutcome) -> ValidatorNextAction:
     """Pure helper: bijective lookup from §25.2 mapping table. AC #1."""
     return _OUTCOME_TO_NEXT_ACTION[outcome]
+
+
+def _compose_escalation_brief(
+    step: WorkflowStep, step_context: StepExecutionContext, result: ValidatorResult
+) -> HITLEscalationBrief:
+    """The brief for an escalating result that carried none (§25.2 `HITLEscalationBrief`).
+
+    Names the step and its action id the way the driver names them to the gate composer,
+    and carries the validator's own fail class and detail hash; the reason states the
+    outcome so the operator sees why they are asked.
+    """
+    fail_class = result.fail_class.value if result.fail_class is not None else "unspecified"
+    return HITLEscalationBrief(
+        parent_step_id=str(step.step_id),
+        parent_action_id=str(step_context.parent_action_id),
+        fail_class=result.fail_class,
+        fail_detail_hash=result.fail_detail_hash,
+        escalation_reason=(
+            f"validator returned {result.outcome.value} ({fail_class}) without an escalation brief"
+        ),
+    )
 
 
 # ----------------------------------------------------------------------------
@@ -229,6 +251,14 @@ class ConcreteValidatorFramework:
         burden.count += int(result.outcome != ValidatorOutcome.PASS)
 
         next_action = _map_outcome_to_next_action(result.outcome)
+        if next_action is ValidatorNextAction.ESCALATE_HITL and result.escalation_brief is None:
+            # [LAW:parse-dont-validate] An ESCALATE_HITL evaluation always carries the brief
+            # the gate composer consumes (§25.2 "populated on ESCALATE"; §25.7 invariant 4
+            # "escalation cannot be silently dropped"): the framework composes it from the
+            # step and result when the operator's validator returned none.
+            result = result.model_copy(
+                update={"escalation_brief": _compose_escalation_brief(step, step_context, result)}
+            )
         span_attributes = self._build_span_attributes(
             step=step,
             result=result,

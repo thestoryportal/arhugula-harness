@@ -38,6 +38,7 @@ from harness_runtime.config.path_bindings import build_path_binding
 from harness_runtime.lifecycle.ask_user_question_surface import AskUserQuestionResult
 from harness_runtime.lifecycle.audit_writer import materialize_audit_writer_stage
 from harness_runtime.lifecycle.cp_is_wiring import materialize_cp_is_wiring_stage
+from harness_runtime.lifecycle.hitl_auto_approve_policy import HITLAutoApprovePolicy
 from harness_runtime.lifecycle.hitl_placement import RuntimeHITLPlacementRegistry
 from harness_runtime.lifecycle.hitl_tool_loop import (
     HITLToolLoopContext,
@@ -95,6 +96,10 @@ def _config(tmp_path: Path) -> RuntimeConfig:
         otel=OTelConfig(otlp_endpoint="http://localhost:4317"),
         collector=CollectorConfig(),
         default_topology=TopologyPattern.SINGLE_THREADED_LINEAR,
+        # The solo default auto-approves READ_ONLY calls (runtime spec §3.8); these suites
+        # witness the gate mechanics, so the operator opts out and every call is asked.
+        # `test_hitl_tool_loop_auto_approve_policy.py` witnesses the default.
+        hitl_auto_approve_policy=HITLAutoApprovePolicy(solo_persona_floor_auto=False),
     )
 
 

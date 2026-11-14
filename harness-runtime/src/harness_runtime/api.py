@@ -511,7 +511,12 @@ class RunResult(BaseModel):
     Always present per C-RT-09 invariants."""
 
     trace_ids: tuple[str, ...]
-    """Root span trace IDs emitted by the workflow execution."""
+    """Root span trace IDs emitted by the workflow execution.
+
+    Not populated: always `()`. The run's root trace is the CP driver's
+    `workflow.envelope` span, which the configured OTLP exporter delivers to the
+    collector; the CP `RunResult` carries no trace field, so this ingress cannot
+    report it (runtime spec §25 deferred-to-discretion)."""
 
     cost_attribution: tuple[CrossFamilyCostRollup, ...]
     """Per-run cost rollup along `RollupAxis.PER_PROVIDER_AND_MODEL` (C-OD-15

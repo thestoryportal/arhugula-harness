@@ -50,6 +50,32 @@ workflow_class = "pipeline-automation"
 deployment_surface = "local-development"
 path = "/absolute/path/to/your/workspace/.harness/onboarding/state-ledger"
 
+# `harness daemon` bootstraps with the software-engineering workload class (it serves
+# manifests of any class later), so the same four path classes are bound for it here.
+[[runtime.path_bindings.raw_entries]]
+path_class = "SKILLS"
+workflow_class = "software-engineering"
+deployment_surface = "local-development"
+path = "/absolute/path/to/your/workspace/.agents/skills"
+
+[[runtime.path_bindings.raw_entries]]
+path_class = "PROMPTS"
+workflow_class = "software-engineering"
+deployment_surface = "local-development"
+path = "/absolute/path/to/your/workspace/.harness/onboarding/prompts"
+
+[[runtime.path_bindings.raw_entries]]
+path_class = "ROUTING_MANIFEST"
+workflow_class = "software-engineering"
+deployment_surface = "local-development"
+path = "/absolute/path/to/your/workspace/.harness/onboarding/routing-manifest"
+
+[[runtime.path_bindings.raw_entries]]
+path_class = "STATE_LEDGER"
+workflow_class = "software-engineering"
+deployment_surface = "local-development"
+path = "/absolute/path/to/your/workspace/.harness/onboarding/state-ledger"
+
 [runtime.routing_manifest]
 manifest_version = 1
 per_role_bindings = {}

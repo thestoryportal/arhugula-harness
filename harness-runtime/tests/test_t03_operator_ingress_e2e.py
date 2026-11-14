@@ -477,8 +477,11 @@ class Terminal:
     def close(self) -> None:
         self.stdin.close()
         self.stderr.close()
-        os.close(self._slave)
+        # The master goes first: a terminal operator the run never answered still has a
+        # reader thread blocked in `read()` on the slave, and Darwin blocks `close()` of a
+        # tty slave until that read ends; hanging up the master ends it on every platform.
         os.close(self.master)
+        os.close(self._slave)
 
 
 @pytest.fixture

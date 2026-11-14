@@ -9,8 +9,11 @@ import pytest
 from harness_runtime.admin.pidfile import (
     DEFAULT_PIDFILE_BASENAME,
     PidfileError,
+    claim_pidfile,
     default_pidfile_path,
+    pid_is_alive,
     read_pidfile,
+    release_pidfile,
     remove_pidfile,
     write_pidfile,
 )
@@ -104,3 +107,63 @@ def test_remove_pidfile_idempotent(tmp_path: Path) -> None:
     remove_pidfile(path)
     remove_pidfile(path)  # must not raise
     assert not path.exists()
+
+
+# --- one live owner per repository root (a daemon and a one-shot share the root) ----------
+
+
+def _dead_pid() -> int:
+    """A pid no process holds: a child that has already been reaped."""
+    pid = os.fork()
+    if pid == 0:
+        os._exit(0)
+    os.waitpid(pid, 0)
+    return pid
+
+
+def test_claim_writes_when_absent_and_releases_only_its_own(tmp_path: Path) -> None:
+    path = tmp_path / "runtime.pid"
+    me = os.getpid()
+
+    assert claim_pidfile(path, me) is True
+    assert read_pidfile(path) == me
+    assert release_pidfile(path, me) is True
+    assert not path.exists()
+    assert release_pidfile(path, me) is True  # already absent
+
+
+def test_a_second_process_does_not_clobber_a_live_owner(tmp_path: Path) -> None:
+    path = tmp_path / "runtime.pid"
+    owner = os.getppid()  # the test runner's parent is alive for the whole test
+    write_pidfile(path, owner)
+
+    assert claim_pidfile(path, os.getpid()) is False
+    assert read_pidfile(path) == owner
+    assert release_pidfile(path, os.getpid()) is False  # not ours: left in place
+    assert read_pidfile(path) == owner
+
+
+def test_a_stale_pidfile_is_claimed(tmp_path: Path) -> None:
+    path = tmp_path / "runtime.pid"
+    stale = _dead_pid()
+    write_pidfile(path, stale)
+    assert pid_is_alive(stale) is False
+
+    assert claim_pidfile(path, os.getpid()) is True
+    assert read_pidfile(path) == os.getpid()
+
+
+def test_a_malformed_pidfile_is_claimed_and_released(tmp_path: Path) -> None:
+    path = tmp_path / "runtime.pid"
+    path.write_text("junk\n")
+
+    assert claim_pidfile(path, os.getpid()) is True
+    assert read_pidfile(path) == os.getpid()
+    path.write_text("junk\n")
+    assert release_pidfile(path, os.getpid()) is True  # nobody owns junk; it is cleared
+    assert not path.exists()
+
+
+def test_pid_is_alive_sees_this_process_and_not_a_reaped_child() -> None:
+    assert pid_is_alive(os.getpid()) is True
+    assert pid_is_alive(_dead_pid()) is False
