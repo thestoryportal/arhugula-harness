@@ -46,7 +46,7 @@ from harness_core.workload_class import WorkloadClass
 from harness_runtime.bootstrap.mutable_context import _MutableHarnessContext
 from harness_runtime.config.state_placement import (
     bootstrap_state_root,
-    linux_filesystem_type,
+    host_filesystem_type,
     transient_worktree_base,
 )
 from harness_runtime.lifecycle.index_cache import materialize_index_cache
@@ -82,7 +82,7 @@ async def execute(
             repository_root=config.repository_root,
             worktree_base=worktree_base,
             path_bindings=config.path_bindings,
-            filesystem_type=linux_filesystem_type,
+            filesystem_type=host_filesystem_type,
         )
 
     # 1. Path registry.

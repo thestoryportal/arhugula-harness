@@ -56,8 +56,8 @@ def placed_root(world: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     adopt a non-empty unmarked directory.
     """
     # The scratch dir may be tmpfs; the verifier's real resolver is covered in test_state_placement.
-    monkeypatch.setattr(stage_1_is, "linux_filesystem_type", lambda _p: "ext4")
-    monkeypatch.setattr(state_placement, "linux_filesystem_type", lambda _p: "ext4")
+    monkeypatch.setattr(stage_1_is, "host_filesystem_type", lambda _p: "ext4")
+    monkeypatch.setattr(state_placement, "host_filesystem_type", lambda _p: "ext4")
     repo = world / "repo"
     (repo / ".git").mkdir(parents=True)
     root = world / "state"
