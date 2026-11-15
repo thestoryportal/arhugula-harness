@@ -31,6 +31,7 @@ from harness_cp.handoff_context import StateSummary
 from harness_cp.pause_resume_protocol_types import PauseSnapshot, WorkflowPauseReason
 from harness_is.pause_journal_root import UnresolvedCause
 from harness_is.state_ledger_entry_schema import Identifier
+from harness_runtime.config.state_placement import StateRootPlacementError
 from harness_runtime.lifecycle import journal_workflow_pause_store as journal_module
 from harness_runtime.lifecycle.durable_pause_resume_protocol import DurablePauseResumeProtocol
 from harness_runtime.lifecycle.journal_workflow_pause_store import (
@@ -219,6 +220,7 @@ def test_a_failed_append_fails_the_run_before_its_body_and_records_its_own_failu
     assert body == []
     assert raised.value is admission.failure
     assert isinstance(raised.value.__cause__, PermissionError)
+    assert "the supersession append failed (PermissionError)" in str(raised.value)
     assert str(tmp_path) not in str(raised.value)
 
 
@@ -240,8 +242,45 @@ def test_an_unresolved_root_fails_the_run_before_its_body_and_writes_nothing(
     cause = raised.value.__cause__
     assert isinstance(cause, PauseJournalRootUnresolvedError)
     assert cause.cause is UnresolvedCause.UNBOUND
+    assert "pause-journal root unresolved (unbound): no installation-state document" in str(
+        raised.value
+    )
     assert sorted(p.name for p in _journal_root(tmp_path).iterdir()) == before
     assert _order(_store(tmp_path), _W) == ["snapshot:run-paused"]
+
+
+def test_a_declared_root_that_is_not_a_directory_is_named_as_missing(tmp_path: Path) -> None:
+    """The operator's first run on a fresh state root: the declared directory is not there yet."""
+    _journal_root(tmp_path).rmdir()
+    admission = FreshRunAdmission(workflow_id=_W, run_id="run-fresh")
+    body: list[object] = []
+
+    with pytest.raises(FreshRunAdmissionError) as raised:
+        admission.run(_ctx(tmp_path), body.append)
+
+    assert body == []
+    assert (
+        "pause-journal root unresolved (missing): the declared pause-journal root is not an "
+        "existing directory" in str(raised.value)
+    )
+    assert str(tmp_path) not in str(raised.value)
+
+
+def test_an_undeclared_state_placement_is_named_as_placement_required(tmp_path: Path) -> None:
+    """A config with no `[runtime.state_placement]` table cannot place the journal root."""
+    ctx = _ctx(tmp_path)
+    ctx.config.state_placement = None
+    admission = FreshRunAdmission(workflow_id=_W, run_id="run-fresh")
+    body: list[object] = []
+
+    with pytest.raises(FreshRunAdmissionError) as raised:
+        admission.run(ctx, body.append)
+
+    assert body == []
+    assert isinstance(raised.value.__cause__, StateRootPlacementError)
+    assert "state-root placement refused (placement-required)" in str(raised.value)
+    assert "[runtime.state_placement]" in str(raised.value)
+    assert str(tmp_path) not in str(raised.value)
 
 
 def test_a_durable_run_supersedes_in_its_capture_directory_after_the_root_link_retargets(
