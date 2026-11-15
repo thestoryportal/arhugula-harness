@@ -141,9 +141,10 @@ async def _rollback_cp_clients(ctx: _MutableHarnessContext) -> None:
     # `mcp_client_hosts`). A post-stage-3a failure — e.g. a stage-5
     # RT-FAIL-MCP-TOOL-NAME-COLLISION abort — must not leak their
     # subprocesses/sessions (the symmetric teardown to stage_3a's per-host
-    # start loop; mirrors `shutdown()` step 4). Best-effort, per-resource isolation.
+    # start loop; mirrors `shutdown()` step 4, including its reverse start
+    # order, #1756). Best-effort, per-resource isolation.
     if ctx.mcp_client_hosts is not None:
-        for host in ctx.mcp_client_hosts.values():
+        for host in reversed(ctx.mcp_client_hosts.values()):
             if getattr(host, "started", False):
                 try:
                     await host.shutdown()

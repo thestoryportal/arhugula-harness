@@ -1387,8 +1387,13 @@ async def shutdown(
     # the loop for the same reason as step 3c above — a stale pre-loop budget
     # would let each host burn the full timeout instead of what's actually
     # left, multiplying the aggregate shutdown time under multiple hosts.
+    # Hosts close in REVERSE start order (#1756): stage 3a starts them one
+    # after another in this task, so each host's transport cancel scope is
+    # nested inside the previous host's. Closing an earlier host first exits a
+    # scope that is not the task's current one; anyio refuses and leaves the
+    # outer scope cancelled, and the next host's close dies of CancelledError.
     hosts: dict[ServerName, Any] = getattr(ctx, "mcp_client_hosts", None) or {}
-    for host in hosts.values():
+    for host in reversed(hosts.values()):
         remaining = max(0.0, deadline - time.monotonic())
         if getattr(host, "started", False):
             try:
