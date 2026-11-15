@@ -2,6 +2,8 @@
 
 `ollama-first.toml` sends one short prompt to the local `llama3.2:3b` model. Its matching `ollama.local.toml.example` selects Ollama alone, needs no API key, and keeps run state under this checkout's `.harness/onboarding/` directory.
 
+> **At this release this config cannot complete a fresh run.** Every fresh `harness run` places its pause-journal root under a declared external state root (Runtime spec v1.137 Rule B3). `ollama.local.toml.example` and `ollama.handoff.local.toml.example` declare no `[runtime.state_placement]` table, so a run with either stops before its first step and reports `state-root placement refused (placement-required)`. Both files still load, and the provider-free checks still use them. To complete the first workflow, follow [Complete a first run](#complete-a-first-run-external-state-root).
+
 On Omarchy or another Arch Linux installation, have Python 3.12, `uv`, and Ollama available. From the repository root, prepare the locked Python workspace and the local model:
 
 ```sh
@@ -33,6 +35,44 @@ ledger:    <64-character hash>
 The CLI does not print the model's reply in text mode. The state ledger is `.harness/onboarding/state-ledger/state.jsonl`; `STATE_LEDGER` binds its parent directory. The runtime also writes its index and worktree state under `.harness/`. The config names a loopback OTLP endpoint at port 4317; without a collector, trace export can report connection errors even when the workflow completes.
 
 `minimal.toml` remains an optional hosted Anthropic example. **It is not a supported surface of the first self-hosted Omarchy release**, which runs local Ollama with no paid hosted provider or API key. It selects `claude-haiku-4-5` and needs an Anthropic credential and a matching runtime provider and fallback chain. The generic `harness.toml.example` defaults to subscription CLI routing, so copying it unchanged does **not** configure the Anthropic-only route for `minimal.toml`. Keep credentials out of TOML; the local-development secret backend supports the OS keyring with environment fallback.
+
+## Complete a first run (external state root)
+
+A fresh run needs three things that the config above does not give it: a declared state root outside every checkout, an installation-state document that names the pause-journal root, and that directory inside the state root. `omarchy.ollama.toml.example` is the same local Ollama route with the state placement declared.
+
+1. Copy the profile and replace both placeholders: `/absolute/path/to/your/workspace` with the path printed by `pwd -P`, and `/absolute/path/to/your/state-root` with an absolute path outside every checkout. [External state root](../docs/how-to-deploy.md#external-state-root-omarchy-production-profile) lists the rules that path must meet.
+
+   ```sh
+   cp examples/omarchy.ollama.toml.example harness.toml
+   ${EDITOR:-vi} harness.toml
+   ```
+
+2. Write the installation-state document under the interpreter's prefix. Set `STATE_ROOT` to the state root you chose in step 1:
+
+   ```sh
+   STATE_ROOT=/absolute/path/to/your/state-root
+   PREFIX=$(uv run --no-sync python -c 'import sys; print(sys.prefix)')
+   mkdir -p "$PREFIX/etc/arhugula"
+   printf '{"pause_journal_root_declarations": [{"installation_root": "%s/pause-journal"}]}\n' \
+     "$STATE_ROOT" > "$PREFIX/etc/arhugula/installation-state.json"
+   ```
+
+3. Run once. This run creates and stamps the state root, then stops with `pause-journal root unresolved (missing)`, because the runtime refuses a state root that already holds files it did not stamp, so you cannot create the directory first:
+
+   ```sh
+   uv run --no-sync harness run examples/ollama-first.toml --config harness.toml
+   ```
+
+4. Create the pause-journal root inside the stamped state root and run again:
+
+   ```sh
+   mkdir -m 700 "$STATE_ROOT/pause-journal"
+   uv run --no-sync harness run examples/ollama-first.toml --config harness.toml
+   ```
+
+The second run prints the completed status shown above. Its state ledger is `state-ledger/state.jsonl` under the state root. If an earlier run with the checkout-local config left `.harness/onboarding/state-ledger` behind, bootstrap refuses with `legacy-state-present`; move that directory out of the checkout first.
+
+The topology examples below name the checkout-local configs. To complete them, use the config from this section instead: add the same path-binding blocks, with each `STATE_LEDGER` path set to `state-ledger` under your state root, and set `inter_step_data_flow = true` where an example asks for the handoff config.
 
 ## Multi-step topology examples (local Ollama)
 
