@@ -81,6 +81,7 @@ from opentelemetry.sdk.trace import SpanProcessor, TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, SpanExporter
 
 from harness_runtime.lifecycle.redaction_token_audit_map import AuditLedgerRedactionTokenMap
+from harness_runtime.lifecycle.span_store_export import mirror_to_span_store
 from harness_runtime.types import AuditLedgerWriter, AuditSigningBackendKind, RuntimeConfig
 
 __all__ = [
@@ -273,6 +274,9 @@ def materialize_span_processor_stage(
     2. Construct the OTLP exporter from `config.otel.otlp_endpoint`
        (gRPC at HEAD). Tests pass an `exporter` keyword override (commonly
        `InMemorySpanExporter`) to avoid network construction.
+       When `config.collector.span_store_path` is set, the exporter is fronted
+       by a `SpanStoreMirror` that writes each batch to the sqlite span store
+       before the OTLP export (`span_store_export.py`).
     3. Construct `BatchSpanProcessor(exporter,
        max_export_batch_size=config.collector.batch_size,
        schedule_delay_millis=config.collector.batch_window_seconds * 1000)`.
@@ -321,10 +325,11 @@ def materialize_span_processor_stage(
     )
 
     try:
-        resolved_exporter: SpanExporter = (
+        resolved_exporter: SpanExporter = mirror_to_span_store(
             exporter
             if exporter is not None
-            else (OTLPSpanExporter(endpoint=config.otel.otlp_endpoint))
+            else (OTLPSpanExporter(endpoint=config.otel.otlp_endpoint)),
+            config.collector,
         )
         processor = BatchSpanProcessor(
             resolved_exporter,

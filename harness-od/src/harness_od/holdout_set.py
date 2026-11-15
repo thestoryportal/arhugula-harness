@@ -34,11 +34,10 @@ Scope notes:
   the identical sample for a given `(cell_id, seed)`. Per-primitive
   construction is deferred to implementation discretion per §17.3, same as
   the rest of this module's scope.
-- The sqlite ring buffer this module reads (`sqlite_span_store_reader`) has
-  no production writer as of this arc — see B-OD19-LOCAL-INSPECTION's
-  reconciliation note. This tooling is verified against seeded test data; the
-  composed chain (real spans -> holdout -> review -> assertion) is not yet
-  live in production until a production span-emission path exists.
+- The sqlite span store this module reads (`sqlite_span_store_reader`) is
+  written by the Runtime only when the operator configures the collector's
+  `span_store_path`; without it the store is empty and a sample draws nothing.
+  This module's own tests use seeded data.
 """
 
 from __future__ import annotations

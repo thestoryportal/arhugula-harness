@@ -35,9 +35,13 @@ is always an operator/judge-supplied input — precisely the seam
 provides. `run_drift_check` / `rebaseline_threshold` take
 `judge_supplied_current_value` for that case.
 
-Production-liveness note (same disposition as B-OD17/B-OD19): the sqlite ring
-buffer this module reads (`sqlite_span_store_reader`) has no production
-writer as of this arc — verified here against seeded test data only.
+Production-liveness note: the sqlite span store this module reads
+(`sqlite_span_store_reader`) is written by the Runtime only when the operator
+configures the collector's `span_store_path`. No Runtime command or config
+field calls `run_drift_check` or `rebaseline_threshold` or carries a threshold:
+both are library functions, and the threshold is an argument the caller's own
+code supplies (§18.1: operator-supplied, never invented here). This module's
+own tests use seeded data.
 """
 
 from __future__ import annotations
