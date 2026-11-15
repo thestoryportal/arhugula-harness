@@ -1143,13 +1143,43 @@ _CODEX_NAMED_TOOL_ITEM_TYPES = frozenset(
 """Tool item types a refusal may name. The name comes from this fixed set, never from the
 untrusted output: any other type is reported only as unrecognised."""
 
+_CODEX_CODE_MODE_HOST_NOTICE = "Code Mode is unavailable because code-mode host is disabled."
+"""The leading sentence of the one `error` item the grammar admits, and only before the turn.
 
-def _codex_event_refusal(event: Mapping[str, Any]) -> str | None:
+`--disable code_mode_host` in `_codex_inference_argv` makes the CLI print this start-up notice
+ahead of `turn.started`: it confirms the switch took effect and that code mode fails closed,
+the state the argv asks for. It is not a tool event and is never an answer. Only a completed
+`error` item whose message starts with this sentence, before the stream's first
+`turn.started`, is admitted; every other `error` item, this notice once the turn has started,
+and `turn.failed` / top-level `error` envelopes still refuse. The tail is not matched, so a
+reworded remedy does not break it; the grammar stays closed."""
+
+
+def _is_codex_code_mode_host_notice(event_type: str, item: Mapping[str, Any]) -> bool:
+    message = item.get("message")
+    return (
+        event_type == "item.completed"
+        and item.get("type") == "error"
+        and isinstance(message, str)
+        and message.startswith(_CODEX_CODE_MODE_HOST_NOTICE)
+    )
+
+
+def _codex_pre_turn_length(events: Sequence[Mapping[str, Any]]) -> int:
+    """How many events precede the stream's first `turn.started`; 0 when it has none, so a
+    stream that never starts a turn has no pre-turn position to admit a notice in."""
+    return next(
+        (index for index, event in enumerate(events) if event.get("type") == "turn.started"), 0
+    )
+
+
+def _codex_event_refusal(event: Mapping[str, Any], *, before_turn: bool) -> str | None:
     """The fixed label for an event outside the closed Codex grammar, else `None`.
 
     The outer `type` must be a string in exactly one of two sets: a lifecycle type, which
     carries no `item` key, or an item phase, which carries a mapping item of a recognised
-    non-tool type. Every label is a constant or a name from `_CODEX_NAMED_TOOL_ITEM_TYPES`.
+    non-tool type, or, `before_turn` only, the code-mode-host notice. Every label is a
+    constant or a name from `_CODEX_NAMED_TOOL_ITEM_TYPES`.
     """
     event_type = event.get("type")
     if not isinstance(event_type, str):
@@ -1164,6 +1194,8 @@ def _codex_event_refusal(event: Mapping[str, Any]) -> str | None:
         return "malformed item event"
     if item_type in _CODEX_NON_TOOL_ITEM_TYPES:
         return None
+    if before_turn and _is_codex_code_mode_host_notice(event_type, cast(Mapping[str, Any], item)):
+        return None
     if item_type in _CODEX_NAMED_TOOL_ITEM_TYPES:
         return item_type
     return "unrecognised item type"
@@ -1176,8 +1208,9 @@ def _codex_answer_text(events: Sequence[Mapping[str, Any]], label: str) -> str:
     item of a fully validated stream; no top-level text shape is ever an answer.
     [LAW:parse-dont-validate]
     """
-    for event in events:
-        refusal = _codex_event_refusal(event)
+    pre_turn_length = _codex_pre_turn_length(events)
+    for index, event in enumerate(events):
+        refusal = _codex_event_refusal(event, before_turn=index < pre_turn_length)
         if refusal is not None:
             raise ExternalCLIOutputError(
                 f"{label} contained a tool item or unverifiable event ({refusal}); "
