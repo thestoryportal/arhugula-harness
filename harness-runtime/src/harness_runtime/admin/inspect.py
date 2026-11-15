@@ -113,9 +113,8 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Path to the collector sqlite span store (C-OD-19 §19.2). Required "
             "with --browse. Unused otherwise — the ledger summary's span rollup "
-            "remains N/A regardless (production span ingestion into this store "
-            "is a separate, pre-existing deferral; see "
-            "b-od19-slice-c-otelcol-manifest-reconciliation.md)."
+            "remains N/A regardless. The runtime writes this store when the "
+            "config sets [runtime.collector] span_store_path."
         ),
     )
     parser.add_argument(

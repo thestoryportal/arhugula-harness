@@ -21,11 +21,12 @@ extension point that reader module's own docstring anticipated: "consumers
 (the canonical 5-primitive set per C-OD-17 §17.1) — extends `harness-inspect`
 internals rather than forking a separate reader.
 
-**Scope boundary** (see `.harness/b-od19-slice-c-otelcol-manifest-reconciliation.md`):
-this module renders whatever the sqlite span store contains. At HEAD nothing
-in production writes real spans there (the in-process collector daemon's
-`ingest_span_row` has no production caller — a pre-existing, already-
-documented deferral, not introduced here). Tested against seeded data.
+**Scope boundary:** this module renders whatever the sqlite span store
+contains. The runtime writes real spans there when the operator sets
+`[runtime.collector] span_store_path` (`lifecycle/span_store_export.py`);
+without it the store stays empty. The in-process collector daemon's
+`ingest_span_row` still has no production caller
+(`.harness/b-od19-slice-c-otelcol-manifest-reconciliation.md`).
 """
 
 from __future__ import annotations

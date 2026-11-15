@@ -226,6 +226,36 @@ uv run harness-shutdown --help
 Use `inspect` for read-only state and trace summaries. Use `shutdown` to signal
 a running harness process to drain and exit through the admin shutdown path.
 
+## Keep A Local Span Store
+
+`harness-inspect --browse`, `--holdout-sample` and the drift algorithm read a
+local sqlite span store through `--collector-path`. The runtime writes that
+store only when the config names it:
+
+```toml
+[runtime.collector]
+span_store_path = "/absolute/path/to/your/state-root/observability/spans.sqlite"
+```
+
+The path must be absolute. The runtime creates the file and its parent
+directory, and a path it cannot open fails bootstrap. With the path set, every
+span the runtime exports is written to the store first and is then sent to the
+OTLP endpoint unchanged, so the store holds what a collector would receive,
+whether or not a collector is listening. Rows older than
+`sqlite_retention_days` (default 7) are removed on each write. A write that
+fails is logged under `harness.runtime.span_store` and the spans are still
+exported. Without the setting no store is written, and `--browse` shows no
+data.
+
+```sh
+uv run harness-inspect --browse --collector-path /absolute/path/to/your/state-root/observability/spans.sqlite
+```
+
+Alignment-floor drift thresholds have no config field and no command at this
+release. `harness_od.alignment_floor_drift_algorithm.run_drift_check` and
+`rebaseline_threshold` are library functions: the threshold is an argument
+your own code passes, and nothing in the runtime calls them for you.
+
 ## Review Captured Memory
 
 Captured memory becomes reusable only through an operator decision. The

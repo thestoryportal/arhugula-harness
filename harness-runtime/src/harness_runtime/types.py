@@ -801,6 +801,14 @@ class CollectorConfig(BaseModel):
     row 3 (operator-configurable; default 7 days). U-OD-44 lazy-on-write
     cleanup applies this at every `RuntimeRingBuffer.flush_to_sqlite` call."""
 
+    span_store_path: Path | None = None
+    """Absolute path of the sqlite span store (OD spec §C-OD-27), or `None` to keep none.
+
+    When set, every span batch the runtime exports is first written to this store, which
+    `harness-inspect --browse`, the holdout sampler and the drift algorithm read, and is
+    then exported over OTLP unchanged. `sqlite_retention_days` bounds the store. The
+    runtime creates the file and its parent directory."""
+
     tail_keep_max_buffered_traces: int = 4096
     """Operator-tunable ceiling on the number of traces the production
     `TailKeepSpanProcessor` buffers pending root-close, per OD spec §C-OD-09
@@ -837,6 +845,14 @@ class CollectorConfig(BaseModel):
         """All collector thresholds must be strictly positive."""
         if value <= 0:
             raise ValueError(f"value must be > 0 (got {value})")
+        return value
+
+    @field_validator("span_store_path")
+    @classmethod
+    def _absolute(cls, value: Path | None) -> Path | None:
+        """A relative store path would follow each process's working directory."""
+        if value is not None and not value.is_absolute():
+            raise ValueError(f"span_store_path must be an absolute path (got {str(value)!r})")
         return value
 
 
