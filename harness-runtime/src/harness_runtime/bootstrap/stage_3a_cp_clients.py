@@ -88,7 +88,8 @@ async def execute(
                 await host.start()
                 started.append(host)
         except Exception:
-            for already in started:
+            # Reverse start order, as in `shutdown()` step 4 (#1756).
+            for already in reversed(started):
                 try:
                     await already.shutdown()
                 except Exception:
