@@ -192,6 +192,75 @@ async def test_output_without_an_agent_message_is_still_an_output_error() -> Non
         await _dispatch(_events(THREAD, REASONING, TURN_DONE))
 
 
+# --- the code-mode-host start-up notice, and only it, before the turn (Codex CLI 0.169.0) -------
+
+_WITNESSED_NOTICE_LINE = (
+    '{"type":"item.completed","item":{"id":"item_0","type":"error","message":"Code Mode is'
+    " unavailable because code-mode host is disabled. Code mode will fail closed; enable"
+    ' `features.code_mode_host` and install `codex-code-mode-host`."}}'
+)
+_WITNESSED_TRANSCRIPT = (
+    '{"type":"thread.started","thread_id":"..."}\n'
+    f"{_WITNESSED_NOTICE_LINE}\n"
+    '{"type":"turn.started"}\n'
+    '{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"ok"}}\n'
+    '{"type":"turn.completed","usage":{"input_tokens":15137,"cached_input_tokens":6272,'
+    '"cache_write_input_tokens":0,"output_tokens":5,"reasoning_output_tokens":0}}\n'
+)
+NOTICE = json.loads(_WITNESSED_NOTICE_LINE)
+
+
+def _error_item(message: object, phase: str = "item.completed") -> dict[str, Any]:
+    return {"type": phase, "item": {"id": "item_0", "type": "error", "message": message}}
+
+
+@pytest.mark.asyncio
+async def test_the_witnessed_code_mode_host_notice_transcript_is_accepted() -> None:
+    assert await _dispatch(_WITNESSED_TRANSCRIPT) == "ok"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "item",
+    [
+        _error_item("Model overloaded; try again."),
+        _error_item("Warning: Code Mode is unavailable because code-mode host is disabled."),
+        _error_item("Code Mode is unavailable"),
+        _error_item(None),
+        {"type": "item.completed", "item": {"id": "item_0", "type": "error"}},
+        _error_item(NOTICE["item"]["message"], phase="item.started"),
+        _error_item(NOTICE["item"]["message"], phase="item.updated"),
+    ],
+    ids=["other", "prefixed", "truncated", "non-string", "no-message", "started", "updated"],
+)
+async def test_any_other_error_item_before_the_turn_is_still_refused(item: dict[str, Any]) -> None:
+    with pytest.raises(ExternalCLIOutputError, match="unrecognised item type"):
+        await _dispatch(_events(THREAD, item, TURN_STARTED, ANSWER, TURN_DONE))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "events",
+    [
+        (THREAD, TURN_STARTED, NOTICE, ANSWER, TURN_DONE),
+        (THREAD, TURN_STARTED, ANSWER, NOTICE, TURN_DONE),
+        (THREAD, NOTICE, ANSWER, TURN_DONE),
+    ],
+    ids=["after-turn-started", "after-the-answer", "no-turn-started"],
+)
+async def test_the_notice_outside_the_pre_turn_position_is_still_refused(
+    events: tuple[dict[str, Any], ...],
+) -> None:
+    with pytest.raises(ExternalCLIOutputError, match="unrecognised item type"):
+        await _dispatch(_events(*events))
+
+
+@pytest.mark.asyncio
+async def test_the_notice_alone_is_not_an_answer() -> None:
+    with pytest.raises(ExternalCLIOutputError, match="agent text result"):
+        await _dispatch(_events(THREAD, NOTICE, TURN_STARTED, TURN_DONE))
+
+
 # --- the default runner uses a fresh empty private cwd ------------------------------------------
 
 
