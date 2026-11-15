@@ -20,7 +20,7 @@ Useful flags:
 | `--config <path>` | Use a specific TOML runtime config instead of CWD discovery. |
 | `--output text|json` | Select text or JSON result output. |
 | `--provider <name>` | Dispatch every step of this invocation to this provider (must be one of the config's `enabled_provider_names`; an unknown name is refused). Applied as the per-step model override, the highest tier of the model-resolution precedence. |
-| `--model <name>` | Dispatch every step of this invocation to this model (with `--provider`, or on the workflow default provider). |
+| `--model <name>` | Dispatch every step of this invocation to this model (with `--provider`, or on the workflow's `default_model_binding` provider). Alone, it is refused when that workflow provider is not one of the config's `enabled_provider_names`. |
 | `--tenant-id <id>` | Override `RuntimeConfig.tenant_id`. |
 | `--daemon` | Dispatch through a running daemon instead of one-shot bootstrap. |
 | `--socket-path <path>` | Select the daemon Unix socket for daemon-client mode. |
@@ -33,6 +33,11 @@ A manifest's `default_model_binding` and `fallback_chain` are metadata and do
 not select the dispatched provider: run the Ollama examples under a config whose
 first chain is Ollama (`examples/ollama.local.toml.example`), or pass
 `--provider ollama`.
+
+When `--provider` or `--model` is set, the run prints one `override:` line on
+stderr that names the provider and model every step dispatches to first. A
+candidate that fails still falls back along the config's chain, so a
+`completed` status does not prove that the override served the run.
 
 ## Answer An Approval Gate
 
