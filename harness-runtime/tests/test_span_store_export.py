@@ -10,6 +10,9 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
+import subprocess
+import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -21,6 +24,7 @@ from harness_runtime.admin.trace_browser import (
     compute_operator_burden_rollups,
     open_readonly_span_store,
 )
+from harness_runtime.lifecycle import span_store_export
 from harness_runtime.lifecycle.span_processor import (
     SpanProcessorBindError,
     materialize_span_processor_stage,
@@ -177,6 +181,116 @@ def test_a_store_that_cannot_be_written_is_counted_and_never_fails_the_export(
     assert (mirror.stored_span_count, mirror.failed_span_count) == (0, 3)
     assert "span store write failed for a batch of 3 spans" in caplog.text
     mirror.shutdown()
+
+
+def test_a_span_the_row_cannot_carry_is_counted_and_the_batch_is_still_exported(
+    tmp_path: Path,
+) -> None:
+    """A lone surrogate in a workflow id encodes over OTLP but cannot bind as sqlite text."""
+    recorder = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(recorder))
+    with provider.get_tracer("test").start_as_current_span("workflow.envelope") as envelope:
+        envelope.set_attribute("workflow.id", "w\udc80")
+    spans = recorder.get_finished_spans()
+    otlp = InMemorySpanExporter()
+    mirror = SpanStoreMirror(
+        downstream=otlp,
+        connection=initialize_span_store(tmp_path / "spans.sqlite"),
+        retention_days=7,
+    )
+
+    result = mirror.export(spans)
+
+    assert result is SpanExportResult.SUCCESS
+    assert len(otlp.get_finished_spans()) == 1
+    assert (mirror.stored_span_count, mirror.failed_span_count) == (0, 1)
+    mirror.shutdown()
+
+
+def test_a_failed_retention_cleanup_is_its_own_count_and_the_batch_stays_stored(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    def locked(*args: object, **kwargs: object) -> int:
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(span_store_export, "retention_cleanup_lazy", locked)
+    store_path = tmp_path / "spans.sqlite"
+    otlp = InMemorySpanExporter()
+    mirror = SpanStoreMirror(
+        downstream=otlp, connection=initialize_span_store(store_path), retention_days=7
+    )
+
+    with caplog.at_level(logging.ERROR, logger="harness.runtime.span_store"):
+        mirror.export(_finished_workflow_spans())
+
+    assert (mirror.stored_span_count, mirror.failed_span_count) == (3, 0)
+    assert mirror.failed_retention_count == 1
+    assert "retention cleanup failed" in caplog.text and "write failed" not in caplog.text
+    assert len(otlp.get_finished_spans()) == 3
+    mirror.shutdown()
+
+
+def test_shutdown_waits_for_a_write_in_flight_instead_of_closing_under_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The batch processor may shut the exporter down while its worker is still exporting."""
+    writing, release = threading.Event(), threading.Event()
+    real_insert = span_store_export.insert_spans
+
+    def slow_insert(conn: sqlite3.Connection, rows: object) -> int:
+        writing.set()
+        assert release.wait(10)
+        return real_insert(conn, rows)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(span_store_export, "insert_spans", slow_insert)
+    mirror = SpanStoreMirror(
+        downstream=InMemorySpanExporter(),
+        connection=initialize_span_store(tmp_path / "spans.sqlite"),
+        retention_days=7,
+    )
+    spans = _finished_workflow_spans()
+    exporting = threading.Thread(target=mirror.export, args=(spans,))
+    closing = threading.Thread(target=mirror.shutdown)
+
+    exporting.start()
+    assert writing.wait(10)
+    closing.start()
+    closing.join(0.2)
+    assert closing.is_alive()  # the close is waiting on the write, not racing it
+    release.set()
+    exporting.join(10)
+    closing.join(10)
+
+    assert not exporting.is_alive() and not closing.is_alive()
+    assert (mirror.stored_span_count, mirror.failed_span_count) == (3, 0)
+
+
+def test_processes_starting_together_on_a_new_store_all_open_it(tmp_path: Path) -> None:
+    store_path = tmp_path / "observability" / "spans.sqlite"
+    script = (
+        "import sys\n"
+        "from pathlib import Path\n"
+        "from harness_runtime.lifecycle.span_store_export import mirror_to_span_store\n"
+        "from harness_runtime.types import CollectorConfig\n"
+        "from opentelemetry.sdk.trace.export.in_memory_span_exporter import "
+        "InMemorySpanExporter\n"
+        "mirror_to_span_store(InMemorySpanExporter(), "
+        "CollectorConfig(span_store_path=Path(sys.argv[1]))).shutdown()\n"
+    )
+    starters = [
+        subprocess.Popen(
+            [sys.executable, "-c", script, str(store_path)], stderr=subprocess.PIPE, text=True
+        )
+        for _ in range(6)
+    ]
+
+    failures = [stderr for p in starters if (stderr := p.communicate()[1]) and p.returncode]
+
+    assert failures == []
+    conn = sqlite3.connect(store_path)
+    assert conn.execute("PRAGMA journal_mode").fetchone() == ("wal",)
+    conn.close()
 
 
 def test_a_reexported_span_is_stored_once(tmp_path: Path) -> None:
