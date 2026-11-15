@@ -25,7 +25,7 @@ child's own refusal included) propagate as themselves.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING, Final
@@ -33,6 +33,7 @@ from typing import TYPE_CHECKING, Final
 from harness_core import JournalRecordRef
 from harness_core.cross_process_lock_deadline import CrossProcessLockTimeoutError
 from harness_cp.workflow_driver_types import ChildResumeAuthority
+from harness_is.pause_journal_root import UnresolvedCause
 
 from harness_runtime.config import state_placement
 from harness_runtime.config.state_placement import StateRootPlacementError, place_state_dir
@@ -237,17 +238,56 @@ class _Unclaimed:
 UNCLAIMED: Final = _Unclaimed()
 
 
+type _AdmissionFault = (
+    PauseJournalRootUnresolvedError
+    | StateRootPlacementError
+    | CrossProcessLockTimeoutError
+    | OSError
+)
+"""What can fail a fresh run's admission before its body: resolution, placement, the lock, I/O."""
+
+_UNRESOLVED_ROOT: Final[Mapping[UnresolvedCause, str]] = {
+    UnresolvedCause.UNBOUND: "no installation-state document declares a pause-journal root",
+    UnresolvedCause.MALFORMED: "the installation-state document or its declaration is malformed",
+    UnresolvedCause.CONFLICTING: (
+        "the installation-state document declares more than one pause-journal root"
+    ),
+    UnresolvedCause.MISSING: "the declared pause-journal root is not an existing directory",
+    UnresolvedCause.OVERLAPPING: (
+        "the declared pause-journal root overlaps a path-binding directory"
+    ),
+}
+
+
+def _named(fault: _AdmissionFault) -> str:
+    """The fault as its typed discriminator and what it means, never a path or identifier."""
+    match fault:
+        case PauseJournalRootUnresolvedError(cause=cause):
+            return f"pause-journal root unresolved ({cause.value}): {_UNRESOLVED_ROOT[cause]}"
+        case StateRootPlacementError(reason=reason):
+            return (
+                f"state-root placement refused ({reason.value}): "
+                "see the config's [runtime.state_placement] table"
+            )
+        case CrossProcessLockTimeoutError():
+            return "the pause journal's cross-process lock timed out"
+        case OSError():
+            return f"the supersession append failed ({type(fault).__name__})"
+
+
 class FreshRunAdmissionError(Exception):
     """A fresh root run failed at its admission point; its workflow body did not run.
 
-    The message names no path or identifier; the failed resolution, placement or journal
-    operation is the `__cause__`.
+    [LAW:no-silent-failure] The message crosses the MCP text boundary, where the `__cause__`
+    is lost, so it names the failed operation by its typed discriminator. It names no path or
+    identifier; the failure itself stays the `__cause__`.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, fault: _AdmissionFault) -> None:
         super().__init__(
             "the fresh run's pause-journal root resolution, placement or supersession append "
-            "failed and its workflow body did not run (Runtime spec v1.137 Rule B3)"
+            f"failed and its workflow body did not run: {_named(fault)} "
+            "(Runtime spec v1.137 Rule B3)"
         )
 
 
@@ -291,7 +331,7 @@ class FreshRunAdmission:
         ) as exc:
             # [LAW:no-silent-failure] Rule B3: a failed resolution, placement or append fails the
             # run before its first step (witness I.16 F1).
-            self.failure = FreshRunAdmissionError()
+            self.failure = FreshRunAdmissionError(exc)
             raise self.failure from exc
         result = body(None)
         _append_locator(store, locate(result))

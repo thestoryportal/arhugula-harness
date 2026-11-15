@@ -118,22 +118,40 @@ def _apply_workflow_overrides(
     spec §14.6 precedence ``per-step > per-workload > per-role > routed > default``),
     so the flags land as every step's ``StepOverride.model_binding``, with
     ``default_model_binding`` kept in step for the manifest's own readers. A provider
-    the config does not enable is refused at this edge; nothing downstream would
-    dispatch to it. When neither flag is set, the workflow is returned unchanged.
+    the config does not enable is refused at this edge, whether it came from
+    ``--provider`` or from the workflow default that ``--model`` alone pairs with;
+    nothing downstream would dispatch to it. The resolved binding is named on stderr.
+    When neither flag is set, the workflow is returned unchanged.
     """
     if provider is None and model is None:
         return workflow
-    # [LAW:parse-dont-validate] The flag becomes a binding only for an enabled provider.
-    if provider is not None and provider not in enabled_provider_names:
-        raise typer.BadParameter(
-            f"{provider!r} is not an enabled provider "
-            f"(enabled_provider_names: {', '.join(enabled_provider_names) or 'none'})",
-            param_hint="--provider",
-        )
     current = workflow.default_model_binding
+    # [LAW:parse-dont-validate] The flags become a binding only for an enabled provider.
+    # `--model` alone pairs with the workflow's default provider, so that provider is
+    # judged too: a binding nothing dispatches to would leave the flag without effect.
+    resolved_provider = provider if provider is not None else current.provider
+    if resolved_provider not in enabled_provider_names:
+        enabled = ", ".join(enabled_provider_names) or "none"
+        if provider is not None:
+            raise typer.BadParameter(
+                f"{provider!r} is not an enabled provider (enabled_provider_names: {enabled})",
+                param_hint="--provider",
+            )
+        raise typer.BadParameter(
+            f"pairs with the workflow's default provider {resolved_provider!r}, which is not "
+            f"an enabled provider (enabled_provider_names: {enabled}); add --provider",
+            param_hint="--model",
+        )
     new_binding = ModelBinding(
-        provider=provider if provider is not None else current.provider,
+        provider=resolved_provider,
         model=model if model is not None else current.model,
+    )
+    # The operator sees which candidate the flags resolved to: `--model` alone takes its
+    # provider from the workflow, and a failed candidate still falls back along the chain.
+    typer.echo(
+        f"override:  every step dispatches first to {new_binding.provider}/{new_binding.model}; "
+        "the config's fallback chain applies if that candidate fails",
+        err=True,
     )
     # [LAW:single-enforcer] Model selection has one authority, the dispatch chain; the
     # override enters it through the tier the chain already reads.

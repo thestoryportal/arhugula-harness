@@ -111,8 +111,13 @@ Setup, in order:
    `.harness/memory` or `.harness/onboarding/state-ledger`, bootstrap refuses with
    `legacy-state-present`. Archive or migrate it yourself first; the harness never copies
    or deletes it. A custom older ledger binding is not detected; inventory it yourself.
-5. Edit every placeholder, then run. The first run creates and stamps the root. There is
-   no read-only placement-check command yet, and `inspect` does not report placement.
+5. Edit every placeholder and write the installation-state document that names
+   `pause-journal` under the state root
+   ([Declare The Pause-Journal Root](how-to-operate-runtime.md#declare-the-pause-journal-root)).
+   Then run. The first run creates and stamps the root and stops with
+   `pause-journal root unresolved (missing)`. Create that directory with mode 0700 and run
+   again. There is no read-only placement-check command yet, and `inspect` does not report
+   placement.
 
 `/home/robbo/.local/state/arhugula-harness` is a host path that is a candidate, not accepted.
 Its acceptance waits on the installed host inventory and restore-scope witness (S5). It is never a default and does not appear in any profile.
@@ -122,7 +127,8 @@ Limits you must not read past:
 - These profiles do not enable durable pause/resume. That waits on the reviewed B-104
   claim gateway, recovery path and CLI/MCP integration.
 - The tutorial and handoff examples are unchanged: they keep state in the checkout and
-  declare no placement (non-durable).
+  declare no placement (non-durable). At this release that also means a fresh run with
+  them stops before its first step with `placement-required`.
 - The Gemini and Antigravity overlays are not part of this first release.
 - Source tests check the loader and verifier only. Installed restore, filesystem, CLI
   output and launch acceptance are separate, later gates.

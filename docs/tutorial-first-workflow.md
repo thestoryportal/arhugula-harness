@@ -2,6 +2,8 @@
 
 Run `examples/ollama-first.toml` against a local Ollama server. This one-shot workflow uses `llama3.2:3b` and requires no hosted API key.
 
+> **At this release the config in step 2 cannot complete step 3.** Every fresh `harness run` needs a declared external state root (Runtime spec v1.137 Rule B3), and `examples/ollama.local.toml.example` declares none, so the run stops before its first step and reports `state-root placement refused (placement-required)`. Follow [Complete a first run](../examples/README.md#complete-a-first-run-external-state-root) to get the completed output shown in step 3; with that config the ledger is `state-ledger/state.jsonl` under your state root.
+
 ## 1. Prepare the local tools
 
 Install Python 3.12, `uv`, and Ollama, then run these commands from the repository root:

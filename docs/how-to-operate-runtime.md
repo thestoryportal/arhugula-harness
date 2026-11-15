@@ -20,7 +20,7 @@ Useful flags:
 | `--config <path>` | Use a specific TOML runtime config instead of CWD discovery. |
 | `--output text|json` | Select text or JSON result output. |
 | `--provider <name>` | Dispatch every step of this invocation to this provider (must be one of the config's `enabled_provider_names`; an unknown name is refused). Applied as the per-step model override, the highest tier of the model-resolution precedence. |
-| `--model <name>` | Dispatch every step of this invocation to this model (with `--provider`, or on the workflow default provider). |
+| `--model <name>` | Dispatch every step of this invocation to this model (with `--provider`, or on the workflow's `default_model_binding` provider). Alone, it is refused when that workflow provider is not one of the config's `enabled_provider_names`. |
 | `--tenant-id <id>` | Override `RuntimeConfig.tenant_id`. |
 | `--daemon` | Dispatch through a running daemon instead of one-shot bootstrap. |
 | `--socket-path <path>` | Select the daemon Unix socket for daemon-client mode. |
@@ -33,6 +33,11 @@ A manifest's `default_model_binding` and `fallback_chain` are metadata and do
 not select the dispatched provider: run the Ollama examples under a config whose
 first chain is Ollama (`examples/ollama.local.toml.example`), or pass
 `--provider ollama`.
+
+When `--provider` or `--model` is set, the run prints one `override:` line on
+stderr that names the provider and model every step dispatches to first. A
+candidate that fails still falls back along the config's chain, so a
+`completed` status does not prove that the override served the run.
 
 ## Answer An Approval Gate
 
@@ -107,9 +112,11 @@ A config that loads but does not bind the pause protocol is refused with kind
 
 ## Declare The Pause-Journal Root
 
-Durable pause and resume need one pause-journal root per installation. You
-declare it in one file, at a fixed place under the environment of the
-interpreter that runs the harness:
+Every fresh `harness run` needs one pause-journal root per installation,
+whether or not the config enables durable pause and resume: the run records
+that it supersedes any earlier pause of the same workflow there before its
+first step. You declare the root in one file, at a fixed place under the
+environment of the interpreter that runs the harness:
 
 ```text
 <sys.prefix>/etc/arhugula/installation-state.json
@@ -139,8 +146,32 @@ default root: invalid JSON, a missing or non-list
 `pause_journal_root_declarations`, zero or several declarations, a relative or
 non-normalized path, a path that is not a directory, or a directory that
 overlaps one of the config's path bindings all leave the root unresolved. Then
-a run whose config enables durable pause-resume fails at bootstrap, and
-`harness resume` is refused with kind `protocol-not-bound`.
+every fresh run stops before its first step, a run whose config enables
+durable pause-resume fails at bootstrap, and `harness resume` is refused with
+kind `protocol-not-bound`.
+
+The directory must also sit inside the state root that the config declares in
+`[runtime.state_placement]`. A config without that table cannot complete a
+fresh run. The runtime refuses a state root that already holds files it did
+not stamp, so on a new state root the order is: run once, which creates and
+stamps the root and then stops; create the pause-journal root inside it; run
+again. `examples/README.md` shows the commands.
+
+A fresh run that stops this way exits 1 and its last error line names the
+cause:
+
+| The line contains | Cause | What to do |
+| --- | --- | --- |
+| `state-root placement refused (placement-required)` | The config has no `[runtime.state_placement]` table. | Declare a state root; see [External state root](how-to-deploy.md#external-state-root-omarchy-production-profile). |
+| `state-root placement refused (` another reason `)` | The declared state root or the pause-journal root's place in it was refused. | Read the reason against the rules in the same section. |
+| `pause-journal root unresolved (unbound)` | No installation-state document, or it declares no root. | Write the document shown above. |
+| `pause-journal root unresolved (missing)` | The declared directory does not exist. | Create it inside the stamped state root. |
+| `pause-journal root unresolved (malformed)`, `(conflicting)` or `(overlapping)` | The document is not valid, declares several roots, or names a directory that overlaps a path binding. | Correct the document. |
+| `the pause journal's cross-process lock timed out` | Another process held the workflow's journal lock. | Run again. |
+| `the supersession append failed (` an error class `)` | The journal file could not be written. | Check the directory's owner and permissions. |
+
+The line names no path. The same text reaches a daemon client as the tool
+error.
 
 ## Run The Daemon
 

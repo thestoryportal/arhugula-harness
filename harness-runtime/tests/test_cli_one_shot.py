@@ -111,8 +111,10 @@ def _runtime_config(
     *,
     deployment_surface: DeploymentSurface = DeploymentSurface.LOCAL_DEVELOPMENT,
     tenant_id: str | None = None,
+    **fields: Any,
 ) -> RuntimeConfig:
     return RuntimeConfig(
+        **fields,
         deployment_surface=deployment_surface,
         repository_root=Path("/tmp"),
         path_bindings=PathBindingConfig(),
@@ -150,6 +152,7 @@ def mock_config_load(
         *,
         deployment_surface: DeploymentSurface = DeploymentSurface.LOCAL_DEVELOPMENT,
         raises: BaseException | None = None,
+        **fields: Any,
     ) -> None:
         def _fake_load(
             cls: Any,
@@ -163,6 +166,7 @@ def mock_config_load(
             return _runtime_config(
                 deployment_surface=deployment_surface,
                 tenant_id=(cli_overrides or {}).get("tenant_id"),
+                **fields,
             )
 
         monkeypatch.setattr(
@@ -493,6 +497,41 @@ def test_provider_flag_outside_enabled_provider_names_is_refused(
     result = runner.invoke(app, ["run", str(manifest), "--provider", "nonexistent"])
     assert result.exit_code != EXIT_SUCCESS
     assert "not an enabled provider" in _plain(result.stdout + result.stderr)
+    assert "workflow" not in getattr(mock_api_run, "captured", {})  # never dispatched
+
+
+def test_model_flag_alone_pairs_with_the_workflow_provider_and_says_so(
+    tmp_path: Path,
+    mock_config_load: Callable[..., None],
+    mock_api_run: Callable[..., None],
+) -> None:
+    mock_config_load()
+    mock_api_run(result=_run_result(status="completed"))
+    manifest = _write_yaml(tmp_path)
+    result = runner.invoke(app, ["run", str(manifest), "--model", "another-model"])
+    assert result.exit_code == EXIT_SUCCESS, result.stdout + result.stderr
+    workflow = mock_api_run.captured["workflow"]  # type: ignore[attr-defined]
+    manifest_provider = workflow.default_model_binding.provider
+    for step in workflow.steps:
+        binding = workflow.manifest_entry.per_step_overrides[step.step_id].model_binding
+        assert (binding.provider, binding.model) == (manifest_provider, "another-model")
+    assert f"override:  every step dispatches first to {manifest_provider}/another-model" in _plain(
+        result.stderr
+    )
+
+
+def test_model_flag_alone_is_refused_when_the_workflow_provider_is_not_enabled(
+    tmp_path: Path,
+    mock_config_load: Callable[..., None],
+    mock_api_run: Callable[..., None],
+) -> None:
+    mock_config_load(enabled_provider_names=("ollama",))
+    mock_api_run(result=_run_result(status="completed"))
+    manifest = _write_yaml(tmp_path)
+    result = runner.invoke(app, ["run", str(manifest), "--model", "another-model"])
+    assert result.exit_code != EXIT_SUCCESS
+    message = _plain(result.stdout + result.stderr)
+    assert "--model" in message and "add --provider" in message
     assert "workflow" not in getattr(mock_api_run, "captured", {})  # never dispatched
 
 

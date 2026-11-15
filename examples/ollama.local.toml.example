@@ -1,6 +1,10 @@
 # Local Ollama first workflow. Copy to harness.toml at the checkout root.
 # Replace /absolute/path/to/your/workspace with this checkout's absolute path.
 # Only the local Ollama provider is constructed; no API key is needed.
+# At this release a fresh `harness run` with this config stops before its first step:
+# it declares no [runtime.state_placement], and every fresh run needs one (Runtime spec
+# v1.137 Rule B3). It still loads. To complete a run, see "Complete a first run" in
+# examples/README.md.
 [runtime]
 deployment_surface = "local-development"
 repository_root = "/absolute/path/to/your/workspace"
