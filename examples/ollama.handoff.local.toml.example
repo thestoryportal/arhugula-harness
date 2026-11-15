@@ -5,6 +5,10 @@
 # Use the shared ollama.local.toml.example for every other example: with the
 # channel on, a step is handed the most recently recorded step output, which peer
 # branches of a parallelization workflow are not meant to consume.
+# At this release a fresh `harness run` with this config stops before its first step:
+# it declares no [runtime.state_placement], and every fresh run needs one (Runtime spec
+# v1.137 Rule B3). It still loads. To complete a run, see "Complete a first run" in
+# examples/README.md.
 [runtime]
 deployment_surface = "local-development"
 repository_root = "/absolute/path/to/your/workspace"
